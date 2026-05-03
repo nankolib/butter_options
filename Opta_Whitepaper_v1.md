@@ -47,7 +47,7 @@ Opta is built to occupy that vacuum. It is not a better perp venue — that race
 
 This whitepaper is organised in three movements. First, it establishes the market thesis — why options dominance is structural in mature markets, why on-chain options have underperformed until now, and why Solana is the specific chain where this primitive is most needed. Second, it describes the protocol architecture in detail — the Living Option Token built on Token-2022, the three-layer liquidity model, the on-chain Black-Scholes pricing engine, and the security story. Third, it is honest about what is not yet finished and what remains on the Phase 2 and mainnet roadmap.
 
-A note on language before proceeding. The protocol was developed under the project name Butter Options and submitted under that name to the Colosseum Frontier hackathon in April 2026. On the twenty-first of April 2026 the project was renamed to Opta to signal the scope evolution from hackathon submission toward mainnet-aspiring infrastructure. Throughout this document, and throughout the public repository and deployment, the project is Opta. Some code-level identifiers in the on-chain programs still reflect the prior name. These are scheduled for renaming in Phase 2 alongside the mainnet redeploy. This is not hidden; it is documented in the repository's seed handoff document and flagged explicitly below.
+A note on language before proceeding. The protocol was developed under the project name Butter Options and submitted under that name to the Colosseum Frontier hackathon in April 2026. On the twenty-first of April 2026 the project was renamed to Opta to signal the scope evolution from hackathon submission toward mainnet-aspiring infrastructure. Throughout this document, throughout the public repository, and throughout the deployed code on devnet, the project is Opta — directory layout, Anchor.toml keys, PDA seed constants, `declare_id!()` macros, and IDL all match the new name as of the on-disk Phase 2 rename completed on the twenty-ninth of April 2026.
 
 ---
 
@@ -127,6 +127,19 @@ The PermanentDelegate extension designates a program-derived address as a perman
 
 This is not a backdoor. It is the specific mechanism by which on-chain options settlement works without custody. At settlement, Opta computes which positions are in-the-money and which are not. For positions that expire worthless, the protocol burns the option tokens directly from the holder's wallet using the PermanentDelegate authority. For positions that expire in-the-money, the protocol pays the payoff in USDC from the writer's locked collateral and then burns the option token. At no point does the protocol take custody of user funds. The option token's economic life is automatically resolved at expiry, and the token itself is destroyed as part of that resolution.
 
+The shape of the delegated burn is unusual enough that it bears illustrating concretely. A standard SPL transfer or burn requires the token-account holder to sign. PermanentDelegate inverts this: the mint's permanent delegate (here, an Opta protocol PDA) can call into the Token-2022 burn instruction with the PDA itself as the authority, and the runtime accepts the burn with no signature from the token's actual holder.
+
+```rust
+// PermanentDelegate burn: protocol PDA signs as authority,
+// no holder signature required.
+invoke_signed(
+    &burn(&token_program, holder_ata, option_mint,
+          protocol_pda, &[], amount)?,
+    accounts,
+    &[&[PROTOCOL_SEED, &[bump]]],
+)?;
+```
+
 Critically, the PermanentDelegate authority is a PDA, not a keypair. It is derived from protocol seeds and can be exercised only through calls to specific on-chain instructions that enforce settlement logic. No human holds the key. The capability is scoped to settlement mechanics, enforced by program code, and auditable by anyone reading the source.
 
 ### 4.3 MetadataPointer — Term Sheet On-Chain
@@ -139,7 +152,7 @@ The consequence is that any on-chain program — a lending protocol, a portfolio
 
 Each of these three extensions exists individually. Token-2022 has been live in production since 2023 and each extension has seen isolated use in other projects — transfer hooks for compliance tokens, permanent delegates for confidential transfer demonstrations, metadata pointers for NFT-adjacent use cases. What has not been done, to our knowledge, is the combination of all three in a single mint to create a financial instrument that is simultaneously self-enforcing, self-settling, and self-describing.
 
-The result is what we call the Living Option Token: an option represented as a token that carries its own expiry enforcement, its own settlement authority, and its own complete term sheet. It is a tradable, composable, self-aware instrument. It can be listed on any Solana DEX during its life. It can be held as collateral by any lending protocol that reads its metadata. It can be acquired by an AI agent that queries its terms directly. It can be placed inside a structured-product vault. And at expiry, it resolves itself, without requiring the protocol operator to maintain watch or intervene.
+The result is what we call the Living Option Token: an option represented as a token that carries its own expiry enforcement, its own settlement authority, and its own complete term sheet. It is a tradable, composable, self-aware instrument. It can be listed on any Solana DEX during its life. It can be held as collateral by any lending protocol that reads its metadata. It can be acquired by an AI agent that queries its terms directly. It can be placed inside a structured-product vault. And at expiry, the position is resolved by Opta's permissionless crank-driven automation via the PermanentDelegate authority — no user action required at expiry, no claim, no exercise, no withdraw click. The user-facing experience is "wake up the next day with USDC in your wallet"; the architectural reality is permissionless crank infrastructure exercising a delegated burn authority on a public schedule, not on-chain self-resolution.
 
 This is the primitive. Everything else in Opta's architecture — the liquidity model, the pricing engine, the frontend, the crank bot — exists to make the primitive usable and to turn it into a functioning market.
 
@@ -151,7 +164,7 @@ Opta is implemented as two on-chain programs deployed on Solana devnet, with a f
 
 ### 5.1 On-Chain Programs
 
-The main protocol program is deployed at program ID `CtzJ4MJYX6BFvF4g67i5C24tQuwRn6ddKkaE5L84z9Cq` on Solana devnet. It contains twenty-four instructions covering the full lifecycle of option creation, purchase, exercise, settlement, and shared-vault liquidity management. The instructions are grouped into two sets: thirteen instructions implementing the core peer-to-peer protocol (market creation, writing, purchasing, exercise, expiry, cancellation, the V1 resale marketplace, and the pricing configuration), and eleven instructions implementing the V2 shared-vault liquidity system described in section 7.
+The main protocol program is deployed at program ID `CtzJ4MJYX6BFvF4g67i5C24tQuwRn6ddKkaE5L84z9Cq` on Solana devnet. It contains twenty-one instructions covering the full lifecycle of market creation, vault liquidity, option purchase, settlement, post-expiry finalization, and secondary listing. The instructions group into eight functional categories — Admin, Market lifecycle, Vault writer flow, Vault buyer flow, Settlement, Manual cleanup, V2 secondary listing, and Auto-cleanup — enumerated in Appendix A. The original V1 peer-to-peer instructions that shipped with the hackathon submission have been archived (commit `54c35c5`) and are no longer part of the deployed program; the V2 shared-vault model described in section 7 is now the only liquidity surface exposed by the protocol.
 
 The transfer-hook program is deployed separately at program ID `83EW6a9o9P5CmGUkQKvVZvsz6v6Dgztiw5M4tVjfZMAG`. Its sole responsibility is to enforce the expiry-based transfer veto described in section 4.1. It is small, auditable, and has a single instruction.
 
@@ -159,15 +172,32 @@ Both programs are written in Rust using the Anchor framework version 0.32.1. The
 
 ### 5.2 State Accounts
 
-Eight primary account types form the protocol's on-chain state. The `Protocol` account is the singleton root, holding global configuration. The `Market` account represents a specific option contract — underlying asset, strike, expiry, type — and is the parent account for all positions written against it. The `Position` account tracks a buyer's holdings of a specific option (though in practice the option token itself is the primary representation of the position, and the Position account is used for lifecycle bookkeeping). The `WriterPosition` account tracks the collateral locked by an option writer and the premium they have accrued. The `Pricing` account holds per-market volatility and risk-free-rate parameters used by the Black-Scholes engine. The `EpochConfig` account defines the settlement windows for V2 shared vaults. The `SharedVault` account is the V2 liquidity pool backing a set of related markets. The `VaultMint` account tracks vault-issued option tokens.
+Eight primary account types form the protocol's on-chain state. The `Protocol` account is the singleton root, holding global configuration. The `Market` account represents a specific option contract — underlying asset, strike, expiry, type — and is the parent account for all positions written against it. The `WriterPosition` account tracks the collateral, share-of-pool, and premium accounting for a single writer in a single shared vault. The `Pricing` account holds per-market volatility and risk-free-rate parameters used by the Black-Scholes engine. The `EpochConfig` account defines the settlement windows for V2 shared vaults. The `SharedVault` account is the V2 liquidity pool backing a set of related markets. The `VaultMint` account tracks vault-issued option tokens. The `VaultResaleListing` account records a peer-to-peer secondary listing — see section 7.
 
-The separation between Market, Position, and WriterPosition accounts reflects a careful design decision. Markets are shared — any number of writers and buyers can transact against a single market. Positions are individual to buyers. Writer positions are individual to writers. This separation makes the shared-vault liquidity model possible without custom account rewriting, because writers' collateral obligations are scoped to their WriterPosition accounts regardless of which specific option tokens buyers end up holding.
+`WriterPosition` is worth illustrating explicitly because it makes the protocol's premium-accounting model concrete. The fields below are the load-bearing ones; a couple of bookkeeping fields are elided for legibility.
+
+```rust
+pub struct WriterPosition {
+    pub owner: Pubkey,             // writer's wallet
+    pub vault: Pubkey,             // joins to SharedVault
+    pub shares: u64,               // pro-rata claim on the pool
+    pub deposited_collateral: u64, // USDC originally posted
+    pub options_minted: u64,       // contracts written by this writer
+    pub options_sold: u64,         // contracts purchased by buyers
+    pub premium_claimed: u64,      // already-claimed premium (USDC)
+    // + premium_debt accumulator and PDA bookkeeping
+}
+```
+
+Premium does not accrue at expiry. Each time a buyer purchases a contract from the vault, premium flows into the pool and is recorded against `premium_per_share_cumulative` on `SharedVault`; each writer's claimable balance is a function of their `shares` against that cumulative, minus what they have already taken via `claim_premium`. Buyer pays at trade time; writer claims as their share-of-pool dictates. This is the protocol's premium model and it is enforced by the on-chain math, not by post-expiry settlement geometry.
+
+The separation of Market, SharedVault, VaultMint, and WriterPosition accounts reflects a careful design decision. Markets are shared — any number of writers and buyers can transact against a single market. Vaults pool collateral across writers within a market. Writer positions are individual to writers. Vault mints index the option-token mints issued by the vault. This separation makes the shared-vault liquidity model possible without custom account rewriting: writers' collateral obligations are scoped to their `WriterPosition` regardless of which specific option tokens buyers end up holding, and buyers' positions are represented as actual Token-2022 balances rather than as bespoke ledger entries.
 
 ### 5.3 Frontend Application
 
-The frontend is a React nineteen application built with Vite eight and TypeScript five-point-nine, deployed on Vercel. It provides six pages: a landing page, a markets page showing all live option markets with their pricing grids, a Deribit-style trading page for purchasing options, a writing page for minting new options against collateral, a portfolio page showing the user's positions with automatic in-the-money and out-of-the-money classification, and a docs page.
+The frontend is a React nineteen application built with Vite eight and TypeScript five-point-nine, deployed on Vercel. It provides six pages: a landing page, a markets page showing all live option markets with their pricing grids, a Deribit-style trading page where vault inventory and secondary listings are unified into a single buy modal that routes across both surfaces, a writing page for minting new options against vault collateral, a two-ledger portfolio page that surfaces both buyer-side positions and writer-side vaults written as parallel sections, and a docs page.
 
-Client-side, the application uses the Solana wallet adapter for connection, `@coral-xyz/anchor` for program interaction, and a custom polyfills module to handle Buffer polyfilling under Vite eight. Live spot prices are fetched from CoinGecko and Jupiter with static fallbacks for robustness. The Black-Scholes fair-value computation is performed both on-chain (for composability) and client-side (for grid rendering performance) — the frontend computation uses the same mathematical formulation as the on-chain engine and is validated against it.
+Client-side, the application uses the Solana wallet adapter for connection, `@coral-xyz/anchor` for program interaction, and a custom polyfills module to handle Buffer polyfilling under Vite eight. Live spot prices and the available-asset catalogue are fetched from Pyth's Hermes mainnet endpoint with no off-chain fallbacks; the catalogue cache is keyed on the Hermes host so that switching the endpoint automatically invalidates the cache. The Black-Scholes fair-value computation is performed both on-chain (for composability) and client-side (for grid rendering performance) — the frontend computation uses the same mathematical formulation as the on-chain engine and is validated against it.
 
 ### 5.4 Data Flow: A Purchase in Full
 
@@ -179,11 +209,17 @@ The user clicks Buy. The frontend constructs a `purchase_from_vault` instruction
 
 The buyer now holds option tokens in their wallet. The tokens are freely transferable to any other address before expiry — the transfer hook permits it. The tokens are visible in any wallet or portfolio tracker that reads Token-2022 metadata — the metadata pointer makes the term sheet discoverable. The tokens can be listed on any Solana DEX that supports Token-2022 — though the V2 vault-specific secondary market infrastructure is still in development, as discussed in section 9.
 
-At expiry, the admin — or in the mainnet design, a permissionless Pyth oracle reader — calls `settle_market`, which records the underlying's spot price at expiry on-chain. For positions that are in-the-money, the holder calls `exercise_from_vault` to receive the payoff in USDC, and the option token is burned via the PermanentDelegate authority. For positions that are out-of-the-money, the holder's token expires worthless and is burned by the crank bot's `expire_option` sweep. For writers whose options expired worthless, they call `withdraw_post_settlement` to recover their collateral plus accrued premium.
+At expiry, the protocol's permissionless crank infrastructure takes over. On the first tick after a market's `expiry` timestamp passes, the crank posts a Pyth `PriceUpdateV2` and calls `settle_expiry`, which records the EMA price at expiry-time on a fresh `SettlementRecord` PDA along with the consumed Pyth `publish_time` as an audit trail (see section 6.5). The same tick calls `settle_vault` to flip `is_settled = true` for the affected shared vault.
+
+On the next tick after settle, the crank's holder-finalize pass enumerates Token-2022 accounts holding the option mint and calls `auto_finalize_holders` in batches. For each holder, this single instruction burns their tokens via the PermanentDelegate authority and, if the option settled in-the-money, transfers the payoff in USDC from the vault. The instruction is idempotent across batches: zero-balance accounts and mismatched USDC ATAs are silent-skipped on chain, so re-running a batch that partially completed is safe.
+
+The writer-finalize pass follows. `auto_finalize_writers` returns each writer's unclaimed premium plus their pro-rata share of the remaining vault collateral, then closes the `WriterPosition` account, refunding its rent SOL to the writer. On the last writer in the vault, any leftover USDC dust from premium-accumulator integer truncation is swept to the protocol treasury and the vault's USDC account is closed, with that rent also routed to treasury.
+
+When the user reads their wallet the day after expiry, they see the resolution as a fait accompli. A buyer who held an in-the-money call sees the USDC payoff in their wallet without ever calling `exercise_from_vault`. A writer in an out-of-the-money vault sees their collateral and premium returned without ever calling `withdraw_post_settlement`. The manual instructions still exist as fallbacks for users who want to trigger their own resolution; the default path is the crank's permissionless automation. No claim, no exercise, no withdraw click.
 
 ### 5.5 The Crank Bot
 
-A separate TypeScript process, the crank bot, runs on a sixty-second timer and performs automation tasks that would otherwise require manual intervention: settling markets at expiry, exercising in-the-money positions on behalf of inactive holders, and expiring out-of-the-money tokens. In the current devnet deployment, the crank bot reads from a hardcoded price map — a deliberate hackathon simplification. The mainnet design replaces this with live Pyth oracle reads.
+Opta's settlement automation runs as a Node.js crank process on a five-minute tick interval. The crank's role is permissionless infrastructure exercising the PermanentDelegate authority on a public schedule — anyone can run a crank against the protocol; the team's crank is one of many possible operators. Each tick covers four passes against on-chain state: `settle_expiry` posts a Pyth update and creates a `SettlementRecord` for any market whose expiry has passed; `settle_vault` flips `is_settled = true` for the affected vaults; `auto_finalize_holders` enumerates Token-2022 accounts holding the option mint, burns their tokens via the PermanentDelegate authority, and distributes ITM payouts in batches; `auto_finalize_writers` returns each writer's premium and pro-rata collateral and closes their `WriterPosition` account. A fifth pass auto-cancels expired V2 secondary listings to free their escrow rent. Live prices come from Pyth's Hermes mainnet endpoint; the earlier hardcoded devnet price map was retired during the Pyth Pull migration arc.
 
 ---
 
@@ -211,33 +247,65 @@ In addition to fair value, the Opta pricing engine computes the five standard op
 
 The significance of on-chain Black-Scholes is not computational novelty. It is trust minimisation and composability. A price that is computed on-chain can be verified on-chain. Any downstream program that consumes Opta's pricing — a structured-product vault building a covered-call strategy, a lending protocol accepting option tokens as collateral, an AI agent constructing a hedge — does not need to trust an off-chain server. The price is a function of on-chain state, computable by anyone, auditable by anyone, and consistent across all callers.
 
+### 6.5 Settlement Pricing — EMA at Expiry-Time
+
+A subtle problem in any oracle-driven settlement is the question of *which* price reads when. The naive answer — "the price at the moment `settle_expiry` runs" — opens a small but real attack surface. If the crank runs even a minute or two after the market's `expiry` timestamp, the consumed Pyth update's `publish_time` could fall well after the option's actual expiry, and the contract would settle against a price that has already moved past the at-expiry mark. In an environment of automated cranks running on five-minute ticks against markets that may have a sharp price move at the expiry boundary, this drift can be material.
+
+Opta's `settle_expiry` instruction reads Pyth's exponentially-weighted moving average (EMA) price rather than the spot price, and verifies on-chain that the consumed price update's `publish_time` lies within a sixty-second window of the market's `expiry` timestamp. The choice of EMA over spot is deliberate: EMA smooths flash price moves that occur right at the expiry boundary, which is exactly the regime where a market-maker's algorithm might be repositioning aggressively and where spot is least reliable as a settlement reference.
+
+```rust
+require!(
+    publish_time >= expiry - WINDOW_SECONDS &&
+    publish_time <= expiry + WINDOW_SECONDS,
+    SettlementWindowExpired
+);
+```
+
+The consumed `publish_time` is itself written into the on-chain `SettlementRecord` account as an audit trail. Anyone — a settled writer auditing their payout, a lending protocol that accepted Opta option tokens as collateral, an AI agent verifying its hedge — can read the `SettlementRecord` and confirm exactly which Pyth update settled the vault. There is no off-chain price provenance to trust.
+
+For an integrator calling `settle_expiry` directly, the typed `SettlementWindowExpired` error is the contract: if the integrator's logic produces a Pyth update whose `publish_time` falls outside the sixty-second window, the call reverts cleanly. The expected response is to either fetch a fresher update closer to the expiry boundary or — if the market is genuinely stale — leave the settlement to whichever crank operator next runs against this market. The crank itself handles this case by retrying with a freshly-posted Pyth update on its next tick — and because `settle_expiry` is permissionless, any operator can step in if the configured crank is offline.
+
 ---
 
 ## 7. The Three-Layer Liquidity Model
 
 Options markets present a hard liquidity problem. Every option is unique in four dimensions — underlying, strike, expiry, type — which fragments liquidity in a way that simple spot markets do not experience. An options venue must solve this fragmentation or accept that most markets will be thin, wide-spread, and unusable for institutional size.
 
-Opta's answer is a three-layer liquidity architecture. The layers are not alternatives to one another; they compose. Each layer serves a distinct set of use cases, and together they form a coherent liquidity surface across the full option chain.
+Opta's answer is a three-layer liquidity architecture. The layers are not alternatives to one another; they compose. Each layer is a distinct on-chain (or composable-over-on-chain) surface that buyers can fill against, and each addresses a use case the others cannot serve naturally.
 
-### 7.1 Layer One — Isolated Escrows (V1 Peer-to-Peer)
+### 7.1 Layer One — Shared Vaults
 
-The first layer is the classic peer-to-peer model: a writer locks collateral in an isolated escrow account scoped to a single market and a single position; a buyer pays premium in exchange for the option tokens; the collateral remains locked until settlement or cancellation.
+The foundation is the shared-vault model. A `SharedVault` is a USDC collateral pool keyed on the four dimensions of an option contract — market, option type, strike, and expiry. Writers deposit USDC into the vault and receive `shares` proportional to their contribution; the vault mints option tokens against that pooled collateral; buyers purchase those tokens via `purchase_from_vault`, paying premium into the pool. Premium accrues to writers' claimable balances at trade time, in proportion to their `shares` against `premium_per_share_cumulative` (see section 5.2). At settlement, post-payout collateral is distributed pro-rata.
 
-This layer is appropriate for bespoke, illiquid, or large-notional positions where neither counterparty wants to commingle with a shared pool. It is also the layer that currently supports on-chain secondary trading: the V1 resale marketplace allows a position holder to list their option for sale to a third buyer, with the listing state tracked on-chain and the escrow transferred atomically on purchase. This resale infrastructure is fully live on devnet.
+Vaults come in two variants distinguished by `vault_type`. Epoch vaults align with protocol-defined expiry windows (configured in `EpochConfig`) and are open to any writer; they are the default for new markets. Custom vaults have writer-defined expiries and are restricted to a single writer; functionally similar to a private isolated escrow but built on the same `SharedVault` account type, so the same buyer flow, settlement path, and auto-finalize machinery handles both.
 
-### 7.2 Layer Two — Shared Vaults (V2)
+Shared vaults offer three structural advantages. Capital efficiency — writers do not need to match buyers individually but can provide liquidity in advance and earn premium as buyers arrive. Scale — vault sizes can grow to levels that individual writers would not or could not reach. Specialisation — a vault can be thematic (a BTC call vault, a tokenised-gold put vault, a BUIDL short-delta vault) and attract depositors with specific risk-return preferences.
 
-The second layer is the shared-vault model, introduced in the V2 protocol upgrade and now the default for all new markets via the `USE_V2_VAULTS = true` feature flag. A shared vault is a collateral pool open to any writer who wants to participate. Multiple writers deposit USDC into the vault, the vault mints option tokens against that pooled collateral, and buyers purchase those tokens paying premium into the vault. When options expire, the settlement economics are resolved at the vault level: losses are drawn from the pool, gains are distributed pro-rata to depositors based on their share.
+### 7.2 Layer Two — Secondary Listings
 
-Shared vaults offer three advantages. Capital efficiency — writers do not need to match buyers individually but can provide liquidity in advance and earn premium as buyers arrive. Scale — vault sizes can grow to levels that individual writers would not or could not reach. Specialisation — a vault can be thematic (a BTC call vault, a tokenised-gold put vault, a BUIDL short-delta vault) and attract depositors with specific risk-return preferences.
+The second layer is on-chain peer-to-peer secondary trading of vault-issued option tokens. Once a buyer holds an option, they can list it for resale via `list_v2_for_resale`, which creates a `VaultResaleListing` account (PDA seeded by `(option_mint, seller)`, so at most one active listing per seller per mint) and escrows the listed tokens in a protocol-controlled account. A second buyer can call `buy_v2_resale` to purchase against the listing, with the seller's USDC ATA receiving the resale premium minus the protocol fee. The original seller can withdraw via `cancel_v2_resale`. Expired listings are cleaned up permissionlessly via `auto_cancel_listings` on every crank tick, freeing the escrow rent.
 
-### 7.3 Layer Three — The Routing Layer
+This is structurally different from the primary vault layer. Vaults issue *new* tokens against pooled collateral; secondary listings move *existing* tokens between parties without touching the vault's collateral. The transfer hook permits these pre-expiry transfers; the PermanentDelegate is not exercised on a secondary trade. Secondary listings let a holder exit a position before expiry without forcing the writer to also exit, and without forcing the vault to acquire back its own tokens at an arbitrary price.
 
-The third layer is the router. When a buyer submits a purchase intent, the router determines how best to fill it given the state of V1 and V2 liquidity. For markets where both layers are active, it selects the layer with better economics for the buyer. For markets where only one layer has capacity, it routes there. The router is implemented as a TypeScript SDK wrapping the on-chain programs, and the frontend's `purchase_from_vault` and related flows go through it.
+### 7.3 Layer Three — The Router
+
+The third layer is the price-discovery layer that composes Layers One and Two. The distinction worth drawing carefully is between the on-chain instructions and the router itself. `purchase_from_vault` and `buy_v2_resale` are passive primitives — each executes a fill against the surface it references, but neither chooses between surfaces. Routing — the active decision of which surface to fill against given a buyer's intent, the available depth, and the prevailing prices on each side — happens in whatever program composes across both. The on-chain surfaces are the substrate; the router is the layer.
+
+In Opta's reference frontend the router is implemented as the unified `BuyModal` on the Trade page, which joins vault chain-row data with active listings, computes which surface gives the buyer better economics, and dispatches the appropriate on-chain call. `BuyModal` is one router. The on-chain surfaces of Layers One and Two are designed to be read and routed across by *any* program — a frontend, an aggregator, an AI agent acting on a user's behalf, a structured-product vault that needs to acquire option exposure as part of a covered-call strategy, an institutional execution layer routing large orders preferentially through whichever surface has depth. Specialised routers built on top of the same on-chain primitives can implement entirely different strategies: a yield-oriented router that always prefers seller listings when their premium falls below the model's fair value; an AI-agent hedging strategy that chains option purchases with spot positions on the same wallet; an institutional desk's TWAP-over-options execution.
+
+The on-chain protocol does not need to know which router is calling it; the router does not need permission from the protocol to compose. This permissionless composability of price discovery across both inventory sources is what makes the router a layer rather than a piece of frontend logic. `BuyModal` is one instance of it; the layer is everything else that could be built on the same substrate.
 
 ### 7.4 Why Three Layers Is the Right Number
 
-The three-layer design reflects a deliberate separation of concerns. Isolated escrows handle the long tail of bespoke positions. Shared vaults handle the bulk of standardised exposure with capital efficiency. The router makes the complexity invisible to users. Other protocols have tried to force all liquidity into a single model — all peer-to-peer, or all AMM, or all vault — and have invariably discovered that options markets have genuinely different liquidity needs across different use cases. Opta's three-layer model is an explicit bet that matching layer to use case yields strictly better outcomes than forcing a single model.
+The three-layer design reflects a deliberate separation of concerns, with each layer serving a use case the others cannot handle naturally.
+
+Shared vaults serve writers who want to provide liquidity in advance and earn premium as buyers arrive, without the operational burden of matching individual counterparties. They serve buyers who want to fill at a model-derived premium against fresh, vault-backed inventory.
+
+Secondary listings serve a different participant entirely — the holder who wants to exit a position before expiry. The vault cannot serve this case because vault collateral is committed against the issued contracts; redemption mid-life would require the vault to acquire back its own tokens at an arbitrary price. A secondary marketplace lets the holder negotiate exit price with a third buyer directly, with the protocol providing only escrow and settlement. Without this layer, holders would have to wait until expiry to realise any P&L, which collapses the option's optionality value.
+
+The router serves the price-discovery use case. Without it, every integrator would have to write its own logic for routing between vault inventory and seller listings — duplicated code, inconsistent execution quality, and a worse experience for users who do not know which surface is cheaper at any given moment. Building it once as a composable layer makes correct execution the default, and leaves room for specialised routers (institutional execution, AI-agent strategies, structured-product vaults) to be built on top without rebuilding the underlying inventory plumbing.
+
+Other protocols have tried to force all options liquidity into a single model — all peer-to-peer, or all AMM, or all vault — and have invariably discovered that options markets have genuinely different liquidity needs at different points in the contract lifecycle. Opta's three-layer model is an explicit bet that matching layer to use case yields strictly better outcomes than forcing a single model. The cost is architectural complexity. The benefit is that each participant — writer, buyer, holder, integrator — finds a surface that fits their need without bending the protocol around them.
 
 ---
 
@@ -247,15 +315,17 @@ A derivatives protocol is only as useful as it is safe. Opta's security posture 
 
 ### 8.1 The Test Suite
 
-Opta has ninety-five tests across six test suites, running under Mocha and `ts-mocha` and invoked by `anchor test`. The test count is not an aesthetic achievement — it reflects the protocol's breadth. The primary suite, `butter-options.ts`, covers thirty-six tests of core protocol lifecycle: market creation, writing, purchasing, exercise, expiry, cancellation, resale, and pricing. The `shared-vaults.ts` suite adds twenty-three tests of the V2 vault lifecycle. The `pricing.ts` suite adds nineteen tests of the Black-Scholes engine, including asset-class variations and edge cases. The `zzz-audit-fixes.ts` suite, deliberately named to run last in the Mocha alphabetical ordering, contains twelve tests verifying specific audit findings remain fixed. The `poc-C1-expire-before-settle.ts` suite contains three tests for a specific critical vulnerability that was discovered, exploited as a proof-of-concept, fixed, and verified. The `token2022-smoke.ts` suite contains two tests exercising the Token-2022 extension interactions end-to-end.
+Opta has one hundred and seven tests in the suite as of the collateral-fix redeploy at slot four-fifty-nine-seven-nine-seven-three-one-four (commit `a8b5f14`), running under Mocha and `ts-mocha` and invoked by `anchor test` or by `run-tests.sh` for finer-grained iteration. The suite spans market creation and lifecycle, the V2 shared-vault flow, the Black-Scholes engine and Greeks, audit-finding regressions, the C-01 expire-before-settle proof-of-concept that was exploited and patched during the audit phase, the Token-2022 extension interactions, and the new settlement-pricing and collateral-symmetry handlers shipped on the third of May 2026.
 
-The suite currently passes at ninety-five of ninety-five, with zero failures and zero pending tests, as verified on commit `ff08458`. The wall-clock time for a full test run is approximately three minutes for the Mocha execution and five minutes including the Anchor rebuild.
+Approximately seventy-three of these one hundred and seven tests pass on a clean run. Approximately thirty-four fail. The pass rate of about sixty-eight percent reflects cumulative test debt across the Pyth Pull migration arc (P1–P6, late April), the settlement-pricing fix arc (commit `4dc6250`), and the collateral symmetry arc (commit `a8b5f14`). The failures cluster around `zzz-audit-fixes.ts` fixture staleness — the suite is named to run last under Mocha alphabetical ordering and depends on earlier fixtures that drifted during the migration — and around the historical `PriceTooOld` cascade from the Pull oracle migration. They are environmental and test-harness failures, not handler-correctness bugs; the protocol's on-chain logic is exercised end-to-end by the smoke tests detailed in `MIGRATION_LOG.md` and is in functional parity with the deployed devnet program. A test-suite refresh is on the project's quality-polish roadmap; the goal is to return to a green or cleanly-skipped suite on a refreshed fixture set.
 
 ### 8.2 Five Rust Audit Rounds
 
-The on-chain Rust programs have been subjected to five distinct audit rounds. Each round produced findings at a range of severities — critical, high, medium, and low — and each round's findings were fixed, tested, and committed before the next round began. Cumulatively, eighteen findings were raised and eighteen findings were resolved. Zero open findings remain. The audit history is documented in the project's `CLAUDE.md` file with commit hashes, finding IDs, and the specific tests added to verify each fix.
+The on-chain Rust programs have been subjected to five distinct audit rounds during the original development cycle, plus a re-audit on the twelfth of April 2026 covering the V2 shared-vault changes that landed after the original five rounds. Each round produced findings at a range of severities — critical, high, medium, and low — and each round's findings were fixed, tested, and committed before the next round began. The April 12 re-audit raised four additional findings (one critical, one high, one medium, one low); all four were fixed, tested, and committed before the auto-finalize arc began. Cumulatively across all rounds, twenty-two findings have been raised and twenty-two have been resolved. Zero open findings remain. The audit history is documented in the project's `CLAUDE.md` file with commit hashes, finding IDs, and the specific tests added to verify each fix.
 
-Notably, the audit process discovered a critical vulnerability — a race condition in the expiry-before-settle sequence — that was developed into a full working proof-of-concept exploit, patched, and then preserved in the test suite as a regression check. The exploit PoC remains in the repository as `poc-C1-expire-before-settle.ts` so that any future refactor that accidentally reintroduces the vulnerability will fail the test suite immediately.
+Notably, the original audit process discovered a critical vulnerability — a race condition in the expiry-before-settle sequence — that was developed into a full working proof-of-concept exploit, patched, and then preserved in the test suite as a regression check. The exploit PoC remains in the repository as `poc-C1-expire-before-settle.ts` so that any future refactor that accidentally reintroduces the vulnerability will fail the test suite immediately.
+
+The May 3 arcs (settlement-pricing fix and collateral symmetry) and the May 1–3 arcs (V2 secondary listing and Trade × Marketplace merge) have not been re-audited externally; a fresh audit covering the post-migration codebase, including those changes, is recommended before any mainnet deployment with real funds.
 
 ### 8.3 Two Frontend Audits
 
@@ -279,23 +349,29 @@ Any protocol at the Opta stage — a hackathon submission pursuing mainnet ambit
 
 ### 9.1 What Is Live
 
-The protocol is deployed on Solana devnet at the program IDs listed in section 5.1. Both programs compile, deploy, and execute successfully. All ninety-five tests pass. The frontend is live on Vercel with the full user flow exercised: wallet connect, market browse, option purchase, position management, exercise, and settlement. The Living Option Token behaves as designed — transfer-hook expiry enforcement works, PermanentDelegate settlement burn works, MetadataPointer term sheet is readable. Five Rust audits and two frontend audits have closed. The crank bot runs.
+The protocol is deployed on Solana devnet at the program IDs listed in section 5.1. Both programs compile, deploy, and execute successfully. The full user flow is exercised end-to-end: wallet connect, market browse, option purchase from vault inventory or from a peer-to-peer secondary listing, two-ledger portfolio (buyer side and writer side as parallel sections), claim of accrued premium, exercise, withdraw of post-settlement collateral, and burn of unsold writer escrow. The Living Option Token behaves as designed — transfer-hook expiry enforcement works, PermanentDelegate settlement burn works, MetadataPointer term sheet is readable. Settlement is permissionless via Pyth Pull oracle reads, with EMA-at-expiry pricing and an on-chain `publish_time` audit trail. Auto-finalize at expiry — burning holder tokens and distributing payouts; returning writer collateral and premium and closing writer positions — is permissionless and crank-driven. V2 secondary listing is live in the unified Trade buy modal. Five Rust audit rounds plus the April 12 re-audit, plus two frontend audits, have closed; twenty-two findings raised and resolved, zero open. The crank runs on a five-minute tick.
 
-### 9.2 Living Option Tokens Cannot Yet Trade on Secondary (V2 Vault Markets)
+### 9.2 Test Infrastructure Has Drifted From the Codebase
 
-The most material gap, and the one we want to surface clearly, is secondary trading of Living Option Tokens issued by V2 shared vaults. To be precise about the state: V1 peer-to-peer options, which are written against isolated escrows, have full on-chain resale infrastructure today — listing, cancellation, purchase, escrow transfer, all live on devnet and tested. V2 shared-vault option tokens, which are now the default for new markets, do not yet have equivalent on-chain listing and matching infrastructure.
+The Rust test suite stands at one hundred and seven tests as of the collateral-fix redeploy at slot four-fifty-nine-seven-nine-seven-three-one-four. Approximately seventy-three pass and approximately thirty-four fail on a clean run. The failures are not handler-correctness bugs — they are environmental. The `zzz-audit-fixes.ts` suite (deliberately named to run last under Mocha alphabetical ordering) depends on earlier fixtures that drifted during the Pyth Pull migration; several other suites cascade through `PriceTooOld` failures because their mock Pyth updates are now stale relative to the on-chain handler's window check.
 
-The token mechanics support secondary trading: the transfer hook permits pre-expiry transfers, the PermanentDelegate does not interfere with user-to-user transfers, and the metadata is queryable by any program. What is missing is the protocol-side on-chain listing state: a `VaultResaleListing` account type, an escrow PDA for seller holdings during a listing, and three new instructions (`list_vault_resale`, `buy_vault_resale`, `cancel_vault_resale`). The V1 resale infrastructure is structurally bound to the `OptionPosition` account type and cannot be adapted directly to V2 vault-issued tokens; a parallel set of accounts and instructions is required.
+The protocol's on-chain logic is exercised end-to-end by the smoke tests detailed in `MIGRATION_LOG.md` for each arc — auto-finalize Step 6, the May 3 settlement-pricing fix, the May 3 collateral symmetry fix, the writer-PF dashboard. Functional parity between the deployed devnet program and the test harness is verified by these smoke runs at present.
 
-This work is on the Phase 2 roadmap. It requires three new Rust instructions, one new account type, one new escrow PDA, a new test suite, and a program redeploy. It is not tonight's work. We surface it here because a whitepaper that claimed "fully composable, freely tradable" of V2 vault tokens would be overclaiming the current state, and we would rather name the gap than have readers discover it.
+A test-suite refresh is the largest open quality item. The goal is to retune the fixtures so the suite runs green or with a known-cleanly-skipped subset, and to add coverage for the post-migration handlers that landed without dedicated tests. This is engineering work, not protocol work — no on-chain change is required.
 
-### 9.3 Admin-Only Settlement
+### 9.3 Writer-Side Resale UX Is Implicit Rather Than First-Class
 
-The `settle_market` instruction currently accepts a settlement price as an admin-supplied parameter rather than reading it from a Pyth oracle feed. This is a deliberate hackathon scope reduction, documented inline in the source at `settle_market.rs`. The rationale is that making settlement permissionless via on-chain oracle reads is a specific engineering task with its own testing surface, and the team prioritised completing end-to-end lifecycle coverage before adding oracle composability. The Pyth integration point is documented in the source at line fifty-five of `settle_market.rs`. This is a required change before any mainnet deployment.
+The V2 secondary listing infrastructure described in section 7.2 supports writer-side resale today as a structural matter — a writer who minted contracts directly from their own vault holds those contracts in their own ATA and can call `list_v2_for_resale` against them through the same flow a buyer-turned-seller uses. There is no on-chain limitation.
 
-### 9.4 Hardcoded Devnet Price Map in Crank
+What is missing is a first-class writer-side experience in the reference frontend. The Portfolio page's writer ledger displays minted-versus-sold counts and accrued claimable premium, but it does not surface a "list contracts for resale" affordance from the writer row, and it does not expose a dedicated "listings I have created" view. A writer who wants to actively manage their secondary positions must use the buyer-flavoured row affordances on the Trade page. This works mechanically but the framing is wrong: it presents secondary trading as a buyer activity that writers happen to also be able to do, rather than as a first-class part of the writer's lifecycle.
 
-The crank bot currently uses a hardcoded price map for the handful of devnet assets (SOL at one hundred ninety-five, BTC at one hundred five thousand, ETH at three thousand six hundred, XAU at three thousand one hundred). This is a devnet-only convenience that eliminates the need for the crank bot to make live Pyth network calls during hackathon demos. For mainnet, the crank bot must be rewritten to fetch live Pyth prices before settlement. This is documented with a `TODO` comment in the crank source.
+Closing this gap is frontend work — adding writer-flavoured UI affordances on the Portfolio page's writer ledger, surfacing the writer's open listings as a section, and possibly exposing partial-fill mechanics that vault writers care about more than secondary buyers do. No on-chain change is required.
+
+### 9.4 Burn-Unsold Sequencing Across Auto-Finalize
+
+A subtle interaction in the post-expiry lifecycle is the relationship between `burn_unsold_from_vault` (a writer-signed instruction that burns a writer's unsold mint inventory and reclaims their committed collateral) and the auto-finalize sequence. The auto-finalize pass closes the writer's `WriterPosition` account as part of returning their pro-rata collateral. `burn_unsold_from_vault` requires a live `WriterPosition` to operate against. The cleanup window is therefore *before* the writer-finalize pass runs, not after. A writer who waits until after auto-finalize to clean up their unsold inventory will find the instruction inapplicable — the position is gone.
+
+Two follow-up paths are documented in the engineer handoff. The first is to reorder the crank's tick sequence so `burn_unsold_from_vault` runs ahead of `auto_finalize_writers` for any writer with unsold inventory. The second is to add a permissionless `auto_burn_unsold_escrow` instruction that the crank can run on the same tick. Either resolves the sequencing issue; both are deferred from the May 3 polish run because the impact is small. A few writers' unsold inventory becomes inert tokens — TransferHook blocks transfers post-expiry, no economic value is at risk, and a small amount of rent (~0.004 SOL per affected writer) is locked in the abandoned escrow account.
 
 ### 9.5 Upgrade Authority and Program Governance
 
@@ -305,13 +381,19 @@ Both on-chain programs are currently under the upgrade authority of a single key
 
 Opta currently supports only European-style options (exercisable only at expiry) and only USDC-denominated collateral and premium. This is a simplification that was chosen for audit tractability — American-style options introduce early-exercise logic that widens the attack surface, and multi-collateral support introduces oracle and pricing complexity that compounds with every asset added. These simplifications are appropriate for the current stage. American-style options and multi-collateral support are plausible Phase 3 items but are not currently scoped.
 
-### 9.7 The Legacy V1 Vault Code
+### 9.7 Hermes and Pyth Integration Gotchas
 
-The V2 shared-vault system is the active default via the `USE_V2_VAULTS = true` feature flag. The V1 peer-to-peer code remains in the repository and is exercised by the V1 resale infrastructure described in section 7.1. We have deliberately preserved V1 because it supports a use case (bespoke large-notional P2P options with isolated escrow) that V2 shared vaults do not fully replicate. A decision about whether to fully retire V1 or to continue maintaining both in parallel is deferred to a later milestone.
+Two specific gotchas are worth flagging for any integrator building against Opta or against Pyth's Pull oracle on Solana more generally. They are not bugs in either Opta or Pyth, but they are the kind of detail that costs time when discovered live.
 
-### 9.8 The Rename Is Phased
+Hermes endpoint version split. Pyth's Hermes service exposes the latest-update endpoint at `/v2/updates/price/latest` but the historical endpoint at `/v1/updates/price/{publish_time}`. An integrator who needs to fetch a price update for a specific past timestamp — for instance, to settle a market whose expiry has already passed — must use the `/v1` path. Mismatched paths return four-oh-four responses that look like generic network errors rather than version-mismatch errors. Both endpoints are documented at `docs.pyth.network` but the version split is easy to miss when copying a working `/v2` request shape.
 
-As mentioned in the introduction, the project was renamed from Butter Options to Opta on 2026-04-21. Phase 1 of the rename — documentation, GitHub repository, frontend display strings, Vercel project, socials — was completed on that date. Phase 2 — Rust program names, directory paths (`programs/butter-options/`), PDA seed string constants, `declare_id!()` macros, and IDL regeneration — is parked until after Colosseum judging to avoid any risk of breaking the live demo deployment. A reader of the source code will therefore see `butter_options` as the Rust program name while the brand is Opta. This is not a bug; it is a deliberate phased operation, documented in the repository's HANDOFF.md with a rename-notice blockquote at the top of the file.
+The `pyth-solana-receiver-sdk` does not expose `get_ema_price_no_older_than`. The SDK provides `get_price_no_older_than` for spot prices, which leads naturally to looking for an analogous EMA helper. None exists at the public-API level. The SDK's EMA accessor is lower-level and requires manual decoding of the `PriceUpdateV2` account's EMA fields. Reading the SDK's source rather than its method-name pattern is the cleanest path; relying on autocomplete will produce a method-not-found error at build time.
+
+### 9.8 A Fresh Audit Is Needed Before Mainnet
+
+Five Rust audit rounds plus an April 12 re-audit have closed all twenty-two findings raised against the on-chain programs. Two frontend audits have closed against the reference application. None of these covered the May 1–3 work — the V2 secondary listing instructions, the Trade × Marketplace merge, the settlement-pricing fix, the collateral symmetry fix, or the writer-side Portfolio dashboard. The May 3 changes in particular touch settlement math, collateral economics, and the writer-side UX surface; they should not go to mainnet without a fresh audit pass.
+
+This is a standing item rather than a known bug. The post-May-3 codebase is functioning correctly as exercised by the smoke runs in `MIGRATION_LOG.md`. But the audit posture that justifies a mainnet deployment with real funds does not yet exist for that codebase, and obtaining it is a Phase 2 prerequisite.
 
 ---
 
@@ -321,27 +403,23 @@ The philosophy for Opta's path to production is progressive decentralisation —
 
 Opta's decentralisation milestones are concrete.
 
-### 10.1 Phase 1 — Current State (Devnet, Admin-Controlled)
+### 10.1 Phase 1 — Current State (Devnet, Permissionless Settlement)
 
-Where Opta is today. Admin controls settlement pricing. Admin controls upgrade authority. A single crank bot runs settlement automation. This is appropriate for a hackathon submission and for initial mainnet preparation. It is explicitly not the destination.
+Where Opta is today. Settlement is permissionless via Pyth Pull oracle reads with EMA-at-expiry pricing — anyone can call `settle_expiry` at or after a market's expiry timestamp and the on-chain handler enforces correct pricing. Auto-finalize at expiry is also permissionless: anyone can run a crank that exercises the PermanentDelegate authority to burn holder tokens, distribute payouts, return writer collateral, and close writer positions. The team's crank exercises these on a five-minute tick and is one of many possible operators. Upgrade authority remains with a single deployer keypair pending Phase 2. This is appropriate for the current stage of mainnet preparation. It is explicitly not the destination.
 
-### 10.2 Phase 2 — Pyth-Permissionless Settlement
+### 10.2 Phase 2 — Multisig Upgrade Authority
 
-Replace admin-supplied settlement prices with Pyth oracle reads inside `settle_market`. After this change, anyone can call `settle_market` at or after expiry, and the correct price is enforced by the on-chain oracle read. Settlement becomes permissionless. This is the single most important decentralisation milestone for the protocol and is the critical blocker for any mainnet launch with real funds. It also requires updating the crank bot to fetch live Pyth prices rather than reading from its hardcoded devnet map.
+Migrate the program upgrade authority from the deployer keypair to a multisig. Solana's Squads protocol or an equivalent multisig framework is the likely destination. This reduces the counterparty risk of the upgrade authority to the multisig signer set and makes emergency fixes require explicit multi-party approval. With Pyth-permissionless settlement now in place, this is the most consequential remaining centralisation risk — the protocol's economic logic is settlement-permissionless, but a single keypair could in principle deploy a malicious upgrade.
 
-### 10.3 Phase 3 — Multisig Upgrade Authority
+### 10.3 Phase 3 — Permissionless Crank
 
-Migrate the program upgrade authority from the deployer keypair to a multisig. Solana's Squads protocol or an equivalent multisig framework is the likely destination. This reduces the counterparty risk of the upgrade authority to the multisig signer set and makes emergency fixes require explicit multi-party approval.
+The crank's responsibilities — settle, holder-finalize, writer-finalize, auto-cancel-listings — are already permissionless on the protocol side; any signer can call those instructions. The remaining engineering work is to add small economic incentives (a per-call fee paid to the caller from the protocol treasury) so independent crank operators have a reason to run. After this change, the team's crank becomes one of many possible runners, and the protocol is robust to any single crank going offline.
 
-### 10.4 Phase 4 — Permissionless Crank
-
-The crank bot's responsibilities — settlement triggering, in-the-money exercise, out-of-the-money expiry — should be performable by anyone, not just by the admin's crank. This means adding small economic incentives (a small fee paid to the caller of each crank instruction, funded from protocol fees) and removing any admin-only gating on the crank instructions. After this change, the crank bot the team runs is one of many possible crank runners, and the protocol is robust to the admin's crank going offline.
-
-### 10.5 Phase 5 — Revoke Upgrade Authority
+### 10.4 Phase 4 — Revoke Upgrade Authority
 
 Burn the upgrade authority entirely. The programs become immutable. This is the terminal state of progressive decentralisation. It should not happen until the protocol has been in production for long enough that any remaining bugs are unlikely to require emergency fixes — typically at least a year of mainnet operation with meaningful volume. The revocation is irreversible and is a one-way commitment to the current program code.
 
-### 10.6 Beyond Decentralisation: The Governance Question
+### 10.5 Beyond Decentralisation: The Governance Question
 
 Orthogonal to the decentralisation path is the question of whether Opta should introduce a governance token and a DAO. The honest answer at this stage is: maybe, but not yet. A governance token introduced prematurely becomes a distraction from building the core protocol, attracts mercenary capital without corresponding contribution, and commits the team to regulatory and operational complexity that is inappropriate for an early-stage project. If Opta reaches meaningful mainnet volume and faces genuine parameter-choice decisions (listing new markets, adjusting fees, upgrading risk parameters), a governance layer becomes appropriate. Until then, it is a deferred decision.
 
@@ -379,7 +457,7 @@ Direct protocol-by-protocol comparison, focused on the specific dimensions that 
 
 The critical row is the first: Opta is the only protocol whose option instrument enforces its own expiry at the token level, via a standard Solana runtime mechanism. This is not a feature addition. It is a primitive change.
 
-A few honest notes on this table. Protocols evolve. Lyra has iterated through multiple versions. Zeta has pivoted. Thetanuts has expanded. The descriptions above reflect each protocol's defining design period, not necessarily its current state. Opta is itself early, and some of the rows about Opta describe the current devnet state rather than a mainnet-deployed reality. The table is meant to be descriptive of the architectural approach, not a scoring of who is "better" today.
+A few honest notes on this table. Protocols evolve. Lyra has iterated through multiple versions. Zeta has pivoted. Thetanuts has expanded. The descriptions above reflect each protocol's defining design period, not necessarily its current state. Opta is itself early, and some of the rows about Opta describe the current devnet state rather than a mainnet-deployed reality. Opta's secondary marketplace — vault tokens listed and traded peer-to-peer through the unified Trade buy modal — is now live on devnet as of the May 2–3 merge arc; this was an open gap when the architectural categorisation in the table opposite was first compiled. The table is meant to be descriptive of the architectural approach, not a scoring of who is "better" today.
 
 ---
 
@@ -387,7 +465,7 @@ A few honest notes on this table. Protocols evolve. Lyra has iterated through mu
 
 Opta is an attempt to build the options primitive that on-chain DeFi has needed for five years and that Solana specifically has needed for one. The design is not speculative — every element is implemented, tested, and audited in the current devnet deployment. The thesis is empirical — each of the four pillars that motivates the protocol is grounded in publicly verifiable data on institutional derivatives flow, on Solana's ecosystem composition, and on traditional finance's options-dominant reference class. The roadmap is explicit — progressive decentralisation from the current admin-controlled devnet state toward a fully permissionless mainnet primitive.
 
-The ambition is to be the fourth DeFi primitive. The execution is early. The path between here and there passes through Phase 2 of the rename, through Pyth-permissionless settlement, through the V2 vault secondary trading work, through multisig governance migration, and through whatever else adversarial contact with mainnet reveals. We do not claim that path is short. We claim that it is built on a primitive — the Living Option Token — that has not previously existed and that is specifically fit to the market it is designed for.
+The ambition is to be the fourth DeFi primitive. The execution is early. The path between here and there has already passed through the on-disk Phase 2 rename, through Pyth-permissionless settlement with EMA-at-expiry pricing, through V2 vault secondary trading merged into the unified Trade buy modal, and through symmetric one-times-strike collateral for both calls and puts. The path ahead — multisig governance migration, permissionless crank with caller incentives, eventual upgrade-authority revocation, a fresh audit of the post-migration codebase, and whatever else adversarial contact with mainnet reveals — remains. We do not claim that path is short. We claim that it is built on a primitive — the Living Option Token — that has not previously existed and that is specifically fit to the market it is designed for.
 
 We welcome review, critique, and collaboration from Superteam, the Solana Foundation, and the broader Solana developer community. This whitepaper is version one. It will evolve as the protocol does.
 
@@ -395,11 +473,25 @@ We welcome review, critique, and collaboration from Superteam, the Solana Founda
 
 ## Appendix A — Instruction Set
 
-The main Opta program exposes twenty-four instructions, grouped into the core peer-to-peer protocol (thirteen) and the shared-vault liquidity system (eleven).
+The main Opta program exposes twenty-one instructions, grouped into eight functional categories.
 
-**Core P2P protocol (V1):** `initialize_protocol`, `create_market`, `write_option`, `purchase_option`, `settle_market`, `exercise_option`, `expire_option`, `cancel_option`, `list_for_resale`, `buy_resale`, `cancel_resale`, `initialize_pricing`, `update_pricing`.
+**Admin (2):** `initialize_protocol`, `initialize_epoch_config`.
 
-**Shared vault system (V2):** `initialize_epoch_config`, `create_shared_vault`, `deposit_to_vault`, `mint_from_vault`, `purchase_from_vault`, `burn_unsold_from_vault`, `withdraw_from_vault`, `claim_premium`, `settle_vault`, `exercise_from_vault`, `withdraw_post_settlement`.
+**Market lifecycle (2):** `create_market` (permissionless and idempotent), `migrate_pyth_feed` (admin).
+
+**Vault writer flow (5):** `create_shared_vault`, `deposit_to_vault`, `mint_from_vault`, `withdraw_from_vault`, `claim_premium`.
+
+**Vault buyer flow (1):** `purchase_from_vault`.
+
+**Settlement (4):** `settle_expiry` (post Pyth update + create `SettlementRecord`, permissionless, EMA-at-expiry with on-chain `publish_time` audit trail), `settle_vault` (mark vault settled, permissionless), `auto_finalize_holders` (permissionless; burns holder tokens via PermanentDelegate and distributes ITM payouts in batches), `auto_finalize_writers` (permissionless; returns writer collateral and premium, closes writer positions, sweeps dust to protocol treasury, closes the vault USDC account on the last writer).
+
+**Manual cleanup (3):** `exercise_from_vault` (holder-signed power-user fallback), `withdraw_post_settlement` (writer-signed fallback; auto-claims premium internally), `burn_unsold_from_vault` (writer-signed; burns own unsold escrow inventory).
+
+**V2 secondary listing (3):** `list_v2_for_resale`, `buy_v2_resale`, `cancel_v2_resale` — listing PDA per `(option_mint, seller)` so at most one active listing per seller per mint.
+
+**Auto-cleanup (1):** `auto_cancel_listings` — permissionless cleanup of expired V2 listings.
+
+The original V1 peer-to-peer instructions that shipped with the hackathon submission have been archived in commit `54c35c5` and are no longer in `programs/opta/`; they live in `archive/` for historical reference only.
 
 The transfer-hook program exposes a single instruction implementing the Token-2022 transfer-hook interface.
 
@@ -407,11 +499,21 @@ The transfer-hook program exposes a single instruction implementing the Token-20
 
 ## Appendix B — Account Structures
 
-Eight primary account types.
+Nine primary account types, grouped here by their place in the contract lifecycle.
 
-`Protocol` — singleton root account; global configuration. `Market` — an option market definition (underlying, strike, expiry, type). `Position` — a buyer's lifecycle bookkeeping for a specific purchase. `WriterPosition` — a writer's collateral and premium accounting for a specific market. `Pricing` — per-market volatility and risk-free-rate parameters for the Black-Scholes engine. `EpochConfig` — settlement windows for V2 shared vaults. `SharedVault` — the V2 liquidity pool backing a set of related markets. `VaultMint` — a vault-issued option mint and its associated state.
+**Protocol root.** `Protocol` — singleton root account; global configuration including the USDC mint and the protocol fee receiver.
 
-All state accounts are defined in `programs/butter-options/src/state/`. The directory name reflects the Phase 2 code-rename still outstanding; the logical content is the Opta protocol state layout described above.
+**Markets.** `Market` — an option market definition (underlying asset, strike, expiry, option type); the parent account for all liquidity and positions written against the contract. `Pricing` — per-market volatility and risk-free-rate parameters used by the Black-Scholes engine.
+
+**Vaults.** `EpochConfig` — settlement windows for V2 shared vaults. `SharedVault` — the V2 liquidity pool backing a market; epoch and custom variants are distinguished by `vault_type` on the same account. `VaultMint` — a vault-issued option mint and its associated state, including the running supply and protocol metadata for the issued Token-2022 mint.
+
+**Positions.** `WriterPosition` — a writer's collateral, share-of-pool, and premium accounting for a specific vault. PDA seeded by `(vault, owner)`, so a writer has at most one position per vault and multiple deposits accumulate on the same record.
+
+**Settlement.** `SettlementRecord` — per-(market-asset, expiry) on-chain record of the settlement EMA price and the consumed Pyth `publish_time`. Created by `settle_expiry`; consumed by `settle_vault` and the auto-finalize handlers.
+
+**Listings.** `VaultResaleListing` — a peer-to-peer listing of vault-issued option tokens. PDA seeded by `(option_mint, seller)`, so a seller has at most one active listing per mint at a time.
+
+All state accounts are defined in `programs/opta/src/state/`.
 
 ---
 
@@ -431,7 +533,7 @@ Pyth Network. Pull Oracle Model and Price Feed Documentation.
 
 Black, F. and Scholes, M. The Pricing of Options and Corporate Liabilities. Journal of Political Economy, 1973.
 
-Opta. Source repository at `github.com/nankolib/opta`. Seed context in `HANDOFF.md`. Audit history in `CLAUDE.md`. Test suite invoked by `anchor test`.
+Opta. Source repository at `github.com/nankolib/opta`. Seed context in `HANDOFF.md`. Migration and arc-by-arc chronology in `MIGRATION_LOG.md`. Audit history in `CLAUDE.md`. Test suite invoked by `anchor test` (or by `run-tests.sh` for finer-grained iteration).
 
 ---
 

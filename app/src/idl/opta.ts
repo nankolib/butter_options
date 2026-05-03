@@ -3700,6 +3700,11 @@ export type Opta = {
       "code": 6039,
       "name": "priceUpdateTooFarFromExpiry",
       "msg": "Pyth price update publish_time is more than 60s after vault expiry"
+    },
+    {
+      "code": 6040,
+      "name": "priceConfidenceTooWide",
+      "msg": "Pyth EMA confidence interval exceeds MAX_CONF_BPS at settlement"
     }
   ],
   "types": [

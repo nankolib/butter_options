@@ -60,6 +60,15 @@ pub const PYTH_MAX_AGE_SECS: u64 = 86_400;
 /// expiry." One-sided: publish_time must be in [expiry, expiry + 60].
 pub const EXPIRY_WINDOW_SECS: i64 = 60;
 
+/// Maximum Pyth EMA confidence width tolerated at settlement, in basis
+/// points of the EMA price. Settlement reverts when
+/// `ema_conf * 10_000 > abs(ema_price) * MAX_CONF_BPS`. 200 bps (2%) is
+/// the audit-suggested default — broad enough to absorb routine Pyth
+/// noise on blue-chip feeds, tight enough to reject the wide-conf prints
+/// that surface during oracle-stress / aggregator-divergence events.
+/// See audit Run-6 finding CRIT-2.
+pub const MAX_CONF_BPS: u16 = 200;
+
 pub fn handle_settle_expiry(
     ctx: Context<SettleExpiry>,
     asset_name: String,
@@ -91,7 +100,19 @@ pub fn handle_settle_expiry(
     let exponent = pu.price_message.exponent;
     let publish_time = pu.price_message.publish_time;
 
-    // 3. Expiry-window gate (replaces the old "freshness vs clock" check).
+    // 3. Confidence-interval gate (CRIT-2). Reject prints whose EMA
+    //    confidence width exceeds MAX_CONF_BPS of the EMA price. Pyth
+    //    publishes wide-conf updates during stress events; settling
+    //    against one would lock in a price hundreds of bps off true.
+    let conf = pu.price_message.ema_conf as u128;
+    let abs_price = ema_price.unsigned_abs() as u128;
+    require!(
+        conf.checked_mul(10_000).ok_or(OptaError::MathOverflow)?
+            <= abs_price.checked_mul(MAX_CONF_BPS as u128).ok_or(OptaError::MathOverflow)?,
+        OptaError::PriceConfidenceTooWide
+    );
+
+    // 4. Expiry-window gate (replaces the old "freshness vs clock" check).
     //    publish_time MUST sit in [expiry, expiry + EXPIRY_WINDOW_SECS].
     require!(
         publish_time >= expiry,
@@ -102,20 +123,20 @@ pub fn handle_settle_expiry(
         OptaError::PriceUpdateTooFarFromExpiry
     );
 
-    // 4. Backstop staleness floor: don't settle vaults so late that we
+    // 5. Backstop staleness floor: don't settle vaults so late that we
     //    can't even reach the historical update's publish_time within
     //    1 day of the on-chain clock. Operational SLO, not a security
-    //    gate (the gate is step 3).
+    //    gate (the gates are steps 3 and 4).
     require!(
         publish_time.saturating_add(PYTH_MAX_AGE_SECS as i64) >= clock.unix_timestamp,
         GetPriceError::PriceTooOld
     );
 
-    // 5. Normalize Pyth's (i64 price, i32 exponent) to u64 USDC 6-decimal.
+    // 6. Normalize Pyth's (i64 price, i32 exponent) to u64 USDC 6-decimal.
     //    Rejects price <= 0 (InvalidSettlementPrice) and overflow (MathOverflow).
     let settlement_price = pyth_price_to_usdc(ema_price, exponent)?;
 
-    // 6. Populate the record
+    // 7. Populate the record
     let record = &mut ctx.accounts.settlement_record;
     record.asset_name = asset_name.clone();
     record.expiry = expiry;

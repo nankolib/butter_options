@@ -697,6 +697,92 @@ describe("opta", () => {
   });
 
   // ===========================================================================
+  // settle_expiry — confidence-interval gate (CRIT-2 audit fix)
+  // ===========================================================================
+  // The handler rejects PriceUpdateV2 accounts whose ema_conf is wider than
+  // MAX_CONF_BPS=200 (2%) of |ema_price|. We mint three fixtures with conf
+  // dialed to: just-under boundary (passes), exactly at boundary (passes,
+  // <= is inclusive), and just-over boundary (reverts PriceConfidenceTooWide).
+  // Pinned to baseTime so the window-gate gap is exactly +5s.
+  // ===========================================================================
+  describe("settle_expiry — confidence-interval check (CRIT-2)", () => {
+    const CONF_UNDER_PK = fixturePubkey("sol-180-conf-just-under");
+    const CONF_EDGE_PK  = fixturePubkey("sol-180-conf-at-edge");
+    const CONF_OVER_PK  = fixturePubkey("sol-180-conf-just-over");
+
+    let baseTime: number;
+    let underExpiry: BN;
+    let edgeExpiry: BN;
+    let overExpiry: BN;
+
+    before(async function () {
+      this.timeout(120_000);
+      baseTime = getFixtureBaseTime();
+      underExpiry = new BN(baseTime + 100);
+      edgeExpiry  = new BN(baseTime + 101);
+      overExpiry  = new BN(baseTime + 102);
+      // Wait until past all three expiries.
+      const target = baseTime + 103;
+      const waitMs = Math.max(0, (target - Math.floor(Date.now() / 1000)) * 1000);
+      if (waitMs > 0) await sleep(waitMs);
+    });
+
+    it("accepts ema_conf just under the MAX_CONF_BPS boundary", async () => {
+      const [marketPda] = deriveMarketPda("SOL");
+      const [settlementPda] = deriveSettlementPda("SOL", underExpiry);
+      await program.methods
+        .settleExpiry("SOL", underExpiry)
+        .accountsStrict({
+          caller: admin.publicKey,
+          market: marketPda,
+          priceUpdate: CONF_UNDER_PK,
+          settlementRecord: settlementPda,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+      const rec = await program.account.settlementRecord.fetch(settlementPda);
+      assert.equal(rec.assetName, "SOL");
+    });
+
+    it("accepts ema_conf exactly at the MAX_CONF_BPS boundary (inclusive)", async () => {
+      const [marketPda] = deriveMarketPda("SOL");
+      const [settlementPda] = deriveSettlementPda("SOL", edgeExpiry);
+      await program.methods
+        .settleExpiry("SOL", edgeExpiry)
+        .accountsStrict({
+          caller: admin.publicKey,
+          market: marketPda,
+          priceUpdate: CONF_EDGE_PK,
+          settlementRecord: settlementPda,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+      const rec = await program.account.settlementRecord.fetch(settlementPda);
+      assert.equal(rec.assetName, "SOL");
+    });
+
+    it("rejects ema_conf just past the MAX_CONF_BPS boundary (PriceConfidenceTooWide)", async () => {
+      const [marketPda] = deriveMarketPda("SOL");
+      const [settlementPda] = deriveSettlementPda("SOL", overExpiry);
+      try {
+        await program.methods
+          .settleExpiry("SOL", overExpiry)
+          .accountsStrict({
+            caller: admin.publicKey,
+            market: marketPda,
+            priceUpdate: CONF_OVER_PK,
+            settlementRecord: settlementPda,
+            systemProgram: SystemProgram.programId,
+          })
+          .rpc();
+        assert.fail("Should have thrown PriceConfidenceTooWide");
+      } catch (err: any) {
+        assert.include(err.toString(), "PriceConfidenceTooWide");
+      }
+    });
+  });
+
+  // ===========================================================================
   // 4. migrate_pyth_feed — admin-only feed_id rotation
   // ===========================================================================
   // Uses BTC (not SOL) for the happy-path mutation: SOL has many downstream

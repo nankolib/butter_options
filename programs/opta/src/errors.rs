@@ -136,4 +136,7 @@ pub enum OptaError {
 
     #[msg("Pyth price update publish_time is more than 60s after vault expiry")]
     PriceUpdateTooFarFromExpiry,
+
+    #[msg("Pyth EMA confidence interval exceeds MAX_CONF_BPS at settlement")]
+    PriceConfidenceTooWide,
 }

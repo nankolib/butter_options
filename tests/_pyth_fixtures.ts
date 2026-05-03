@@ -224,6 +224,11 @@ export type FixtureSpec = {
   exponent: number;
   /// Offset from now (negative = in the past). 0 = "right now".
   publishTimeOffsetSec: number;
+  /// Optional override for emaConf. Defaults to 1_000_000 (well below
+  /// any realistic threshold for SOL/BTC at typical prices). The CRIT-2
+  /// conf-gate tests dial this above/at/below the MAX_CONF_BPS=200
+  /// boundary to exercise the new check in settle_expiry.
+  emaConf?: bigint;
 };
 
 export const ALL_FIXTURES: FixtureSpec[] = [
@@ -249,6 +254,17 @@ export const ALL_FIXTURES: FixtureSpec[] = [
   { name: "sol-180-window-before-5", feedIdHex: FEED_ID_HEX.SOL, price: BigInt("18000000000"), exponent: -8, publishTimeOffsetSec: 46 },
   // sol-180-window-too-late-120: publish_time=baseTime+172, paired expiry=baseTime+52, gap=+120s (PriceUpdateTooFarFromExpiry)
   { name: "sol-180-window-too-late-120", feedIdHex: FEED_ID_HEX.SOL, price: BigInt("18000000000"), exponent: -8, publishTimeOffsetSec: 172 },
+  // -- CRIT-2 conf-gate fixtures (audit Run-6, 2026-05-03) ---------------------
+  // Threshold: conf * 10_000 <= |ema_price| * MAX_CONF_BPS (=200). For
+  // SOL @ 180 (ema_price scaled = 18_000_000_000), boundary is conf =
+  // 360_000_000. Each fixture is paired with a distinct expiry to avoid
+  // SettlementRecord PDA collision; all three use a +5s window-gate gap.
+  // sol-180-conf-just-under: emaConf=359_999_999, paired expiry=baseTime+100, gap=+5 → PASS
+  { name: "sol-180-conf-just-under", feedIdHex: FEED_ID_HEX.SOL, price: BigInt("18000000000"), exponent: -8, publishTimeOffsetSec: 105, emaConf: BigInt(359_999_999) },
+  // sol-180-conf-at-edge:    emaConf=360_000_000 (boundary inclusive), expiry=baseTime+101, gap=+5 → PASS
+  { name: "sol-180-conf-at-edge",    feedIdHex: FEED_ID_HEX.SOL, price: BigInt("18000000000"), exponent: -8, publishTimeOffsetSec: 106, emaConf: BigInt(360_000_000) },
+  // sol-180-conf-just-over:  emaConf=360_000_001, expiry=baseTime+102, gap=+5 → REVERT (PriceConfidenceTooWide)
+  { name: "sol-180-conf-just-over",  feedIdHex: FEED_ID_HEX.SOL, price: BigInt("18000000000"), exponent: -8, publishTimeOffsetSec: 107, emaConf: BigInt(360_000_001) },
 ];
 
 /// Write all fixtures to /tmp and return the (name → pubkey) map plus the
@@ -275,7 +291,7 @@ export function writeAllFixtures(outDir: string = "/tmp"): {
       publishTime: BigInt(now + spec.publishTimeOffsetSec),
       prevPublishTime: BigInt(now + spec.publishTimeOffsetSec - 1),
       emaPrice: spec.price,
-      emaConf: BigInt(1_000_000),
+      emaConf: spec.emaConf ?? BigInt(1_000_000),
     };
     const body = serializePriceUpdateV2(fixture);
     const pk = fixturePubkey(spec.name);

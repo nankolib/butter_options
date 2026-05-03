@@ -17,6 +17,7 @@ use anchor_spl::token::{self, Token, TokenAccount, Transfer};
 use crate::errors::OptaError;
 use crate::events::VaultWithdrawn;
 use crate::state::*;
+use crate::utils::collateral::required_collateral_per_contract;
 
 pub fn handle_withdraw_from_vault(
     ctx: Context<WithdrawFromVault>,
@@ -55,14 +56,15 @@ pub fn handle_withdraw_from_vault(
         .checked_div(vault.total_shares as u128)
         .ok_or(OptaError::MathOverflow)? as u64;
 
-    // Check that withdrawal doesn't breach committed collateral
-    // FIX M-04: Match v1 collateral formula — calls require 2x strike
-    let collateral_per_contract = match vault.option_type {
-        OptionType::Call => vault.strike_price
-            .checked_mul(2)
-            .ok_or(OptaError::MathOverflow)?,
-        OptionType::Put => vault.strike_price,
-    };
+    // Check that withdrawal doesn't breach committed collateral.
+    // Symmetric 1× strike for both CALL and PUT — see utils/collateral.rs.
+    //
+    // Legacy vaults created under the previous 2× formula will have excess
+    // collateral above the new 1× committed amount; this gate correctly
+    // treats that excess as free (post-redeploy, legacy CALL writers may
+    // withdraw the previously-locked half).
+    let collateral_per_contract =
+        required_collateral_per_contract(vault.strike_price, vault.option_type);
     let writer_total_collateral = (writer_pos.shares as u128)
         .checked_mul(vault.total_collateral as u128)
         .ok_or(OptaError::MathOverflow)?

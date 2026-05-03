@@ -308,9 +308,9 @@ describe("auto-finalize-holders", () => {
       .signers([writer])
       .rpc();
 
-    // Deposit collateral. For calls, 2x strike per contract; for puts, 1x.
-    const collateralPerContract = opts.optionTypeIndex === 0
-      ? opts.strike.muln(2) : opts.strike;
+    // Deposit collateral. Symmetric 1× strike per contract for both CALL and PUT
+    // (see programs/opta/src/utils/collateral.rs).
+    const collateralPerContract = opts.strike;
     const totalQty = opts.numHolders * opts.quantityPerHolder;
     const totalCollateral = collateralPerContract.muln(totalQty).muln(2); // 2x buffer
     const [writerPosPda] = deriveWriterPositionPda(vaultPda, writer.publicKey);

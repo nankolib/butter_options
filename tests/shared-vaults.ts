@@ -1205,4 +1205,181 @@ describe("shared-vaults", () => {
         "Mint should have extension data (TransferHook, PermanentDelegate, Metadata)");
     });
   });
+
+  // =========================================================================
+  // TEST GROUP 9: Symmetric collateral (CALL == PUT)
+  // =========================================================================
+  //
+  // Post-fix invariant (2026-05-03): required collateral per contract is
+  // `strike` for both CALL and PUT — see programs/opta/src/utils/collateral.rs.
+  // This group creates a sibling PUT vault with the same strike + expiry as
+  // the existing epoch CALL vault, deposits exactly the new-formula
+  // requirement (no buffer), mints all available contracts, and asserts the
+  // committed-vs-free split matches the symmetric rule.
+  //
+  // Smoking-gun assertion: under the new 1× rule, depositing exactly
+  // strike × N USDC and minting N contracts leaves zero free collateral.
+  // A subsequent $1 withdraw must fail with CollateralCommitted. Under
+  // the old 2× rule, the mint itself would have failed with
+  // InsufficientVaultCollateral (would have needed 2 × strike × N = $2000
+  // but the deposit is only $1000). Reaching the withdraw assertion at
+  // all confirms the symmetric rule is live.
+  // =========================================================================
+  describe("9. Symmetric collateral (CALL == PUT)", () => {
+    let writerC: Keypair;
+    let writerCUsdcAccount: PublicKey;
+    let putVaultPda: PublicKey;
+    let putVaultUsdcPda: PublicKey;
+    let putWriterPosPda: PublicKey;
+    let putMintCreatedAt: BN;
+    let putOptionMintPda: PublicKey;
+    let putPurchaseEscrowPda: PublicKey;
+    let putVaultMintRecordPda: PublicKey;
+
+    const QTY = 5;
+    let TIGHT_DEPOSIT: BN; // strike × QTY, populated in before()
+
+    before(async () => {
+      // Tight deposit = exactly the new-formula required amount, no buffer.
+      TIGHT_DEPOSIT = strike.muln(QTY); // $200 × 5 = $1000 USDC
+
+      // Fresh writer to keep accounting clean (the existing epoch CALL
+      // vault is mid-lifecycle from prior test groups).
+      writerC = Keypair.generate();
+      const sig = await connection.requestAirdrop(writerC.publicKey, 10 * LAMPORTS_PER_SOL);
+      await connection.confirmTransaction(sig, "confirmed");
+      writerCUsdcAccount = await createTokenAccount(
+        connection, payer, usdcMint, writerC.publicKey,
+        undefined, undefined, TOKEN_PROGRAM_ID,
+      );
+      // Mint exactly the tight deposit amount.
+      await mintTo(
+        connection, payer, usdcMint, writerCUsdcAccount, payer,
+        TIGHT_DEPOSIT.toNumber(),
+      );
+
+      // Sibling PUT vault — same market + strike + expiry as the CALL
+      // vault, optionTypeIndex=1 makes the PDA unique.
+      [putVaultPda] = deriveSharedVaultPda(marketPda, strike, fridayExpiry, 1);
+      [putVaultUsdcPda] = deriveVaultUsdcPda(putVaultPda);
+      [putWriterPosPda] = deriveWriterPositionPda(putVaultPda, writerC.publicKey);
+    });
+
+    it("PUT vault accepts a tight 1× strike × N deposit and mints N contracts", async () => {
+      // Step 1: Create the PUT vault (epoch type, same expiry as the CALL vault).
+      await (program as any).methods
+        .createSharedVault(strike, fridayExpiry, { put: {} }, { epoch: {} }, usdcMint)
+        .accounts({
+          creator: writerC.publicKey,
+          market: marketPda,
+          sharedVault: putVaultPda,
+          vaultUsdcAccount: putVaultUsdcPda,
+          usdcMint,
+          protocolState: protocolStatePda,
+          epochConfig: epochConfigPda,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([writerC])
+        .rpc();
+
+      // Step 2: Deposit EXACTLY strike × QTY (= $1000). No buffer.
+      await (program as any).methods
+        .depositToVault(TIGHT_DEPOSIT)
+        .accounts({
+          writer: writerC.publicKey,
+          sharedVault: putVaultPda,
+          writerPosition: putWriterPosPda,
+          writerUsdcAccount: writerCUsdcAccount,
+          vaultUsdcAccount: putVaultUsdcPda,
+          protocolState: protocolStatePda,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([writerC])
+        .rpc();
+
+      const vaultAfterDeposit = await program.account.sharedVault.fetch(putVaultPda);
+      assert.equal(
+        vaultAfterDeposit.totalCollateral.toNumber(),
+        TIGHT_DEPOSIT.toNumber(),
+        "Total collateral should equal the deposited amount",
+      );
+
+      // Step 3: Mint exactly QTY contracts. Under the new 1× rule, this
+      // requires QTY × strike = TIGHT_DEPOSIT, exactly what we deposited.
+      // Under the old 2× rule, this would have required 2 × QTY × strike
+      // = $2000 and would have reverted with InsufficientVaultCollateral.
+      putMintCreatedAt = new BN(Math.floor(Date.now() / 1000));
+      [putOptionMintPda] = deriveVaultOptionMintPda(
+        putVaultPda, writerC.publicKey, putMintCreatedAt,
+      );
+      [putPurchaseEscrowPda] = deriveVaultPurchaseEscrowPda(
+        putVaultPda, writerC.publicKey, putMintCreatedAt,
+      );
+      [putVaultMintRecordPda] = deriveVaultMintRecordPda(putOptionMintPda);
+
+      const [eaml] = deriveExtraAccountMetaListPda(putOptionMintPda);
+      const [hookState] = deriveHookStatePda(putOptionMintPda);
+
+      const tx = new Transaction().add(EXTRA_CU);
+      const ix = await (program as any).methods
+        .mintFromVault(new BN(QTY), usdc(5), putMintCreatedAt) // $5 premium per contract
+        .accounts({
+          writer: writerC.publicKey,
+          sharedVault: putVaultPda,
+          writerPosition: putWriterPosPda,
+          market: marketPda,
+          protocolState: protocolStatePda,
+          optionMint: putOptionMintPda,
+          purchaseEscrow: putPurchaseEscrowPda,
+          vaultMintRecord: putVaultMintRecordPda,
+          transferHookProgram: HOOK_PROGRAM_ID,
+          extraAccountMetaList: eaml,
+          hookState,
+          systemProgram: SystemProgram.programId,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+          rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+        })
+        .signers([writerC])
+        .instruction();
+      tx.add(ix);
+      await provider.sendAndConfirm(tx, [writerC]);
+
+      // Verify: tight deposit + tight mint succeeded.
+      const pos = await program.account.writerPosition.fetch(putWriterPosPda);
+      assert.equal(
+        pos.optionsMinted.toNumber(), QTY,
+        "Writer C should have exactly QTY options minted under symmetric rule",
+      );
+    });
+
+    it("Withdrawing $1 from a fully-committed vault reverts with CollateralCommitted", async () => {
+      // Smoking gun: with TIGHT_DEPOSIT = strike × QTY and QTY options minted,
+      // the new 1× formula gives committed = strike × QTY = TIGHT_DEPOSIT.
+      // Free = 0. ANY non-zero withdraw must revert with CollateralCommitted.
+      //
+      // Note: the unclaimed-premium gate (FIX MEDIUM-01) passes here because
+      // no buyer has purchased yet (no premium accrued). So we land on the
+      // committed-vs-free check, which is the assertion this test exercises.
+      try {
+        await (program as any).methods
+          .withdrawFromVault(usdc(1))
+          .accounts({
+            writer: writerC.publicKey,
+            sharedVault: putVaultPda,
+            writerPosition: putWriterPosPda,
+            vaultUsdcAccount: putVaultUsdcPda,
+            writerUsdcAccount: writerCUsdcAccount,
+            protocolState: protocolStatePda,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .signers([writerC])
+          .rpc();
+        assert.fail("Should have reverted with CollateralCommitted");
+      } catch (e: any) {
+        assert.include(e.toString(), "CollateralCommitted");
+      }
+    });
+  });
 });

@@ -12,6 +12,7 @@ import {
   calculatePutPremium,
   getDefaultVolatility,
 } from "../../utils/blackScholes";
+import { requiredCollateralPerContract } from "../../utils/collateral";
 import { useWriteSubmit, type WriteSubmitResult } from "./useWriteSubmit";
 import { decodeError } from "../../utils/errorDecoder";
 
@@ -61,7 +62,7 @@ export const CustomVaultSection: FC<CustomVaultSectionProps> = ({
             ? calculateCallPremium(spot, strikeNum, days, baselineIv)
             : calculatePutPremium(spot, strikeNum, days, baselineIv)
           : 0;
-      const collateralPerContract = values.side === "call" ? strikeNum * 2 : strikeNum;
+      const collateralPerContract = requiredCollateralPerContract(strikeNum, values.side);
       const collateral = collateralPerContract * contractsNum;
 
       const result = await submit({

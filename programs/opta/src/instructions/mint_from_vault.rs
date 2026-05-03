@@ -32,6 +32,7 @@ const MONTHS: [&str; 12] = [
 
 // FIX I-04: Use shared time utilities instead of duplicated code
 use crate::utils::time::timestamp_to_month_day;
+use crate::utils::collateral::required_collateral_per_contract;
 
 pub fn handle_mint_from_vault(
     ctx: Context<MintFromVault>,
@@ -57,15 +58,15 @@ pub fn handle_mint_from_vault(
     // =========================================================================
     // Calculate writer's available collateral
     //
-    // FIX M-04: Match v1 collateral formula — calls require 2x strike.
+    // Symmetric 1× strike for both CALL and PUT — see utils/collateral.rs.
     // The writer can only mint options backed by their free (uncommitted) share.
+    //
+    // Legacy vaults created under the previous 2× formula will have excess
+    // collateral above the new 1× committed amount; the withdraw_from_vault
+    // gate now correctly treats that excess as free.
     // =========================================================================
-    let collateral_per_contract = match vault.option_type {
-        OptionType::Call => vault.strike_price
-            .checked_mul(2)
-            .ok_or(OptaError::MathOverflow)?,
-        OptionType::Put => vault.strike_price,
-    };
+    let collateral_per_contract =
+        required_collateral_per_contract(vault.strike_price, vault.option_type);
 
     let total_collateral_needed = quantity
         .checked_mul(collateral_per_contract)

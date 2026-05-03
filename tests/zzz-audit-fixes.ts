@@ -463,7 +463,7 @@ describe("audit-fixes", () => {
     let ctx: Awaited<ReturnType<typeof setupVaultScenario>>;
     const strike = usdc(100); // $100 strike
     const deposit = usdc(1000); // 1000 USDC
-    const quantity = 5; // 5 contracts (5 * $200 collateral = $1000)
+    const quantity = 5; // 5 contracts (5 × $100 strike × 1 = $500 required; deposit over-collateralizes)
 
     before(async function () {
       this.timeout(120_000);
@@ -601,7 +601,7 @@ describe("audit-fixes", () => {
   describe("CRITICAL-01: OTM settlement — writers get everything back", () => {
     let ctx: Awaited<ReturnType<typeof setupVaultScenario>>;
     const strike = usdc(110); // $110 — differentiated from ITM ($100) for vault PDA uniqueness
-    const deposit = usdc(1200); // 5 contracts × $110 × 2x = $1100 collateral required
+    const deposit = usdc(1200); // 5 contracts × $110 × 1 = $550 required; deposit over-collateralizes
 
     before(async function () {
       this.timeout(120_000);
@@ -690,7 +690,7 @@ describe("audit-fixes", () => {
   describe("HIGH-01: withdraw_post_settlement auto-claims unclaimed premium", () => {
     let ctx: Awaited<ReturnType<typeof setupVaultScenario>>;
     const strike = usdc(120); // $120 — differentiated for vault PDA uniqueness
-    const deposit = usdc(1300); // 5 contracts × $120 × 2x = $1200 collateral required
+    const deposit = usdc(1300); // 5 contracts × $120 × 1 = $600 required; deposit over-collateralizes
     const premiumPerContract = usdc(10); // $10 premium each
 
     before(async function () {
@@ -1134,7 +1134,7 @@ describe("audit-fixes", () => {
       this.timeout(60_000);
 
       // We need a separate vault with parameters that let us mint with small collateral.
-      // Redesign: use $10 strike so 2x collateral = $20/contract. $100 deposit = max 5 contracts.
+      // Redesign: use $10 strike so 1x collateral = $10/contract. $100 deposit = max 10 contracts.
       // But the market is already created with $100 strike. We need a new market.
 
       // Create a new vault with $10 strike on the SOL market (asset-only PDA).
@@ -1192,7 +1192,7 @@ describe("audit-fixes", () => {
         .signers([writer])
         .rpc();
 
-      // Mint 1 option ($10 strike, 2x = $20 collateral committed)
+      // Mint 1 option ($10 strike, 1× = $10 collateral committed)
       const mintCreatedAt1 = new BN(Math.floor(Date.now() / 1000));
       const [mintPda1] = deriveVaultOptionMintPda(vPda, writer.publicKey, mintCreatedAt1);
       const [escrowPda1] = deriveVaultPurchaseEscrowPda(vPda, writer.publicKey, mintCreatedAt1);
@@ -1283,9 +1283,9 @@ describe("audit-fixes", () => {
       assert.ok(firstClaim > 0, "First claim should be > 0");
 
       // Step 4: Writer withdraws 50% of shares (must burn unsold first to free collateral)
-      // Actually the 1 option is sold, so options_minted = 1 and committed = $20.
-      // Writer has $100 deposited, $20 committed, $80 free.
-      // Withdraw 50M shares (half of 100M) = $50 withdrawal. $50 > free($80) check passes.
+      // Actually the 1 option is sold, so options_minted = 1 and committed = $10.
+      // Writer has $100 deposited, $10 committed, $90 free.
+      // Withdraw 50M shares (half of 100M) = $50 withdrawal. Check passes ($50 ≤ free $90).
       const halfShares = usdc(50); // 50,000,000 shares
       await (program as any).methods
         .withdrawFromVault(halfShares)

@@ -8,6 +8,7 @@ import {
   calculatePutPremium,
   getDefaultVolatility,
 } from "../../utils/blackScholes";
+import { requiredCollateralPerContract } from "../../utils/collateral";
 
 type LiveQuoteCardProps = {
   asset: string | null;
@@ -70,8 +71,9 @@ export const LiveQuoteCard: FC<LiveQuoteCardProps> = ({
   const totalPremium =
     premiumPerContract != null && contracts > 0 ? premiumPerContract * contracts : null;
 
-  // Collateral required for the user's chosen contracts (matches Rust formula).
-  const collateralPerContract = side === "call" ? strike * 2 : strike;
+  // Collateral required for the user's chosen contracts. Helper lives in
+  // utils/collateral.ts and mirrors programs/opta/src/utils/collateral.rs.
+  const collateralPerContract = requiredCollateralPerContract(strike, side);
   const collateralRequired = contracts > 0 ? collateralPerContract * contracts : null;
 
   // Breakeven for the buyer (writer's max-profit threshold).

@@ -60,18 +60,19 @@ The differentiation comes from three intertwined design choices, each of which o
 - **GitHub remote:** `https://github.com/nankolib/opta.git`
 - **Current branch:** `master` (also pushed to `main` for hackathon judges; both branches stay in sync at every commit via explicit `git push origin master:main` refspec)
 - **Working tree:** clean (modulo five local-only audit/plan markdowns kept by policy: `WRITER_PF_AUDIT.md`, `WRITER_PF_PLAN.md`, `COLLATERAL_2X_AUDIT.md`, `COLLATERAL_2X_PREMIUM_FOLLOWUP.md`, `SETTLEMENT_PRICING_AUDIT.md`)
-- **Latest commits as of 2026-05-03:**
+- **Latest commits as of 2026-05-04:**
+  - `8e638b9` chore(idl): refresh frontend IDL after audit-fix arc redeploy
+  - `d0f0c2e` fix(security): HIGH-1 — validate protocol_state PDA in opta_transfer_hook init
+  - `8005cae` fix(security): CRIT-3 — admin gate on initialize_protocol via hardcoded deployer pubkey
+  - `ceef4af` fix(security): CRIT-2 — Pyth EMA confidence-interval gate at settle_expiry
+  - `ec53120` docs(whitepaper): refresh for May-3 reality + technical depth
+  - `42be174` docs(handoff): refresh for May-3 arcs + V2 secondary state
   - `15a3ac9` fix(portfolio): correct WriterRowAction import path in WrittenPositionsSection
   - `1480b3c` feat(portfolio): writer-side vault dashboard + solscan links
   - `a8b5f14` fix(collateral): symmetric 1x strike collateral for CALL and PUT (remove 2x asymmetry)
   - `4dc6250` feat(settlement): expiry-pinned EMA pricing + audit trail
   - `b28f201` docs: archive V2 secondary listing frontend plan
-  - `c5ce63c` feat(stage-trade-merge-7): final polish + smoke + post-tx polling fix
-  - `ef2b4dc` feat(stage-trade-merge-6): retire /marketplace, redirect, drop AppNav link
-  - `9a17a73` feat(stage-trade-merge-5): your-listing tag + headline self-exclusion + qty>inventory hint
-  - `22781de` feat(stage-trade-merge-4): unify BuyModal + lift resale flow into trade
-  - `4f2f5e6` feat(stage-secondary-7.5): cluster-aware UI — devnet labels + solscan URLs
-  - …earlier history (auto-finalize, P1–P6 migration, V2 secondary scaffolding) accessible via `git log`
+  - …earlier history (V2 secondary, trade-merge, auto-finalize, P1–P6 migration) accessible via `git log`
 
 Author throughout: **nankolib** (single-developer, Claude-paired).
 
@@ -117,6 +118,23 @@ Two same-day side effects:
 2. **Build-fix follow-up `15a3ac9`.** Step 7 of the writer-PF arc moved the `WriterRowAction` export from `WriterPositionsTable.tsx` to `writerRows.ts` (the data module — single-source-of-truth refactor). `PortfolioPage.tsx` and `WriterPositionsTable.tsx` itself were updated; `WrittenPositionsSection.tsx` kept the stale import path and was missed in the audit. **Local `tsc --noEmit` returned clean** because Windows incremental cache still had the pre-refactor module shape visible — but Vercel's clean-room build correctly rejected the import. The follow-up commit fixed the one-line import. Lesson preserved in §11.
 
 Local audit chain: `WRITER_PF_AUDIT.md` (investigation: data fetched, UI absent — verdict C, hybrid lopsided toward A) and `WRITER_PF_PLAN.md` (locked design decisions D1–D10 + D5b live-update).
+
+### What changed in the audit-fix arc (May 4 2026, commits `ceef4af` → `8e638b9`)
+
+A four-commit security arc that closed three findings from a Run-6 external audit on the Rust on-chain code. Findings were surgical and isolated; the larger CRIT-1 (settlement-race / writer-drains-before-holders) and CRIT-4 (CALL undercollateralization disclosure) were intentionally out of scope and parked for separate arcs.
+
+- **CRIT-2 — Pyth EMA confidence-interval gate** (commit `ceef4af`). `settle_expiry` validated `verification_level` + `feed_id` + `publish_time` but never read `pu.price_message.ema_conf`. A wide-conf Pyth print published during oracle stress could be accepted as canonical settlement. Added `MAX_CONF_BPS = 200` (2%) constant in `programs/opta/src/instructions/settle_expiry.rs` and a `require!()` that reverts with new error `PriceConfidenceTooWide` (code 6040) when `ema_conf * 10_000 > |ema_price| * MAX_CONF_BPS`. Boundary inclusive on the pass side. Three new tests cover just-under / at-edge / just-over; existing fixtures keep the default 1_000_000 conf via the new optional `emaConf` override on `FixtureSpec`.
+- **CRIT-3 — admin gate on `initialize_protocol`** (commit `8005cae`). Original handler was unauthenticated; first caller became admin permanently. Added hardcoded `DEPLOYER_PUBKEY` const (`5YRMuuoY3P7z5GeRAAQND7BxgNdmPSa6CSPCJLca1zZk`, the wallet at `/home/nanko/.config/solana/id.json`) and `require_keys_eq!(admin, DEPLOYER_PUBKEY, Unauthorized)` at the top of the handler. Hardcoded approach over upgrade-authority lookup chosen for surgical simplicity; if the program is ever redeployed with a different deployer key, the constant must update in lockstep. Existing devnet `ProtocolState` predates the gate — the new check only fires on FRESH `initialize_protocol` calls.
+- **HIGH-1 — `protocol_state` PDA validation in `opta_transfer_hook`** (commit `d0f0c2e`). The hook's `initialize_extra_account_meta_list` stored the caller-supplied `protocol_state` verbatim with no validation. A frontrunner could pre-init the hook with a malicious `protocol_state`, breaking legitimate `mint_from_vault` CPIs (init-already-in-use) AND fixing the malicious pubkey as the protocol-escrow recognition for that mint (post-expiry transfers from attacker accounts would bypass the expiry check via the protocol-escrow allow path). Added two consts in `programs/opta-transfer-hook/src/lib.rs`: `OPTA_PROGRAM_ID` and `OPTA_PROTOCOL_SEED` (mirroring source-of-truth in `programs/opta/src/lib.rs:26` and `programs/opta/src/state/protocol.rs:48`). Handler now derives the expected `protocol_state` PDA and `require_keys_eq!`'s the caller's arg against it; new error `InvalidProtocolState` on the hook's `TransferHookError`.
+- **IDL chore** (commit `8e638b9`). Frontend IDL bundle refreshed (`app/src/idl/opta.json` + `opta.ts`) so error decoders surface `PriceConfidenceTooWide` by name. Hook IDL stays out of `app/src/idl/` — the frontend never invokes the hook directly, only references its program ID + PDA-seed helpers.
+
+**Test footprint:** 5 new tests in `tests/opta.ts` (3 CRIT-2 boundary cases + 1 CRIT-3 negative + 1 HIGH-1 negative); 3 new boundary fixtures in `tests/_pyth_fixtures.ts`; positive case for HIGH-1 covered implicitly by every existing successful `mint_from_vault` test. **Suite went from 73/34 → 78/34** with no regressions on previously-green tests; the 34 baseline reds are dominated by `PriceUpdateBeforeExpiry` cascades from older `Date.now()`-based fixtures (documented in `tests/_pyth_fixtures.ts:184` as deferred to a separate refactor arc).
+
+**Devnet redeploys:** `opta_transfer_hook` upgraded to slot **459869839** (was 459388006); `opta` upgraded to slot **459869998** (was 459797314). Both IDLs auto-upgraded inline by `anchor deploy` (no separate `anchor idl upgrade` needed). Total wallet cost: 0.018 SOL for both program upgrades.
+
+**Smoke verification:** on-chain IDL fetched post-deploy via `anchor idl fetch` confirms both new error variants land on devnet — `PriceConfidenceTooWide` on opta and `InvalidProtocolState` on the hook. Local test suite proves both gates fire with the same `.so` binaries that were deployed.
+
+Audit report at `.context/outputs/6/audit-report-part1.md` (gitignored). Out-of-scope findings (CRIT-1, CRIT-4, HIGH-2/3/4/5, MEDIUM/LOW/INFO) tracked for follow-up arcs; CRIT-1 is the most consequential remaining item — it's a settlement-race bug where writers can drain before ITM holders exercise.
 
 ---
 
@@ -233,8 +251,8 @@ The original V1 P2P instructions (`write_option`, `purchase_option`, `settle_mar
 
 | What | Where |
 |---|---|
-| Both programs | **Solana devnet**, program IDs above. Last upgraded slots: opta = `459797314` (collateral symmetry redeploy 2026-05-03; settlement-pricing fix at slot `459782078` was earlier the same day; writer-PF arc was frontend-only); opta_transfer_hook = `458867413` (Pyth migration upgrade 2026-04-29, unchanged since) |
-| Frontend | **Vercel** — `https://opta-solana.vercel.app` (root dir `app/`, SPA rewrite via `vercel.json`). Auto-deploys on push to `main`. Live at `15a3ac9` as of 2026-05-03 ~15:24Z (post-build-fix) |
+| Both programs | **Solana devnet**, program IDs above. Last upgraded slots: opta = `459869998` (audit-fix arc redeploy 2026-05-04; collateral symmetry was at `459797314`; settlement-pricing was at `459782078`); opta_transfer_hook = `459869839` (audit-fix arc redeploy 2026-05-04 — first hook upgrade since the Pyth migration at `458867413` 2026-04-29) |
+| Frontend | **Vercel** — `https://opta-solana.vercel.app` (root dir `app/`, SPA rewrite via `vercel.json`). Auto-deploys on push to `main`. Live at `15a3ac9` as of 2026-05-03 ~15:24Z; the audit-fix arc IDL chore (`8e638b9`) has not yet been pushed to `main` at the time this section was written — for the live-site head run `git log -1 origin/main --oneline` |
 | Crank bot | Run manually via `npm start` from `crank/` (or as a background process under WSL with `nohup`). Reads `OPTA_RPC_URL` and `OPTA_CRANK_KEYPAIR` from env. **NOT** running as a daemon — operator must start it explicitly |
 | Devnet USDC mint | `AytU5HUQRew9VdUdrzQuZvZ7s14pHLiYjAF5WqdK3oxL` (in `app/src/utils/constants.ts`) |
 | Devnet faucet wallet | Public keypair baked into `app/src/utils/constants.ts` for demo USDC distribution; in-code warnings flag it |
@@ -250,8 +268,8 @@ The `app/.env.example` and `crank/README.md` document the expected variable name
 
 ## 6. Current State — What Works
 
-- All **21 instructions** deployed and live on devnet; main program at slot `459797314`, transfer hook at slot `458867413`
-- **107 tests in the suite** as of the collateral-fix redeploy at slot `459797314`; **~73 passing / ~34 failing**. The writer-PF arc was frontend-only and did not change the Rust test suite. The pass rate (~68%) reflects cumulative test debt across the migration, settlement-pricing, and collateral arcs — the failures are dominated by fixture staleness and the historical `PriceTooOld` cascade rather than handler-correctness bugs (see `MIGRATION_LOG.md` test-harness gotchas; see §10 Tier-2 for the planned refresh)
+- All **21 instructions** deployed and live on devnet; main program at slot `459869998`, transfer hook at slot `459869839` (both bumped in the May-4 audit-fix arc)
+- **112 tests in the suite** post the audit-fix arc; **78 passing / 34 failing**. Five new tests landed (3 CRIT-2 boundary cases + 1 CRIT-3 negative + 1 HIGH-1 negative), zero regressions on previously-green tests. The 34 baseline reds are unchanged from the May-3 state — dominated by `PriceUpdateBeforeExpiry` cascades from older `Date.now()`-based fixtures (documented in `tests/_pyth_fixtures.ts:184` as deferred to a separate refactor arc) and the historical `PriceTooOld` cascade from the Pull oracle migration. See §10 Tier-2 for the planned refresh
 - **Full frontend** live on Vercel: Trade (Deribit-style chain with secondary listings unified into the buy modal), Write, Portfolio (now two-ledger — buyer side + writer side as parallel sections), Markets (with "+ New Market" promoted to AppNav), Docs
 - **On-chain Black-Scholes** pricing + 5 Greeks via solmath (~50K CU)
 - **Hermes-driven catalog + spot prices** — fetches live from `hermes.pyth.network`
@@ -296,7 +314,13 @@ Both prior smoke runs are detailed in `MIGRATION_LOG.md`.
 
 ## 7. Current State — In Progress / Known Gaps
 
-### Closed today
+### Closed in the audit-fix arc (May 4 2026)
+
+- **CRIT-2 — Pyth EMA confidence-interval gate** — closed by `ceef4af`. `settle_expiry` now reverts `PriceConfidenceTooWide` (code 6040) when the EMA conf width exceeds `MAX_CONF_BPS = 200` (2%) of `|ema_price|`.
+- **CRIT-3 — admin gate on `initialize_protocol`** — closed by `8005cae`. Hardcoded deployer pubkey gate at the top of the handler; first-caller-becomes-admin attack neutralized.
+- **HIGH-1 — `protocol_state` PDA validation in opta_transfer_hook** — closed by `d0f0c2e`. Hook now derives the expected canonical PDA from `OPTA_PROGRAM_ID` + `OPTA_PROTOCOL_SEED` and rejects any `protocol_state` arg that doesn't match.
+
+### Closed in the May 3 polish run
 
 - **Settlement late-crank drift bug** — closed by `4dc6250` (EMA at expiry-time + 60s window + on-chain audit trail).
 - **2× CALL collateral asymmetry** — closed by `a8b5f14` (symmetric 1× strike for both sides, Model B premium framing locked in UI copy).
@@ -314,6 +338,8 @@ Both prior smoke runs are detailed in `MIGRATION_LOG.md`.
 - **Frontend bug — Stale market list on /markets after creating a market via AppNav.** The `+ New Market` modal owns its own state; the Markets page's `useMarketsData` doesn't refetch when the modal closes. User has to refresh.
 - **`burn_unsold_from_vault` post-finalize sequencing.** `burn_unsold_from_vault` requires a live `WriterPosition`; auto-finalize closes the position. The cleanup window is BEFORE the writer-finalize pass, not after. Two follow-up paths documented in `MIGRATION_LOG.md`: (1) reorder crank to call `burn_unsold` before writer-finalize, or (2) add a permissionless `auto_burn_unsold_escrow` instruction. Both deferred.
 - **Token-2022 / Pyth pull edge cases not exhaustively tested** — the auto-finalize Step 6 smoke validated three vaults end-to-end, but ITM payout, secondary-market holder, and multi-holder scenarios have not all been exercised in tests.
+- **Broken BTC PUT vault on devnet (parked, follow-up arc).** User-reported $750k BTC PUT $75,000 / 8 May vault stuck at `total_options_minted = 0` despite full collateral + populated `WriterPosition`. On-chain state is well-formed (vault `3UKiNyDB3qmXG3h2NHG3Tmrzvq7UPPFbLxfs6wcTqtGD`, creator `GkG1UX8ML4UzNSGUtJxBWfRRWCdH7YejdhfuxFWTRFAx`, vault_type Epoch); user has never successfully minted from a PUT or Epoch vault, only from Custom CALLs. `mint_from_vault` validation math passes cleanly for these inputs (verified analytically: u128 share calc 5.6e23 well under overflow, `available == total_collateral_needed`). 5 hypotheses surveyed; can't isolate the failure mode without a browser-console repro (Phantom popup behavior, tx signature, exact error). Diagnosis report sits in chat 2026-05-04. Vault funds recoverable via `withdraw_from_vault` once root cause is identified — `premium_claimed = 0` already, no claim-first gate to navigate.
+- **CRIT-1 / CRIT-4 / HIGH-2/3/4/5 / MEDIUM / LOW / INFO from audit Run-6** — out of scope for the May-4 audit-fix arc; tracked for follow-up. CRIT-1 is the most consequential — a settlement-race bug where writers can drain `withdraw_post_settlement` before ITM holders exercise. Audit report at `.context/outputs/6/audit-report-part1.md` (gitignored).
 
 ### Resolved during the May 1–3 polish run
 
@@ -346,7 +372,10 @@ Both prior smoke runs are detailed in `MIGRATION_LOG.md`.
 - **Writer dashboard uses live-update via refetchAll + `commitment="confirmed"` (D5b pattern).** No setTimeout, no polling. After every successful writer action, the unified `onSuccess` callback awaits both `refetchAll` and `useVaults().refetch`; cells reflect fresh on-chain state within ~2 seconds. Buyer actions inherit the same chain. Demo-verified on 2026-05-03.
 - **Vault PDA is the canonical Solscan target for both ledger sides.** Buyer rows and writer rows link to the SharedVault PDA, not the option mint or the WriterPosition. The vault is the most informative drill-down because it shows pool-level state (collateral, total minted/sold, settlement status). v1 buyer rows fall back to option mint; defensive only — no v1 rows are emitted today.
 - **Single repo, two-program Anchor workspace** — programs at `programs/opta/` and `programs/opta-transfer-hook/`.
-- **Security:** 5 Rust audit rounds + 2 frontend audits, **18 findings fixed, 0 remaining** as of commit `ff08458`. Re-audited fixes from the April 12 re-audit shipped as part of the auto-finalize arc; today's three arcs were not re-audited externally. Fresh audit recommended before any mainnet talk.
+- **Pyth confidence interval gated at settlement.** `MAX_CONF_BPS = 200` (2% of `|ema_price|`); reverts `PriceConfidenceTooWide` (code 6040). Locked 2026-05-04 to close audit Run-6 finding CRIT-2. Threshold is a global constant in `programs/opta/src/instructions/settle_expiry.rs`; per-asset tuning would require promoting it to a `ProtocolState` field — out of scope for this arc.
+- **`initialize_protocol` is gated to a hardcoded deployer pubkey.** `DEPLOYER_PUBKEY = pubkey!("5YRMuuoY3P7z5GeRAAQND7BxgNdmPSa6CSPCJLca1zZk")` in `programs/opta/src/instructions/initialize_protocol.rs`. Reverts `Unauthorized` for any other signer. Locked 2026-05-04 to close audit Run-6 finding CRIT-3. **If the opta program is ever redeployed at a different address with a different deployer key, this constant must update in lockstep.**
+- **`opta_transfer_hook::initialize_extra_account_meta_list` validates `protocol_state` against the canonical PDA.** Two consts in the hook program (`OPTA_PROGRAM_ID` and `OPTA_PROTOCOL_SEED`) mirror the source-of-truth declarations in the opta program. The hook derives the expected PDA at handler entry and rejects any caller-supplied `protocol_state` that doesn't match (`InvalidProtocolState`). Locked 2026-05-04 to close audit Run-6 finding HIGH-1. Same lockstep-update caveat as CRIT-3 — both consts must be refreshed if the opta program is ever redeployed at a new address.
+- **Security:** 5 Rust audit rounds + 2 frontend audits + the May-4 audit-fix arc closing 3 of 9 Run-6 findings (CRIT-2, CRIT-3, HIGH-1). **0 remaining from rounds 1–5 (18 closed); 6 deferred from Run-6 (CRIT-1, CRIT-4, HIGH-2/3/4/5) plus all MEDIUM/LOW/INFO** — tracked in §7. CRIT-1 is the most consequential remaining item. Fresh audit recommended before any mainnet talk.
 
 ---
 
@@ -401,6 +430,7 @@ After today's three arcs, the prior Tier-1 (V2 secondary listing) is shipped end
 - **`bigint: Failed to load bindings, pure JS will be used`** appears on crank startup. Harmless transitive-dep notice. Documented in `crank/README.md`.
 - **JSX in `.ts` files works in Vite but breaks `tsx` (the runner) and any non-Vite TypeScript runner.** Vite's esbuild config tolerates JSX in `.ts` files; `tsc` is permissive via the `jsx` compiler option. But standalone `tsx` (used in `.test-fixtures/`) requires `.tsx` strictly. Rule: any file containing JSX should be `.tsx`. Discovered when the writer-PF arc's test fixture failed to load `solscan.ts` until it was renamed to `solscan.tsx`.
 - **`tsc --noEmit` on Windows can return clean while Vercel's clean-room build fails on the same code** — incremental cache hides stale module shapes that a fresh build would catch. Final verification before any push to the live site should be `npm run build` (runs `tsc -b && vite build` — project-references mode forces the same clean rebuild Vercel does). Discovered when `1480b3c` passed local `tsc --noEmit` but Vercel rejected it with a stale-import error in `WrittenPositionsSection.tsx`; follow-up `15a3ac9` fixed the one-line drift.
+- **`npm run build` from `app/` may fail in WSL with `Cannot find module '@rolldown/binding-linux-x64-gnu'`.** This is npm's optional-dependencies bug (https://github.com/npm/cli/issues/4828). Rolldown ships per-platform native bindings; if `npm install` was originally run from Windows PowerShell, only `@rolldown/binding-win32-x64-msvc` is present and the WSL build can't find its Linux equivalent. Two workarounds: (1) run `npm run build` from PowerShell instead of WSL — the Windows binding is present and the build completes (this is the cheap fallback); (2) from WSL, run `cd app && rm -rf node_modules package-lock.json && npm install` to reinstall and pick up the Linux binding (heavier but unblocks all WSL-side tooling). Either build is meaningful as a code-level verification of the TS/IDL changes; Vercel runs its own clean install on Linux when it deploys, so the bindings story doesn't affect production. Discovered during the May-4 audit-fix arc Step 5 frontend verification — used the PowerShell fallback.
 
 ### Testing
 - **Two test runners in play.** `anchor test` runs the Mocha+Chai suite via `ts-mocha`; `run-tests.sh` is a thin wrapper that runs the same suite with finer-grained control over which fixture files load. The early settlement-pricing arc lost ~30 minutes to "tests fail under `anchor test` but pass under `run-tests.sh`" — the difference is in environment fixture preloading. Default to `run-tests.sh` for iteration; reach for `anchor test` only for full clean-slate runs.
@@ -437,8 +467,8 @@ After today's three arcs, the prior Tier-1 (V2 secondary listing) is shipped end
 ## TL;DR
 
 - **Opta** is a permissionless options primitive on Solana with Token-2022 "living" option tokens. Permissionless any-asset markets via Pyth. On-chain Black-Scholes. V2 shared-vault liquidity. Built for Colosseum Frontier (April 2026).
-- **Live on devnet** with frontend on Vercel (`opta-solana.vercel.app`). Pyth Pull oracle migration shipped April 30. V2 secondary listing merged into the unified Trade `BuyModal` May 2–3. Three correctness/UX arcs landed May 3: settlement EMA-at-expiry pricing (`4dc6250`), symmetric 1× strike collateral (`a8b5f14`), writer-side portfolio dashboard (`1480b3c` + build-fix `15a3ac9`).
+- **Live on devnet** with frontend on Vercel (`opta-solana.vercel.app`). Pyth Pull oracle migration shipped April 30. V2 secondary listing merged into the unified Trade `BuyModal` May 2–3. Three correctness/UX arcs landed May 3: settlement EMA-at-expiry pricing (`4dc6250`), symmetric 1× strike collateral (`a8b5f14`), writer-side portfolio dashboard (`1480b3c` + build-fix `15a3ac9`). May 4 audit-fix arc closed 3 of 9 findings from external Run-6 audit — CRIT-2 (`ceef4af`), CRIT-3 (`8005cae`), HIGH-1 (`d0f0c2e`), plus IDL refresh (`8e638b9`).
 - **The protocol is feature-complete on devnet.** Auto-finalize means "wake up with USDC, no clicks" is real. Secondary marketplace works. Writer ledger has its own UI. Remaining work is correctness, test-infra refresh, and polish — not new feature surface.
 - **Programs ID:** `CtzJ4MJYX6BFvF4g67i5C24tQuwRn6ddKkaE5L84z9Cq` (opta), `83EW6a9o9P5CmGUkQKvVZvsz6v6Dgztiw5M4tVjfZMAG` (transfer hook).
-- **Branches:** master + main mirrored at every commit; live site at `15a3ac9` as of May 3 2026 ~15:24Z. Devnet program slot `459797314` (collateral arc redeploy). For current branch HEADs run `git log -1 --oneline`.
+- **Branches:** master + main mirrored at every commit; for current live-site head run `git log -1 origin/main --oneline`. Devnet slots after the May-4 audit-fix arc: opta `459869998`, opta_transfer_hook `459869839`.
 - **Biggest gotcha:** the protocol-on-devnet runs against Pyth-on-mainnet feeds. Don't confuse "we're on mainnet" with "Solana mainnet" — protocol is still devnet; only the price oracle endpoint is production.

@@ -128,6 +128,48 @@ describe("opta", () => {
   // 1. initialize_protocol
   // ===========================================================================
   describe("initialize_protocol", () => {
+    // CRIT-3 audit fix: only the hardcoded deployer pubkey can initialize
+    // the protocol. We test the gate from a random signer first (PDA still
+    // uninitialized at this point on a fresh ledger via --reset) so the
+    // handler's require_keys_eq! is the failing check, not Anchor's
+    // "already in use" init constraint.
+    it("rejects non-deployer signer (Unauthorized) — CRIT-3", async function () {
+      this.timeout(20_000);
+      // On a fresh ledger (--reset, default for run-tests.sh), the
+      // protocol_state PDA is uninitialized so the handler-level gate
+      // is the first thing to revert. On a stale ledger we'd hit the
+      // init-constraint's "already in use" error before the gate;
+      // skip in that case since the gate is then unreachable.
+      try {
+        await program.account.protocolState.fetch(protocolStatePda);
+        this.skip();
+        return;
+      } catch {}
+
+      const random = Keypair.generate();
+      const sig = await connection.requestAirdrop(random.publicKey, LAMPORTS_PER_SOL);
+      await connection.confirmTransaction(sig, "confirmed");
+
+      try {
+        await program.methods
+          .initializeProtocol()
+          .accountsStrict({
+            admin: random.publicKey,
+            protocolState: protocolStatePda,
+            treasury: treasuryPda,
+            usdcMint,
+            systemProgram: SystemProgram.programId,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+          })
+          .signers([random])
+          .rpc();
+        assert.fail("Should have thrown Unauthorized");
+      } catch (err: any) {
+        assert.include(err.toString(), "Unauthorized");
+      }
+    });
+
     it("initializes the protocol with correct defaults", async () => {
       // Idempotent across test files — if already initialized by another
       // suite, read existing state and assert it's well-formed.

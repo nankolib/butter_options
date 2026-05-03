@@ -18,13 +18,37 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
 
+use crate::errors::OptaError;
 use crate::state::{ProtocolState, PROTOCOL_SEED};
 
 /// Seed for deriving the treasury token account PDA.
 pub const TREASURY_SEED: &[u8] = b"treasury_v2";
 
+/// Hardcoded deployer pubkey — the only signer permitted to call
+/// initialize_protocol. Closes audit Run-6 finding CRIT-3, which
+/// flagged the original unauthenticated handler as letting the
+/// first on-chain caller seize protocol admin permanently. The
+/// literal corresponds to /home/nanko/.config/solana/id.json on
+/// the dev machine; this is also the upgrade authority on devnet
+/// for both opta and opta-transfer-hook.
+pub const DEPLOYER_PUBKEY: Pubkey =
+    pubkey!("5YRMuuoY3P7z5GeRAAQND7BxgNdmPSa6CSPCJLca1zZk");
+
 /// Handler: initialize the protocol with default settings.
 pub fn handle_initialize_protocol(ctx: Context<InitializeProtocol>) -> Result<()> {
+    // CRIT-3: only the hardcoded deployer key may initialize the
+    // protocol. Without this gate, any front-runner who watches
+    // deployment logs can seize admin (the PDA is one-shot, first-
+    // to-fill wins). Check fires before any state mutation; on
+    // revert the `init` constraint's account creation also rolls
+    // back, so a failed call costs the caller the tx fee but does
+    // not consume the PDA slot.
+    require_keys_eq!(
+        ctx.accounts.admin.key(),
+        DEPLOYER_PUBKEY,
+        OptaError::Unauthorized
+    );
+
     let protocol = &mut ctx.accounts.protocol_state;
 
     // Set the admin to whoever signed this transaction.

@@ -34,6 +34,18 @@ pub const HOOK_STATE_SEED: &[u8] = b"hook-state";
 /// Seed for the ExtraAccountMetaList PDA (per-mint, required by Token-2022).
 pub const EXTRA_ACCOUNT_METAS_SEED: &[u8] = b"extra-account-metas";
 
+/// Canonical opta program ID — used to derive the protocol_state PDA the
+/// hook expects. Mirrors the `declare_id!` in
+/// programs/opta/src/lib.rs:26 (HIGH-1 audit fix, Run-6). If the opta
+/// program is ever redeployed at a different address, BOTH this constant
+/// and the canonical protocol_state PDA must be updated in lockstep.
+pub const OPTA_PROGRAM_ID: Pubkey =
+    pubkey!("CtzJ4MJYX6BFvF4g67i5C24tQuwRn6ddKkaE5L84z9Cq");
+
+/// Seed for opta's protocol_state PDA. Mirrors `PROTOCOL_SEED` in
+/// programs/opta/src/state/protocol.rs:48 (HIGH-1 audit fix, Run-6).
+pub const OPTA_PROTOCOL_SEED: &[u8] = b"protocol_v2";
+
 // =============================================================================
 // State
 // =============================================================================
@@ -63,6 +75,9 @@ pub struct HookState {
 pub enum TransferHookError {
     #[msg("Option has expired — transfers are no longer allowed")]
     OptionExpired,
+
+    #[msg("protocol_state does not match the canonical Opta protocol PDA")]
+    InvalidProtocolState,
 }
 
 // =============================================================================
@@ -82,6 +97,22 @@ pub mod opta_transfer_hook {
         ctx: Context<InitializeExtraAccountMetaList>,
         expiry: i64,
     ) -> Result<()> {
+        // HIGH-1 (audit Run-6): validate protocol_state is the canonical opta
+        // program's PDA. Without this, anyone can pre-init this hook with any
+        // protocol_state — frontrunners can grief mint_from_vault for predictable
+        // option_mint pubkeys (init constraint reverts on the legitimate CPI
+        // because hook_state is already populated) AND fix a malicious pubkey
+        // as the protocol-escrow recognition for that mint, allowing post-expiry
+        // transfers from the attacker's accounts to bypass the hook's
+        // expiry check. The check fires before any state mutation.
+        let (expected_protocol_state, _) =
+            Pubkey::find_program_address(&[OPTA_PROTOCOL_SEED], &OPTA_PROGRAM_ID);
+        require_keys_eq!(
+            ctx.accounts.protocol_state.key(),
+            expected_protocol_state,
+            TransferHookError::InvalidProtocolState
+        );
+
         // =====================================================================
         // 1. Initialize the HookState with expiry + protocol PDA
         // =====================================================================

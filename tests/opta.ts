@@ -831,6 +831,51 @@ describe("opta", () => {
   // consumers across this file and zzz-audit-fixes.ts that depend on its
   // current feed_id matching the SOL fixtures. BTC has no downstream
   // consumers post-create_market, so rotating it is a safe isolated test.
+  // ===========================================================================
+  // 5. opta_transfer_hook::initialize_extra_account_meta_list — protocol_state gate (HIGH-1)
+  // ===========================================================================
+  // The hook program rejects any call whose `protocol_state` arg is not the
+  // canonical opta protocol PDA. The positive case is covered implicitly by
+  // every successful mint_from_vault flow (CPI passes the canonical PDA);
+  // we only test the negative case here.
+  describe("opta_transfer_hook — protocol_state gate (HIGH-1)", () => {
+    it("rejects bogus protocol_state (InvalidProtocolState)", async () => {
+      const hookProgram = (anchor.workspace as any).optaTransferHook;
+      assert.ok(hookProgram, "hook program not loaded in workspace");
+
+      // Use a fresh dummy "mint" pubkey so the hook_state + extra_account_meta_list
+      // PDAs are unallocated — the gate fires before init constraint runs.
+      const fakeMint = Keypair.generate();
+      const [extraAccountMetaList] = PublicKey.findProgramAddressSync(
+        [Buffer.from("extra-account-metas"), fakeMint.publicKey.toBuffer()],
+        hookProgram.programId,
+      );
+      const [hookState] = PublicKey.findProgramAddressSync(
+        [Buffer.from("hook-state"), fakeMint.publicKey.toBuffer()],
+        hookProgram.programId,
+      );
+      const bogusProtocolState = Keypair.generate().publicKey;
+      const expiry = new BN(Math.floor(Date.now() / 1000) + 3600);
+
+      try {
+        await hookProgram.methods
+          .initializeExtraAccountMetaList(expiry)
+          .accountsStrict({
+            payer: admin.publicKey,
+            mint: fakeMint.publicKey,
+            extraAccountMetaList,
+            hookState,
+            protocolState: bogusProtocolState,
+            systemProgram: SystemProgram.programId,
+          })
+          .rpc();
+        assert.fail("Should have thrown InvalidProtocolState");
+      } catch (err: any) {
+        assert.include(err.toString(), "InvalidProtocolState");
+      }
+    });
+  });
+
   describe("migrate_pyth_feed", () => {
     // A new 32-byte feed_id we rotate BTC to. Non-zero, distinguishable
     // from the original BTC mainnet feed_id so we can assert the swap.

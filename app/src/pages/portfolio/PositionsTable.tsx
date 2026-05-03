@@ -1,5 +1,7 @@
 import type { FC, ReactNode } from "react";
+import type { PublicKey } from "@solana/web3.js";
 import { MoneyAmount } from "../../components/MoneyAmount";
+import { SolscanLink } from "../../utils/solscan";
 import type { Position, PositionAction } from "./positions";
 
 const ASSET_FULL_NAME: Record<string, string> = {
@@ -160,27 +162,47 @@ const PositionRow: FC<{
         </span>
       </td>
 
-      {/* Action */}
+      {/* Action — Solscan icon + primary action button (D7 retrofit). */}
       <td className="py-4">
-        {p.action !== "none" && (
-          <button
-            type="button"
-            onClick={() => onAction(p, p.action)}
-            disabled={isBusy}
-            className={`inline-flex items-center gap-2 rounded-full border px-[14px] py-[7px] font-mono text-[10.5px] uppercase tracking-[0.18em] no-underline transition-colors duration-300 ease-opta disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap ${actionStyle(
-              p.action,
-            )}`}
-          >
-            {isBusy ? "…" : actionLabel(p.action)}
-            {!isBusy && p.action === "exercise" && (
-              <span aria-hidden="true">→</span>
-            )}
-          </button>
-        )}
+        <div className="flex items-center gap-3 justify-end">
+          <SolscanLink pda={solscanTargetFor(p)} />
+          {p.action !== "none" && (
+            <button
+              type="button"
+              onClick={() => onAction(p, p.action)}
+              disabled={isBusy}
+              className={`inline-flex items-center gap-2 rounded-full border px-[14px] py-[7px] font-mono text-[10.5px] uppercase tracking-[0.18em] no-underline transition-colors duration-300 ease-opta disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap ${actionStyle(
+                p.action,
+              )}`}
+            >
+              {isBusy ? "…" : actionLabel(p.action)}
+              {!isBusy && p.action === "exercise" && (
+                <span aria-hidden="true">→</span>
+              )}
+            </button>
+          )}
+        </div>
       </td>
     </tr>
   );
 };
+
+/**
+ * Resolve the Solscan link target for a buyer row. v2 rows use the
+ * SharedVault PDA (most informative — links to the pool that backs the
+ * position). v1 rows fall back to the option mint per the WRITER_PF_PLAN
+ * Open-Q2 decision; v1 has no shared vault so the mint is the next-best
+ * drill-down. The fallback path is defensive — v1 is retired post-P4a
+ * and no v1 rows are emitted by buildPositions today, but the type union
+ * still permits them.
+ */
+function solscanTargetFor(p: Position): PublicKey {
+  if (p.vaultPda) return p.vaultPda;
+  if (p.source.kind === "v1") {
+    return p.source.position.account.optionMint as PublicKey;
+  }
+  return p.source.vault.publicKey;
+}
 
 function actionLabel(action: PositionAction): string {
   switch (action) {

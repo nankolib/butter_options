@@ -15,13 +15,21 @@ import { AppNav } from "../../components/AppNav";
 import { MoneyAmount } from "../../components/MoneyAmount";
 import { StatementHeader, type Denomination } from "./StatementHeader";
 import { SummaryBand, type SummaryCell } from "./SummaryBand";
+import { WriterSummaryBand } from "./WriterSummaryBand";
 import { OpenPositionsSection } from "./OpenPositionsSection";
+import { WrittenPositionsSection } from "./WrittenPositionsSection";
 import { ClosedPositionsSection } from "./ClosedPositionsSection";
 import { ResaleModal } from "./ResaleModal";
 import { SettleExpiriesSection } from "./SettleExpiriesSection";
 import { MigrateFeedSection } from "./MigrateFeedSection";
 import { buildPositions, type Position, type PositionAction } from "./positions";
+import {
+  buildWriterRows,
+  type WriterRow,
+  type WriterRowAction,
+} from "./writerRows";
 import { usePortfolioActions } from "./usePortfolioActions";
+import { useWriterActions } from "./useWriterActions";
 
 interface PositionAccount {
   publicKey: PublicKey;
@@ -35,24 +43,29 @@ interface MarketAccount {
 /**
  * PortfolioPage — the user's options statement.
  *
- * Stage 1 built the AppNav / StatementHeader / SummaryBand shell with
- * data-driven summary metrics. Stage 2 replaces the placeholder below
- * the band with the real positions content:
+ * Two-ledger composition (post WRITER_PF arc): the page renders a
+ * buyer ledger and a writer ledger as parallel sections sharing the
+ * AppNav + StatementHeader shell. Each ledger has its own SummaryBand
+ * (writer band only renders when the wallet has writer positions),
+ * its own data builder (positions.ts vs writerRows.ts), and its own
+ * action hook (usePortfolioActions vs useWriterActions). Both action
+ * hooks point onSuccess at the same refetchAll callback, which itself
+ * also kicks useVaults().refetch — so D5b's "watch the cell tick"
+ * demo moment fires symmetrically from both sides.
  *
- *   - § 01 · Open positions table (with filter pills)
- *   - § 02 · Closed positions (collapsible)
- *   - Admin tools (admin-only, visually quarantined)
- *   - ResaleModal (mounted on demand when a v1 active row clicks
- *     "List for Resale")
+ *   SummaryBand            — buyer summary metrics (always rendered)
+ *   WriterSummaryBand      — writer summary metrics (conditional)
+ *   § 01 · Open positions   (buyer)
+ *   § 02 · Vaults written   (writer)
+ *   § 03 · Closed positions (buyer; renumbered from § 02)
+ *   SettleExpiriesSection  — public-good crank UI
+ *   MigrateFeedSection     — admin
+ *   ResaleModal            — mounted on demand from a buyer row
  *
- * Buyer-side only — written/vault-writer positions live elsewhere
- * (legacy WrittenTab and VaultPositions tabs were dropped per Stage 2
- * scope; their logic remains in components/portfolio/ for reference
- * and may be migrated to a future page).
- *
- * Position[] is built once via buildPositions(); both the SummaryBand
- * and the section tables consume the same array, so the cost-basis
- * and current-value math is computed in exactly one place.
+ * Buyer rows: built once via buildPositions() and shared with SummaryBand.
+ * Writer rows: built once via buildWriterRows() and shared with
+ * WriterSummaryBand + WrittenPositionsSection so claim/withdraw math
+ * is computed in exactly one place per side.
  */
 export const PortfolioPage: FC = () => {
   usePaperPalette();
@@ -70,7 +83,13 @@ export const PortfolioPage: FC = () => {
   const [denomination, setDenomination] = useState<Denomination>("USDC");
   const [resaleTarget, setResaleTarget] = useState<Position | null>(null);
 
-  const { vaults, vaultMints } = useVaults();
+  const {
+    vaults,
+    vaultMints,
+    myPositions,
+    getUnclaimedPremium,
+    refetch: refetchVaults,
+  } = useVaults();
   const feeds = useMemo(() => {
     const out: { ticker: string; feedIdHex: string }[] = [];
     const seen = new Set<string>();
@@ -113,12 +132,23 @@ export const PortfolioPage: FC = () => {
       } else {
         setHeldBalances(new Map());
       }
+      // D5b: also refresh vault-side accounts so writer rows + summary band
+      // see fresh state. useVaults owns its own state setters; awaiting
+      // here makes the overall refetch atomic — both ledgers update before
+      // the action's onSuccess promise resolves, so any post-action UI
+      // (toast, busy-state clear) lands on a fully-fresh view.
+      await refetchVaults();
     } catch (err) {
       console.error("Portfolio refetch failed", err);
     }
-  }, [program, publicKey]);
+  }, [program, publicKey, refetchVaults]);
 
   const actions = usePortfolioActions(refetchAll);
+  const writerActions = useWriterActions({
+    vaults,
+    vaultMints,
+    onSuccess: refetchAll,
+  });
 
   useEffect(() => {
     if (!program) return;
@@ -212,6 +242,21 @@ export const PortfolioPage: FC = () => {
         listings: myListings,
       }),
     [v1Held, v2Held, heldBalances, marketMap, spotPrices, metadataSymbolByMint, myListings],
+  );
+
+  // Writer rows derived from useVaults().myPositions, joined to vaults +
+  // vaultMints + marketMap. Same array drives WriterSummaryBand and
+  // WrittenPositionsSection so claim/withdraw math is computed once.
+  const writerRows = useMemo(
+    () =>
+      buildWriterRows({
+        myPositions,
+        vaults,
+        vaultMints,
+        marketMap,
+        getUnclaimedPremium,
+      }),
+    [myPositions, vaults, vaultMints, marketMap, getUnclaimedPremium],
   );
 
   const openPositions = useMemo(
@@ -351,6 +396,29 @@ export const PortfolioPage: FC = () => {
     [actions, resaleTarget],
   );
 
+  // Writer action dispatcher — mirrors handleAction but emits to
+  // useWriterActions handlers. "settling" is informational only (no IX
+  // to invoke); the table renders a disabled label and never fires this
+  // case, but the switch is exhaustive for type-safety.
+  const handleWriterAction = useCallback(
+    (row: WriterRow, action: WriterRowAction) => {
+      switch (action) {
+        case "claim-premium":
+          writerActions.claimPremium(row);
+          break;
+        case "withdraw-collateral":
+          writerActions.withdrawCollateral(row);
+          break;
+        case "burn-unsold":
+          writerActions.burnUnsoldEscrow(row);
+          break;
+        case "settling":
+          break;
+      }
+    },
+    [writerActions],
+  );
+
   return (
     <div className="relative bg-paper text-ink overflow-x-hidden min-h-screen">
       <PaperGrain />
@@ -363,6 +431,7 @@ export const PortfolioPage: FC = () => {
           onDenominationChange={setDenomination}
         />
         <SummaryBand cells={cells} />
+        <WriterSummaryBand rows={writerRows} />
 
         {!connected ? (
           <div className="mt-16 border border-rule rounded-md p-12 text-center">
@@ -376,6 +445,12 @@ export const PortfolioPage: FC = () => {
               positions={openPositions}
               onAction={handleAction}
               busyId={actions.busyId}
+            />
+            <WrittenPositionsSection
+              rows={writerRows}
+              onAction={handleWriterAction}
+              busyId={writerActions.busyId}
+              busyLabel={writerActions.busyLabel}
             />
             <ClosedPositionsSection
               positions={closedPositions}

@@ -12,7 +12,7 @@ type ClosedPositionsSectionProps = {
 };
 
 /**
- * § 02 · Closed positions section.
+ * § 03 · Closed positions section.
  *
  * Closed = settled-otm — settled with $0 payout, user still holds
  * worthless dust until they burn it. Renders the same PositionsTable
@@ -39,7 +39,7 @@ export const ClosedPositionsSection: FC<ClosedPositionsSectionProps> = ({
         aria-expanded={expanded}
         className="group flex items-baseline gap-4 mb-6"
       >
-        <SectionNumber number="02" label="Closed positions" />
+        <SectionNumber number="03" label="Closed positions" />
         <span className="font-mono text-[11.5px] uppercase tracking-[0.18em] opacity-55 group-hover:opacity-100 transition-opacity duration-300 ease-opta">
           {count} {count === 1 ? "contract" : "contracts"} {expanded ? "—" : "+"}
         </span>

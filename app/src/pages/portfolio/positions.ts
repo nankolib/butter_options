@@ -49,6 +49,13 @@ export type Position = {
   /** Stable id — option-mint base58. Unique across both v1 and v2 because each holds its own SPL mint. */
   id: string;
   source: PositionSource;
+  /**
+   * Vault PDA for v2 rows; null for v1 (which has no shared vault — each
+   * v1 position is its own escrow). Drives the Solscan icon link target;
+   * the table component falls back to option_mint for v1 rows so every
+   * row gets a clickable drill-down.
+   */
+  vaultPda: PublicKey | null;
   asset: string;
   side: "call" | "put";
   strike: number;
@@ -187,6 +194,7 @@ export function buildPositions(args: BuildPositionsArgs): Position[] {
     result.push({
       id: mintKey,
       source: { kind: "v2", vault, vaultMint, market },
+      vaultPda: vault.publicKey,
       asset: assetName || "?",
       side: isCall ? "call" : "put",
       strike,

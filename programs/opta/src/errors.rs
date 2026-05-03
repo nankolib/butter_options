@@ -127,4 +127,13 @@ pub enum OptaError {
 
     #[msg("listing PDA derivation failed or its mint/vault doesn't match the batch")]
     ListingMismatch,
+
+    // =========================================================================
+    // Pyth settlement window (settle_expiry, D2 of pricing-fix arc)
+    // =========================================================================
+    #[msg("Pyth price update publish_time is before vault expiry")]
+    PriceUpdateBeforeExpiry,
+
+    #[msg("Pyth price update publish_time is more than 60s after vault expiry")]
+    PriceUpdateTooFarFromExpiry,
 }

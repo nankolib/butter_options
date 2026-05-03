@@ -35,6 +35,7 @@ import {
   serializePriceUpdateV2,
   deserializePriceUpdateV2,
   FEED_ID_HEX,
+  getFixtureBaseTime,
 } from "./_pyth_fixtures";
 
 // =============================================================================
@@ -485,7 +486,12 @@ describe("opta", () => {
       assert.ok(record.settledAt.toNumber() > 0);
     });
 
-    it("rejects stale PriceUpdateV2 (PriceTooOld)", async () => {
+    it("rejects stale PriceUpdateV2 (PriceUpdateBeforeExpiry)", async () => {
+      // Post-2026-05-03 settlement-pricing-fix arc: the stale fixture's
+      // publish_time (-400s offset) lands BEFORE any test expiry. Under
+      // the new on-chain check chain, the publish_time >= expiry guard
+      // (D2) trips first, so the error code is PriceUpdateBeforeExpiry,
+      // not PriceTooOld. Same negative behavior, different sentinel.
       const [marketPda] = deriveMarketPda("SOL");
       const [settlementPda] = deriveSettlementPda("SOL", staleExpiry);
 
@@ -500,9 +506,9 @@ describe("opta", () => {
             systemProgram: SystemProgram.programId,
           })
           .rpc();
-        assert.fail("Should have thrown PriceTooOld");
+        assert.fail("Should have thrown PriceUpdateBeforeExpiry");
       } catch (err: any) {
-        assert.include(err.toString(), "PriceTooOld");
+        assert.include(err.toString(), "PriceUpdateBeforeExpiry");
       }
     });
 
@@ -559,6 +565,133 @@ describe("opta", () => {
       } catch (err: any) {
         // Anchor account-already-in-use error
         assert.ok(err);
+      }
+    });
+  });
+
+  // ===========================================================================
+  // 4b. settle_expiry — D2 expiry-window check (2026-05-03)
+  // ===========================================================================
+  //
+  // Post-fix arc: settle_expiry now requires the Pyth update's publish_time
+  // to land in [expiry, expiry + EXPIRY_WINDOW_SECS]. These three tests
+  // pin both expiry and fixture publish_time to a single shared anchor
+  // (baseTime, persisted by writeAllFixtures and read via
+  // getFixtureBaseTime) so the gap is exact, not racy against suite
+  // wall-clock drift.
+  // ===========================================================================
+  describe("settle_expiry — expiry-window check (D2)", () => {
+    const D2_HAPPY_PK    = fixturePubkey("sol-180-window-future-5");
+    const D2_BEFORE_PK   = fixturePubkey("sol-180-window-before-5");
+    const D2_TOO_LATE_PK = fixturePubkey("sol-180-window-too-late-120");
+
+    let baseTime: number;
+    let happyExpiry: BN;
+    let beforeExpiry: BN;
+    let tooLateExpiry: BN;
+
+    before(async function () {
+      this.timeout(120_000);
+      baseTime = getFixtureBaseTime();
+      // Expiries paired with fixture publishTimeOffsetSec values in
+      // _pyth_fixtures.ts. Gap = publish_time - expiry:
+      //   happy:    publish_time = baseTime + 55, expiry = baseTime + 50, gap = +5  → success
+      //   before:   publish_time = baseTime + 46, expiry = baseTime + 51, gap = -5  → PriceUpdateBeforeExpiry
+      //   too-late: publish_time = baseTime + 172, expiry = baseTime + 52, gap = +120 → PriceUpdateTooFarFromExpiry
+      happyExpiry   = new BN(baseTime + 50);
+      beforeExpiry  = new BN(baseTime + 51);
+      tooLateExpiry = new BN(baseTime + 52);
+
+      // Wait until the latest D2 expiry has elapsed on-chain. Tests that
+      // run later in the file have already advanced clock past baseTime,
+      // but we add an explicit wait to be robust against fast machines
+      // that finish the prior settle_expiry block before clock crosses
+      // baseTime + 52.
+      const target = baseTime + 53;
+      const nowSec = Math.floor(Date.now() / 1000);
+      const waitMs = Math.max(0, (target - nowSec) * 1000);
+      if (waitMs > 0) {
+        await sleep(waitMs);
+      }
+    });
+
+    it("happy-path: publish_time = expiry + 5s succeeds and records pyth_publish_time", async () => {
+      const [marketPda] = deriveMarketPda("SOL");
+      const [settlementPda] = deriveSettlementPda("SOL", happyExpiry);
+
+      await program.methods
+        .settleExpiry("SOL", happyExpiry)
+        .accountsStrict({
+          caller: admin.publicKey,
+          market: marketPda,
+          priceUpdate: D2_HAPPY_PK,
+          settlementRecord: settlementPda,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+
+      const record = await program.account.settlementRecord.fetch(settlementPda);
+      assert.equal(record.assetName, "SOL");
+      assert.ok(record.expiry.eq(happyExpiry));
+      // Fixture: ema_price=18_000_000_000, expo=-8 → $180.00 in USDC 6-dec.
+      assert.equal(record.settlementPrice.toString(), "180000000");
+      // Critical D2 assertion: publish_time was recorded, not just settled_at.
+      assert.equal(record.pythPublishTime.toNumber(), baseTime + 55,
+        "pyth_publish_time must equal the fixture's baseTime + 55");
+      // settled_at must be a real on-chain timestamp. We can't assert
+      // its relation to pyth_publish_time in this test because the
+      // synthetic fixture's publish_time is set to baseTime + 55 (in
+      // the future relative to clock at settle time) — in real Pyth,
+      // publish_time is always in the past relative to clock, but the
+      // test fixture doesn't replicate that ordering.
+      assert.isAbove(record.settledAt.toNumber(), 0,
+        "settled_at must be populated with the on-chain clock");
+    });
+
+    it("rejects publish_time before expiry (PriceUpdateBeforeExpiry)", async () => {
+      const [marketPda] = deriveMarketPda("SOL");
+      const [settlementPda] = deriveSettlementPda("SOL", beforeExpiry);
+
+      try {
+        await program.methods
+          .settleExpiry("SOL", beforeExpiry)
+          .accountsStrict({
+            caller: admin.publicKey,
+            market: marketPda,
+            priceUpdate: D2_BEFORE_PK,
+            settlementRecord: settlementPda,
+            systemProgram: SystemProgram.programId,
+          })
+          .rpc();
+        assert.fail("Should have thrown PriceUpdateBeforeExpiry");
+      } catch (err: any) {
+        assert.include(err.toString(), "PriceUpdateBeforeExpiry");
+      }
+    });
+
+    it("rejects publish_time more than 60s after expiry (PriceUpdateTooFarFromExpiry)", async () => {
+      const [marketPda] = deriveMarketPda("SOL");
+      const [settlementPda] = deriveSettlementPda("SOL", tooLateExpiry);
+
+      try {
+        await program.methods
+          .settleExpiry("SOL", tooLateExpiry)
+          .accountsStrict({
+            caller: admin.publicKey,
+            market: marketPda,
+            priceUpdate: D2_TOO_LATE_PK,
+            settlementRecord: settlementPda,
+            systemProgram: SystemProgram.programId,
+          })
+          .rpc();
+        assert.fail("Should have thrown PriceUpdateTooFarFromExpiry");
+      } catch (err: any) {
+        const msg = err.toString();
+        if (!msg.includes("PriceUpdateTooFarFromExpiry")) {
+          // Print the full error so we can diagnose if the wrong code fires.
+          console.error("FULL ERR for too-late test:", msg);
+        }
+        assert.include(msg, "PriceUpdateTooFarFromExpiry");
       }
     });
   });

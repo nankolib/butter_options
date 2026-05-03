@@ -2,13 +2,29 @@
 // instructions/settle_expiry.rs — Record settlement price from Pyth Pull
 // =============================================================================
 //
-// Stage P2 shape: permissionless. Caller passes a fresh PriceUpdateV2
-// account (posted via the Pyth Receiver program off-chain — typically by
-// the crank). settle_expiry validates:
-//   1. Asset's expiry has elapsed
-//   2. PriceUpdateV2's feed_id matches the OptionsMarket's stored feed_id
-//   3. PriceUpdateV2's publish_time is within PYTH_MAX_AGE_SECS of now
-//   4. Verification level is Full (all Wormhole guardian signatures verified)
+// Pricing semantic (post-fix arc, 2026-05-03):
+//   settlement price = Pyth EMA at first published time at-or-after
+//                      vault expiry, within a 60s window.
+//
+// The crank fetches a HISTORICAL Pyth update whose publish_time is at
+// or just after vault expiry (Hermes /v1/updates/price/{ts} endpoint),
+// posts it via the Pyth Receiver, and consumes it here. We read EMA
+// (price_update.price_message.ema_price) rather than spot to dampen
+// final-tick noise — the EMA is signed/verified via the same Wormhole
+// VAA + Merkle path as spot, so verification guarantees are identical.
+//
+// Permissionless. Caller passes a PriceUpdateV2 account. We validate:
+//   1. Asset's expiry has elapsed (clock >= expiry)
+//   2. price_update.verification_level == Full
+//   3. price_update.price_message.feed_id == market.pyth_feed_id
+//   4. publish_time >= expiry  (else PriceUpdateBeforeExpiry)
+//   5. publish_time - expiry <= EXPIRY_WINDOW_SECS (60)  (else PriceUpdateTooFarFromExpiry)
+//   6. publish_time + PYTH_MAX_AGE_SECS >= clock        (else PriceTooOld; 1-day floor)
+//
+// Checks (2) and (3) replicate what the SDK's get_price_no_older_than
+// performs internally — verified against pyth-solana-receiver-sdk v1.1.0
+// source at src/price_update.rs (2026-05-03). We replicate manually
+// because that helper returns a Price struct with no EMA field.
 //
 // On success, writes the canonical settlement price for this (asset, expiry)
 // to a SettlementRecord PDA. SharedVaults for this (asset, expiry) read
@@ -20,17 +36,29 @@
 // =============================================================================
 
 use anchor_lang::prelude::*;
+use pyth_solana_receiver_sdk::error::GetPriceError;
 use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
+use pyth_solana_receiver_sdk::price_update::VerificationLevel;
 
 use crate::errors::OptaError;
 use crate::state::{OptionsMarket, SettlementRecord, MARKET_SEED, SETTLEMENT_SEED};
 use crate::utils::solmath_bridge::pyth_price_to_usdc;
 
-/// Maximum age (in seconds) of a Pyth price update accepted by settle_expiry.
-/// Pyth Pull on Solana typically posts every ~400ms; 300s = 5 minutes is a
-/// generous bound that tolerates network hiccups while preventing obvious
-/// stale data.
-pub const PYTH_MAX_AGE_SECS: u64 = 300;
+/// Maximum gap between the Pyth update's `publish_time` and the on-chain
+/// clock at settlement time. Bumped from 300s to 86_400s (1 day) because
+/// the historical-fetch flow intentionally posts updates whose
+/// publish_time is near `expiry`, not near `now`. The real protection
+/// against stale-data attacks is the EXPIRY_WINDOW_SECS check below;
+/// this constant is a backstop SLO so we never silently settle
+/// week-old vaults.
+pub const PYTH_MAX_AGE_SECS: u64 = 86_400;
+
+/// Maximum gap between Pyth `publish_time` and vault `expiry`. The crank
+/// fetches a historical update at `publish_time = expiry`; Pyth posts
+/// every ~400ms, so a window of 60s comfortably accommodates skipped
+/// slots while pinning settlement to "first official print at-or-after
+/// expiry." One-sided: publish_time must be in [expiry, expiry + 60].
+pub const EXPIRY_WINDOW_SECS: i64 = 60;
 
 pub fn handle_settle_expiry(
     ctx: Context<SettleExpiry>,
@@ -44,36 +72,66 @@ pub fn handle_settle_expiry(
         OptaError::MarketNotExpired
     );
 
-    // 2. Read price from PriceUpdateV2 — this enforces:
-    //    - feed_id match (else MismatchedFeedId)
-    //    - publish_time freshness (else PriceTooOld)
-    //    - verification_level == Full (else InsufficientVerificationLevel)
+    // 2. Manually replicate the SDK's get_price_no_older_than verification.
+    //    pyth-solana-receiver-sdk v1.1.0 has no EMA equivalent; we read
+    //    the EMA fields directly from price_message after performing the
+    //    same verification_level + feed_id checks the SDK does.
     let market = &ctx.accounts.market;
-    let pyth_price = ctx.accounts.price_update.get_price_no_older_than(
-        &clock,
-        PYTH_MAX_AGE_SECS,
-        &market.pyth_feed_id,
-    )?;
+    let pu = &ctx.accounts.price_update;
+    require!(
+        pu.verification_level.gte(VerificationLevel::Full),
+        GetPriceError::InsufficientVerificationLevel
+    );
+    require!(
+        pu.price_message.feed_id == market.pyth_feed_id,
+        GetPriceError::MismatchedFeedId
+    );
 
-    // 3. Normalize Pyth's (i64 price, i32 exponent) to u64 USDC 6-decimal.
+    let ema_price = pu.price_message.ema_price;
+    let exponent = pu.price_message.exponent;
+    let publish_time = pu.price_message.publish_time;
+
+    // 3. Expiry-window gate (replaces the old "freshness vs clock" check).
+    //    publish_time MUST sit in [expiry, expiry + EXPIRY_WINDOW_SECS].
+    require!(
+        publish_time >= expiry,
+        OptaError::PriceUpdateBeforeExpiry
+    );
+    require!(
+        publish_time.saturating_sub(expiry) <= EXPIRY_WINDOW_SECS,
+        OptaError::PriceUpdateTooFarFromExpiry
+    );
+
+    // 4. Backstop staleness floor: don't settle vaults so late that we
+    //    can't even reach the historical update's publish_time within
+    //    1 day of the on-chain clock. Operational SLO, not a security
+    //    gate (the gate is step 3).
+    require!(
+        publish_time.saturating_add(PYTH_MAX_AGE_SECS as i64) >= clock.unix_timestamp,
+        GetPriceError::PriceTooOld
+    );
+
+    // 5. Normalize Pyth's (i64 price, i32 exponent) to u64 USDC 6-decimal.
     //    Rejects price <= 0 (InvalidSettlementPrice) and overflow (MathOverflow).
-    let settlement_price = pyth_price_to_usdc(pyth_price.price, pyth_price.exponent)?;
+    let settlement_price = pyth_price_to_usdc(ema_price, exponent)?;
 
-    // 4. Populate the record
+    // 6. Populate the record
     let record = &mut ctx.accounts.settlement_record;
     record.asset_name = asset_name.clone();
     record.expiry = expiry;
     record.settlement_price = settlement_price;
     record.settled_at = clock.unix_timestamp;
+    record.pyth_publish_time = publish_time;
     record.bump = ctx.bumps.settlement_record;
 
     msg!(
-        "Settlement recorded: {} expiry={} price={} (pyth={}, expo={})",
+        "Settlement recorded: {} expiry={} price={} (pyth_ema={}, expo={}, publish_time={})",
         asset_name,
         expiry,
         settlement_price,
-        pyth_price.price,
-        pyth_price.exponent,
+        ema_price,
+        exponent,
+        publish_time,
     );
 
     Ok(())

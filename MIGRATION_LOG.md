@@ -1158,3 +1158,55 @@ Both paths are post-Step-6 work and out of scope for this cleanup chore.
 ### One-sentence summary
 
 **Two clean, one blocked.** IDL is now correct on-chain at `9hP1piv1yQgdW7S9afYjzwVvDReCFK5MKkpk4DAHSVs`; orphan-buffer chore was a stale-indexer no-op; the unsold-escrow burn surfaced a real auto-finalize-vs-burn-unsold ordering issue worth a follow-up, but the affected tokens are inert and the affected SOL rent is small (~0.004 SOL, locked indefinitely barring a new instruction).
+
+---
+
+## Settlement pricing fix — test suite delta (2026-05-03)
+
+### Why this section exists
+
+The settlement-pricing-fix arc (audited under `SETTLEMENT_PRICING_AUDIT.md`) introduces a new on-chain check in `settle_expiry`:
+
+```text
+require!(publish_time >= expiry,                            PriceUpdateBeforeExpiry);
+require!(publish_time - expiry <= EXPIRY_WINDOW_SECS (60),  PriceUpdateTooFarFromExpiry);
+```
+
+That is, the Pyth update's `publish_time` must sit in `[vault.expiry, vault.expiry + 60]`.
+
+The existing test fixture model (`tests/_pyth_fixtures.ts`) bakes each fake `PriceUpdateV2` account at validator-launch time with a hardcoded `publishTimeOffsetSec` relative to that one moment (`baseTime`). Tests then compute their `expiry` dynamically as `Math.floor(Date.now() / 1000) + N` at test-runtime. The unbounded gap between `baseTime` and per-test `Date.now()` (validator boot delta + cumulative test setup time, anywhere from 5s to 5+ minutes deep into the suite) easily exceeds 60s, so the fixture's `publish_time` no longer falls in the new window for most tests.
+
+In short: the legacy fixture timing model is incompatible with the new on-chain window check. Fixing every dependent test requires per-test fixture pinning (~40 fixtures across ~3 files) or a polling-based test scheduler — both substantial refactors that are orthogonal to the settlement-pricing fix itself.
+
+### What this PR ships (in scope)
+
+- **Three new tests in `tests/opta.ts`** under `describe("settle_expiry — expiry-window check (D2)")`. Each pins both `expiry` and the fixture's `publishTimeOffsetSec` to the same `baseTime` anchor (persisted via a new `getFixtureBaseTime()` helper in `_pyth_fixtures.ts`). Cover: happy path (gap = +5s), `PriceUpdateBeforeExpiry` (gap = -5s), `PriceUpdateTooFarFromExpiry` (gap = +120s).
+- **One assertion update in `tests/opta.ts`** for the existing stale-rejection test — the stale fixture's `publish_time` (~400s before `baseTime`) now trips `PriceUpdateBeforeExpiry` instead of `PriceTooOld`. Same negative behavior, different sentinel.
+- **Three new fixture entries in `tests/_pyth_fixtures.ts`**: `sol-180-window-future-5`, `sol-180-window-before-5`, `sol-180-window-too-late-120`, paired 1:1 with the three D2 tests.
+- **`baseTime` persistence** to `/tmp/pyth_meta.json` from `writeAllFixtures()` so D2 tests can read it back via `getFixtureBaseTime()`. Sidecar file approach matches how fixture JSONs are already passed.
+
+### What this PR knowingly leaves broken
+
+The following test files use `settle_expiry` as a **setup step** for downstream assertions about `settle_vault`, `auto_finalize_holders`, `auto_finalize_writers`, etc. They are not themselves tests of `settle_expiry` semantics. Under the new on-chain window check, their existing `Date.now()`-based fixture model fails the `publish_time >= expiry` guard and reverts before the actual assertion runs:
+
+- `tests/zzz-audit-fixes.ts` — 4 settle sites (CRITICAL-01 ITM/OTM lifecycle + double-deduction repro).
+- `tests/zzz-auto-finalize-holders.ts` — 1 settle helper called from ~10 setting-up describe blocks.
+- `tests/zzz-auto-finalize-writers.ts` — 1 settle helper called from ~14 setting-up describe blocks.
+
+These tests will report failures under `anchor test` after this PR lands. The failures are expected and documented; they reflect test-infra debt, not regressions in the settlement contract.
+
+### Why we accept the broken tests for this PR
+
+- The 3 D2 tests directly cover the new on-chain behavior (one positive case + both negative variants). Coverage of the fix itself is complete.
+- The broken tests use `settle_expiry` as scaffolding for unrelated assertions. Their downstream invariants (vault collateral accounting, auto-finalize burn/payout math) were verified under the prior pricing semantics and are independent of the new `publish_time`-vs-`expiry` window.
+- **Devnet smoke (Step 7 of the fix arc) is the real correctness check** for the production lifecycle: deploy the new program to devnet, run the crank against a real expired vault with a real historical Hermes update, confirm `pyth_publish_time` is recorded and equals the published time at expiry. Localnet test infra cannot replicate the historical-Hermes path without significant fixture rework.
+- Splitting the test refactor into its own arc keeps the pricing-fix PR small and reviewable.
+
+### Follow-up tracked
+
+**Tier 2 — post-Colosseum work**:
+
+> **Refactor `tests/_pyth_fixtures.ts` to support per-test `publish_time` anchoring; re-enable broken settle-using tests.**
+>
+> Likely shape: each fixture-using test declares (a) its expected suite execution slot and (b) the `publish_time` gap it wants relative to its `expiry`; the fixture writer generates one fixture per test with a `publish_time` computed to match. Tests pin `expiry = baseTime + slot`. Affected files: `tests/_pyth_fixtures.ts`, `tests/zzz-audit-fixes.ts`, `tests/zzz-auto-finalize-holders.ts`, `tests/zzz-auto-finalize-writers.ts`. Estimated 3-4 hours plus iteration on slot timing predictions. Not blocking mainnet readiness — those tests can sit red until this lands.
+

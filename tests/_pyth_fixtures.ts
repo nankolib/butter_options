@@ -165,6 +165,55 @@ export const FEED_ID_HEX = {
   BTC: "e62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43",
 };
 
+// ---------------------------------------------------------------------------
+// baseTime persistence (D2-only — 2026-05-03)
+// ---------------------------------------------------------------------------
+//
+// settle_expiry's new EXPIRY_WINDOW_SECS check (publish_time within 60s of
+// expiry) requires the 3 D2 tests to compute their expiry as baseTime + N
+// matching the fixture's hardcoded publishTimeOffsetSec, NOT as
+// `Date.now()/1000 + N` like older tests.
+//
+// To bridge fixture-write time and test runtime, we persist the `now` used
+// by writeAllFixtures to /tmp/pyth_meta.json. Tests read that via
+// getFixtureBaseTime(). Sidecar file approach matches how fixture JSONs
+// are already passed (file-on-disk).
+//
+// Only the 3 D2 tests in opta.ts use this. Older tests that drive settle
+// remain on the Date.now()-based pattern (and thus break under the new
+// on-chain check; per the test-suite-delta migration log entry, those
+// will be re-enabled in a separate refactor arc).
+//
+// Path resolution mirrors `_write_fixtures.ts`'s convention:
+//   getFixtureBaseTime: process.env.OPTA_FIXTURE_DIR ?? "./.test-fixtures"
+//   writeAllFixtures:   outDir param (caller's responsibility — typically
+//                       "./.test-fixtures" passed by run-tests.sh).
+// The two endpoints align as long as the runner passes the same dir.
+const META_FILE = "pyth_meta.json";
+const DEFAULT_FIXTURE_DIR = "./.test-fixtures";
+
+declare const process: { env: Record<string, string | undefined> };
+
+function getFixtureDir(): string {
+  return process.env.OPTA_FIXTURE_DIR ?? DEFAULT_FIXTURE_DIR;
+}
+
+export function getFixtureBaseTime(): number {
+  const metaPath = path.join(getFixtureDir(), META_FILE);
+  try {
+    const raw = fs.readFileSync(metaPath, "utf-8");
+    const parsed = JSON.parse(raw) as { baseTime?: number };
+    if (typeof parsed.baseTime !== "number" || !Number.isFinite(parsed.baseTime)) {
+      throw new Error("invalid baseTime in meta file");
+    }
+    return parsed.baseTime;
+  } catch (err) {
+    throw new Error(
+      `getFixtureBaseTime: failed to read ${metaPath}. Did writeAllFixtures run before tests started? (${String(err)})`,
+    );
+  }
+}
+
 /// The 5 fixtures the P2 test suite needs. Names map to scenarios and
 /// must stay stable — test code looks them up by name via fixturePubkey().
 export type FixtureSpec = {
@@ -188,6 +237,18 @@ export const ALL_FIXTURES: FixtureSpec[] = [
   { name: "sol-250-fresh", feedIdHex: FEED_ID_HEX.SOL, price: BigInt("25000000000"), exponent: -8, publishTimeOffsetSec: -30 },
   // SOL @ $50 fresh — zzz CRITICAL-OTM, HIGH-01, DUST
   { name: "sol-50-fresh", feedIdHex: FEED_ID_HEX.SOL, price: BigInt("5000000000"), exponent: -8, publishTimeOffsetSec: -30 },
+  // -- D2 expiry-window fixtures (2026-05-03) ----------------------------------
+  // Pinned to baseTime: each is paired with a specific test expiry in opta.ts
+  // such that the gap publish_time - expiry is exactly the value the test
+  // exercises. Tests compute their expiry via getFixtureBaseTime() + N to
+  // match these offsets exactly.
+  //
+  // sol-180-window-future-5: publish_time=baseTime+55, paired expiry=baseTime+50, gap=+5s (HAPPY)
+  { name: "sol-180-window-future-5", feedIdHex: FEED_ID_HEX.SOL, price: BigInt("18000000000"), exponent: -8, publishTimeOffsetSec: 55 },
+  // sol-180-window-before-5: publish_time=baseTime+46, paired expiry=baseTime+51, gap=-5s (PriceUpdateBeforeExpiry)
+  { name: "sol-180-window-before-5", feedIdHex: FEED_ID_HEX.SOL, price: BigInt("18000000000"), exponent: -8, publishTimeOffsetSec: 46 },
+  // sol-180-window-too-late-120: publish_time=baseTime+172, paired expiry=baseTime+52, gap=+120s (PriceUpdateTooFarFromExpiry)
+  { name: "sol-180-window-too-late-120", feedIdHex: FEED_ID_HEX.SOL, price: BigInt("18000000000"), exponent: -8, publishTimeOffsetSec: 172 },
 ];
 
 /// Write all fixtures to /tmp and return the (name → pubkey) map plus the
@@ -197,6 +258,11 @@ export function writeAllFixtures(outDir: string = "/tmp"): {
   launcherArgs: string[];
 } {
   const now = Math.floor(Date.now() / 1000);
+  // Persist baseTime so D2 tests in opta.ts can compute expiries that
+  // match these fixtures' hardcoded publishTimeOffsetSec values. Sidecar
+  // lives in the same outDir as the fixture JSONs themselves, so
+  // getFixtureBaseTime() resolves to the same place via OPTA_FIXTURE_DIR.
+  fs.writeFileSync(path.join(outDir, META_FILE), JSON.stringify({ baseTime: now }));
   const pubkeys: Record<string, PublicKey> = {};
   const launcherArgs: string[] = [];
 

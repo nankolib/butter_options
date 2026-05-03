@@ -38,6 +38,15 @@ pub struct SettlementRecord {
     /// audit trails and "settle was X seconds late" diagnostics.
     pub settled_at: i64,
 
+    /// Pyth `publish_time` of the price update used to derive
+    /// `settlement_price`. Must satisfy
+    /// `expiry <= pyth_publish_time <= expiry + 60` (enforced by
+    /// `settle_expiry`). Distinct from `settled_at`, which is the
+    /// on-chain clock at the moment the crank ran. The gap
+    /// `settled_at - pyth_publish_time` is the visible "settle was
+    /// late by N seconds" diagnostic.
+    pub pyth_publish_time: i64,
+
     /// PDA bump seed.
     pub bump: u8,
 }

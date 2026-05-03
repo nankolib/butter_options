@@ -3690,6 +3690,16 @@ export type Opta = {
       "code": 6037,
       "name": "listingMismatch",
       "msg": "listing PDA derivation failed or its mint/vault doesn't match the batch"
+    },
+    {
+      "code": 6038,
+      "name": "priceUpdateBeforeExpiry",
+      "msg": "Pyth price update publish_time is before vault expiry"
+    },
+    {
+      "code": 6039,
+      "name": "priceUpdateTooFarFromExpiry",
+      "msg": "Pyth price update publish_time is more than 60s after vault expiry"
     }
   ],
   "types": [
@@ -4263,6 +4273,19 @@ export type Opta = {
             "docs": [
               "On-chain timestamp at which `settle_expiry` was called. Useful for",
               "audit trails and \"settle was X seconds late\" diagnostics."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "pythPublishTime",
+            "docs": [
+              "Pyth `publish_time` of the price update used to derive",
+              "`settlement_price`. Must satisfy",
+              "`expiry <= pyth_publish_time <= expiry + 60` (enforced by",
+              "`settle_expiry`). Distinct from `settled_at`, which is the",
+              "on-chain clock at the moment the crank ran. The gap",
+              "`settled_at - pyth_publish_time` is the visible \"settle was",
+              "late by N seconds\" diagnostic."
             ],
             "type": "i64"
           },

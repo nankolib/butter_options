@@ -53,13 +53,31 @@ async function main(): Promise<void> {
   const program = new anchor.Program<Opta>(idl, provider);
 
   console.log("=== SettlementRecord ===");
-  const sr: any = await program.account.settlementRecord.fetch(SETTLEMENT_PDA);
+  let sr: any;
+  try {
+    sr = await program.account.settlementRecord.fetch(SETTLEMENT_PDA);
+  } catch (err) {
+    console.error(
+      "FATAL: failed to fetch SettlementRecord. After the 2026-05-03 schema",
+      "bump (added pyth_publish_time field), pre-existing records on devnet",
+      "have an OLD layout that will not deserialize via the new struct. Point",
+      "SETTLEMENT_PDA at a record created after the redeploy.\n",
+      err,
+    );
+    process.exit(1);
+  }
   const srPrice = bn(sr.settlementPrice);
   console.log("  pda:               ", SETTLEMENT_PDA.toBase58());
   console.log("  asset_name:        ", sr.assetName);
   console.log("  expiry:            ", bn(sr.expiry));
   console.log("  settlement_price:  ", srPrice);
+  console.log("  settled_at:        ", bn(sr.settledAt));
   console.log("  pyth_publish_time: ", bn(sr.pythPublishTime));
+  console.log(
+    "  settle_lateness:   ",
+    bn(sr.settledAt) - bn(sr.pythPublishTime),
+    "seconds (settled_at - pyth_publish_time)",
+  );
 
   console.log("");
   console.log("=== Vault ===");

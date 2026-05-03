@@ -423,10 +423,13 @@ async function tick(ctx: CrankContext): Promise<TickResult> {
         });
       } catch (err) {
         result.errors += 1;
-        logError("tuple failed (will retry next tick)", {
+        logError("tuple settle failed (will retry next tick)", {
           asset: t.asset,
           expiry: t.expiry,
           err: String(err),
+          // Common cause post-2026-05-03: Hermes returned no historical
+          // VAA at or after vault.expiry yet (Pyth lag, or a non-supported
+          // feed window). The crank retries on the next tick.
         });
       }
     }

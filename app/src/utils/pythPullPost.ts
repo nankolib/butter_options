@@ -56,6 +56,7 @@ export type SignerWallet = {
 export const DEFAULT_HERMES_BASE = "https://hermes.pyth.network";
 
 const HERMES_PRICE_PATH = "/v2/updates/price/latest";
+const HERMES_HISTORICAL_PATH_PREFIX = "/v1/updates/price/";
 const FETCH_TIMEOUT_MS = 15000;
 const COMPUTE_UNIT_PRICE_MICRO_LAMPORTS = 50_000;
 
@@ -90,6 +91,53 @@ export async function fetchHermesUpdate(
   const b64 = json?.binary?.data?.[0];
   if (typeof b64 !== "string") {
     throw new Error("Hermes response missing binary.data[0]");
+  }
+  return Buffer.from(b64, "base64");
+}
+
+/** Fetch the binary Wormhole VAA for a single feed_id at a SPECIFIC
+ *  historical unix timestamp. Hermes returns the first price update
+ *  whose publish_time is at or after the requested timestamp. Used by
+ *  settle_expiry, which requires `publish_time` to sit in
+ *  [vault.expiry, vault.expiry + 60].
+ *
+ *  NOTE: Hermes's historical endpoint lives only on /v1, NOT /v2. The
+ *  /v2/updates/price/latest endpoint used elsewhere in this file does
+ *  not have a historical sibling on /v2 as of 2026-05-03.
+ *
+ *  No fallback to /latest on failure — falling back would silently
+ *  reintroduce the late-settlement bug. Callers must handle the throw.
+ */
+export async function fetchHistoricalHermesUpdate(
+  feedIdHex: string,
+  publishTimeUnixSeconds: number,
+  hermesBase: string = DEFAULT_HERMES_BASE,
+): Promise<Buffer> {
+  if (!Number.isFinite(publishTimeUnixSeconds) || publishTimeUnixSeconds <= 0) {
+    throw new Error(
+      `fetchHistoricalHermesUpdate: invalid timestamp ${publishTimeUnixSeconds}`,
+    );
+  }
+  const hex = feedIdHex.replace(/^0x/, "").toLowerCase();
+  const ts = Math.floor(publishTimeUnixSeconds);
+  const url = `${hermesBase}${HERMES_HISTORICAL_PATH_PREFIX}${ts}?ids[]=0x${hex}&encoding=base64`;
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), FETCH_TIMEOUT_MS);
+  let json: any;
+  try {
+    const resp = await fetch(url, { signal: ac.signal });
+    if (!resp.ok) {
+      throw new Error(`Hermes historical price HTTP ${resp.status} for ts=${ts}`);
+    }
+    json = await resp.json();
+  } finally {
+    clearTimeout(timer);
+  }
+  const b64 = json?.binary?.data?.[0];
+  if (typeof b64 !== "string") {
+    throw new Error(
+      `Hermes historical response missing binary.data[0] for ts=${ts}`,
+    );
   }
   return Buffer.from(b64, "base64");
 }
@@ -138,7 +186,13 @@ export async function buildPostUpdateAndSettleTx(
   feedIdHex: string,
   hermesBase: string = DEFAULT_HERMES_BASE,
 ): Promise<BuiltTx[]> {
-  const priceUpdateData = await fetchHermesUpdate(feedIdHex, hermesBase);
+  // Historical fetch — VAA whose publish_time is at-or-after vault expiry.
+  // settle_expiry then enforces the 60s window on-chain.
+  const priceUpdateData = await fetchHistoricalHermesUpdate(
+    feedIdHex,
+    expiry,
+    hermesBase,
+  );
 
   const receiver = new PythSolanaReceiver({
     connection: program.provider.connection,

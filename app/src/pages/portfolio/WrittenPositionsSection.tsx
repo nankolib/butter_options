@@ -18,8 +18,8 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { SectionNumber } from "../../components/layout";
 import { FilterPills, type FilterId } from "./FilterPills";
-import { WriterPositionsTable, type WriterRowAction } from "./WriterPositionsTable";
-import type { WriterRow } from "./writerRows";
+import { WriterPositionsTable } from "./WriterPositionsTable";
+import type { WriterRow, WriterRowAction } from "./writerRows";
 
 type WrittenPositionsSectionProps = {
   rows: WriterRow[];

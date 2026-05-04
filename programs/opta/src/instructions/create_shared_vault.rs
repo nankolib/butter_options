@@ -33,6 +33,16 @@ pub fn handle_create_shared_vault(
     vault_type: VaultType,
     collateral_mint: Pubkey,
 ) -> Result<()> {
+    // HIGH-3 (audit Run-6) — defense-in-depth. Reject vaults backed by
+    // a market with all-zeros pyth_feed_id. Even if the create-side gate
+    // (HIGH-2 + zero-check in create_market) regresses, no collateral
+    // can be locked behind a market that will never settle (settle_expiry's
+    // MismatchedFeedId check would reject every call).
+    require!(
+        ctx.accounts.market.pyth_feed_id != [0u8; 32],
+        OptaError::InvalidPythFeedId
+    );
+
     let clock = Clock::get()?;
 
     // Strike price must be positive

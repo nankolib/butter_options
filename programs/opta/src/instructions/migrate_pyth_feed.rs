@@ -36,6 +36,15 @@ pub fn handle_migrate_pyth_feed(
         OptaError::Unauthorized
     );
 
+    // HIGH-2 / HIGH-3 same-arc zero-feed guard (audit Run-6). Reject
+    // rotation to all-zeros — an admin fat-finger of the default-zeroed
+    // bytes would brick the market. Strict subset of HIGH-5 (full
+    // feed-vs-asset proof validation via PriceUpdateV2 stays in Arc 5).
+    require!(
+        new_pyth_feed_id != [0u8; 32],
+        OptaError::InvalidPythFeedId
+    );
+
     let market = &mut ctx.accounts.market;
 
     // Idempotent re-call with same feed_id — silent Ok.

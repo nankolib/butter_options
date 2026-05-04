@@ -153,4 +153,15 @@ pub enum OptaError {
          vault.expiry + EXERCISE_WINDOW before withdrawing"
     )]
     HolderExerciseWindowOpen,
+
+    // =========================================================================
+    // Zero-feed grief guard (HIGH-2 + HIGH-3 audit-fix arc, Run-7)
+    // =========================================================================
+    // Rejected at create_market, create_shared_vault, and migrate_pyth_feed.
+    // The all-zeros feed_id is the default sentinel value of [u8; 32] — a
+    // common admin fat-finger and the registration-name griefer's lowest-
+    // friction lock. Real Pyth feed IDs are random 32-byte values and
+    // never collide with this.
+    #[msg("Pyth feed ID cannot be all zeros — register a real feed")]
+    InvalidPythFeedId,
 }

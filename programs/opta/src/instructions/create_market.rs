@@ -1,11 +1,12 @@
 // =============================================================================
-// instructions/create_market.rs — Register an asset (permissionless)
+// instructions/create_market.rs — Register an asset (admin-only)
 // =============================================================================
 //
-// Stage P1 shape: create_market is permissionless. Anyone can register an
-// asset by storing a 32-byte Pyth Pull feed ID alongside its ticker and
-// asset class. The feed_id is stored verbatim with no on-chain validation
-// at create time — Stage P2's settle_expiry validates it by passing the
+// Admin-only post-HIGH-2 fix (audit Run-6). Only protocol_state.admin
+// can register an asset by storing a 32-byte Pyth Pull feed ID alongside
+// its ticker and asset class. Zero feed IDs are rejected at create
+// time (HIGH-3 same-arc guard); non-zero feed IDs are stored verbatim
+// and validated downstream — Stage P2's settle_expiry passes the
 // stored feed_id to PriceUpdateV2::get_price_no_older_than, which fails
 // with MismatchedFeedId if the feed_id doesn't match the price update.
 //
@@ -45,6 +46,24 @@ pub fn handle_create_market(
     pyth_feed_id: [u8; 32],
     asset_class: u8,
 ) -> Result<()> {
+    // HIGH-2 (audit Run-6) — admin-only gate. Pre-fix, anyone could
+    // register an asset name with arbitrary feed_id, locking the
+    // (asset_name, feed_id) tuple via idempotent-init at line 56-65
+    // below. Random-byte griefers could permanently brick a namespace
+    // until manual migrate_pyth_feed recovery. Matches the pattern in
+    // migrate_pyth_feed.rs:33-37 — protocol_state.admin is the source
+    // of truth for the canonical authority.
+    require_keys_eq!(
+        ctx.accounts.creator.key(),
+        ctx.accounts.protocol_state.admin,
+        OptaError::Unauthorized
+    );
+
+    // HIGH-3 same-arc zero-feed guard. Defense-in-depth even with the
+    // admin gate above; an admin fat-finger of the default-zeroed bytes
+    // would otherwise lock the namespace.
+    require!(pyth_feed_id != [0u8; 32], OptaError::InvalidPythFeedId);
+
     // 1. Asset name normalization contract
     assert_normalized(&asset_name)?;
 
@@ -88,9 +107,10 @@ pub fn handle_create_market(
 #[derive(Accounts)]
 #[instruction(asset_name: String, pyth_feed_id: [u8; 32], asset_class: u8)]
 pub struct CreateMarket<'info> {
-    /// Permissionless — anyone can call. Pays for account creation on
-    /// first init; pays nothing on idempotent re-call because
-    /// `init_if_needed` short-circuits when the account already exists.
+    /// Admin-only post-HIGH-2 fix (audit Run-6). Must match
+    /// protocol_state.admin (verified in handler). Pays for account
+    /// creation on first init; pays nothing on idempotent re-call
+    /// because `init_if_needed` short-circuits.
     #[account(mut)]
     pub creator: Signer<'info>,
 

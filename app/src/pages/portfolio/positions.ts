@@ -61,7 +61,6 @@ export type Position = {
   strike: number;
   expiry: number;
   contracts: number;
-  totalSupply: number;
   costBasis: number;
   currentValue: number;
   pnl: number;
@@ -160,9 +159,13 @@ export function buildPositions(args: BuildPositionsArgs): Position[] {
     const isSettled = !!v.isSettled;
     const isPastExpiry = expiry <= now;
 
-    const totalSupply = vaultMint.account.totalSupply?.toNumber?.() || 1;
-    const premium = usdcToNumber(vaultMint.account.premium ?? 0);
-    const costBasis = premium * (balance / totalSupply);
+    // HIGH-2 (audit Run-7): source canonical IDL fields. Pre-fix this read
+    // non-existent .totalSupply / .premium on VaultMint, silently zeroing
+    // costBasis on every row. premiumPerContract × balance is the buyer's
+    // dollar cost basis — premiumPerContract is fixed for a VaultMint's
+    // lifetime per purchase_from_vault.rs:60-62.
+    const premiumPerContract = usdcToNumber(vaultMint.account.premiumPerContract ?? 0);
+    const costBasis = premiumPerContract * balance;
 
     let assetName: string = market?.assetName ?? "";
     if (!assetName && metadataSymbolByMint) {
@@ -200,7 +203,6 @@ export function buildPositions(args: BuildPositionsArgs): Position[] {
       strike,
       expiry,
       contracts: balance,
-      totalSupply,
       costBasis,
       currentValue,
       pnl,

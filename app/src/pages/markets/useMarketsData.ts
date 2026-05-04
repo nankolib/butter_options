@@ -62,7 +62,7 @@ export type UseMarketsData = {
  *
  * Open interest per row is the sum of `quantityMinted` across vault mints
  * belonging to that specific vault. Vault TVL is the vault's
- * `totalCollateral`. Premia Written is `totalPremiumReceived` (cumulative
+ * `totalCollateral`. Premia Written is `netPremiumCollected` (cumulative
  * since vault creation; no per-day indexer).
  */
 export function useMarketsData(): UseMarketsData {
@@ -192,7 +192,7 @@ export function useMarketsData(): UseMarketsData {
 
     for (const v of vaults) {
       totalTvl += usdcToNumber(v.account.totalCollateral);
-      const premia = v.account.totalPremiumReceived;
+      const premia = v.account.netPremiumCollected;
       if (premia) totalPremia += usdcToNumber(premia);
     }
 

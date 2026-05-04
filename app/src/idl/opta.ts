@@ -1079,9 +1079,10 @@ export type Opta = {
         {
           "name": "creator",
           "docs": [
-            "Permissionless — anyone can call. Pays for account creation on",
-            "first init; pays nothing on idempotent re-call because",
-            "`init_if_needed` short-circuits when the account already exists."
+            "Admin-only post-HIGH-2 fix (audit Run-6). Must match",
+            "protocol_state.admin (verified in handler). Pays for account",
+            "creation on first init; pays nothing on idempotent re-call",
+            "because `init_if_needed` short-circuits."
           ],
           "writable": true,
           "signer": true
@@ -3710,6 +3711,11 @@ export type Opta = {
       "code": 6041,
       "name": "holderExerciseWindowOpen",
       "msg": "Holder exercise window still open — writers must wait until \\\n         vault.expiry + EXERCISE_WINDOW before withdrawing"
+    },
+    {
+      "code": 6042,
+      "name": "invalidPythFeedId",
+      "msg": "Pyth feed ID cannot be all zeros — register a real feed"
     }
   ],
   "types": [

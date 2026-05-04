@@ -51,7 +51,10 @@ function computeCells(
 ): [SummaryCell, SummaryCell, SummaryCell, SummaryCell] {
   const openCount = rows.filter((r) => r.state === "live").length;
   const settledCount = rows.filter(
-    (r) => r.state === "settled-itm" || r.state === "settled-otm",
+    (r) =>
+      r.state === "settled-itm" ||
+      r.state === "settled-otm" ||
+      r.state === "settled-locked",
   ).length;
 
   // Cell 1 — Vaults Written

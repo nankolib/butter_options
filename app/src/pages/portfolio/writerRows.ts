@@ -46,8 +46,20 @@ import { usdcToNumber } from "../../utils/format";
 export type WriterRowState =
   | "live"
   | "expired-pending"
+  | "settled-locked"
   | "settled-itm"
   | "settled-otm";
+
+/**
+ * Holders-first exercise window in seconds. Mirrors EXERCISE_WINDOW =
+ * 86_400 in programs/opta/src/state/shared_vault.rs:133. Writers cannot
+ * call withdraw_post_settlement (or be processed by auto_finalize_writers)
+ * until vault.expiry + EXERCISE_WINDOW has elapsed, OR the vault never
+ * sold any options. The frontend mirrors this gate as the settled-locked
+ * row state (see buildWriterRows below) so users don't click withdraw
+ * and bounce off the on-chain revert (HolderExerciseWindowOpen, 6041).
+ */
+export const EXERCISE_WINDOW_SECONDS = 86_400;
 
 export type WriterRowPrimaryAction =
   | "claim-premium"
@@ -213,8 +225,20 @@ export function buildWriterRows(args: BuildWriterRowsArgs): WriterRow[] {
         : Math.max(0, strike - settlementPrice);
     }
 
+    // CRIT-1 holders-first lockup (audit Run-6 / May-4 audit-fix arc) —
+    // mirrors withdraw_post_settlement.rs:40-50 and
+    // auto_finalize_writers.rs:68-80 verbatim. Lock applies post-settle
+    // when the vault sold to buyers and the 24h exercise window hasn't
+    // elapsed. Bypassed when total_options_sold == 0 (no holders exist
+    // to harm; writer can withdraw immediately at settle time).
+    const totalOptionsSold = asNumber(v.totalOptionsSold);
+    const lockEnd = expiry + EXERCISE_WINDOW_SECONDS;
+    const isLocked = isSettled && totalOptionsSold > 0 && now < lockEnd;
+
     let state: WriterRowState;
-    if (isSettled) {
+    if (isLocked) {
+      state = "settled-locked";
+    } else if (isSettled) {
       state = payoutPerContract > 0 ? "settled-itm" : "settled-otm";
     } else if (isPastExpiry) {
       state = "expired-pending";
@@ -271,6 +295,7 @@ export function buildWriterRows(args: BuildWriterRowsArgs): WriterRow[] {
         primaryAction = "claim-premium";
         break;
       case "expired-pending":
+      case "settled-locked":
         primaryAction = "settling";
         break;
       case "settled-itm":

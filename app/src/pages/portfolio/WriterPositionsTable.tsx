@@ -24,6 +24,7 @@ import type {
   WriterRowPrimaryAction,
   WriterRowAction,
 } from "./writerRows";
+import { EXERCISE_WINDOW_SECONDS } from "./writerRows";
 
 const ASSET_FULL_NAME: Record<string, string> = {
   SOL: "Solana",
@@ -281,6 +282,7 @@ function stateDotClass(state: WriterRowState): string {
     case "live":
       return "bg-ink";
     case "expired-pending":
+    case "settled-locked":
       return "bg-amber-500";
     case "settled-itm":
       return "bg-crimson";
@@ -295,6 +297,8 @@ function stateLabel(state: WriterRowState): string {
       return "Live";
     case "expired-pending":
       return "Expired · Pending";
+    case "settled-locked":
+      return "Settled · Locked";
     case "settled-itm":
       return "Settled · ITM";
     case "settled-otm":
@@ -309,6 +313,8 @@ function stateSubtitle(row: WriterRow): string {
       return "";
     case "expired-pending":
       return "settling…";
+    case "settled-locked":
+      return `Locked until ${formatLockUnlock(row.expiry + EXERCISE_WINDOW_SECONDS)}`;
     case "settled-itm":
       return row.settlementPrice !== null
         ? `Settled @ $${row.settlementPrice.toFixed(2)}`
@@ -334,6 +340,27 @@ function formatCountdown(unix: number): string {
   const hours = Math.floor((diff % 86400) / 3600);
   if (days === 0) return `${hours}h`;
   return `${days}d ${hours}h`;
+}
+
+/**
+ * "05 May, 18:44 UTC" — date + time, UTC explicit. Used by the
+ * settled-locked subtitle. Year omitted because lock is always within
+ * 24h of expiry; UTC explicit because the on-chain gate compares
+ * clock.unix_timestamp directly (see writerRows.ts EXERCISE_WINDOW_SECONDS).
+ */
+function formatLockUnlock(unix: number): string {
+  const d = new Date(unix * 1000);
+  const date = d.toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    timeZone: "UTC",
+  });
+  const time = d.toLocaleTimeString("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "UTC",
+  });
+  return `${date}, ${time} UTC`;
 }
 
 // Suppress unused-import-warning: PublicKey is used via the WriterRow type

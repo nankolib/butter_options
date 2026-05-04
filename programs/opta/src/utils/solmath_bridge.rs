@@ -63,14 +63,19 @@ pub fn pyth_price_to_scale(price: i64, exponent: i32) -> Result<u128> {
     let target_decimals: i32 = 12; // SCALE = 1e12
     let shift = target_decimals + exponent;
 
-    if shift >= 0 {
+    let result = if shift >= 0 {
         let multiplier = 10u128.pow(shift as u32);
         price_u128.checked_mul(multiplier)
-            .ok_or_else(|| error!(OptaError::MathOverflow))
+            .ok_or_else(|| error!(OptaError::MathOverflow))?
     } else {
         let divisor = 10u128.pow((-shift) as u32);
-        Ok(price_u128 / divisor)
-    }
+        price_u128 / divisor
+    };
+    // HIGH-4 (audit Run-6) — reject silent-zero from integer truncation.
+    // For sub-microUSDC inputs (price·10^exponent < 1e-12) the divide
+    // path rounds to 0 with no input-side guard catching it.
+    require!(result > 0, OptaError::InvalidSettlementPrice);
+    Ok(result)
 }
 
 /// Converts a Pyth price to USDC smallest units (6 decimals).
@@ -91,6 +96,12 @@ pub fn pyth_price_to_usdc(price: i64, exponent: i32) -> Result<u64> {
     } else {
         price_u128 / 10u128.pow((-shift) as u32)
     };
+    // HIGH-4 (audit Run-6) — reject silent-zero from integer truncation.
+    // settle_expiry stores this as SettlementRecord.settlement_price; a
+    // zero would cause PUT exercise to pay full strike to every holder
+    // (max(0, strike - 0) = strike), exhausting the vault. Sub-microUSDC
+    // inputs (e.g. price=1 at exponent=-8 → 1/100 = 0) hit this path.
+    require!(result > 0, OptaError::InvalidSettlementPrice);
     require!(result <= u64::MAX as u128, OptaError::MathOverflow);
     Ok(result as u64)
 }

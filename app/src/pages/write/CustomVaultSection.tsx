@@ -87,14 +87,6 @@ export const CustomVaultSection: FC<CustomVaultSectionProps> = ({
       }
     } catch (err: any) {
       const msg = decodeError(err);
-      if (msg.includes("already confirmed")) {
-        showToast({
-          type: "success",
-          title: "Custom vault written",
-          message: "Tx already confirmed — refresh to verify state.",
-        });
-        return;
-      }
       showToast({
         type: "error",
         title: "Write failed",

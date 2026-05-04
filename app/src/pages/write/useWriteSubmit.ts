@@ -69,6 +69,55 @@ export type UseWriteSubmit = {
   submit: (input: WriteSubmitInput) => Promise<WriteSubmitResult | null>;
 };
 
+// Decoder-coupling note: this helper inspects the decoded error message for
+// the substring "already confirmed", which is the wallet-replay sentinel
+// produced by errorDecoder.ts:65-73 (raw RPC "already been processed" →
+// "Transaction already confirmed."). If the decoder is ever refactored,
+// update this helper in lockstep.
+/**
+ * Sends one stage of the 3-stage write flow with race-recovery built in.
+ *
+ * Happy path:  awaits sendFn, returns its tx signature.
+ *
+ * Recovery path: if sendFn rejects with the wallet-replay sentinel
+ *   ("Transaction already confirmed."), we run landedCheckFn against the
+ *   chain. If true, the stage actually landed despite the bad reject — we
+ *   resolve with whatever signature we can recover from the rejection.
+ *   If false, we throw a real per-stage error.
+ *
+ * Non-recovery path: any other rejection rethrows the original error
+ *   unchanged, so the outer try/catch can decode it normally.
+ */
+async function submitStageWithRecovery(
+  stageName: "Vault create" | "Deposit" | "Mint",
+  sendFn: () => Promise<string>,
+  landedCheckFn: () => Promise<boolean>,
+): Promise<string> {
+  try {
+    return await sendFn();
+  } catch (err: any) {
+    const decoded = decodeError(err);
+    if (!decoded.includes("already confirmed")) {
+      throw err;
+    }
+    const landed = await landedCheckFn();
+    if (!landed) {
+      throw new Error(`${stageName} did not confirm — please retry.`);
+    }
+    // Best-effort signature extraction. Phantom's wallet-replay rejects
+    // don't always carry a signature; we accept "(unrecoverable)" in those
+    // cases. Stage 3 is the only consumer that exposes the sig in the
+    // result toast — see WriteSubmitResult.txSignature handling below.
+    const recoveredSig: string = err?.signature ?? err?.txid ?? "";
+    console.warn(
+      `[useWriteSubmit] ${stageName} reported 'already confirmed', ` +
+        `verified on-chain — continuing.`,
+      { signature: recoveredSig || "(unrecoverable)" },
+    );
+    return recoveredSig;
+  }
+}
+
 /**
  * Bundles the three-step write sequence (post-Stage-P4c, post-Stage-2):
  *   1. createSharedVault        (skip if PDA exists)
@@ -154,46 +203,82 @@ export function useWriteSubmit(): UseWriteSubmit {
         if (!vaultExists) {
           setStageLabel("1/3 · Creating vault");
           const [epochConfigPda] = deriveEpochConfig();
-          await program.methods
-            .createSharedVault(
-              strikeBN,
-              expiryBN,
-              optTypeEnum as any,
-              input.vaultType === "epoch" ? { epoch: {} } : ({ custom: {} } as any),
-              protocolState.usdcMint,
-            )
-            .accountsStrict({
-              creator: publicKey,
-              market: marketPda,
-              sharedVault: sharedVaultPda,
-              vaultUsdcAccount: vaultUsdcPda,
-              usdcMint: protocolState.usdcMint,
-              protocolState: protocolStatePda,
-              epochConfig: input.vaultType === "epoch" ? epochConfigPda : null,
-              tokenProgram: TOKEN_PROGRAM_ID,
-              systemProgram: SystemProgram.programId,
-            })
-            .preInstructions([EXTRA_CU_400K])
-            .rpc({ commitment: "confirmed" });
+          await submitStageWithRecovery(
+            "Vault create",
+            () =>
+              program.methods
+                .createSharedVault(
+                  strikeBN,
+                  expiryBN,
+                  optTypeEnum as any,
+                  input.vaultType === "epoch" ? { epoch: {} } : ({ custom: {} } as any),
+                  protocolState.usdcMint,
+                )
+                .accountsStrict({
+                  creator: publicKey,
+                  market: marketPda,
+                  sharedVault: sharedVaultPda,
+                  vaultUsdcAccount: vaultUsdcPda,
+                  usdcMint: protocolState.usdcMint,
+                  protocolState: protocolStatePda,
+                  epochConfig: input.vaultType === "epoch" ? epochConfigPda : null,
+                  tokenProgram: TOKEN_PROGRAM_ID,
+                  systemProgram: SystemProgram.programId,
+                })
+                .preInstructions([EXTRA_CU_400K])
+                .rpc({ commitment: "confirmed" }),
+            async () => {
+              try {
+                await program.account.sharedVault.fetch(sharedVaultPda);
+                return true;
+              } catch {
+                return false;
+              }
+            },
+          );
         }
 
         // ---- Step 2: depositToVault ----
         setStageLabel("2/3 · Depositing collateral");
         const [writerPositionPda] = deriveWriterPosition(sharedVaultPda, publicKey);
-        await program.methods
-          .depositToVault(collateralBN)
-          .accountsStrict({
-            writer: publicKey,
-            sharedVault: sharedVaultPda,
-            writerPosition: writerPositionPda,
-            writerUsdcAccount,
-            vaultUsdcAccount: vaultUsdcPda,
-            protocolState: protocolStatePda,
-            tokenProgram: TOKEN_PROGRAM_ID,
-            systemProgram: SystemProgram.programId,
-          })
-          .preInstructions([EXTRA_CU_400K])
-          .rpc({ commitment: "confirmed" });
+
+        // Snapshot deposited_collateral before sending — used by the
+        // race-recovery landed-check to confirm THIS deposit landed (vs a
+        // prior deposit by the same writer to the same vault).
+        let depositSnapshot: BN = new BN(0);
+        try {
+          const existingPosition = await program.account.writerPosition.fetch(writerPositionPda);
+          depositSnapshot = existingPosition.depositedCollateral as BN;
+        } catch {
+          // first deposit — no WriterPosition yet; snapshot stays at 0.
+        }
+
+        await submitStageWithRecovery(
+          "Deposit",
+          () =>
+            program.methods
+              .depositToVault(collateralBN)
+              .accountsStrict({
+                writer: publicKey,
+                sharedVault: sharedVaultPda,
+                writerPosition: writerPositionPda,
+                writerUsdcAccount,
+                vaultUsdcAccount: vaultUsdcPda,
+                protocolState: protocolStatePda,
+                tokenProgram: TOKEN_PROGRAM_ID,
+                systemProgram: SystemProgram.programId,
+              })
+              .preInstructions([EXTRA_CU_400K])
+              .rpc({ commitment: "confirmed" }),
+          async () => {
+            try {
+              const after = await program.account.writerPosition.fetch(writerPositionPda);
+              return (after.depositedCollateral as BN).gte(depositSnapshot.add(collateralBN));
+            } catch {
+              return false;
+            }
+          },
+        );
 
         // ---- Step 3: mintFromVault ----
         setStageLabel("3/3 · Minting contracts");
@@ -211,26 +296,38 @@ export function useWriteSubmit(): UseWriteSubmit {
         const [extraAccountMetaList] = deriveExtraAccountMetaListPda(optionMintPda);
         const [hookState] = deriveHookStatePda(optionMintPda);
 
-        const tx = await program.methods
-          .mintFromVault(contractsBN, premiumBN, createdAt)
-          .accountsStrict({
-            writer: publicKey,
-            sharedVault: sharedVaultPda,
-            writerPosition: writerPositionPda,
-            market: marketPda,
-            protocolState: protocolStatePda,
-            optionMint: optionMintPda,
-            purchaseEscrow: purchaseEscrowPda,
-            vaultMintRecord: vaultMintRecordPda,
-            transferHookProgram: TRANSFER_HOOK_PROGRAM_ID,
-            extraAccountMetaList,
-            hookState,
-            systemProgram: SystemProgram.programId,
-            token2022Program: TOKEN_2022_PROGRAM_ID,
-            rent: SYSVAR_RENT_PUBKEY,
-          })
-          .preInstructions([EXTRA_CU_800K])
-          .rpc({ commitment: "confirmed" });
+        const tx = await submitStageWithRecovery(
+          "Mint",
+          () =>
+            program.methods
+              .mintFromVault(contractsBN, premiumBN, createdAt)
+              .accountsStrict({
+                writer: publicKey,
+                sharedVault: sharedVaultPda,
+                writerPosition: writerPositionPda,
+                market: marketPda,
+                protocolState: protocolStatePda,
+                optionMint: optionMintPda,
+                purchaseEscrow: purchaseEscrowPda,
+                vaultMintRecord: vaultMintRecordPda,
+                transferHookProgram: TRANSFER_HOOK_PROGRAM_ID,
+                extraAccountMetaList,
+                hookState,
+                systemProgram: SystemProgram.programId,
+                token2022Program: TOKEN_2022_PROGRAM_ID,
+                rent: SYSVAR_RENT_PUBKEY,
+              })
+              .preInstructions([EXTRA_CU_800K])
+              .rpc({ commitment: "confirmed" }),
+          async () => {
+            try {
+              await program.account.vaultMint.fetch(vaultMintRecordPda);
+              return true;
+            } catch {
+              return false;
+            }
+          },
+        );
 
         return {
           txSignature: tx,

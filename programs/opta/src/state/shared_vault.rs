@@ -119,3 +119,15 @@ pub const SHARED_VAULT_SEED: &[u8] = b"shared_vault";
 
 /// PDA seed prefix for the vault's USDC token account.
 pub const VAULT_USDC_SEED: &[u8] = b"vault_usdc";
+
+/// Holder exercise window in seconds, applied post-expiry before writers
+/// may call withdraw_post_settlement or auto_finalize_writers (CRIT-1
+/// audit-fix arc, Run-6). 24 hours matches industry-standard cash-settled
+/// options conventions and gives ITM holders a clear, predictable window
+/// to exercise via either exercise_from_vault or auto_finalize_holders
+/// before pro-rata writer payouts can deplete vault.collateral_remaining.
+///
+/// Vaults with `total_options_sold == 0` bypass this gate (no buyers ever
+/// bought, so no holders exist to harm — writers can withdraw immediately
+/// at settle time).
+pub const EXERCISE_WINDOW: i64 = 86_400;

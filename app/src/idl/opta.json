@@ -3699,6 +3699,11 @@
       "code": 6040,
       "name": "PriceConfidenceTooWide",
       "msg": "Pyth EMA confidence interval exceeds MAX_CONF_BPS at settlement"
+    },
+    {
+      "code": 6041,
+      "name": "HolderExerciseWindowOpen",
+      "msg": "Holder exercise window still open — writers must wait until \\\n         vault.expiry + EXERCISE_WINDOW before withdrawing"
     }
   ],
   "types": [

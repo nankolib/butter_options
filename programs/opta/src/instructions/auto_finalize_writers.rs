@@ -60,6 +60,25 @@ pub fn handle_auto_finalize_writers<'info>(
         ctx.accounts.shared_vault.is_settled,
         OptaError::VaultNotSettled
     );
+
+    // CRIT-1 (audit Run-6) — same holders-first gate as
+    // withdraw_post_settlement.rs:29-49. Mirrored here so the crank's
+    // batched writer-payout path enforces the same invariant.
+    // EXERCISE_WINDOW lives in state/shared_vault.rs.
+    if ctx.accounts.shared_vault.total_options_sold > 0 {
+        let clock = Clock::get()?;
+        let window_end = ctx
+            .accounts
+            .shared_vault
+            .expiry
+            .checked_add(EXERCISE_WINDOW)
+            .ok_or(OptaError::MathOverflow)?;
+        require!(
+            clock.unix_timestamp >= window_end,
+            OptaError::HolderExerciseWindowOpen
+        );
+    }
+
     require!(
         ctx.remaining_accounts.len() % 3 == 0,
         OptaError::InvalidBatchAccounts

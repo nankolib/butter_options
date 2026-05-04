@@ -47,7 +47,10 @@ const CUSTOM_ERRORS: Record<number, string> = {
   6038: "Vault expiry has passed",
   6039: "Invalid epoch expiry — must fall on configured day and hour",
   6040: "Insufficient free collateral in your vault position",
-  6041: "Collateral is committed to active options and cannot be withdrawn",
+  // 6041 was previously stale (mapped to CollateralCommitted, which is now
+  // 6023 in errors.rs). Reclaimed by HolderExerciseWindowOpen, May-4
+  // CRIT-1 audit-fix arc — see programs/opta/src/errors.rs.
+  6041: "Withdraw opens 24h after expiry — buyers need time to exercise first.",
   6042: "No unsold tokens to burn",
   6043: "Nothing to claim — all premium already withdrawn",
   6044: "Premium exceeds your maximum (slippage protection)",

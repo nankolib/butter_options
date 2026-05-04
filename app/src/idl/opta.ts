@@ -3705,6 +3705,11 @@ export type Opta = {
       "code": 6040,
       "name": "priceConfidenceTooWide",
       "msg": "Pyth EMA confidence interval exceeds MAX_CONF_BPS at settlement"
+    },
+    {
+      "code": 6041,
+      "name": "holderExerciseWindowOpen",
+      "msg": "Holder exercise window still open — writers must wait until \\\n         vault.expiry + EXERCISE_WINDOW before withdrawing"
     }
   ],
   "types": [

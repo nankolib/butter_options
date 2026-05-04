@@ -139,4 +139,18 @@ pub enum OptaError {
 
     #[msg("Pyth EMA confidence interval exceeds MAX_CONF_BPS at settlement")]
     PriceConfidenceTooWide,
+
+    // =========================================================================
+    // Holder exercise window (CRIT-1 audit-fix arc, Run-6)
+    // =========================================================================
+    // Writers must wait EXERCISE_WINDOW seconds after vault.expiry before
+    // calling withdraw_post_settlement / auto_finalize_writers, unless the
+    // vault never sold any options (total_options_sold == 0). This prevents
+    // the writer-drains-before-holders-exercise race where holders' payouts
+    // get capped to a vault that's already been emptied.
+    #[msg(
+        "Holder exercise window still open — writers must wait until \
+         vault.expiry + EXERCISE_WINDOW before withdrawing"
+    )]
+    HolderExerciseWindowOpen,
 }

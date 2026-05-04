@@ -265,6 +265,30 @@ export const ALL_FIXTURES: FixtureSpec[] = [
   { name: "sol-180-conf-at-edge",    feedIdHex: FEED_ID_HEX.SOL, price: BigInt("18000000000"), exponent: -8, publishTimeOffsetSec: 106, emaConf: BigInt(360_000_000) },
   // sol-180-conf-just-over:  emaConf=360_000_001, expiry=baseTime+102, gap=+5 → REVERT (PriceConfidenceTooWide)
   { name: "sol-180-conf-just-over",  feedIdHex: FEED_ID_HEX.SOL, price: BigInt("18000000000"), exponent: -8, publishTimeOffsetSec: 107, emaConf: BigInt(360_000_001) },
+  // -- CRIT-1 holders-first gate fixtures (audit Run-6, 2026-05-03) ------------
+  // Two fixtures used by tests/zzz-crit1-holders-first-gate.ts. Test expiries
+  // are baseTime + 60/90/120/150 (30s spacing — minimum 60s buffer for fresh
+  // validator bootstrap on Test 1, comfortable buffers thereafter). The 90s
+  // spread between Test 1 and Test 4 exceeds the 60s settle_expiry
+  // publish-time window, so we use TWO fixtures — each serves two tests:
+  //
+  //   Fixture A (sol-250-window-future-90, publish_time = baseTime + 90):
+  //     Test 1 (sole-writer ITM, BEFORE window):    expiry=baseTime+60, gap=+30
+  //     Test 2 (sole-writer no-buyer):              expiry=baseTime+90, gap= 0
+  //
+  //   Fixture B (sol-250-window-future-180, publish_time = baseTime + 180):
+  //     Test 3 (multi-writer ITM, BEFORE window):   expiry=baseTime+120, gap=+60
+  //     Test 4 (multi-writer no-buyer):             expiry=baseTime+150, gap=+30
+  //
+  // Both fixtures use default emaConf (1_000_000), which passes the CRIT-2
+  // 200bps confidence-interval gate at SOL @ $250 by a wide margin
+  // (threshold = 25e9 * 200 / 10_000 = 5e8; 1e6 << 5e8).
+  //
+  // gap math verification: gap = publish_time - expiry, must be in [0, 60].
+  //   Fixture A: 90-60=+30 ✓, 90-90=0 ✓
+  //   Fixture B: 180-120=+60 ✓ (boundary inclusive), 180-150=+30 ✓
+  { name: "sol-250-window-future-90", feedIdHex: FEED_ID_HEX.SOL, price: BigInt("25000000000"), exponent: -8, publishTimeOffsetSec: 90 },
+  { name: "sol-250-window-future-180", feedIdHex: FEED_ID_HEX.SOL, price: BigInt("25000000000"), exponent: -8, publishTimeOffsetSec: 180 },
 ];
 
 /// Write all fixtures to /tmp and return the (name → pubkey) map plus the

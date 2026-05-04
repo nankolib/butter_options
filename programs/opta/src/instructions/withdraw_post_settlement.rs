@@ -26,6 +26,29 @@ pub fn handle_withdraw_post_settlement(ctx: Context<WithdrawPostSettlement>) -> 
     require!(writer_pos.owner == ctx.accounts.writer.key(), OptaError::NotWriter);
     require!(writer_pos.shares > 0, OptaError::InsufficientCollateral);
 
+    // CRIT-1 (audit Run-6) — holders-first gate.
+    //
+    // Without this check, a writer could call withdraw_post_settlement the
+    // same slot settle_vault lands and drain the vault before any holder
+    // exercises ITM tokens. Holders' payouts would cap at
+    // `min(raw, collateral_remaining=0) = 0`. EXERCISE_WINDOW lives in
+    // state/shared_vault.rs.
+    //
+    // Fast path: no buyers ever bought → no holders exist → skip the wait.
+    // Slow path: 24h post-expiry guarantees holders a clean window to exit
+    // via exercise_from_vault or auto_finalize_holders.
+    if vault.total_options_sold > 0 {
+        let clock = Clock::get()?;
+        let window_end = vault
+            .expiry
+            .checked_add(EXERCISE_WINDOW)
+            .ok_or(OptaError::MathOverflow)?;
+        require!(
+            clock.unix_timestamp >= window_end,
+            OptaError::HolderExerciseWindowOpen
+        );
+    }
+
     // FIX HIGH-01: Auto-claim any unclaimed premium before closing position
     let total_earned = (writer_pos.shares as u128)
         .checked_mul(vault.premium_per_share_cumulative)

@@ -12,9 +12,16 @@
 // addresses and a publicly-known signing key. In that state, any wallet
 // funded with DEVNET_FAUCET_KEYPAIR is drained within seconds of deploy.
 //
+// RUNTIME GUARD: WalletContext.tsx asserts that the inferred cluster
+// matches `EXPECTED_CLUSTER` below. A mainnet RPC URL with this file
+// untouched will throw at boot — visible crash, no silent breakage.
+// Update EXPECTED_CLUSTER, PROGRAM_ID, TRANSFER_HOOK_PROGRAM_ID, and
+// DEVNET_USDC_MINT in lockstep when promoting clusters.
+//
 // BEFORE ANY MAINNET BUILD — REQUIRED CHANGES:
 //   [ ] Deploy both Anchor programs to mainnet; replace PROGRAM_ID and
 //       TRANSFER_HOOK_PROGRAM_ID below with the mainnet addresses.
+//   [ ] Set EXPECTED_CLUSTER = "mainnet-beta" below.
 //   [ ] Replace DEVNET_USDC_MINT with Circle's real USDC mint
 //       (EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v).
 //   [ ] DELETE DEVNET_FAUCET_KEYPAIR entirely, then delete its only caller
@@ -40,6 +47,12 @@ export const PROGRAM_ID = new PublicKey(
 export const TRANSFER_HOOK_PROGRAM_ID = new PublicKey(
   "83EW6a9o9P5CmGUkQKvVZvsz6v6Dgztiw5M4tVjfZMAG",
 );
+
+// Build-time expected cluster. WalletContext asserts the runtime-inferred
+// cluster (from VITE_RPC_URL) matches this value; mismatch throws at boot.
+// Lockstep with PROGRAM_ID / TRANSFER_HOOK_PROGRAM_ID / DEVNET_USDC_MINT —
+// promote all four together when moving to mainnet. See file header.
+export const EXPECTED_CLUSTER: "devnet" | "mainnet-beta" = "devnet";
 
 // PDA seeds (must match the Rust program)
 export const PROTOCOL_SEED = "protocol_v2";

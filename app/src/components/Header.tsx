@@ -64,6 +64,14 @@ export const Header: FC = () => {
       showToast({ type: "error", title: "Faucet not configured", message: "Run: npx ts-node scripts/setup-faucet.ts" });
       return;
     }
+    // MED-2 defense-in-depth: even if the L158 isDevnet render gate ever
+    // regresses, the keypair never executes off-devnet. The keypair is
+    // publicly committed; on mainnet, signing ANY tx with it would let
+    // an attacker drain a misfunded wallet in seconds.
+    if (!isDevnet) {
+      showToast({ type: "error", title: "Faucet disabled", message: "Devnet only." });
+      return;
+    }
     setMintingUsdc(true);
     try {
       // ------------------------------------------------------------------

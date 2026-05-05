@@ -23,6 +23,11 @@ const FETCH_TIMEOUT_MS = 4000;
 const REFRESH_INTERVAL_MS = 30_000;
 const CACHE_TTL_MS = 30_000;
 const STALE_THRESHOLD_MS = 60_000;
+// MED-7: prune cache entries older than 5× TTL. Without this, every
+// distinct feed_id ever queried over a tab's lifetime accumulates a
+// Map entry that's never cleaned up. Bounded leak (~1MB at 10k feeds)
+// but worth fixing for long-running trader tabs.
+const JANITOR_THRESHOLD_MS = CACHE_TTL_MS * 5;
 
 export type FeedRequest = {
   /** Display key. Whatever string the caller wants the price returned under. */
@@ -157,6 +162,16 @@ export function usePythPrices(feeds: FeedRequest[]): {
     };
 
     const run = async () => {
+      // Janitor pass: drop entries that haven't been refreshed in
+      // 5× TTL. Runs at the top of every cycle so abandoned feed_ids
+      // (user navigated away from a market) clear within ~150s.
+      const janitorNow = Date.now();
+      for (const [id, entry] of priceCache.entries()) {
+        if (janitorNow - entry.ts > JANITOR_THRESHOLD_MS) {
+          priceCache.delete(id);
+        }
+      }
+
       // Serve cache first if every feed_id is fresh.
       const cacheOnly = computeFromCacheOnly();
       if (cacheOnly.complete) {

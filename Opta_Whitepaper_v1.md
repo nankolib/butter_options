@@ -381,6 +381,8 @@ Both on-chain programs are currently under the upgrade authority of a single key
 
 Opta currently supports only European-style options (exercisable only at expiry) and only USDC-denominated collateral and premium. This is a simplification that was chosen for audit tractability — American-style options introduce early-exercise logic that widens the attack surface, and multi-collateral support introduces oracle and pricing complexity that compounds with every asset added. These simplifications are appropriate for the current stage. American-style options and multi-collateral support are plausible Phase 3 items but are not currently scoped.
 
+Collateral sizing follows a related simplification. Each option contract is collateralised at 1× strike on both calls and puts. This makes settlement payouts symmetric and bounded, but it places a ceiling on a CALL holder's recoverable value: a buyer of a $50,000 BTC call exercising into a settlement of $200,000 receives $50,000 per contract, not the $150,000 intrinsic difference, because the vault simply does not hold the additional collateral. PUTs do not exhibit this asymmetry — a PUT's maximum payout is the strike (settlement floors at zero), which the 1× collateral fully covers. The mainnet design contemplates either underlying-asset-collateralised CALLs or a higher cash-collateral multiple to remove the cap; either is a plausible Phase 3 item.
+
 ### 9.7 Hermes and Pyth Integration Gotchas
 
 Two specific gotchas are worth flagging for any integrator building against Opta or against Pyth's Pull oracle on Solana more generally. They are not bugs in either Opta or Pyth, but they are the kind of detail that costs time when discovered live.

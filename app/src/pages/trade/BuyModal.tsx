@@ -361,6 +361,12 @@ export const BuyModal: FC<BuyModalProps> = ({
                 </div>
               )}
 
+              {side === "call" && (
+                <p className="m-0 mb-4 font-fraunces-text italic font-light leading-[1.5] opacity-70 text-[12.5px]">
+                  CALL payout is capped at strike per contract. Vaults hold 1× strike as collateral, so a deep ITM move pays the strike, not the full intrinsic value.
+                </p>
+              )}
+
               <HairlineRule className="mb-5" weight="soft" />
 
               <div className="flex gap-3">

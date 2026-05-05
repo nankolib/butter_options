@@ -66,8 +66,6 @@ export function usePortfolioActions(onSuccess: () => void): PortfolioActions {
   const exercise = useCallback(
     async (p: Position) => {
       if (!program || !provider || !publicKey) return;
-      // V2-only post-P4a; v1 path retired with the broken IDL reads.
-      if (p.source.kind !== "v2") return;
       setBusyId(p.id);
       try {
         await exerciseV2({ program, publicKey, position: p });
@@ -96,11 +94,7 @@ export function usePortfolioActions(onSuccess: () => void): PortfolioActions {
       if (!program || !provider || !publicKey) return;
       setBusyId(p.id);
       try {
-        if (p.source.kind === "v2") {
-          await listResaleV2({ program, publicKey, position: p, premiumUsd, tokenAmount });
-        } else {
-          await listResaleV1({ program, publicKey, position: p, premiumUsd, tokenAmount });
-        }
+        await listResaleV2({ program, publicKey, position: p, premiumUsd, tokenAmount });
         showToast({
           type: "success",
           title: "Listed for resale",
@@ -131,11 +125,7 @@ export function usePortfolioActions(onSuccess: () => void): PortfolioActions {
       if (!program || !provider || !publicKey) return;
       setBusyId(p.id);
       try {
-        if (p.source.kind === "v2") {
-          await cancelResaleV2({ program, publicKey, position: p });
-        } else {
-          await cancelResaleV1({ program, publicKey, position: p });
-        }
+        await cancelResaleV2({ program, publicKey, position: p });
         showToast({
           type: "success",
           title: "Listing cancelled",
@@ -208,7 +198,6 @@ async function exerciseV2({
   publicKey: PublicKey;
   position: Position;
 }) {
-  if (position.source.kind !== "v2") throw new Error("expected v2");
   const { vault, vaultMint } = position.source;
   const v = vault.account;
   const [protocolStatePda] = PublicKey.findProgramAddressSync(
@@ -262,117 +251,6 @@ async function exerciseV2({
   });
 }
 
-async function listResaleV1({
-  program,
-  publicKey,
-  position,
-  premiumUsd,
-  tokenAmount,
-}: {
-  program: any;
-  publicKey: PublicKey;
-  position: Position;
-  premiumUsd: number;
-  tokenAmount: number;
-}) {
-  if (position.source.kind !== "v1") throw new Error("expected v1");
-  const { position: p } = position.source;
-  const optionMint = p.account.optionMint as PublicKey;
-  const [protocolStatePda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("protocol_v2")],
-    program.programId,
-  );
-  const sellerOptionAccount = getAssociatedTokenAddressSync(
-    optionMint,
-    publicKey,
-    false,
-    TOKEN_2022_PROGRAM_ID,
-  );
-  const [resaleEscrowPda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("resale_escrow"), p.publicKey.toBuffer()],
-    program.programId,
-  );
-  const [extraAccountMetaList] = deriveExtraAccountMetaListPda(optionMint);
-  const [hookState] = deriveHookStatePda(optionMint);
-
-  const resalePremiumBN = new BN(Math.round(premiumUsd * 1_000_000));
-  const tokenAmountBN = new BN(tokenAmount);
-
-  const createSellerAtaIx = createAssociatedTokenAccountIdempotentInstruction(
-    publicKey,
-    sellerOptionAccount,
-    publicKey,
-    optionMint,
-    TOKEN_2022_PROGRAM_ID,
-    ASSOCIATED_TOKEN_PROGRAM_ID,
-  );
-
-  await program.methods
-    .listForResale(resalePremiumBN, tokenAmountBN)
-    .accountsStrict({
-      seller: publicKey,
-      protocolState: protocolStatePda,
-      position: p.publicKey,
-      sellerOptionAccount,
-      resaleEscrow: resaleEscrowPda,
-      optionMint,
-      token2022Program: TOKEN_2022_PROGRAM_ID,
-      transferHookProgram: TRANSFER_HOOK_PROGRAM_ID,
-      extraAccountMetaList,
-      hookState,
-      systemProgram: SystemProgram.programId,
-      rent: anchor.web3.SYSVAR_RENT_PUBKEY,
-    })
-    .preInstructions([EXTRA_CU, createSellerAtaIx])
-    .rpc({ commitment: "confirmed" });
-}
-
-async function cancelResaleV1({
-  program,
-  publicKey,
-  position,
-}: {
-  program: any;
-  publicKey: PublicKey;
-  position: Position;
-}) {
-  if (position.source.kind !== "v1") throw new Error("expected v1");
-  const { position: p } = position.source;
-  const [protocolStatePda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("protocol_v2")],
-    program.programId,
-  );
-  const [resaleEscrowPda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("resale_escrow"), p.publicKey.toBuffer()],
-    program.programId,
-  );
-  const sellerOptionAccount = getAssociatedTokenAddressSync(
-    p.account.optionMint,
-    publicKey,
-    false,
-    TOKEN_2022_PROGRAM_ID,
-  );
-  const [extraAccountMetaList] = deriveExtraAccountMetaListPda(p.account.optionMint);
-  const [hookState] = deriveHookStatePda(p.account.optionMint);
-
-  await program.methods
-    .cancelResale()
-    .accountsStrict({
-      seller: publicKey,
-      protocolState: protocolStatePda,
-      position: p.publicKey,
-      resaleEscrow: resaleEscrowPda,
-      sellerOptionAccount,
-      optionMint: p.account.optionMint,
-      token2022Program: TOKEN_2022_PROGRAM_ID,
-      transferHookProgram: TRANSFER_HOOK_PROGRAM_ID,
-      extraAccountMetaList,
-      hookState,
-    })
-    .preInstructions([EXTRA_CU])
-    .rpc({ commitment: "confirmed" });
-}
-
 async function listResaleV2({
   program,
   publicKey,
@@ -386,7 +264,6 @@ async function listResaleV2({
   premiumUsd: number;
   tokenAmount: number;
 }) {
-  if (position.source.kind !== "v2") throw new Error("expected v2");
   const { vault, vaultMint } = position.source;
   const optionMint = vaultMint.account.optionMint as PublicKey;
   const marketPda = vault.account.market as PublicKey;
@@ -471,7 +348,6 @@ async function cancelResaleV2({
   publicKey: PublicKey;
   position: Position;
 }) {
-  if (position.source.kind !== "v2") throw new Error("expected v2");
   const { vault, vaultMint } = position.source;
   const optionMint = vaultMint.account.optionMint as PublicKey;
 
@@ -532,14 +408,10 @@ async function burnTokens({
   publicKey: PublicKey;
   position: Position;
 }) {
-  // Token-2022 burn — works for both v1 and v2 since both mints are
-  // Token-2022. Doesn't update the on-chain OptionPosition state; just
-  // removes the worthless tokens from the wallet so they stop appearing
-  // in heldBalances.
-  const optionMint =
-    position.source.kind === "v1"
-      ? (position.source.position.account.optionMint as PublicKey)
-      : (position.source.vaultMint.account.optionMint as PublicKey);
+  // Token-2022 burn. Doesn't update on-chain state; just removes
+  // worthless tokens from the wallet so they stop appearing in
+  // heldBalances.
+  const optionMint = position.source.vaultMint.account.optionMint as PublicKey;
 
   const ata = getAssociatedTokenAddressSync(
     optionMint,

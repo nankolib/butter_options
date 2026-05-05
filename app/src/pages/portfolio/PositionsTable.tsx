@@ -187,21 +187,9 @@ const PositionRow: FC<{
   );
 };
 
-/**
- * Resolve the Solscan link target for a buyer row. v2 rows use the
- * SharedVault PDA (most informative — links to the pool that backs the
- * position). v1 rows fall back to the option mint per the WRITER_PF_PLAN
- * Open-Q2 decision; v1 has no shared vault so the mint is the next-best
- * drill-down. The fallback path is defensive — v1 is retired post-P4a
- * and no v1 rows are emitted by buildPositions today, but the type union
- * still permits them.
- */
+/** Resolve the Solscan link target for a buyer row — the SharedVault PDA. */
 function solscanTargetFor(p: Position): PublicKey {
-  if (p.vaultPda) return p.vaultPda;
-  if (p.source.kind === "v1") {
-    return p.source.position.account.optionMint as PublicKey;
-  }
-  return p.source.vault.publicKey;
+  return p.vaultPda;
 }
 
 function actionLabel(action: PositionAction): string {

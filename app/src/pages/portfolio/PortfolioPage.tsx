@@ -31,10 +31,6 @@ import {
 import { usePortfolioActions } from "./usePortfolioActions";
 import { useWriterActions } from "./useWriterActions";
 
-interface PositionAccount {
-  publicKey: PublicKey;
-  account: any;
-}
 interface MarketAccount {
   publicKey: PublicKey;
   account: any;
@@ -71,7 +67,6 @@ export const PortfolioPage: FC = () => {
   usePaperPalette();
   const { publicKey, connected } = useWallet();
   const { program } = useProgram();
-  const [positionsRaw, setPositionsRaw] = useState<PositionAccount[]>([]);
   const [markets, setMarkets] = useState<MarketAccount[]>([]);
   const [settlementRecords, setSettlementRecords] = useState<
     { publicKey: PublicKey; account: any }[]
@@ -106,13 +101,11 @@ export const PortfolioPage: FC = () => {
   const refetchAll = useCallback(async () => {
     if (!program) return;
     try {
-      const [posns, mkts, settles, lists] = await Promise.all([
-        safeFetchAll(program, "optionPosition"),
+      const [mkts, settles, lists] = await Promise.all([
         safeFetchAll(program, "optionsMarket"),
         safeFetchAll(program, "settlementRecord"),
         safeFetchAll(program, "vaultResaleListing"),
       ]);
-      setPositionsRaw(posns as PositionAccount[]);
       setMarkets(mkts as MarketAccount[]);
       setSettlementRecords(
         settles as { publicKey: PublicKey; account: any }[],
@@ -178,16 +171,6 @@ export const PortfolioPage: FC = () => {
     return m;
   }, [tokenMetadata]);
 
-  // Filter raw positions/vault-mints down to what the wallet currently holds
-  const v1Held = useMemo(() => {
-    if (!connected || !publicKey) return [];
-    return positionsRaw.filter((p) => {
-      if (p.account.isExercised || p.account.isCancelled) return false;
-      const bal = heldBalances.get(p.account.optionMint.toBase58());
-      return !!bal && bal > 0;
-    });
-  }, [positionsRaw, heldBalances, connected, publicKey]);
-
   // Filter raw listings down to ones the connected wallet owns. The on-chain
   // PDA seed [VAULT_RESALE_LISTING_SEED, mint, seller] guarantees at most one
   // active listing per (mint, seller), so this maps cleanly into the
@@ -233,15 +216,12 @@ export const PortfolioPage: FC = () => {
   const positions = useMemo(
     () =>
       buildPositions({
-        v1Held,
         v2Held,
-        heldBalances,
-        marketMap,
         spotPrices,
         metadataSymbolByMint,
         listings: myListings,
       }),
-    [v1Held, v2Held, heldBalances, marketMap, spotPrices, metadataSymbolByMint, myListings],
+    [v2Held, spotPrices, metadataSymbolByMint, myListings],
   );
 
   // Writer rows derived from useVaults().myPositions, joined to vaults +

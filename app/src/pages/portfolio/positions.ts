@@ -19,10 +19,6 @@ export type PositionAction =
   | "burn"
   | "none";
 
-interface PositionAccount {
-  publicKey: PublicKey;
-  account: any;
-}
 interface VaultAccount {
   publicKey: PublicKey;
   account: any;
@@ -36,26 +32,21 @@ interface ResaleListingAccount {
   account: any;
 }
 
-export type PositionSource =
-  | { kind: "v1"; position: PositionAccount; market: any }
-  | {
-      kind: "v2";
-      vault: VaultAccount;
-      vaultMint: VaultMintAccount;
-      market: any | null;
-    };
+export type PositionSource = {
+  kind: "v2";
+  vault: VaultAccount;
+  vaultMint: VaultMintAccount;
+  market: any | null;
+};
 
 export type Position = {
   /** Stable id — option-mint base58. Unique across both v1 and v2 because each holds its own SPL mint. */
   id: string;
   source: PositionSource;
   /**
-   * Vault PDA for v2 rows; null for v1 (which has no shared vault — each
-   * v1 position is its own escrow). Drives the Solscan icon link target;
-   * the table component falls back to option_mint for v1 rows so every
-   * row gets a clickable drill-down.
+   * Vault PDA — drives the Solscan icon link target on each row.
    */
-  vaultPda: PublicKey | null;
+  vaultPda: PublicKey;
   asset: string;
   side: "call" | "put";
   strike: number;
@@ -96,15 +87,12 @@ export function tickerFromMetadataSymbol(symbol: string | undefined): string | n
 }
 
 type BuildPositionsArgs = {
-  v1Held: PositionAccount[];
   v2Held: {
     vaultMint: VaultMintAccount;
     vault: VaultAccount;
     balance: number;
     market: any | null;
   }[];
-  heldBalances: Map<string, number>;
-  marketMap: Map<string, any>;
   spotPrices: Record<string, number>;
   metadataSymbolByMint?: Map<string, string>;
   /**
@@ -118,24 +106,14 @@ type BuildPositionsArgs = {
 };
 
 /**
- * Collapse v1 (P2P) and v2 (vault) buyer-side holdings into a single
- * Position[] array shaped for the new positions table.
+ * Build the V2 buyer-side Position[] array for the positions table.
  *
  * Centralises the cost-basis (proportional premium), current-value
  * (B-S for active, intrinsic for settled-ITM, $0 for settled-OTM),
- * and state-machine derivation that previously lived inline in the
- * Stage 1 PortfolioPage summary memo and the legacy V2TokenHoldings
- * component.
+ * and state-machine derivation in one place.
  */
 export function buildPositions(args: BuildPositionsArgs): Position[] {
-  // v1Held / heldBalances / marketMap params retained for cascade
-  // prevention — PortfolioPage still computes and passes them. v1 path
-  // retired in P4a; v2 path reads balances and market straight off each
-  // v2Held entry. Full type cleanup deferred to P4e.
   const { v2Held, spotPrices, metadataSymbolByMint, listings = [] } = args;
-  void args.v1Held;
-  void args.heldBalances;
-  void args.marketMap;
   const now = Math.floor(Date.now() / 1000);
   const result: Position[] = [];
 
@@ -209,7 +187,7 @@ export function buildPositions(args: BuildPositionsArgs): Position[] {
       pnlPercent,
       state,
       isListedForResale,
-      action: deriveAction(state, isListedForResale, "v2"),
+      action: deriveAction(state, isListedForResale),
     });
   }
 
@@ -271,12 +249,9 @@ function computeStateAndValue(args: {
 function deriveAction(
   state: PositionState,
   isListedForResale: boolean,
-  kind: "v1" | "v2",
 ): PositionAction {
   if (state === "settled-itm") return "exercise";
   if (state === "settled-otm") return "burn";
   if (state === "expired-unsettled") return "none";
-  // active
-  if (kind === "v2") return isListedForResale ? "cancel-resale" : "list-resale";
   return isListedForResale ? "cancel-resale" : "list-resale";
 }

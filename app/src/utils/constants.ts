@@ -98,14 +98,6 @@ export function isPostPhase2Vault(vault: { account: any } | { createdAt: any }):
   return ts >= PHASE2_CUTOFF_TIMESTAMP;
 }
 
-/** Returns true if an OptionPosition account was created at or after the Phase 2 cutoff. */
-export function isPostPhase2Position(position: { account: any } | { createdAt: any }): boolean {
-  const createdAt = (position as any)?.account?.createdAt ?? (position as any)?.createdAt;
-  if (createdAt == null) return false;
-  const ts = typeof createdAt === "number" ? createdAt : createdAt.toNumber();
-  return ts >= PHASE2_CUTOFF_TIMESTAMP;
-}
-
 // ============================================================================
 // ⚠️  CRITICAL — FULL PRIVATE KEY, DO NOT SHIP TO MAINNET
 // ============================================================================

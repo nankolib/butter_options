@@ -97,17 +97,3 @@ export function isExpired(timestamp: BN | number): boolean {
   const ts = typeof timestamp === "number" ? timestamp : timestamp.toNumber();
   return Date.now() / 1000 >= ts;
 }
-
-/** Get position status string (tokenized model). */
-export function getPositionStatus(position: {
-  isExercised: boolean;
-  isExpired: boolean;
-  isCancelled: boolean;
-  isListedForResale: boolean;
-}): string {
-  if (position.isCancelled) return "Cancelled";
-  if (position.isExercised) return "Exercised";
-  if (position.isExpired) return "Expired";
-  if (position.isListedForResale) return "Listed for Resale";
-  return "Active";
-}

@@ -8,15 +8,10 @@
 import { PublicKey } from "@solana/web3.js";
 import { Program } from "@coral-xyz/anchor";
 import { Buffer } from "buffer";
-import { isPostPhase2Position } from "../utils/constants";
-
-// Token-2022 program ID — hardcoded to avoid importing @solana/spl-token here
-const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 
 // Account discriminators from the current IDL
 const DISCRIMINATORS: Record<string, number[]> = {
   optionsMarket: [67, 30, 90, 36, 130, 219, 166, 8],
-  optionPosition: [212, 247, 167, 73, 56, 224, 204, 102],
   protocolState: [33, 51, 173, 134, 35, 140, 195, 248],
   // V2 vault accounts
   sharedVault: [195, 36, 66, 128, 41, 62, 161, 142],
@@ -30,7 +25,7 @@ const DISCRIMINATORS: Record<string, number[]> = {
 };
 
 export type AccountName =
-  | "optionsMarket" | "optionPosition" | "protocolState"
+  | "optionsMarket" | "protocolState"
   | "sharedVault" | "writerPosition" | "vaultMint" | "epochConfig"
   | "settlementRecord" | "vaultResaleListing";
 
@@ -74,10 +69,6 @@ export async function safeFetchAll<T>(
         // Post-migration markets have assetClass 0-4. Old markets read garbage (249-255).
         if (typeof account.assetClass !== "number" || account.assetClass > 4) continue;
       }
-      if (accountName === "optionPosition") {
-        // Current format has optionMint (Pubkey). Old format had buyer (Option<Pubkey>).
-        if (!account.optionMint) continue;
-      }
 
       // Deduplicate — same PDA from different fetches shouldn't appear twice
       const key = raw.pubkey.toBase58();
@@ -87,24 +78,6 @@ export async function safeFetchAll<T>(
       decoded.push({ publicKey: raw.pubkey, account: account as T });
     } catch {
       // Skip old-format accounts that can't be decoded
-    }
-  }
-
-  // For positions, filter to only Token-2022 mints (post-migration).
-  // Old pre-migration positions use standard SPL Token mints and will fail on any transaction.
-  if (accountName === "optionPosition" && decoded.length > 0) {
-    try {
-      const mints = decoded.map((d) => (d.account as any).optionMint as PublicKey);
-      const mintInfos = await connection.getMultipleAccountsInfo(mints);
-      const t22Filtered = decoded.filter((_, i) => {
-        const info = mintInfos[i];
-        return info && info.owner.equals(TOKEN_2022_PROGRAM_ID);
-      });
-      // Phase 2 cutoff: hide positions created before the redeploy.
-      return t22Filtered.filter((d) => isPostPhase2Position(d));
-    } catch {
-      // If mint lookup fails (e.g. network error), still apply the cutoff filter.
-      return decoded.filter((d) => isPostPhase2Position(d));
     }
   }
 

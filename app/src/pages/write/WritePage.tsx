@@ -90,7 +90,7 @@ export const WritePage: FC = () => {
       })),
     [assets],
   );
-  const { prices: spotPrices } = usePythPrices(feeds);
+  const { prices: spotPrices, stale: pricesStale } = usePythPrices(feeds);
 
   const epochExpiryTs = useMemo(() => nextFridayUtc8(), []);
   const epochExpiryLabel = useMemo(
@@ -204,6 +204,7 @@ export const WritePage: FC = () => {
           onChange={setEpochValues}
           assets={assets}
           spotForChosenAsset={epochValues.asset ? spotPrices[epochValues.asset] ?? null : null}
+          spotStale={pricesStale}
           epochExpiryTs={epochExpiryTs}
           epochExpiryLabel={epochExpiryLabel}
           onSuccess={handleSuccess}
@@ -218,6 +219,7 @@ export const WritePage: FC = () => {
           onChange={setCustomValues}
           assets={assets}
           spotForChosenAsset={customValues.asset ? spotPrices[customValues.asset] ?? null : null}
+          spotStale={pricesStale}
           onSuccess={handleSuccess}
         />
       </main>

@@ -22,6 +22,7 @@ const PRICE_PATH = "/v2/updates/price/latest";
 const FETCH_TIMEOUT_MS = 4000;
 const REFRESH_INTERVAL_MS = 30_000;
 const CACHE_TTL_MS = 30_000;
+const STALE_THRESHOLD_MS = 60_000;
 
 export type FeedRequest = {
   /** Display key. Whatever string the caller wants the price returned under. */
@@ -83,6 +84,7 @@ export function usePythPrices(feeds: FeedRequest[]): {
   prices: Record<string, number>;
   loading: boolean;
   error: string | null;
+  stale: boolean;
 } {
   // Build the ticker → feedId map once per stable input. Duplicate tickers
   // are last-write-wins with a console.warn — see header comment.
@@ -109,16 +111,29 @@ export function usePythPrices(feeds: FeedRequest[]): {
   const [prices, setPrices] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [stale, setStale] = useState(false);
 
   useEffect(() => {
     if (batchKey === "") {
       setPrices({});
       setLoading(false);
       setError(null);
+      setStale(false);
       return;
     }
     const feedIds = batchKey.split(",");
     let cancelled = false;
+
+    const computeStaleFromIds = (ids: string[]): boolean => {
+      const now = Date.now();
+      let oldest: number | null = null;
+      for (const id of ids) {
+        const c = priceCache.get(id);
+        if (!c) continue;
+        if (oldest == null || c.ts < oldest) oldest = c.ts;
+      }
+      return oldest != null && now - oldest > STALE_THRESHOLD_MS;
+    };
 
     const computeFromCacheOnly = (): { complete: boolean; map: Map<string, number> } => {
       const out = new Map<string, number>();
@@ -149,6 +164,7 @@ export function usePythPrices(feeds: FeedRequest[]): {
           writeIntoState(cacheOnly.map);
           setLoading(false);
           setError(null);
+          setStale(computeStaleFromIds(feedIds));
         }
         return;
       }
@@ -168,6 +184,7 @@ export function usePythPrices(feeds: FeedRequest[]): {
           writeIntoState(merged);
           setLoading(false);
           setError(null);
+          setStale(computeStaleFromIds(feedIds));
         }
       } catch (err: any) {
         // On failure, fall back to whatever we already had cached, even if stale.
@@ -180,6 +197,7 @@ export function usePythPrices(feeds: FeedRequest[]): {
           writeIntoState(fallback);
           setLoading(false);
           setError(err?.message ?? "Hermes price fetch failed");
+          setStale(computeStaleFromIds(feedIds));
         }
       }
     };
@@ -192,5 +210,5 @@ export function usePythPrices(feeds: FeedRequest[]): {
     };
   }, [batchKey, tickerToFeedId]);
 
-  return { prices, loading, error };
+  return { prices, loading, error, stale };
 }

@@ -21,6 +21,7 @@ type EpochVaultSectionProps = {
   onChange: (next: WriterFormValues) => void;
   assets: AssetOption[];
   spotForChosenAsset: number | null;
+  spotStale: boolean;
   /** Computed expiry timestamp for next Friday (Unix seconds). */
   epochExpiryTs: number;
   /** Pretty label for the expiry, rendered in the form's read-only tail. */
@@ -42,6 +43,7 @@ export const EpochVaultSection: FC<EpochVaultSectionProps> = ({
   onChange,
   assets,
   spotForChosenAsset,
+  spotStale,
   epochExpiryTs,
   epochExpiryLabel,
   onSuccess,
@@ -143,6 +145,7 @@ export const EpochVaultSection: FC<EpochVaultSectionProps> = ({
           expiry={epochExpiryTs}
           contracts={contractsNum}
           spot={spotForChosenAsset}
+          spotStale={spotStale}
           isPlaceholder={!connected}
           footnote="Premium is paid into the vault as buyers fill — accrued share-by-share, claimable on settlement."
         />

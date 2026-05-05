@@ -12,6 +12,8 @@ type OfferingsPanelProps = {
   strike: number;
   expiry: number;
   spot: number | null;
+  /** True when spot is sourced from stale cache (Hermes outage > 60s). */
+  stale?: boolean;
   /** B-S fair premium for this (strike, side) — `row.callPremium` or `row.putPremium`. */
   fairPremium: number;
   /** Smile-adjusted IV (decimal, e.g. 0.78 = 78%). Used for the header strip only. */
@@ -47,6 +49,7 @@ export const OfferingsPanel: FC<OfferingsPanelProps> = ({
   strike,
   expiry,
   spot,
+  stale = false,
   fairPremium,
   ivSmiled,
   offerings,
@@ -108,6 +111,7 @@ export const OfferingsPanel: FC<OfferingsPanelProps> = ({
         <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 font-mono text-[10.5px] uppercase tracking-[0.18em] opacity-65">
           <span>
             Spot {spot != null ? <MoneyAmount value={spot} /> : "—"}
+            {stale && spot != null && <span> · delayed</span>}
           </span>
           <span>
             Fair <MoneyAmount value={fairPremium} />

@@ -18,6 +18,8 @@ type LiveQuoteCardProps = {
   expiry: number | null;
   contracts: number;
   spot: number | null;
+  /** True when spot is sourced from stale cache (Hermes outage > 60s). */
+  spotStale?: boolean;
   /** Footer prose under the figures. */
   footnote: string;
   /** When true, render — placeholders (e.g. wallet disconnected). */
@@ -41,6 +43,7 @@ export const LiveQuoteCard: FC<LiveQuoteCardProps> = ({
   expiry,
   contracts,
   spot,
+  spotStale = false,
   footnote,
   isPlaceholder = false,
 }) => {
@@ -95,7 +98,12 @@ export const LiveQuoteCard: FC<LiveQuoteCardProps> = ({
         </div>
 
         <Row label="Spot">
-          {spot != null && !isPlaceholder ? <MoneyAmount value={spot} /> : "—"}
+          {spot != null && !isPlaceholder ? (
+            <>
+              <MoneyAmount value={spot} />
+              {spotStale && <span className="opacity-55"> · delayed</span>}
+            </>
+          ) : "—"}
         </Row>
         <Row label="Baseline IV">
           {baselineIv != null ? `${(baselineIv * 100).toFixed(1)}%` : "—"}

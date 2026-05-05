@@ -114,6 +114,8 @@ export type UseTradeData = {
   clearHighlightedStrike: () => void;
   /** Spot price for the currently selected asset. */
   spot: number | null;
+  /** True when displayed spot is sourced from cache > 60s old (Hermes outage). */
+  stale: boolean;
   /** ATM strike for the current chain — used for the rule + label. */
   atmStrike: number | null;
   /** Baseline IV (smile-adjusted) at the ATM strike — used by MarketContextStrip. */
@@ -293,7 +295,7 @@ export function useTradeData(): UseTradeData {
     }
     return out;
   }, [vaults, markets]);
-  const { prices: spotPrices } = usePythPrices(feeds);
+  const { prices: spotPrices, stale } = usePythPrices(feeds);
 
   const spot = selectedAsset ? spotPrices[selectedAsset] ?? null : null;
 
@@ -583,6 +585,7 @@ export function useTradeData(): UseTradeData {
     },
     clearHighlightedStrike,
     spot,
+    stale,
     atmStrike,
     atmBaselineIv,
     rows,

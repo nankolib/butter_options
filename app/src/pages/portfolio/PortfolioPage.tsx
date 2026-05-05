@@ -101,7 +101,7 @@ export const PortfolioPage: FC = () => {
     }
     return out;
   }, [markets]);
-  const { prices: spotPrices } = usePythPrices(feeds);
+  const { prices: spotPrices, stale: pricesStale } = usePythPrices(feeds);
 
   const refetchAll = useCallback(async () => {
     if (!program) return;
@@ -343,7 +343,7 @@ export const PortfolioPage: FC = () => {
       label: "Current Value",
       value:
         summary.currentValue === null ? "—" : <MoneyAmount value={summary.currentValue} />,
-      sub: "Mark · Black–Scholes",
+      sub: pricesStale ? "Mark · Black–Scholes · delayed" : "Mark · Black–Scholes",
     },
     {
       label: "Unrealised P&L",

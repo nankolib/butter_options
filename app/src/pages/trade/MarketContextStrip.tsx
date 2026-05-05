@@ -3,6 +3,8 @@ import { MoneyAmount } from "../../components/MoneyAmount";
 
 type MarketContextStripProps = {
   spot: number | null;
+  /** True when displayed spot is sourced from stale cache (Hermes outage > 60s). */
+  stale: boolean;
   /** ATM baseline IV (smile-adjusted) for the selected expiry. */
   atmBaselineIv: number | null;
   /** Total OI for the selected asset across all expiries. */
@@ -17,13 +19,19 @@ type MarketContextStripProps = {
  */
 export const MarketContextStrip: FC<MarketContextStripProps> = ({
   spot,
+  stale,
   atmBaselineIv,
   totalOi,
 }) => (
   <div className="flex flex-wrap items-center justify-between gap-y-3 gap-x-6 border-y border-rule py-3 mb-8">
     <div className="flex flex-wrap items-center gap-x-6 gap-y-2 font-mono text-[11.5px] uppercase tracking-[0.18em]">
       <Stat label="Spot">
-        {spot != null ? <MoneyAmount value={spot} /> : "—"}
+        {spot != null ? (
+          <>
+            <MoneyAmount value={spot} />
+            {stale && <span className="opacity-55"> · delayed</span>}
+          </>
+        ) : "—"}
       </Stat>
       <Stat label="24H">
         <span className="opacity-55">—</span>

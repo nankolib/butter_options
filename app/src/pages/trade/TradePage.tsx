@@ -36,6 +36,7 @@ export const TradePage: FC = () => {
     fairPremium: number;
     ivSmiled: number;
     spot: number | null;
+    stale: boolean;
     initialSelected: Offering | null;
   } | null>(null);
 
@@ -113,6 +114,7 @@ export const TradePage: FC = () => {
 
         <MarketContextStrip
           spot={data.spot}
+          stale={data.stale}
           atmBaselineIv={data.atmBaselineIv}
           totalOi={data.summary.totalOi}
         />
@@ -150,6 +152,7 @@ export const TradePage: FC = () => {
                   asset: data.selectedAsset,
                   expiry: data.selectedExpiry,
                   spot: data.spot,
+                  stale: data.stale,
                   initialSelected:
                     target.offerings.find(
                       (o) => !(o.kind === "resale" && o.isSelfListing),
@@ -174,6 +177,7 @@ export const TradePage: FC = () => {
           strike={buyTarget.strike}
           expiry={buyTarget.expiry}
           spot={buyTarget.spot}
+          stale={buyTarget.stale}
           fairPremium={buyTarget.fairPremium}
           ivSmiled={buyTarget.ivSmiled}
           offerings={buyTarget.offerings}

@@ -22,6 +22,7 @@ type BuyModalProps = {
   strike: number;
   expiry: number;
   spot: number | null;
+  stale?: boolean;
   fairPremium: number;
   ivSmiled: number;
   /** Pre-sorted ascending by premium per Slice 1. */
@@ -62,6 +63,7 @@ export const BuyModal: FC<BuyModalProps> = ({
   strike,
   expiry,
   spot,
+  stale = false,
   fairPremium,
   ivSmiled,
   offerings,
@@ -277,6 +279,7 @@ export const BuyModal: FC<BuyModalProps> = ({
               strike={strike}
               expiry={expiry}
               spot={spot}
+              stale={stale}
               fairPremium={fairPremium}
               ivSmiled={ivSmiled}
               offerings={offerings}

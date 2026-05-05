@@ -21,6 +21,7 @@ type CustomVaultSectionProps = {
   onChange: (next: WriterFormValues) => void;
   assets: AssetOption[];
   spotForChosenAsset: number | null;
+  spotStale: boolean;
   onSuccess: (result: WriteSubmitResult & { kind: "epoch" | "custom" }) => void;
 };
 
@@ -33,6 +34,7 @@ export const CustomVaultSection: FC<CustomVaultSectionProps> = ({
   onChange,
   assets,
   spotForChosenAsset,
+  spotStale,
   onSuccess,
 }) => {
   const { connected } = useWallet();
@@ -125,6 +127,7 @@ export const CustomVaultSection: FC<CustomVaultSectionProps> = ({
           expiry={values.expiry}
           contracts={contractsNum}
           spot={spotForChosenAsset}
+          spotStale={spotStale}
           isPlaceholder={!connected}
           footnote="Custom vaults inherit the same settlement mechanics as epoch vaults — the only difference is the expiry timestamp."
         />

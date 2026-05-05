@@ -12,6 +12,8 @@ type MarketsStatementHeaderProps = {
   onDenominationChange: (d: Denomination) => void;
   /** Wired to NEW MARKET CTA — opens the modal in the parent. */
   onNewMarket: () => void;
+  /** When false, hides the New Market CTA entirely. Gated to protocol admin. */
+  showNewMarketCta: boolean;
 };
 
 /**
@@ -31,6 +33,7 @@ export const MarketsStatementHeader: FC<MarketsStatementHeaderProps> = ({
   denomination,
   onDenominationChange,
   onNewMarket,
+  showNewMarketCta,
 }) => {
   const { connection } = useConnection();
   const clusterLabel = useMemo(
@@ -76,14 +79,16 @@ export const MarketsStatementHeader: FC<MarketsStatementHeaderProps> = ({
             </DenomButton>
           </div>
 
-          <button
-            type="button"
-            onClick={onNewMarket}
-            className="group inline-flex items-center gap-2 rounded-full border border-ink bg-ink text-paper px-[18px] py-[10px] font-mono text-[11px] uppercase tracking-[0.2em] no-underline transition-[background-color,color] duration-500 ease-opta hover:bg-transparent hover:text-ink"
-          >
-            New Market
-            <span className="transition-transform duration-500 ease-opta group-hover:translate-x-[3px]">→</span>
-          </button>
+          {showNewMarketCta && (
+            <button
+              type="button"
+              onClick={onNewMarket}
+              className="group inline-flex items-center gap-2 rounded-full border border-ink bg-ink text-paper px-[18px] py-[10px] font-mono text-[11px] uppercase tracking-[0.2em] no-underline transition-[background-color,color] duration-500 ease-opta hover:bg-transparent hover:text-ink"
+            >
+              New Market
+              <span className="transition-transform duration-500 ease-opta group-hover:translate-x-[3px]">→</span>
+            </button>
+          )}
         </div>
       </div>
     </header>

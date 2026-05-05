@@ -1,8 +1,7 @@
 import type { FC } from "react";
-import { useEffect, useState } from "react";
 import { PublicKey } from "@solana/web3.js";
-import { useWallet } from "@solana/wallet-adapter-react";
 import { useProgram } from "../../hooks/useProgram";
+import { useIsAdmin } from "../../hooks/useIsAdmin";
 import { MetaLabel } from "../../components/layout";
 import { MigrateFeedTools } from "../../components/portfolio/MigrateFeedTools";
 
@@ -33,32 +32,8 @@ export const MigrateFeedSection: FC<MigrateFeedSectionProps> = ({
   markets,
   onRefetch,
 }) => {
-  const { publicKey } = useWallet();
   const { program } = useProgram();
-  const [isAdmin, setIsAdmin] = useState(false);
-
-  useEffect(() => {
-    if (!program || !publicKey) {
-      setIsAdmin(false);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const [protocolStatePda] = PublicKey.findProgramAddressSync(
-          [Buffer.from("protocol_v2")],
-          program.programId,
-        );
-        const ps = await program.account.protocolState.fetch(protocolStatePda);
-        if (!cancelled) setIsAdmin(ps.admin.equals(publicKey));
-      } catch {
-        if (!cancelled) setIsAdmin(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [program, publicKey]);
+  const isAdmin = useIsAdmin();
 
   if (!isAdmin || !program) return null;
 

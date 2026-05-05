@@ -85,6 +85,10 @@ export function decodeError(error: any): string {
   if (codeMatch) {
     const code = parseInt(codeMatch[1], 16);
     if (CUSTOM_ERRORS[code]) return CUSTOM_ERRORS[code];
+    console.warn(
+      `[opta] unmapped on-chain error code ${code} — IDL may need refresh`,
+      error,
+    );
     return `Program error ${code}`;
   }
 
@@ -93,6 +97,11 @@ export function decodeError(error: any): string {
   if (anchorMatch) {
     const code = parseInt(anchorMatch[1]);
     if (CUSTOM_ERRORS[code]) return CUSTOM_ERRORS[code];
+    console.warn(
+      `[opta] unmapped on-chain error code ${code} — IDL may need refresh`,
+      error,
+    );
+    return `Program error ${code}`;
   }
 
   // Truncate long messages

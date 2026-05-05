@@ -3,6 +3,7 @@ import { useState } from "react";
 import { NavLink } from "react-router-dom";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
+import { useIsAdmin } from "../hooks/useIsAdmin";
 import { Wordmark } from "./brand";
 import { NewMarketModal } from "../pages/markets/NewMarketModal";
 
@@ -32,6 +33,7 @@ import { NewMarketModal } from "../pages/markets/NewMarketModal";
 export const AppNav: FC = () => {
   const { publicKey, connected, disconnect } = useWallet();
   const { setVisible } = useWalletModal();
+  const isAdmin = useIsAdmin();
   const [showNewMarket, setShowNewMarket] = useState(false);
 
   // Mirrors MarketsPage's handler: prompt wallet connection first if
@@ -65,13 +67,15 @@ export const AppNav: FC = () => {
       </div>
 
       <div className="flex items-center gap-4">
-        <button
-          type="button"
-          onClick={handleNewMarket}
-          className="hidden sm:inline-flex items-center no-underline transition-opacity duration-300 ease-opta opacity-65 hover:opacity-100"
-        >
-          + New Market
-        </button>
+        {isAdmin && (
+          <button
+            type="button"
+            onClick={handleNewMarket}
+            className="hidden sm:inline-flex items-center no-underline transition-opacity duration-300 ease-opta opacity-65 hover:opacity-100"
+          >
+            + New Market
+          </button>
+        )}
         {connected && publicKey ? (
           <>
             <span className="hidden sm:inline-flex items-center gap-2 text-ink opacity-85">

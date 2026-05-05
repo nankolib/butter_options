@@ -52,6 +52,26 @@ const CUSTOM_ERRORS: Record<number, string> = (() => {
   return map;
 })();
 
+// MED-8 — single source of truth for wallet-replay sentinel detection.
+//
+// The wallet-replay artifact (an optimistic resimulate against a lagged
+// RPC pool) surfaces as one of two strings depending on which catch
+// site receives it:
+//   - Direct catches (no rethrow): err.message contains the raw RPC
+//     string "already been processed".
+//   - Rethrow chain catches (purchaseFlow / resaleBuyFlow / writeSubmit
+//     all rethrow with `new Error(decodeError(err))`): err.message
+//     contains the decoded string "already confirmed".
+// Either path resolves to the same boolean. Decoupling sentinel
+// detection from the decoder string means future copy changes to
+// "Transaction already confirmed." (HIGH-1's IDL-driven decoder is
+// open to such tweaks) cannot silently regress the BTC PUT race
+// recovery shipped 2026-05-02.
+export function isWalletReplay(error: any): boolean {
+  const msg = String(error?.message ?? error ?? "");
+  return msg.includes("already been processed") || msg.includes("already confirmed");
+}
+
 export function decodeError(error: any): string {
   if (!error) return "Unknown error";
   const msg = error?.message || error?.toString() || "";

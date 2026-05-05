@@ -11,6 +11,7 @@ import { MoneyAmount } from "../../components/MoneyAmount";
 import { HairlineRule } from "../../components/layout";
 import { truncateAddress } from "../../utils/format";
 import { inferClusterFromUrl, getSolscanTxUrl } from "../../utils/env";
+import { isWalletReplay } from "../../utils/errorDecoder";
 import { OfferingsPanel } from "./OfferingsPanel";
 import { usePurchaseFlow } from "./usePurchaseFlow";
 import { useResaleBuyFlow } from "./useResaleBuyFlow";
@@ -216,7 +217,7 @@ export const BuyModal: FC<BuyModalProps> = ({
       // success: refetch + close, no failure toast. The wallet's
       // optimistic resimulate against a lagged RPC pool saw the
       // now-landed tx; this is not a real failure.
-      if (msg.includes("already confirmed")) {
+      if (isWalletReplay(err)) {
         showToast({
           type: "success",
           title: selected!.kind === "vault" ? "Contracts purchased" : "Listing filled",

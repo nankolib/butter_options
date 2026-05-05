@@ -46,7 +46,7 @@ import {
   deriveWriterPosition,
   deriveVaultPurchaseEscrow,
 } from "../../hooks/useAccounts";
-import { decodeError } from "../../utils/errorDecoder";
+import { decodeError, isWalletReplay } from "../../utils/errorDecoder";
 import { showToast } from "../../components/Toast";
 import type { WriterRow } from "./writerRows";
 
@@ -167,7 +167,7 @@ export function useWriterActions(args: UseWriterActionsArgs): WriterActions {
         // (memory: project_post_tx_polling_false_error_gap.md). The tx did
         // land; we just can't tell from this side. Treat as success and
         // refetch so the UI reflects the truth.
-        if (msg.includes("already confirmed")) {
+        if (isWalletReplay(err)) {
           showToast({
             type: "success",
             title: "Premium claimed",
@@ -253,7 +253,7 @@ export function useWriterActions(args: UseWriterActionsArgs): WriterActions {
         onSuccess();
       } catch (err: any) {
         const msg = decodeError(err);
-        if (msg.includes("already confirmed")) {
+        if (isWalletReplay(err)) {
           showToast({
             type: "success",
             title: "Withdrawn",
@@ -344,7 +344,7 @@ export function useWriterActions(args: UseWriterActionsArgs): WriterActions {
         onSuccess();
       } catch (err: any) {
         const msg = decodeError(err);
-        if (msg.includes("already confirmed")) {
+        if (isWalletReplay(err)) {
           showToast({
             type: "success",
             title: "Unsold burned",

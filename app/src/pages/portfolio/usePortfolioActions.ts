@@ -28,7 +28,7 @@ import {
   deriveVaultResaleListing,
   deriveVaultResaleEscrow,
 } from "../../hooks/useAccounts";
-import { decodeError } from "../../utils/errorDecoder";
+import { decodeError, isWalletReplay } from "../../utils/errorDecoder";
 import { showToast } from "../../components/Toast";
 import type { Position } from "./positions";
 
@@ -74,7 +74,7 @@ export function usePortfolioActions(onSuccess: () => void): PortfolioActions {
         onSuccess();
       } catch (err: any) {
         const msg = decodeError(err);
-        if (msg.includes("already confirmed")) {
+        if (isWalletReplay(err)) {
           showToast({
             type: "success",
             title: "Exercised",
@@ -109,7 +109,7 @@ export function usePortfolioActions(onSuccess: () => void): PortfolioActions {
         onSuccess();
       } catch (err: any) {
         const msg = decodeError(err);
-        if (msg.includes("already confirmed")) {
+        if (isWalletReplay(err)) {
           showToast({
             type: "success",
             title: "Listed for resale",
@@ -144,7 +144,7 @@ export function usePortfolioActions(onSuccess: () => void): PortfolioActions {
         onSuccess();
       } catch (err: any) {
         const msg = decodeError(err);
-        if (msg.includes("already confirmed")) {
+        if (isWalletReplay(err)) {
           showToast({
             type: "success",
             title: "Listing cancelled",
@@ -175,7 +175,7 @@ export function usePortfolioActions(onSuccess: () => void): PortfolioActions {
         onSuccess();
       } catch (err: any) {
         const msg = decodeError(err);
-        if (msg.includes("already confirmed")) {
+        if (isWalletReplay(err)) {
           showToast({
             type: "success",
             title: "Tokens burned",

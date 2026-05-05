@@ -28,7 +28,7 @@ import {
   deriveHookStatePda,
 } from "../../utils/constants";
 import { toUsdcBN } from "../../utils/format";
-import { decodeError } from "../../utils/errorDecoder";
+import { decodeError, isWalletReplay } from "../../utils/errorDecoder";
 
 const EXTRA_CU_400K = ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 });
 const EXTRA_CU_800K = ComputeBudgetProgram.setComputeUnitLimit({ units: 800_000 });
@@ -96,8 +96,7 @@ async function submitStageWithRecovery(
   try {
     return await sendFn();
   } catch (err: any) {
-    const decoded = decodeError(err);
-    if (!decoded.includes("already confirmed")) {
+    if (!isWalletReplay(err)) {
       throw err;
     }
     const landed = await landedCheckFn();

@@ -2,7 +2,7 @@ import type { FC } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { PublicKey } from "@solana/web3.js";
-import { getAssociatedTokenAddress } from "@solana/spl-token";
+import { getAssociatedTokenAddress, getAccount, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { useProgram } from "../../hooks/useProgram";
@@ -160,14 +160,17 @@ export const BuyModal: FC<BuyModalProps> = ({
         );
         const protocolState = await program.account.protocolState.fetch(protocolStatePda);
         const ata = await getAssociatedTokenAddress(protocolState.usdcMint, publicKey);
-        const info = await program.provider.connection.getAccountInfo(ata);
-        if (cancelled) return;
-        if (info && info.data.length >= 72) {
-          const raw = Number(info.data.readBigUInt64LE(64));
-          setUsdcBalance(raw / 1_000_000);
-        } else {
-          setUsdcBalance(0);
-        }
+        // MED-4: getAccount validates program owner + discriminator before
+        // reading the amount field. Returns bigint, converted to Number
+        // directly — bypasses BN.toNumber() entirely so MED-5's $9B boundary
+        // doesn't apply on this path.
+        const account = await getAccount(
+          program.provider.connection,
+          ata,
+          "confirmed",
+          TOKEN_PROGRAM_ID,
+        );
+        if (!cancelled) setUsdcBalance(Number(account.amount) / 1_000_000);
       } catch {
         if (!cancelled) setUsdcBalance(null);
       }

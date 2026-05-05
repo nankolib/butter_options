@@ -4,8 +4,19 @@
 
 import BN from "bn.js";
 
+// MED-5: JavaScript's Number.MAX_SAFE_INTEGER is 2^53-1 ≈ 9.007e15. USDC has
+// 6 decimals, so the safe-integer boundary in USDC base units is ~$9 billion.
+// BN.toNumber() throws past that. Both helpers below guard the boundary
+// explicitly so the failure surfaces a clean error before BN's internal throw.
+const MAX_SAFE_USDC_BN = new BN("9007199254740991");
+
 /** Convert on-chain USDC amount (scaled by 10^6) to human-readable string. */
 export function formatUsdc(amount: BN | number): string {
+  if (typeof amount !== "number" && amount.gt(MAX_SAFE_USDC_BN)) {
+    throw new Error(
+      "formatUsdc: amount exceeds JS safe-integer boundary (~$9B in USDC base units)",
+    );
+  }
   const num = typeof amount === "number" ? amount : amount.toNumber();
   return (num / 1_000_000).toLocaleString("en-US", {
     minimumFractionDigits: 2,
@@ -15,6 +26,11 @@ export function formatUsdc(amount: BN | number): string {
 
 /** Convert on-chain USDC amount to raw number (for calculations). */
 export function usdcToNumber(amount: BN | number): number {
+  if (typeof amount !== "number" && amount.gt(MAX_SAFE_USDC_BN)) {
+    throw new Error(
+      "usdcToNumber: amount exceeds JS safe-integer boundary (~$9B in USDC base units)",
+    );
+  }
   const num = typeof amount === "number" ? amount : amount.toNumber();
   return num / 1_000_000;
 }

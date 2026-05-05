@@ -1,5 +1,5 @@
 import type { FC } from "react";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { PublicKey } from "@solana/web3.js";
 import { ExpiryPicker, type ExpiryPresetId } from "./ExpiryPicker";
@@ -13,6 +13,13 @@ export type WriterFormValues = {
   /** For Custom mode: resolved Unix-seconds expiry. For Epoch mode: provided by parent (next Friday). */
   expiry: number | null;
   expiryPreset: ExpiryPresetId;
+  /**
+   * Optional premium-per-contract override (USDC, human-readable). Empty
+   * string = use the B-S-derived default. Non-empty + parsed > 0 =
+   * sophisticated-writer override. MED-6: surfaced via collapsible
+   * Advanced section so default writers don't see the input.
+   */
+  premiumPerContract: string;
 };
 
 export type AssetOption = {
@@ -198,6 +205,11 @@ export const WriterForm: FC<WriterFormProps> = ({
         />
       )}
 
+      <AdvancedSection
+        premiumPerContract={values.premiumPerContract}
+        onChange={(next) => onChange({ ...values, premiumPerContract: next })}
+      />
+
       <button
         type="button"
         onClick={connected ? onSubmit : onConnectClick}
@@ -245,6 +257,55 @@ const SideButton: FC<{
     </span>
   </button>
 );
+
+/**
+ * MED-6: collapsible Advanced section exposing a premium-per-contract
+ * override. Default state: closed; the form behaves as before with
+ * B-S-derived premium computed at submit time. Open: a single numeric
+ * input that, when populated with a positive value, overrides the B-S
+ * default. The handleSubmit logic in EpochVaultSection / CustomVaultSection
+ * parses this string and prefers the override iff valid.
+ */
+const AdvancedSection: FC<{
+  premiumPerContract: string;
+  onChange: (next: string) => void;
+}> = ({ premiumPerContract, onChange }) => {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="border border-rule-soft rounded-sm">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="w-full flex items-center justify-between px-3 py-2 font-mono text-[10.5px] uppercase tracking-[0.18em] opacity-65 hover:opacity-100 transition-opacity duration-200"
+      >
+        <span>Advanced</span>
+        <span aria-hidden="true">{open ? "−" : "+"}</span>
+      </button>
+      {open && (
+        <div className="px-3 pb-3 pt-1 space-y-2 border-t border-rule-soft">
+          <div className="font-mono text-[10.5px] uppercase tracking-[0.2em] opacity-65">
+            Premium per contract (USDC)
+          </div>
+          <input
+            type="number"
+            value={premiumPerContract}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder="Auto · uses Black-Scholes"
+            step="0.01"
+            min="0"
+            className="w-full bg-paper-2 border border-rule rounded-sm px-3 py-2 font-mono text-[13px] text-ink focus:outline-none focus:border-ink transition-colors duration-200"
+          />
+          <div className="font-fraunces-text italic font-light leading-[1.5] opacity-70 text-[12px]">
+            Leave empty to use the Black-Scholes-derived premium. Set a positive
+            value to override — your vault will list at that price regardless of
+            the B-S model.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 function computeMoneyness(
   side: "call" | "put",

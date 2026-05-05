@@ -30,6 +30,7 @@ import type { FC } from "react";
 import { useMemo } from "react";
 import BN from "bn.js";
 import { MoneyAmount } from "../../components/MoneyAmount";
+import { usdcToNumber } from "../../utils/format";
 import { SummaryBand, type SummaryCell } from "./SummaryBand";
 import type { WriterRow } from "./writerRows";
 
@@ -75,13 +76,14 @@ function computeCells(
 
   // Cell 3 — Claimable Premium. Sum BN micro-USDC values to preserve
   // precision when many rows have small accruals; convert to USDC float
-  // at display time. BN.toNumber() is safe here — max realistic claimable
-  // is millions of USDC, far below 2^53.
+  // at display time via usdcToNumber, which guards the $9B safe-integer
+  // boundary (MED-5). Realistic claimable today is millions; the guard
+  // is defense-in-depth for future BTC vault scale.
   const claimableSumBN = rows.reduce(
     (acc, r) => acc.add(r.claimableUsdc),
     new BN(0),
   );
-  const claimableUsd = claimableSumBN.toNumber() / 1_000_000;
+  const claimableUsd = usdcToNumber(claimableSumBN);
 
   // Cell 4 — Premium Realized. Plain number sum (premiumClaimed is already
   // converted to USDC float in writerRows.ts via usdcToNumber).

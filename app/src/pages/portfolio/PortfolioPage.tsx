@@ -117,6 +117,11 @@ export const PortfolioPage: FC = () => {
         });
         const m = new Map<string, number>();
         for (const a of accts.value) {
+          // MED-4: raw byte read intentional. The getTokenAccountsByOwner
+          // RPC filter on programId guarantees every result IS a Token-2022
+          // token account, so the offset 0..32 (mint) and 64..72 (amount)
+          // byte-slice reads are pre-validated by the RPC. Per-item getAccount
+          // would round-trip the same data through a redundant re-validation.
           const mint = new PublicKey(a.account.data.slice(0, 32)).toBase58();
           const balance = Number(a.account.data.readBigUInt64LE(64));
           if (balance > 0) m.set(mint, balance);

@@ -52,18 +52,26 @@ export const CustomVaultSection: FC<CustomVaultSectionProps> = ({
   const handleSubmit = async () => {
     if (!chosen || strikeNum <= 0 || contractsNum <= 0 || values.expiry == null) return;
     try {
+      // MED-6: prefer Advanced-mode override if writer provided a valid
+      // positive value. Empty string or invalid input falls back to the
+      // Black-Scholes-derived default (matches LiveQuoteCard's preview).
+      const overrideStr = values.premiumPerContract.trim();
+      const overrideNum = overrideStr ? parseFloat(overrideStr) : NaN;
+      const useOverride = !isNaN(overrideNum) && overrideNum > 0;
+
       const spot = spotForChosenAsset ?? 0;
       const baselineIv =
         spot > 0
           ? applyVolSmile(getDefaultVolatility(chosen.ticker), spot, strikeNum, chosen.ticker)
           : getDefaultVolatility(chosen.ticker);
       const days = Math.max(0, (values.expiry - Date.now() / 1000) / 86400);
-      const premiumPerContract =
+      const bsPremium =
         spot > 0 && days > 0
           ? values.side === "call"
             ? calculateCallPremium(spot, strikeNum, days, baselineIv)
             : calculatePutPremium(spot, strikeNum, days, baselineIv)
           : 0;
+      const premiumPerContract = useOverride ? overrideNum : bsPremium;
       const collateralPerContract = requiredCollateralPerContract(strikeNum, values.side);
       const collateral = collateralPerContract * contractsNum;
 

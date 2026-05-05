@@ -18,6 +18,7 @@ import type { FC, ReactNode } from "react";
 import type { PublicKey } from "@solana/web3.js";
 import { MoneyAmount } from "../../components/MoneyAmount";
 import { SolscanLink } from "../../utils/solscan";
+import { usdcToNumber } from "../../utils/format";
 import type {
   WriterRow,
   WriterRowState,
@@ -114,8 +115,9 @@ const WriterRowEl: FC<{
   busyLabel: string | null;
 }> = ({ row, onAction, isBusy, busyLabel }) => {
   const fullName = ASSET_FULL_NAME[row.asset];
-  // BN claimable → display number. Safe: USDC amounts are far below 2^53.
-  const claimableUsd = row.claimableUsdc.toNumber() / 1_000_000;
+  // BN claimable → display number via usdcToNumber, which guards the $9B
+  // safe-integer boundary (MED-5).
+  const claimableUsd = usdcToNumber(row.claimableUsdc);
   const canClaim = row.primaryAction === "claim-premium" && claimableUsd > 0;
   const actionDisabled = isBusy || row.primaryAction === "settling" || !canActOnState(row);
 

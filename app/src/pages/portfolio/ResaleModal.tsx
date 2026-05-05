@@ -1,7 +1,7 @@
 import type { FC } from "react";
 import { useEffect, useState } from "react";
 import { PublicKey } from "@solana/web3.js";
-import { getAssociatedTokenAddressSync } from "@solana/spl-token";
+import { getAssociatedTokenAddressSync, getAccount } from "@solana/spl-token";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useProgram } from "../../hooks/useProgram";
 import { TOKEN_2022_PROGRAM_ID } from "../../utils/constants";
@@ -68,9 +68,18 @@ export const ResaleModal: FC<ResaleModalProps> = ({
           false,
           TOKEN_2022_PROGRAM_ID,
         );
-        const info = await program.provider.connection.getAccountInfo(ata);
-        if (info && info.data.length >= 72 && !cancelled) {
-          const bal = Number(info.data.readBigUInt64LE(64));
+        // MED-4: getAccount validates program owner + discriminator before
+        // reading the amount field. Returns bigint, converted to Number
+        // directly — bypasses BN.toNumber() entirely so MED-5's $9B boundary
+        // doesn't apply on this path.
+        const account = await getAccount(
+          program.provider.connection,
+          ata,
+          "confirmed",
+          TOKEN_2022_PROGRAM_ID,
+        );
+        if (!cancelled) {
+          const bal = Number(account.amount);
           setSellerBalance(bal);
           setListQuantity(String(bal));
           setResalePrice((suggestedPerContract * bal).toFixed(2));

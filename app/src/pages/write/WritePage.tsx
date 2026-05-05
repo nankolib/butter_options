@@ -113,6 +113,7 @@ export const WritePage: FC = () => {
     contracts: "1",
     expiry: epochExpiryTs,
     expiryPreset: "7D",
+    premiumPerContract: "",
   });
 
   const [customValues, setCustomValues] = useState<WriterFormValues>({
@@ -122,6 +123,7 @@ export const WritePage: FC = () => {
     contracts: "1",
     expiry: Math.floor(Date.now() / 1000) + 24 * 3600,
     expiryPreset: "1D",
+    premiumPerContract: "",
   });
 
   // Keep the Epoch values' `expiry` field in sync with the computed

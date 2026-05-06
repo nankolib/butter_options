@@ -1,14 +1,22 @@
 // =============================================================================
-// instructions/create_market.rs — Register an asset (admin-only)
+// instructions/create_market.rs — Register an asset (permissionless + proof-gated)
 // =============================================================================
 //
-// Admin-only post-HIGH-2 fix (audit Run-6). Only protocol_state.admin
-// can register an asset by storing a 32-byte Pyth Pull feed ID alongside
-// its ticker and asset class. Zero feed IDs are rejected at create
-// time (HIGH-3 same-arc guard); non-zero feed IDs are stored verbatim
-// and validated downstream — Stage P2's settle_expiry passes the
-// stored feed_id to PriceUpdateV2::get_price_no_older_than, which fails
-// with MismatchedFeedId if the feed_id doesn't match the price update.
+// Permissionless post-HIGH-5 fix (audit Run-7 PART 1). Anyone can register an
+// asset by passing a fresh Pyth PriceUpdateV2 account whose `feed_id` matches
+// the `pyth_feed_id` argument. The caller-supplied feed_id is therefore
+// proof-bound to a real Pyth feed — random byte griefers are rejected at
+// account-validation time, not just downstream at settle. The HIGH-2 admin
+// gate that this fix replaces is strictly weaker: an admin fat-finger could
+// still brick a namespace, and external integrators couldn't bootstrap their
+// own asset listings.
+//
+// On-chain proof check (mirrors settle_expiry.rs:88-97):
+//   1. price_update.verification_level == Full   → InsufficientVerificationLevel
+//   2. price_update.price_message.feed_id == pyth_feed_id  → MismatchedFeedId
+//
+// Zero feed IDs are still rejected as defense-in-depth, though the proof check
+// already implicitly rejects them (no real Pyth feed has feed_id [0u8; 32]).
 //
 // Strike, expiry, option type, and settlement state moved to SharedVault
 // and SettlementRecord. The Market PDA is a per-asset registry record.
@@ -22,6 +30,9 @@
 // =============================================================================
 
 use anchor_lang::prelude::*;
+use pyth_solana_receiver_sdk::error::GetPriceError;
+use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
+use pyth_solana_receiver_sdk::price_update::VerificationLevel;
 
 use crate::errors::OptaError;
 use crate::state::{OptionsMarket, ProtocolState, MARKET_SEED, MAX_ASSET_CLASS, MAX_ASSET_NAME_LEN, PROTOCOL_SEED};
@@ -46,22 +57,27 @@ pub fn handle_create_market(
     pyth_feed_id: [u8; 32],
     asset_class: u8,
 ) -> Result<()> {
-    // HIGH-2 (audit Run-6) — admin-only gate. Pre-fix, anyone could
-    // register an asset name with arbitrary feed_id, locking the
-    // (asset_name, feed_id) tuple via idempotent-init at line 56-65
-    // below. Random-byte griefers could permanently brick a namespace
-    // until manual migrate_pyth_feed recovery. Matches the pattern in
-    // migrate_pyth_feed.rs:33-37 — protocol_state.admin is the source
-    // of truth for the canonical authority.
-    require_keys_eq!(
-        ctx.accounts.creator.key(),
-        ctx.accounts.protocol_state.admin,
-        OptaError::Unauthorized
+    // HIGH-5 proof gate (audit Run-7). Verify the caller-supplied feed_id
+    // is proof-bound to a real Pyth feed by checking the supplied
+    // PriceUpdateV2 account: verification_level must be Full and the
+    // price_message's feed_id must match the argument. Mirrors the
+    // canonical check in settle_expiry.rs:88-97. Replaces the prior
+    // HIGH-2 admin gate — proof-of-feed-existence is strictly stronger:
+    // it rejects random-byte griefers AND admin fat-fingers, and unblocks
+    // permissionless asset listing.
+    let pu = &ctx.accounts.price_update;
+    require!(
+        pu.verification_level.gte(VerificationLevel::Full),
+        GetPriceError::InsufficientVerificationLevel
+    );
+    require!(
+        pu.price_message.feed_id == pyth_feed_id,
+        GetPriceError::MismatchedFeedId
     );
 
-    // HIGH-3 same-arc zero-feed guard. Defense-in-depth even with the
-    // admin gate above; an admin fat-finger of the default-zeroed bytes
-    // would otherwise lock the namespace.
+    // HIGH-3 same-arc zero-feed guard. Defense-in-depth — the proof check
+    // above already implicitly rejects [0u8; 32] (no real Pyth feed has
+    // a zero feed_id), but kept as a belt-and-suspenders explicit reject.
     require!(pyth_feed_id != [0u8; 32], OptaError::InvalidPythFeedId);
 
     // 1. Asset name normalization contract
@@ -107,10 +123,10 @@ pub fn handle_create_market(
 #[derive(Accounts)]
 #[instruction(asset_name: String, pyth_feed_id: [u8; 32], asset_class: u8)]
 pub struct CreateMarket<'info> {
-    /// Admin-only post-HIGH-2 fix (audit Run-6). Must match
-    /// protocol_state.admin (verified in handler). Pays for account
-    /// creation on first init; pays nothing on idempotent re-call
-    /// because `init_if_needed` short-circuits.
+    /// Permissionless post-HIGH-5 fix (audit Run-7). Any signer pays for
+    /// account creation on first init; pays nothing on idempotent re-call
+    /// because `init_if_needed` short-circuits. The proof-of-feed gate is
+    /// enforced via the `price_update` account below.
     #[account(mut)]
     pub creator: Signer<'info>,
 
@@ -121,6 +137,12 @@ pub struct CreateMarket<'info> {
         bump = protocol_state.bump,
     )]
     pub protocol_state: Account<'info, ProtocolState>,
+
+    /// Fresh PriceUpdateV2 from the Pyth Receiver program. The handler
+    /// verifies `verification_level == Full` and
+    /// `price_message.feed_id == pyth_feed_id` to prove the caller-supplied
+    /// feed_id corresponds to a real Pyth feed. Read-only — never mutated.
+    pub price_update: Account<'info, PriceUpdateV2>,
 
     /// Asset registry PDA. One per supported asset.
     #[account(

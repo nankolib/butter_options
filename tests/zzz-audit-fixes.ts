@@ -41,12 +41,19 @@ import { fixturePubkey } from "./_pyth_fixtures";
 // =============================================================================
 const REGISTRY = {
   SOL: Buffer.from("ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d", "hex"),
+  BTC: Buffer.from("e62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43", "hex"),
 };
 const SOL_ID = Array.from(REGISTRY.SOL);
+const BTC_ID = Array.from(REGISTRY.BTC);
 
 // Pre-loaded PriceUpdateV2 fixture pubkeys (see tests/_pyth_fixtures.ts).
 const SOL_250_FRESH = fixturePubkey("sol-250-fresh");
 const SOL_50_FRESH = fixturePubkey("sol-50-fresh");
+// HIGH-5 (audit Run-7): create_market proof gate. Use sol-180-fresh which
+// has feed_id == SOL_ID and verification_level == Full. btc-fresh fixture
+// (feed_id == BTC_ID) is used in the HIGH-5 mismatch negative tests.
+const SOL_180_FRESH_PK = fixturePubkey("sol-180-fresh");
+const BTC_FRESH_PK = fixturePubkey("btc-fresh");
 
 // =============================================================================
 // Helpers
@@ -331,6 +338,7 @@ describe("audit-fixes", () => {
         .accounts({
           creator: payer.publicKey,
           protocolState: protocolStatePda,
+          priceUpdate: SOL_180_FRESH_PK,
           market: marketPda,
           systemProgram: SystemProgram.programId,
         })
@@ -828,6 +836,7 @@ describe("audit-fixes", () => {
           .accounts({
             creator: payer.publicKey,
             protocolState: protocolStatePda,
+            priceUpdate: SOL_180_FRESH_PK,
             market: marketPda,
             systemProgram: SystemProgram.programId,
           })
@@ -1081,6 +1090,7 @@ describe("audit-fixes", () => {
           .accounts({
             creator: payer.publicKey,
             protocolState: protocolStatePda,
+            priceUpdate: SOL_180_FRESH_PK,
             market: marketPda,
             systemProgram: SystemProgram.programId,
           })
@@ -1149,6 +1159,7 @@ describe("audit-fixes", () => {
           .accounts({
             creator: payer.publicKey,
             protocolState: protocolStatePda,
+            priceUpdate: SOL_180_FRESH_PK,
             market: mktPda,
             systemProgram: SystemProgram.programId,
           })
@@ -1514,6 +1525,140 @@ describe("audit-fixes", () => {
       const vaultUsdcInfo = await connection.getAccountInfo(ctx.vaultUsdcPda);
       assert.isNull(vaultUsdcInfo,
         "Vault USDC account should be closed — dust sweep prevents close_account revert");
+    });
+  });
+
+  // ===========================================================================
+  // HIGH-5: feed-id proof gate (audit Run-7)
+  // ===========================================================================
+  // Verifies the proof-of-feed-existence checks added to create_market and
+  // migrate_pyth_feed. The gate replaces the old admin-only HIGH-2 gate on
+  // create_market (strictly stronger) and complements the kept admin gate
+  // on migrate_pyth_feed.
+  describe("HIGH-5: feed-id proof gate", () => {
+    function deriveProtocolPda(): PublicKey {
+      const [pda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("protocol_v2")], program.programId,
+      );
+      return pda;
+    }
+
+    it("create_market reverts MismatchedFeedId when proof.feed_id != arg", async () => {
+      // Claim BTC_ID but post the SOL-feed fixture. The proof gate must fire
+      // before the idempotent / asset-name / class checks ever run.
+      const [marketPda] = deriveMarketPda("HIGH5A");
+      try {
+        await (program as any).methods
+          .createMarket("HIGH5A", BTC_ID, 0)
+          .accounts({
+            creator: payer.publicKey,
+            protocolState: deriveProtocolPda(),
+            priceUpdate: SOL_180_FRESH_PK, // wrong feed (SOL) for arg (BTC)
+            market: marketPda,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([payer])
+          .rpc();
+        assert.fail("Should have thrown MismatchedFeedId");
+      } catch (err: any) {
+        assert.include(err.toString(), "MismatchedFeedId");
+      }
+    });
+
+    it("create_market succeeds with non-admin caller + matching proof (permissionless)", async () => {
+      // Post-HIGH-5: the admin gate is gone. Anyone with a valid proof
+      // can register an asset.
+      const randomUser = Keypair.generate();
+      const sig = await connection.requestAirdrop(randomUser.publicKey, LAMPORTS_PER_SOL);
+      await connection.confirmTransaction(sig, "confirmed");
+
+      const [marketPda] = deriveMarketPda("HIGH5B");
+      await (program as any).methods
+        .createMarket("HIGH5B", SOL_ID, 0)
+        .accounts({
+          creator: randomUser.publicKey,
+          protocolState: deriveProtocolPda(),
+          priceUpdate: SOL_180_FRESH_PK,
+          market: marketPda,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([randomUser])
+        .rpc();
+
+      const market = await program.account.optionsMarket.fetch(marketPda);
+      assert.equal(market.assetName, "HIGH5B");
+      assert.deepEqual(Array.from(market.pythFeedId), SOL_ID);
+    });
+
+    it("create_market reverts when the matching proof is provided for a different asset_name slot — feed_id verification still gates", async () => {
+      // Two separate (asset_name, feed_id) pairs are allowed (e.g. PERM5
+      // already uses SOL feed). What we're verifying here is that even
+      // with a valid SOL fixture, claiming BTC_ID still reverts — the
+      // proof binds (priceUpdate.feed_id) to (arg pyth_feed_id), not to
+      // (market.pyth_feed_id).
+      const [marketPda] = deriveMarketPda("HIGH5C");
+      try {
+        await (program as any).methods
+          .createMarket("HIGH5C", BTC_ID, 0)
+          .accounts({
+            creator: payer.publicKey,
+            protocolState: deriveProtocolPda(),
+            priceUpdate: SOL_180_FRESH_PK,
+            market: marketPda,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([payer])
+          .rpc();
+        assert.fail("Should have thrown MismatchedFeedId");
+      } catch (err: any) {
+        assert.include(err.toString(), "MismatchedFeedId");
+      }
+    });
+
+    it("migrate_pyth_feed reverts MismatchedFeedId when proof.feed_id != new_feed_id", async () => {
+      // Pre-flight: ensure HIGH5B market exists (created above with SOL_ID).
+      // Admin attempts to rotate to BTC_ID but posts the SOL fixture.
+      const [marketPda] = deriveMarketPda("HIGH5B");
+      try {
+        await (program as any).methods
+          .migratePythFeed("HIGH5B", BTC_ID)
+          .accounts({
+            admin: payer.publicKey,
+            protocolState: deriveProtocolPda(),
+            priceUpdate: SOL_180_FRESH_PK, // wrong feed (SOL) for new arg (BTC)
+            market: marketPda,
+          })
+          .signers([payer])
+          .rpc();
+        assert.fail("Should have thrown MismatchedFeedId");
+      } catch (err: any) {
+        assert.include(err.toString(), "MismatchedFeedId");
+      }
+    });
+
+    it("migrate_pyth_feed: admin gate fires before proof gate (Unauthorized priority)", async () => {
+      // Non-admin signer + matching proof. Admin check must fire first
+      // and reject with Unauthorized; the proof gate is never reached.
+      const fakeAdmin = Keypair.generate();
+      const sig = await connection.requestAirdrop(fakeAdmin.publicKey, LAMPORTS_PER_SOL);
+      await connection.confirmTransaction(sig, "confirmed");
+
+      const [marketPda] = deriveMarketPda("HIGH5B");
+      try {
+        await (program as any).methods
+          .migratePythFeed("HIGH5B", BTC_ID)
+          .accounts({
+            admin: fakeAdmin.publicKey,
+            protocolState: deriveProtocolPda(),
+            priceUpdate: BTC_FRESH_PK, // matching proof — but admin check fires first
+            market: marketPda,
+          })
+          .signers([fakeAdmin])
+          .rpc();
+        assert.fail("Should have thrown Unauthorized");
+      } catch (err: any) {
+        assert.include(err.toString(), "Unauthorized");
+      }
     });
   });
 });

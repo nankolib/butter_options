@@ -3,8 +3,16 @@ import { PublicKey } from "@solana/web3.js";
 import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { showToast } from "../Toast";
 import { decodeError } from "../../utils/errorDecoder";
-import { hexFromBytes, hexToBytes32 } from "../../utils/format";
-import { inferClusterFromUrl, getSolscanTxUrl } from "../../utils/env";
+import { hexFromBytes } from "../../utils/format";
+import {
+  inferClusterFromUrl,
+  getSolscanTxUrl,
+  getHermesBase,
+} from "../../utils/env";
+import {
+  buildPostUpdateAndMigrateFeedTx,
+  submitWithFallback,
+} from "../../utils/pythPullPost";
 
 interface AccountRecord {
   publicKey: PublicKey;
@@ -24,8 +32,6 @@ type ModalState =
   | { kind: "success"; asset: string; newHex: string; txSig: string };
 
 const HEX_RE = /^(0x)?[0-9a-fA-F]{64}$/;
-const MARKET_SEED = "market";
-const PROTOCOL_SEED = "protocol_v2";
 
 export const MigrateFeedTools: FC<MigrateFeedToolsProps> = ({
   markets,
@@ -100,23 +106,19 @@ export const MigrateFeedTools: FC<MigrateFeedToolsProps> = ({
     const { asset, oldHex, newHex } = modal;
     setModal({ kind: "submitting", asset, oldHex, newHex });
     try {
-      const newBytes = hexToBytes32(newHex);
-      const [marketPda] = PublicKey.findProgramAddressSync(
-        [Buffer.from(MARKET_SEED), Buffer.from(asset)],
-        program.programId,
+      // HIGH-5 (audit Run-7): migrate_pyth_feed now requires a fresh Pyth
+      // PriceUpdateV2 account proving the new feed_id is real. The helper
+      // posts a Hermes /latest update + invokes migrate_pyth_feed in one
+      // atomic tx; ephemeral account is rent-reclaimed via
+      // closeUpdateAccounts.
+      const txs = await buildPostUpdateAndMigrateFeedTx(
+        program,
+        wallet,
+        asset,
+        newHex,
+        getHermesBase(),
       );
-      const [protocolStatePda] = PublicKey.findProgramAddressSync(
-        [Buffer.from(PROTOCOL_SEED)],
-        program.programId,
-      );
-      const sig = await program.methods
-        .migratePythFeed(asset, newBytes)
-        .accountsStrict({
-          admin: wallet.publicKey,
-          protocolState: protocolStatePda,
-          market: marketPda,
-        })
-        .rpc({ commitment: "confirmed" });
+      const sig = await submitWithFallback(connection, wallet, txs);
       setModal({ kind: "success", asset, newHex, txSig: sig });
       setNewHexInput("");
       onRefetch();

@@ -14,12 +14,17 @@
 // Authorization: signer must match `protocol_state.admin`. Reuses the
 // existing `Unauthorized` error.
 //
-// No PriceUpdateV2 in context — this instruction does not consult the
-// oracle. It only mutates registry metadata. The next `settle_expiry` call
-// will pick up the new feed_id naturally.
+// HIGH-5 proof gate (audit Run-7 PART 1): the new_pyth_feed_id must be
+// proof-bound to a real Pyth feed via a fresh PriceUpdateV2 account. Mirrors
+// the canonical pattern in settle_expiry.rs:88-97. The admin gate is kept
+// because feed rotation is an authority-only operation by design — the proof
+// gate prevents an admin fat-finger from rotating to a non-existent feed.
 // =============================================================================
 
 use anchor_lang::prelude::*;
+use pyth_solana_receiver_sdk::error::GetPriceError;
+use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
+use pyth_solana_receiver_sdk::price_update::VerificationLevel;
 
 use crate::errors::OptaError;
 use crate::state::{OptionsMarket, ProtocolState, MARKET_SEED, PROTOCOL_SEED};
@@ -36,10 +41,21 @@ pub fn handle_migrate_pyth_feed(
         OptaError::Unauthorized
     );
 
-    // HIGH-2 / HIGH-3 same-arc zero-feed guard (audit Run-6). Reject
-    // rotation to all-zeros — an admin fat-finger of the default-zeroed
-    // bytes would brick the market. Strict subset of HIGH-5 (full
-    // feed-vs-asset proof validation via PriceUpdateV2 stays in Arc 5).
+    // HIGH-5 proof gate (audit Run-7). Verify the new feed_id is proof-bound
+    // to a real Pyth feed. Mirrors create_market.rs and settle_expiry.rs.
+    let pu = &ctx.accounts.price_update;
+    require!(
+        pu.verification_level.gte(VerificationLevel::Full),
+        GetPriceError::InsufficientVerificationLevel
+    );
+    require!(
+        pu.price_message.feed_id == new_pyth_feed_id,
+        GetPriceError::MismatchedFeedId
+    );
+
+    // HIGH-3 same-arc zero-feed guard (audit Run-6). Defense-in-depth — the
+    // proof check above already implicitly rejects [0u8; 32] (no real Pyth
+    // feed has a zero feed_id), but kept as a belt-and-suspenders reject.
     require!(
         new_pyth_feed_id != [0u8; 32],
         OptaError::InvalidPythFeedId
@@ -80,6 +96,12 @@ pub struct MigratePythFeed<'info> {
         bump = protocol_state.bump,
     )]
     pub protocol_state: Account<'info, ProtocolState>,
+
+    /// Fresh PriceUpdateV2 from the Pyth Receiver program. The handler
+    /// verifies `verification_level == Full` and
+    /// `price_message.feed_id == new_pyth_feed_id` to prove the rotation
+    /// target corresponds to a real Pyth feed. Read-only — never mutated.
+    pub price_update: Account<'info, PriceUpdateV2>,
 
     /// The market whose Pyth feed_id is being rotated. PDA seeds enforce
     /// existence — passing an unknown asset_name fails seed validation

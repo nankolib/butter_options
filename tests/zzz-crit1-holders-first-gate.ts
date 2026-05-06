@@ -106,6 +106,8 @@ const SOL_FEED_HEX = "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c2
 const SOL_ID = Array.from(Buffer.from(SOL_FEED_HEX, "hex"));
 const SOL_250_WINDOW_FUTURE_90  = fixturePubkey("sol-250-window-future-90");  // Fixture A: $250, publish_time = baseTime + 90
 const SOL_250_WINDOW_FUTURE_180 = fixturePubkey("sol-250-window-future-180"); // Fixture B: $250, publish_time = baseTime + 180
+// HIGH-5: create_market proof gate (sol-180-fresh has feed_id == SOL_ID).
+const SOL_180_FRESH_PK = fixturePubkey("sol-180-fresh");
 
 const EXTRA_CU = ComputeBudgetProgram.setComputeUnitLimit({ units: 1_000_000 });
 const HOOK_PROGRAM_ID = new PublicKey("83EW6a9o9P5CmGUkQKvVZvsz6v6Dgztiw5M4tVjfZMAG");
@@ -258,6 +260,7 @@ describe("CRIT-1 holders-first gate", () => {
         .accounts({
           creator: payer.publicKey,
           protocolState: protocolStatePda,
+          priceUpdate: SOL_180_FRESH_PK,
           market: marketPda,
           systemProgram: SystemProgram.programId,
         })

@@ -1079,10 +1079,10 @@ export type Opta = {
         {
           "name": "creator",
           "docs": [
-            "Admin-only post-HIGH-2 fix (audit Run-6). Must match",
-            "protocol_state.admin (verified in handler). Pays for account",
-            "creation on first init; pays nothing on idempotent re-call",
-            "because `init_if_needed` short-circuits."
+            "Permissionless post-HIGH-5 fix (audit Run-7). Any signer pays for",
+            "account creation on first init; pays nothing on idempotent re-call",
+            "because `init_if_needed` short-circuits. The proof-of-feed gate is",
+            "enforced via the `price_update` account below."
           ],
           "writable": true,
           "signer": true
@@ -1113,6 +1113,15 @@ export type Opta = {
               }
             ]
           }
+        },
+        {
+          "name": "priceUpdate",
+          "docs": [
+            "Fresh PriceUpdateV2 from the Pyth Receiver program. The handler",
+            "verifies `verification_level == Full` and",
+            "`price_message.feed_id == pyth_feed_id` to prove the caller-supplied",
+            "feed_id corresponds to a real Pyth feed. Read-only — never mutated."
+          ]
         },
         {
           "name": "market",
@@ -2021,6 +2030,15 @@ export type Opta = {
               }
             ]
           }
+        },
+        {
+          "name": "priceUpdate",
+          "docs": [
+            "Fresh PriceUpdateV2 from the Pyth Receiver program. The handler",
+            "verifies `verification_level == Full` and",
+            "`price_message.feed_id == new_pyth_feed_id` to prove the rotation",
+            "target corresponds to a real Pyth feed. Read-only — never mutated."
+          ]
         },
         {
           "name": "market",
@@ -4017,9 +4035,10 @@ export type Opta = {
             "name": "pythFeedId",
             "docs": [
               "The 32-byte Pyth Pull oracle feed ID for this asset.",
-              "Stage P1: stored without on-chain validation. Stage P2 settle_expiry",
-              "will validate this matches the `feed_id` on a passed-in PriceUpdateV2",
-              "account via `get_price_no_older_than(.., &feed_id)`."
+              "HIGH-5 (audit Run-7): proof-bound at create_market AND",
+              "migrate_pyth_feed via a PriceUpdateV2 account whose",
+              "`verification_level == Full` and `price_message.feed_id` matches.",
+              "settle_expiry re-validates the same proof at settlement time."
             ],
             "type": {
               "array": [

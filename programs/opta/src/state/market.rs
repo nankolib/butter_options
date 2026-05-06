@@ -46,9 +46,10 @@ pub struct OptionsMarket {
     pub asset_name: String,
 
     /// The 32-byte Pyth Pull oracle feed ID for this asset.
-    /// Stage P1: stored without on-chain validation. Stage P2 settle_expiry
-    /// will validate this matches the `feed_id` on a passed-in PriceUpdateV2
-    /// account via `get_price_no_older_than(.., &feed_id)`.
+    /// HIGH-5 (audit Run-7): proof-bound at create_market AND
+    /// migrate_pyth_feed via a PriceUpdateV2 account whose
+    /// `verification_level == Full` and `price_message.feed_id` matches.
+    /// settle_expiry re-validates the same proof at settlement time.
     pub pyth_feed_id: [u8; 32],
 
     /// Asset class for categorizing the underlying asset.

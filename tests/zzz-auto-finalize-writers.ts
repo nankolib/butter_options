@@ -69,6 +69,8 @@ const SOL_ID = Array.from(Buffer.from(SOL_FEED_HEX, "hex"));
 
 const SOL_250_FRESH = fixturePubkey("sol-250-fresh"); // settlement = $250
 const SOL_50_FRESH = fixturePubkey("sol-50-fresh");   // settlement = $50
+// HIGH-5: create_market proof gate (sol-180-fresh has feed_id == SOL_ID).
+const SOL_180_FRESH_PK = fixturePubkey("sol-180-fresh");
 
 // ---- Helpers ---------------------------------------------------------------
 function sleep(ms: number): Promise<void> {
@@ -244,6 +246,7 @@ describe("auto-finalize-writers", () => {
         .accounts({
           creator: payer.publicKey,
           protocolState: protocolStatePda,
+          priceUpdate: SOL_180_FRESH_PK,
           market: marketPda,
           systemProgram: SystemProgram.programId,
         })

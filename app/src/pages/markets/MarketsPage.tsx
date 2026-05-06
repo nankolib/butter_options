@@ -3,7 +3,6 @@ import { useMemo, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { usePaperPalette } from "../../hooks";
-import { useIsAdmin } from "../../hooks/useIsAdmin";
 import { PaperGrain } from "../../components/layout";
 import { AppNav } from "../../components/AppNav";
 import { MoneyAmount } from "../../components/MoneyAmount";
@@ -29,7 +28,6 @@ export const MarketsPage: FC = () => {
   usePaperPalette();
   const { connected } = useWallet();
   const { setVisible } = useWalletModal();
-  const isAdmin = useIsAdmin();
 
   const [denomination, setDenomination] = useState<Denomination>("USDC");
   const [showNewMarket, setShowNewMarket] = useState(false);
@@ -99,7 +97,6 @@ export const MarketsPage: FC = () => {
           denomination={denomination}
           onDenominationChange={setDenomination}
           onNewMarket={handleNewMarket}
-          showNewMarketCta={isAdmin}
         />
         <SummaryBand cells={cells} />
         <MarketsSection rows={rows} />

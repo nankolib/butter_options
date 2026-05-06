@@ -1,11 +1,11 @@
 import type { FC } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { PublicKey, SystemProgram } from "@solana/web3.js";
-import { useWallet } from "@solana/wallet-adapter-react";
+import { PublicKey } from "@solana/web3.js";
+import { useAnchorWallet, useWallet } from "@solana/wallet-adapter-react";
 import { useProgram } from "../../hooks/useProgram";
 import { showToast } from "../../components/Toast";
 import { decodeError } from "../../utils/errorDecoder";
-import { hexFromBytes, hexToBytes32 } from "../../utils/format";
+import { hexFromBytes } from "../../utils/format";
 import {
   getCatalog,
   searchAssets,
@@ -13,6 +13,10 @@ import {
   type CatalogEntry,
 } from "../../utils/hermesCatalog";
 import { getHermesBase } from "../../utils/env";
+import {
+  buildPostUpdateAndCreateMarketTx,
+  submitWithFallback,
+} from "../../utils/pythPullPost";
 
 type NewMarketModalProps = {
   onClose: () => void;
@@ -27,11 +31,8 @@ const ASSET_CLASS_LABEL: Record<number, string> = {
   4: "ETF",
 };
 
-// On-chain seed constants — must match Rust (programs/opta/src/state/).
-//   MARKET_SEED   = b"market"        (programs/opta/src/state/market.rs:65)
-//   PROTOCOL_SEED = b"protocol_v2"   (programs/opta/src/state/protocol.rs:48)
+// On-chain seed constant — must match Rust (programs/opta/src/state/market.rs:65).
 const MARKET_SEED = "market";
-const PROTOCOL_SEED = "protocol_v2";
 
 type CatalogState =
   | { kind: "loading" }
@@ -61,6 +62,7 @@ export const NewMarketModal: FC<NewMarketModalProps> = ({
 }) => {
   const { program, provider } = useProgram();
   const { publicKey } = useWallet();
+  const anchorWallet = useAnchorWallet();
 
   const [catalogState, setCatalogState] = useState<CatalogState>({ kind: "loading" });
   const [query, setQuery] = useState("");
@@ -160,31 +162,24 @@ export const NewMarketModal: FC<NewMarketModalProps> = ({
     !!program &&
     !!provider &&
     !!publicKey &&
+    !!anchorWallet &&
     !!activeFeed &&
     assetNameValid;
 
   const handleSubmit = async () => {
-    if (!canSubmit || !program || !provider || !publicKey || !activeFeed) return;
+    if (
+      !canSubmit ||
+      !program ||
+      !provider ||
+      !publicKey ||
+      !anchorWallet ||
+      !activeFeed
+    )
+      return;
     setSubmitting(true);
     try {
-      let feedIdBytes: number[];
-      try {
-        feedIdBytes = hexToBytes32(activeFeed.feedIdHex);
-      } catch (err: any) {
-        showToast({
-          type: "error",
-          title: "Invalid feed_id",
-          message: err?.message ?? "feed_id must be 64-char hex",
-        });
-        return;
-      }
-
       const [marketPda] = PublicKey.findProgramAddressSync(
         [Buffer.from(MARKET_SEED), Buffer.from(assetName)],
-        program.programId,
-      );
-      const [protocolStatePda] = PublicKey.findProgramAddressSync(
-        [Buffer.from(PROTOCOL_SEED)],
         program.programId,
       );
 
@@ -218,15 +213,24 @@ export const NewMarketModal: FC<NewMarketModalProps> = ({
         return;
       }
 
-      const tx = await program.methods
-        .createMarket(assetName, feedIdBytes, activeFeed.assetClass)
-        .accountsStrict({
-          creator: publicKey,
-          protocolState: protocolStatePda,
-          market: marketPda,
-          systemProgram: SystemProgram.programId,
-        })
-        .rpc({ commitment: "confirmed" });
+      // HIGH-5 (audit Run-7): create_market now requires a fresh Pyth
+      // PriceUpdateV2 account proving the feed_id is real. The helper
+      // posts a Hermes /latest update + invokes create_market in one
+      // atomic tx; ephemeral account is rent-reclaimed via
+      // closeUpdateAccounts.
+      const txs = await buildPostUpdateAndCreateMarketTx(
+        program,
+        anchorWallet,
+        assetName,
+        activeFeed.feedIdHex,
+        activeFeed.assetClass,
+        getHermesBase(),
+      );
+      const tx = await submitWithFallback(
+        program.provider.connection,
+        anchorWallet,
+        txs,
+      );
 
       showToast({
         type: "success",

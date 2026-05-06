@@ -39,6 +39,7 @@ import {
 } from "@solana/spl-token";
 import { assert } from "chai";
 import BN from "bn.js";
+import { fixturePubkey } from "./_pyth_fixtures";
 
 // =============================================================================
 // Asset registry — 32-byte Pyth Pull feed IDs (mainnet hex from
@@ -50,6 +51,9 @@ const REGISTRY = {
   SOL:  Buffer.from("ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d", "hex"),
   BTC:  Buffer.from("e62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43", "hex"),
 };
+
+// HIGH-5: pre-loaded sol-180-fresh fixture for create_market proof gate.
+const SOL_180_FRESH_PK = fixturePubkey("sol-180-fresh");
 
 // =============================================================================
 // Helpers
@@ -355,6 +359,7 @@ describe("shared-vaults", () => {
         .accounts({
           creator: payer.publicKey,
           protocolState: protocolStatePda,
+          priceUpdate: SOL_180_FRESH_PK,
           market: marketPda,
           systemProgram: SystemProgram.programId,
         })
@@ -429,6 +434,7 @@ describe("shared-vaults", () => {
           .accounts({
             creator: payer.publicKey,
             protocolState: protocolStatePda,
+            priceUpdate: SOL_180_FRESH_PK,
             market: customMarketPda,
             systemProgram: SystemProgram.programId,
           })
@@ -473,6 +479,7 @@ describe("shared-vaults", () => {
           .accounts({
             creator: payer.publicKey,
             protocolState: protocolStatePda,
+            priceUpdate: SOL_180_FRESH_PK,
             market: badMarketPda,
             systemProgram: SystemProgram.programId,
           })

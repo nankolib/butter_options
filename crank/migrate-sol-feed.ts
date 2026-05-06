@@ -17,6 +17,11 @@ import * as os from "os";
 import * as path from "path";
 
 import type { Opta } from "@app/idl/opta";
+import {
+  buildPostUpdateAndMigrateFeedTx,
+  submitWithFallback,
+  DEFAULT_HERMES_BASE,
+} from "@app/utils/pythPullPost";
 
 const PROGRAM_ID = new PublicKey("CtzJ4MJYX6BFvF4g67i5C24tQuwRn6ddKkaE5L84z9Cq");
 const ASSET_NAME = "SOL";
@@ -26,18 +31,6 @@ const EXPECTED_OLD_FEED_HEX =
   "fe650f0367d4a7ef9815a593ea15d36593f0643aaaf0149bb04be67ab851decd";
 const KEYPAIR_PATH = path.join(os.homedir(), ".config/solana/id.json");
 const IDL_JSON_PATH = path.resolve(__dirname, "../app/src/idl/opta.json");
-
-function hexToBytes32(hex: string): number[] {
-  const clean = hex.toLowerCase().replace(/^0x/, "");
-  if (!/^[0-9a-f]{64}$/.test(clean)) {
-    throw new Error("invalid 32-byte hex");
-  }
-  const out: number[] = new Array(32);
-  for (let i = 0; i < 32; i++) {
-    out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
-  }
-  return out;
-}
 
 function hexFromBytes(bytes: Iterable<number>): string {
   let out = "";
@@ -128,16 +121,19 @@ async function main(): Promise<void> {
   console.log("");
 
   // ---- Submit --------------------------------------------------------------
-  const newBytes = hexToBytes32(NEW_FEED_HEX);
-  console.log("submitting migrate_pyth_feed…");
-  const sig = await program.methods
-    .migratePythFeed(ASSET_NAME, newBytes)
-    .accountsStrict({
-      admin: kp.publicKey,
-      protocolState: protocolStatePda,
-      market: marketPda,
-    })
-    .rpc({ commitment: "confirmed" });
+  // HIGH-5 (audit Run-7): migrate_pyth_feed now requires a fresh Pyth
+  // PriceUpdateV2 account proving the new feed_id is real. The helper
+  // posts a Hermes /latest update + invokes migrate_pyth_feed in one
+  // atomic tx; ephemeral account is rent-reclaimed via closeUpdateAccounts.
+  console.log("submitting atomic post_update + migrate_pyth_feed…");
+  const txs = await buildPostUpdateAndMigrateFeedTx(
+    program,
+    wallet,
+    ASSET_NAME,
+    NEW_FEED_HEX,
+    DEFAULT_HERMES_BASE,
+  );
+  const sig = await submitWithFallback(conn, wallet, txs);
 
   console.log("");
   console.log("=== tx submitted");

@@ -55,6 +55,13 @@ const BTC_ID = Array.from(REGISTRY.BTC);
 // care about Pyth correctness (pre-P2 only).
 const ZERO_ID: number[] = Array.from(Buffer.alloc(32, 0));
 
+// HIGH-5 (audit Run-7): create_market + migrate_pyth_feed now require a
+// PriceUpdateV2 account whose feed_id matches the arg. We use the same
+// fixture pubkeys settle_expiry tests use; the only requirement is that
+// verification_level == Full and the feed_id matches the argument.
+const SOL_180_FRESH_PK = fixturePubkey("sol-180-fresh");
+const BTC_FIXTURE_PK = fixturePubkey("btc-fresh");
+
 // =============================================================================
 // Helpers
 // =============================================================================
@@ -220,7 +227,7 @@ describe("opta", () => {
   // 2. create_market — asset registry (admin-only, idempotent)
   // ===========================================================================
   describe("create_market", () => {
-    it("registers SOL with admin signer", async () => {
+    it("registers SOL with caller signer", async () => {
       const [marketPda] = deriveMarketPda("SOL");
 
       await program.methods
@@ -228,6 +235,7 @@ describe("opta", () => {
         .accountsStrict({
           creator: admin.publicKey,
           protocolState: protocolStatePda,
+          priceUpdate: SOL_180_FRESH_PK,
           market: marketPda,
           systemProgram: SystemProgram.programId,
         })
@@ -248,6 +256,7 @@ describe("opta", () => {
         .accountsStrict({
           creator: admin.publicKey,
           protocolState: protocolStatePda,
+          priceUpdate: SOL_180_FRESH_PK,
           market: marketPda,
           systemProgram: SystemProgram.programId,
         })
@@ -258,7 +267,12 @@ describe("opta", () => {
       assert.deepEqual(Array.from(market.pythFeedId), SOL_ID);
     });
 
-    it("idempotent re-call with different feed reverts AssetMismatch", async () => {
+    it("idempotent re-call with different feed reverts MismatchedFeedId", async () => {
+      // Post-HIGH-5: the proof gate rejects (BTC arg + SOL fixture)
+      // before the idempotent AssetMismatch check ever runs. Behavior
+      // change is intentional — the proof gate is strictly stronger:
+      // it rejects feed_id mismatches at the Pyth-attestation layer
+      // (i.e., a griefer can't even claim a non-real feed_id).
       const [marketPda] = deriveMarketPda("SOL");
 
       try {
@@ -267,13 +281,14 @@ describe("opta", () => {
           .accountsStrict({
             creator: admin.publicKey,
             protocolState: protocolStatePda,
+            priceUpdate: SOL_180_FRESH_PK,
             market: marketPda,
             systemProgram: SystemProgram.programId,
           })
           .rpc();
-        assert.fail("Should have thrown AssetMismatch");
+        assert.fail("Should have thrown MismatchedFeedId");
       } catch (err: any) {
-        assert.include(err.toString(), "AssetMismatch");
+        assert.include(err.toString(), "MismatchedFeedId");
       }
     });
 
@@ -285,6 +300,7 @@ describe("opta", () => {
         .accountsStrict({
           creator: admin.publicKey,
           protocolState: protocolStatePda,
+          priceUpdate: BTC_FIXTURE_PK,
           market: marketPda,
           systemProgram: SystemProgram.programId,
         })
@@ -295,22 +311,25 @@ describe("opta", () => {
       assert.deepEqual(Array.from(market.pythFeedId), BTC_ID);
     });
 
-    it("anyone can create a market — permissionless", async () => {
-      // Stage 2-amend-lite: create_market is permissionless. Use a fresh
-      // (non-admin) keypair, an asset name not used elsewhere in tests
-      // ("TEST"), and SystemProgram as a stand-in pyth_feed pubkey to
-      // make explicit "this is opaque, not validated".
+    it("anyone can create a market — permissionless + proof-bound", async () => {
+      // Post-HIGH-5: still permissionless (no admin gate), but the proof
+      // gate forces the caller-supplied feed_id to be real (verified
+      // against PriceUpdateV2). Asset name "PERM5" is unused elsewhere;
+      // we use SOL_ID + sol-180-fresh fixture so the proof gate passes.
+      // Note: ZERO_ID-style griefing is now blocked at the proof gate
+      // (no real Pyth feed has feed_id == [0u8; 32]).
       const randomUser = Keypair.generate();
       const sig = await connection.requestAirdrop(randomUser.publicKey, LAMPORTS_PER_SOL);
       await connection.confirmTransaction(sig, "confirmed");
 
-      const [marketPda] = deriveMarketPda("TEST");
+      const [marketPda] = deriveMarketPda("PERM5");
 
       await program.methods
-        .createMarket("TEST", ZERO_ID, 0)
+        .createMarket("PERM5", SOL_ID, 0)
         .accountsStrict({
           creator: randomUser.publicKey,
           protocolState: protocolStatePda,
+          priceUpdate: SOL_180_FRESH_PK,
           market: marketPda,
           systemProgram: SystemProgram.programId,
         })
@@ -318,8 +337,8 @@ describe("opta", () => {
         .rpc();
 
       const market = await program.account.optionsMarket.fetch(marketPda);
-      assert.equal(market.assetName, "TEST");
-      assert.deepEqual(Array.from(market.pythFeedId), ZERO_ID);
+      assert.equal(market.assetName, "PERM5");
+      assert.deepEqual(Array.from(market.pythFeedId), SOL_ID);
       assert.equal(market.assetClass, 0);
     });
 
@@ -332,6 +351,7 @@ describe("opta", () => {
           .accountsStrict({
             creator: admin.publicKey,
             protocolState: protocolStatePda,
+            priceUpdate: SOL_180_FRESH_PK,
             market: marketPda,
             systemProgram: SystemProgram.programId,
           })
@@ -351,6 +371,7 @@ describe("opta", () => {
           .accountsStrict({
             creator: admin.publicKey,
             protocolState: protocolStatePda,
+            priceUpdate: SOL_180_FRESH_PK,
             market: marketPda,
             systemProgram: SystemProgram.programId,
           })
@@ -447,6 +468,7 @@ describe("opta", () => {
         .createMarket("SOL", SOL_ID, 0)
         .accountsStrict({
           creator: admin.publicKey, protocolState: protocolStatePda,
+          priceUpdate: SOL_180_FRESH_PK,
           market: marketPda, systemProgram: SystemProgram.programId,
         })
         .rpc();
@@ -877,11 +899,11 @@ describe("opta", () => {
   });
 
   describe("migrate_pyth_feed", () => {
-    // A new 32-byte feed_id we rotate BTC to. Non-zero, distinguishable
-    // from the original BTC mainnet feed_id so we can assert the swap.
-    const NEW_BTC_ID: number[] = Array.from(
-      Buffer.from("0".repeat(63) + "1", "hex"), // 32 bytes ending in 0x01
-    );
+    // Post-HIGH-5: the new feed_id must be proof-bound to a real Pyth
+    // feed via a PriceUpdateV2 account. We rotate BTC's pointer to the
+    // SOL feed_id (operationally odd but tests-only) so we can use the
+    // existing sol-180-fresh fixture for the proof.
+    const NEW_BTC_ID: number[] = SOL_ID;
 
     it("admin migrates BTC feed_id to a new value", async () => {
       const [marketPda] = deriveMarketPda("BTC");
@@ -898,6 +920,7 @@ describe("opta", () => {
         .accountsStrict({
           admin: admin.publicKey,
           protocolState: protocolStatePda,
+          priceUpdate: SOL_180_FRESH_PK,
           market: marketPda,
         })
         .rpc();
@@ -922,6 +945,7 @@ describe("opta", () => {
         .accountsStrict({
           admin: admin.publicKey,
           protocolState: protocolStatePda,
+          priceUpdate: SOL_180_FRESH_PK,
           market: marketPda,
         })
         .rpc();
@@ -948,10 +972,11 @@ describe("opta", () => {
 
       try {
         await program.methods
-          .migratePythFeed("BTC", BTC_ID) // any feed_id; gate triggers first
+          .migratePythFeed("BTC", BTC_ID) // admin gate fires before proof gate
           .accountsStrict({
             admin: fakeAdmin.publicKey,
             protocolState: protocolStatePda,
+            priceUpdate: BTC_FIXTURE_PK,
             market: marketPda,
           })
           .signers([fakeAdmin])
@@ -974,6 +999,7 @@ describe("opta", () => {
           .accountsStrict({
             admin: admin.publicKey,
             protocolState: protocolStatePda,
+            priceUpdate: SOL_180_FRESH_PK,
             market: ghostPda,
           })
           .rpc();

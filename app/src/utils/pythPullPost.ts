@@ -291,6 +291,167 @@ export async function submitWithFallback(
 }
 
 // ---------------------------------------------------------------------------
+// HIGH-5 helpers — proof-bound create_market + migrate_pyth_feed
+// ---------------------------------------------------------------------------
+//
+// Both instructions now require a fresh PriceUpdateV2 account whose
+// `verification_level == Full` and `price_message.feed_id == arg`. The
+// frontend therefore must post a Hermes /latest update + consume it in the
+// same atomic tx — same shape as `buildPostUpdateAndSettleTx`, but
+// targeting create_market / migrate_pyth_feed instead of settle_expiry.
+//
+// We use the /latest endpoint (NOT historical) because the proof gate only
+// requires the feed_id be real — staleness against vault expiry isn't a
+// concern here. Hermes /latest comfortably satisfies the receiver's
+// `MAX_AGE` check at on-chain post time.
+
+const PROTOCOL_SEED = "protocol_v2";
+
+/**
+ * Build atomic post_update + create_market tx. Mirrors
+ * buildPostUpdateAndSettleTx but for the registry-create flow. Used by
+ * NewMarketModal (browser) — permissionless post-HIGH-5.
+ */
+export async function buildPostUpdateAndCreateMarketTx(
+  program: Program<Opta>,
+  wallet: SignerWallet,
+  assetName: string,
+  pythFeedIdHex: string,
+  assetClass: number,
+  hermesBase: string = DEFAULT_HERMES_BASE,
+): Promise<BuiltTx[]> {
+  const priceUpdateData = await fetchHermesUpdate(pythFeedIdHex, hermesBase);
+
+  const receiver = new PythSolanaReceiver({
+    connection: program.provider.connection,
+    wallet: wallet as any,
+  });
+
+  const builder = receiver.newTransactionBuilder({
+    closeUpdateAccounts: true,
+  });
+
+  await builder.addPostPriceUpdates([priceUpdateData.toString("base64")]);
+
+  await builder.addPriceConsumerInstructions(async (getPriceUpdateAccount) => {
+    const hexKey = `0x${pythFeedIdHex.replace(/^0x/, "").toLowerCase()}`;
+    const priceUpdatePda = getPriceUpdateAccount(hexKey);
+    if (!priceUpdatePda) {
+      throw new Error(`No ephemeral PriceUpdate PDA for feed ${pythFeedIdHex}`);
+    }
+
+    const [protocolStatePda] = PublicKey.findProgramAddressSync(
+      [Buffer.from(PROTOCOL_SEED)],
+      program.programId,
+    );
+    const [marketPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from(MARKET_SEED), Buffer.from(assetName)],
+      program.programId,
+    );
+
+    // Convert 32-byte hex (with or without 0x) to number[].
+    const hex = pythFeedIdHex.replace(/^0x/, "").toLowerCase();
+    if (hex.length !== 64) {
+      throw new Error(
+        `buildPostUpdateAndCreateMarketTx: invalid feed_id hex (expected 64 chars, got ${hex.length})`,
+      );
+    }
+    const feedIdBytes = Array.from({ length: 32 }, (_, i) =>
+      parseInt(hex.slice(i * 2, i * 2 + 2), 16),
+    );
+
+    const ix = await program.methods
+      .createMarket(assetName, feedIdBytes, assetClass)
+      .accountsStrict({
+        creator: wallet.publicKey,
+        protocolState: protocolStatePda,
+        priceUpdate: priceUpdatePda,
+        market: marketPda,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction();
+
+    return [{ instruction: ix, signers: [] }];
+  });
+
+  return (await builder.buildVersionedTransactions({
+    computeUnitPriceMicroLamports: COMPUTE_UNIT_PRICE_MICRO_LAMPORTS,
+  })) as BuiltTx[];
+}
+
+/**
+ * Build atomic post_update + migrate_pyth_feed tx. Same proof shape as
+ * create_market — admin gate is enforced server-side; this helper only
+ * composes the proof tx. Used by MigrateFeedTools (admin UI) and
+ * crank/migrate-sol-feed.ts.
+ */
+export async function buildPostUpdateAndMigrateFeedTx(
+  program: Program<Opta>,
+  wallet: SignerWallet,
+  assetName: string,
+  newPythFeedIdHex: string,
+  hermesBase: string = DEFAULT_HERMES_BASE,
+): Promise<BuiltTx[]> {
+  const priceUpdateData = await fetchHermesUpdate(newPythFeedIdHex, hermesBase);
+
+  const receiver = new PythSolanaReceiver({
+    connection: program.provider.connection,
+    wallet: wallet as any,
+  });
+
+  const builder = receiver.newTransactionBuilder({
+    closeUpdateAccounts: true,
+  });
+
+  await builder.addPostPriceUpdates([priceUpdateData.toString("base64")]);
+
+  await builder.addPriceConsumerInstructions(async (getPriceUpdateAccount) => {
+    const hexKey = `0x${newPythFeedIdHex.replace(/^0x/, "").toLowerCase()}`;
+    const priceUpdatePda = getPriceUpdateAccount(hexKey);
+    if (!priceUpdatePda) {
+      throw new Error(
+        `No ephemeral PriceUpdate PDA for feed ${newPythFeedIdHex}`,
+      );
+    }
+
+    const [protocolStatePda] = PublicKey.findProgramAddressSync(
+      [Buffer.from(PROTOCOL_SEED)],
+      program.programId,
+    );
+    const [marketPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from(MARKET_SEED), Buffer.from(assetName)],
+      program.programId,
+    );
+
+    const hex = newPythFeedIdHex.replace(/^0x/, "").toLowerCase();
+    if (hex.length !== 64) {
+      throw new Error(
+        `buildPostUpdateAndMigrateFeedTx: invalid feed_id hex (expected 64 chars, got ${hex.length})`,
+      );
+    }
+    const feedIdBytes = Array.from({ length: 32 }, (_, i) =>
+      parseInt(hex.slice(i * 2, i * 2 + 2), 16),
+    );
+
+    const ix = await program.methods
+      .migratePythFeed(assetName, feedIdBytes)
+      .accountsStrict({
+        admin: wallet.publicKey,
+        protocolState: protocolStatePda,
+        priceUpdate: priceUpdatePda,
+        market: marketPda,
+      })
+      .instruction();
+
+    return [{ instruction: ix, signers: [] }];
+  });
+
+  return (await builder.buildVersionedTransactions({
+    computeUnitPriceMicroLamports: COMPUTE_UNIT_PRICE_MICRO_LAMPORTS,
+  })) as BuiltTx[];
+}
+
+// ---------------------------------------------------------------------------
 // One-stop settle helper — atomic Pyth tx + batched settle_vault calls
 // ---------------------------------------------------------------------------
 

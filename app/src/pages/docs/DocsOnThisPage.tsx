@@ -49,7 +49,7 @@ export const DocsOnThisPage: FC = () => {
                   e.preventDefault();
                   smoothScrollToId(item.id);
                 }}
-                className={`block font-fraunces-text italic text-[14px] leading-snug text-ink no-underline transition-opacity duration-300 ease-opta hover:opacity-100 ${isActive ? "opacity-100" : "opacity-65"}`}
+                className={`block font-sans text-[13px] leading-snug text-ink no-underline transition-opacity duration-300 ease-opta hover:opacity-100 ${isActive ? "opacity-100 font-medium" : "opacity-65 font-normal"}`}
               >
                 {item.text}
               </a>

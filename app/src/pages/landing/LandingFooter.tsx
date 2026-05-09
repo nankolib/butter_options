@@ -17,7 +17,7 @@ export const LandingFooter: FC = () => (
       <div className="grid grid-cols-2 md:grid-cols-[1.4fr_1fr_1fr_1fr] gap-10 items-start mb-20">
         <div className="col-span-2 md:col-span-1">
           <Wordmark size="lg" />
-          <p className="mt-[22px] font-fraunces-text italic font-light leading-[1.55] opacity-70 max-w-[36ch] text-[16px]">
+          <p className="mt-[22px] font-sans italic font-normal leading-[1.55] opacity-70 max-w-[36ch] text-[15px]">
             An options layer for Solana. Token-2022 native. Built for
             the desks that price risk for a living.
           </p>

@@ -60,7 +60,7 @@ const SidebarItem: FC<{ section: DocsSectionMeta }> = ({ section }) => (
           <span className="font-mono text-[11px] uppercase tracking-[0.16em] text-crimson">
             {section.number}
           </span>
-          <span className="font-fraunces-text italic font-normal text-[14px] leading-snug text-ink">
+          <span className="font-sans font-medium text-[13.5px] leading-snug text-ink">
             {section.title}
           </span>
         </>

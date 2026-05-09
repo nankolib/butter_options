@@ -50,7 +50,7 @@ export class ErrorBoundary extends Component<Props, State> {
           <h1 className="m-0 mb-6 font-fraunces-display font-light leading-[0.92] tracking-[-0.04em] text-[clamp(40px,6vw,72px)]">
             Something went wrong<span className="italic font-fraunces-display-em text-crimson">.</span>
           </h1>
-          <p className="m-0 mb-8 font-fraunces-text italic font-light leading-[1.5] opacity-70 text-[15px]">
+          <p className="m-0 mb-8 font-sans italic font-normal leading-[1.5] opacity-75 text-[15px]">
             Please reload to try again. If the issue persists, the technical detail below may help diagnose.
           </p>
           <pre className="font-mono text-[11px] text-left bg-paper-2 border border-rule rounded-md p-4 mb-8 overflow-auto whitespace-pre-wrap break-words">

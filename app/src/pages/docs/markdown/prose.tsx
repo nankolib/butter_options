@@ -42,23 +42,23 @@ export const Strong: FC<ComponentPropsWithoutRef<"strong">> = ({ children, ...re
 );
 
 /**
- * Emphasis — italic Fraunces text-axis (SOFT 100, WONK 1).
- * Always Fraunces, never Geist italic, per the v3 brand voice.
- * Proper nouns and inline references read as italic serif.
+ * Emphasis — Inter italic. Body em sits at 17px which is below the
+ * 18px Fraunces floor; Inter italic stays readable at sustained reading
+ * sizes where Fraunces text-axis goes spindly.
  */
 export const Em: FC<ComponentPropsWithoutRef<"em">> = ({ children, ...rest }) => (
-  <em className="font-fraunces-text italic font-light" {...rest}>
+  <em className="font-sans italic" {...rest}>
     {children}
   </em>
 );
 
 /**
- * Blockquote — hairline left rule, italic Fraunces text-axis,
- * narrower measure. Same brand voice as Strike/Tracer.
+ * Blockquote — hairline left rule, Inter italic, narrower measure.
+ * Body-size copy stays Inter italic; reserve Fraunces for ≥18px.
  */
 export const Blockquote: FC<ComponentPropsWithoutRef<"blockquote">> = ({ children, ...rest }) => (
   <blockquote
-    className="border-l-2 border-rule pl-6 my-8 italic font-fraunces-text text-ink/85 max-w-[60ch]"
+    className="border-l-2 border-rule pl-6 my-8 font-sans italic text-ink/85 max-w-[60ch]"
     {...rest}
   >
     {children}

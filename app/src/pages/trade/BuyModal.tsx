@@ -366,7 +366,7 @@ export const BuyModal: FC<BuyModalProps> = ({
               )}
 
               {side === "call" && (
-                <p className="m-0 mb-4 font-fraunces-text italic font-light leading-[1.5] opacity-70 text-[12.5px]">
+                <p className="m-0 mb-4 font-sans italic font-normal leading-[1.5] opacity-75 text-[12.5px]">
                   CALL payout is capped at strike per contract. Vaults hold 1× strike as collateral, so a deep ITM move pays the strike, not the full intrinsic value.
                 </p>
               )}
@@ -418,7 +418,7 @@ const ConfirmedBlock: FC<{
   onDismiss: () => void;
 }> = ({ txSignature, solscanUrl, onDismiss }) => (
   <div>
-    <p className="m-0 font-fraunces-text italic font-light leading-[1.55] opacity-75 text-[15px] mb-4">
+    <p className="m-0 font-sans italic font-normal leading-[1.55] opacity-75 text-[15px] mb-4">
       Your contracts are in your wallet. Solscan link below; Portfolio
       shows them in your open positions.
     </p>

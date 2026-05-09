@@ -53,7 +53,7 @@ export const ClosedPositionsSection: FC<ClosedPositionsSectionProps> = ({
           muted
           emptyState={
             <div className="border border-rule rounded-md p-8 text-center">
-              <p className="font-fraunces-text italic font-light leading-[1.55] opacity-60 text-[clamp(14px,1vw,16px)] m-0">
+              <p className="font-sans italic font-normal leading-[1.55] opacity-65 text-[14px] m-0">
                 No closed positions.
               </p>
             </div>

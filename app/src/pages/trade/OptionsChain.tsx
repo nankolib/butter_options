@@ -65,7 +65,7 @@ export const OptionsChain: FC<OptionsChainProps> = ({
         <ChainCaption asset={asset} expiryLabel={expiryLabel} />
         {emptyState ?? (
           <div className="border border-rule rounded-md p-12 text-center">
-            <p className="font-fraunces-text italic font-light leading-[1.55] opacity-60 text-[clamp(15px,1.2vw,17px)] m-0">
+            <p className="font-sans italic font-normal leading-[1.55] opacity-60 text-[15px] m-0">
               No markets at this expiry — create one on Markets.
             </p>
           </div>

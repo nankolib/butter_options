@@ -54,7 +54,7 @@ export const WrittenPositionsSection: FC<WrittenPositionsSectionProps> = ({
           </span>
         </div>
         <div className="border border-rule rounded-md p-12 text-center">
-          <p className="font-fraunces-text italic font-light leading-[1.55] opacity-60 text-[clamp(15px,1.2vw,17px)] m-0 mb-4">
+          <p className="font-sans italic font-normal leading-[1.55] opacity-65 text-[15px] m-0 mb-4">
             No vaults written yet.
           </p>
           <Link
@@ -91,7 +91,7 @@ export const WrittenPositionsSection: FC<WrittenPositionsSectionProps> = ({
         busyLabel={busyLabel}
         emptyState={
           <div className="border border-rule rounded-md p-12 text-center">
-            <p className="font-fraunces-text italic font-light leading-[1.55] opacity-60 text-[clamp(15px,1.2vw,17px)] m-0">
+            <p className="font-sans italic font-normal leading-[1.55] opacity-65 text-[15px] m-0">
               No vaults match "{filterLabel(filter)}".
             </p>
           </div>

@@ -43,7 +43,7 @@ export const ProductSection: FC = () => (
         </Fade>
         <Fade
           as="p"
-          className="font-fraunces-text italic font-light leading-[1.55] opacity-85 max-w-[42ch] text-[clamp(17px,1.4vw,20px)]"
+          className="font-fraunces-text italic font-light leading-[1.55] opacity-85 max-w-[42ch] text-[clamp(18px,1.4vw,20px)]"
         >
           Strike, expiry, and settlement are written into the asset
           itself. A single SPL token under the Token-2022 standard,

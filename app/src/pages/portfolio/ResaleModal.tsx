@@ -123,7 +123,7 @@ export const ResaleModal: FC<ResaleModalProps> = ({
 
         {/* Position context */}
         <div className="border border-rule-soft rounded-sm p-4 mb-6 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11.5px] uppercase tracking-[0.18em]">
-          <span className="font-fraunces-text italic normal-case tracking-normal text-[15px] text-ink">
+          <span className="font-sans font-medium normal-case tracking-normal text-[15px] text-ink">
             {position.asset}
           </span>
           <span className="text-crimson">{position.side}</span>

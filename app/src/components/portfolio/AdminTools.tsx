@@ -167,7 +167,7 @@ export const AdminTools: FC<AdminToolsProps> = ({
   if (tuples.length === 0 && !confirmation) {
     return (
       <div className="border border-rule rounded-md p-8 text-center">
-        <p className="m-0 font-fraunces-text italic font-light leading-[1.55] opacity-60 text-[clamp(14px,1vw,16px)]">
+        <p className="m-0 font-sans italic font-normal leading-[1.55] opacity-65 text-[14px]">
           No expired markets need settling.
         </p>
       </div>

@@ -125,7 +125,7 @@ export const EpochVaultSection: FC<EpochVaultSectionProps> = ({
             Recommended
           </span>
         </div>
-        <p className="m-0 max-w-[420px] font-fraunces-text italic font-light leading-[1.5] opacity-70 text-[clamp(13px,1vw,15px)]">
+        <p className="m-0 max-w-[420px] font-sans italic font-normal leading-[1.5] opacity-75 text-[14px]">
           Weekly settlement, every Friday. Writers deposit USDC and receive
           writer-share tokens that earn premium as buyers fill the strike.
         </p>

@@ -36,7 +36,7 @@ export const CTASection: FC = () => (
       </h2>
       <Fade
         as="p"
-        className="mx-auto mb-14 mt-6 max-w-[50ch] font-fraunces-text italic font-light opacity-75 text-[clamp(16px,1.4vw,20px)]"
+        className="mx-auto mb-14 mt-6 max-w-[50ch] font-fraunces-text italic font-light opacity-75 text-[clamp(18px,1.4vw,20px)]"
       >
         Mainnet, today. Audits and SDK below.
       </Fade>

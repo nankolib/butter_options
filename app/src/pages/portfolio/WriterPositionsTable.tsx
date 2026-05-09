@@ -133,7 +133,7 @@ const WriterRowEl: FC<{
             {row.asset.charAt(0) || "?"}
           </span>
           <div>
-            <div className="font-fraunces-text italic text-[15px] leading-tight text-ink">
+            <div className="font-sans font-medium text-[15px] leading-tight text-ink">
               {row.asset || "Unknown"}
             </div>
             {fullName && (

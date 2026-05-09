@@ -127,7 +127,7 @@ export const LiveQuoteCard: FC<LiveQuoteCardProps> = ({
 
         <HairlineRule className="my-5" weight="soft" />
 
-        <p className="m-0 font-fraunces-text italic font-light leading-[1.5] opacity-70 text-[13.5px]">
+        <p className="m-0 font-sans italic font-normal leading-[1.5] opacity-75 text-[13px]">
           {footnote}
         </p>
       </div>

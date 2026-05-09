@@ -135,7 +135,7 @@ export const MigrateFeedTools: FC<MigrateFeedToolsProps> = ({
   if (sortedMarkets.length === 0) {
     return (
       <div className="border border-rule rounded-md p-8 text-center">
-        <p className="m-0 font-fraunces-text italic font-light leading-[1.55] opacity-60 text-[clamp(14px,1vw,16px)]">
+        <p className="m-0 font-sans italic font-normal leading-[1.55] opacity-65 text-[14px]">
           No markets registered yet.
         </p>
       </div>
@@ -264,7 +264,7 @@ export const MigrateFeedTools: FC<MigrateFeedToolsProps> = ({
                 </span>
               </Row>
             </div>
-            <p className="m-0 mb-5 font-fraunces-text italic font-light leading-[1.5] opacity-70 text-[12.5px]">
+            <p className="m-0 mb-5 font-sans italic font-normal leading-[1.5] opacity-75 text-[12.5px]">
               This rotates the on-chain feed_id pointer. All future settlements
               for this asset will use the new feed.
             </p>

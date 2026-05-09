@@ -85,7 +85,7 @@ const MarketRowEl: FC<{ row: MarketRow }> = ({ row: r }) => {
             {r.asset.charAt(0) || "?"}
           </span>
           <div>
-            <div className="font-fraunces-text italic text-[15px] leading-tight text-ink">
+            <div className="font-sans font-medium text-[15px] leading-tight text-ink">
               {r.asset || "Unknown"}
             </div>
             {fullName && (

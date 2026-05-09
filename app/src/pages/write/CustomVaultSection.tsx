@@ -109,7 +109,7 @@ export const CustomVaultSection: FC<CustomVaultSectionProps> = ({
     <section className="mt-16">
       <div className="flex flex-wrap items-end justify-between gap-6 mb-8">
         <SectionNumber number="02" label="Custom vault" />
-        <p className="m-0 max-w-[420px] font-fraunces-text italic font-light leading-[1.5] opacity-70 text-[clamp(13px,1vw,15px)]">
+        <p className="m-0 max-w-[420px] font-sans italic font-normal leading-[1.5] opacity-75 text-[14px]">
           Pick any expiry. The mint is derived from your terms; if it
           matches an existing market, your collateral joins that vault.
         </p>

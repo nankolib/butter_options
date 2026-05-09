@@ -95,7 +95,7 @@ export const WriterForm: FC<WriterFormProps> = ({
   if (assets.length === 0) {
     return (
       <div className="border border-rule rounded-md p-12 text-center">
-        <p className="font-fraunces-text italic font-light leading-[1.55] opacity-65 text-[clamp(15px,1.2vw,17px)] m-0 mb-3">
+        <p className="font-sans italic font-normal leading-[1.55] opacity-70 text-[15px] m-0 mb-3">
           No markets registered yet — create one on Markets first.
         </p>
         <Link
@@ -296,7 +296,7 @@ const AdvancedSection: FC<{
             min="0"
             className="w-full bg-paper-2 border border-rule rounded-sm px-3 py-2 font-mono text-[13px] text-ink focus:outline-none focus:border-ink transition-colors duration-200"
           />
-          <div className="font-fraunces-text italic font-light leading-[1.5] opacity-70 text-[12px]">
+          <div className="font-sans italic font-normal leading-[1.5] opacity-75 text-[12.5px]">
             Leave empty to use the Black-Scholes-derived premium. Set a positive
             value to override — your vault will list at that price regardless of
             the B-S model.

@@ -52,10 +52,19 @@
   --color-rule-soft: rgba(10, 10, 8, 0.08);
   --color-dot-teal: #1AC6A5;
 
-  /* ----- fonts */
+  /* ----- fonts
+     Strict three-font split, established 2026-05-09 to fix small-size
+     Fraunces unreadability flagged by Superteam Pakistan reviewer:
+       --font-serif → Fraunces. DISPLAY ONLY (≥18px, ideally ≥24px):
+                      page-title hero text, OPTA. wordmark, large
+                      numerical brand moments. Never used at body sizes.
+       --font-sans  → Inter. ALL body, form labels, field values, table
+                      rows, button text, modal copy, tooltips (12–16px).
+       --font-mono  → JetBrains Mono. Tickers, numbers in tables, prices,
+                      code blocks, uppercase tracked labels. */
   --font-serif: "Fraunces", "Times New Roman", serif;
-  --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "Geist Mono", ui-monospace, "SF Mono", monospace;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
 
   /* ----- easing */
   --ease-opta: cubic-bezier(0.16, 1, 0.3, 1);

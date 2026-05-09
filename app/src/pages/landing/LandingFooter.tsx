@@ -17,7 +17,7 @@ export const LandingFooter: FC = () => (
       <div className="grid grid-cols-2 md:grid-cols-[1.4fr_1fr_1fr_1fr] gap-10 items-start mb-20">
         <div className="col-span-2 md:col-span-1">
           <Wordmark size="lg" />
-          <p className="mt-[22px] font-sans italic font-normal leading-[1.55] opacity-70 max-w-[36ch] text-[15px]">
+          <p className="mt-[22px] font-sans italic font-medium leading-[1.55] text-ink-body max-w-[36ch] text-[15px]">
             An options layer for Solana. Token-2022 native. Built for
             the desks that price risk for a living.
           </p>
@@ -53,7 +53,7 @@ export const LandingFooter: FC = () => (
 
       <HairlineRule />
 
-      <div className="flex flex-wrap items-center justify-between gap-[14px] pt-7 font-mono text-[10.5px] uppercase tracking-[0.2em] opacity-60">
+      <div className="flex flex-wrap items-center justify-between gap-[14px] pt-7 font-mono font-medium text-[10.5px] uppercase tracking-[0.2em] text-ink-muted">
         <span>© 2026 Opta Labs · Built on Solana</span>
         <span className="flex flex-wrap gap-[18px]">
           <a href="#">Terms</a>
@@ -72,7 +72,7 @@ type FooterColumnProps = {
 
 const FooterColumn: FC<FooterColumnProps> = ({ title, links }) => (
   <div>
-    <h5 className="font-mono text-[10.5px] uppercase tracking-[0.22em] m-0 mb-4 opacity-50 font-medium">
+    <h5 className="font-mono text-[10.5px] uppercase tracking-[0.22em] m-0 mb-4 text-ink-muted font-medium">
       {title}
     </h5>
     <ul className="list-none p-0 m-0 flex flex-col gap-[10px]">
@@ -80,7 +80,7 @@ const FooterColumn: FC<FooterColumnProps> = ({ title, links }) => (
         <li key={label}>
           <a
             href={href}
-            className="text-[14px] opacity-85 transition-opacity duration-300 ease-opta hover:opacity-100 no-underline"
+            className="text-[14px] text-ink-body hover:text-ink transition-colors duration-300 ease-opta no-underline"
           >
             {label}
           </a>

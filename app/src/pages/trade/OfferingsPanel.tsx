@@ -104,11 +104,11 @@ export const OfferingsPanel: FC<OfferingsPanelProps> = ({
           <span className="font-mono text-[13px] text-ink">
             ${strike.toFixed(2)}
           </span>
-          <span className="font-mono text-[11px] uppercase tracking-[0.18em] opacity-55">
+          <span className="font-mono font-medium text-[11px] uppercase tracking-[0.18em] text-ink-muted">
             {expiryLabel}
           </span>
         </div>
-        <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 font-mono text-[10.5px] uppercase tracking-[0.18em] opacity-65">
+        <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 font-mono font-medium text-[10.5px] uppercase tracking-[0.18em] text-ink-muted">
           <span>
             Spot {spot != null ? <MoneyAmount value={spot} /> : "—"}
             {stale && spot != null && <span> · delayed</span>}
@@ -139,10 +139,10 @@ export const OfferingsPanel: FC<OfferingsPanelProps> = ({
       {resaleOfferings.length > 0 ? (
         <>
           <div className="flex items-baseline justify-between mt-6 mb-3">
-            <span className="font-mono text-[10.5px] uppercase tracking-[0.2em] opacity-65">
+            <span className="font-mono font-medium text-[10.5px] uppercase tracking-[0.2em] text-ink-muted">
               Resale listings
             </span>
-            <span className="font-mono text-[10.5px] uppercase tracking-[0.18em] opacity-45">
+            <span className="font-mono font-medium text-[10.5px] uppercase tracking-[0.18em] text-ink-muted">
               sorted ↑
             </span>
           </div>
@@ -162,7 +162,7 @@ export const OfferingsPanel: FC<OfferingsPanelProps> = ({
           </div>
         </>
       ) : (
-        <div className="font-mono text-[10.5px] uppercase tracking-[0.18em] opacity-45 mt-6">
+        <div className="font-mono font-medium text-[10.5px] uppercase tracking-[0.18em] text-ink-muted mt-6">
           No resale listings at this strike
         </div>
       )}
@@ -193,11 +193,11 @@ const VaultCard: FC<{
       }`}
     >
       <div className="flex items-baseline justify-between mb-2">
-        <span className="font-mono text-[10.5px] uppercase tracking-[0.2em] opacity-65">
+        <span className="font-mono font-medium text-[10.5px] uppercase tracking-[0.2em] text-ink-muted">
           Vault
         </span>
         {isSelected && (
-          <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-crimson">
+          <span className="font-mono font-medium text-[10px] uppercase tracking-[0.18em] text-crimson">
             selected
           </span>
         )}
@@ -206,12 +206,12 @@ const VaultCard: FC<{
         <span className="font-mono text-[18px] text-ink">
           <MoneyAmount value={offering.premium} />
         </span>
-        <span className="font-mono text-[12px] opacity-70">
+        <span className="font-mono text-[12px] text-ink-body">
           {offering.inventory.toLocaleString()} available
         </span>
         <PremiumPill premiumPct={premiumPct} />
       </div>
-      <div className="font-mono text-[10px] uppercase tracking-[0.18em] opacity-50">
+      <div className="font-mono font-medium text-[10px] uppercase tracking-[0.18em] text-ink-muted">
         Live premium · Black-Scholes derived
       </div>
     </button>
@@ -219,12 +219,12 @@ const VaultCard: FC<{
 };
 
 const VaultMutedCard: FC = () => (
-  <div className="rounded-sm border border-rule-soft p-4 opacity-60">
-    <div className="font-mono text-[10.5px] uppercase tracking-[0.2em] opacity-65 mb-1.5">
+  <div className="rounded-sm border border-rule-soft p-4 bg-paper-2/40">
+    <div className="font-mono font-medium text-[10.5px] uppercase tracking-[0.2em] text-ink-muted mb-1.5">
       Vault
     </div>
-    <div className="font-mono text-[14px] text-ink">Fully written</div>
-    <div className="font-mono text-[10px] uppercase tracking-[0.18em] opacity-50 mt-1">
+    <div className="font-mono text-[14px] text-ink-body">Fully written</div>
+    <div className="font-mono font-medium text-[10px] uppercase tracking-[0.18em] text-ink-muted mt-1">
       No vault inventory at this strike — secondary listings only
     </div>
   </div>
@@ -240,22 +240,22 @@ const ResaleRow: FC<{
 
   if (offering.isSelfListing) {
     return (
-      <div className="flex items-baseline gap-4 py-3 px-1 border-b border-rule-soft opacity-40 flex-wrap">
+      <div className="flex items-baseline gap-4 py-3 px-1 border-b border-rule-soft opacity-55 flex-wrap">
         <span className="font-mono text-[14px] text-ink min-w-[80px]">
           <MoneyAmount value={offering.premium} />
         </span>
-        <span className="font-mono text-[11px] opacity-70 min-w-[88px]">
+        <span className="font-mono text-[11px] text-ink-body min-w-[88px]">
           {offering.qty.toLocaleString()}{" "}
           {offering.qty === 1 ? "contract" : "contracts"}
         </span>
         <PremiumPill premiumPct={premiumPct} />
-        <span className="font-mono text-[11px] opacity-65">
+        <span className="font-mono text-[11px] text-ink-body">
           {truncateAddress(offering.seller.toBase58())}
         </span>
-        <span className="font-mono text-[10px] uppercase tracking-[0.16em] opacity-50">
+        <span className="font-mono font-medium text-[10px] uppercase tracking-[0.16em] text-ink-muted">
           {formatRelative(offering.createdAt)}
         </span>
-        <span className="ml-auto font-mono text-[10px] uppercase tracking-[0.16em] opacity-55 italic">
+        <span className="ml-auto font-mono font-medium text-[10px] uppercase tracking-[0.16em] text-ink-muted italic">
           ·your listing
         </span>
       </div>
@@ -274,19 +274,19 @@ const ResaleRow: FC<{
       <span className="font-mono text-[14px] text-ink min-w-[80px]">
         <MoneyAmount value={offering.premium} />
       </span>
-      <span className="font-mono text-[11px] opacity-70 min-w-[88px]">
+      <span className="font-mono text-[11px] text-ink-body min-w-[88px]">
         {offering.qty.toLocaleString()}{" "}
         {offering.qty === 1 ? "contract" : "contracts"}
       </span>
       <PremiumPill premiumPct={premiumPct} />
-      <span className="font-mono text-[11px] opacity-65">
+      <span className="font-mono text-[11px] text-ink-body">
         {truncateAddress(offering.seller.toBase58())}
       </span>
-      <span className="font-mono text-[10px] uppercase tracking-[0.16em] opacity-50">
+      <span className="font-mono font-medium text-[10px] uppercase tracking-[0.16em] text-ink-muted">
         {formatRelative(offering.createdAt)}
       </span>
       <span
-        className="ml-auto font-mono text-[12px] opacity-65"
+        className="ml-auto font-mono text-[12px] text-ink-body"
         aria-hidden="true"
       >
         →
@@ -298,7 +298,7 @@ const ResaleRow: FC<{
 const Footer: FC<{ bestThirdParty: Offering | null }> = ({ bestThirdParty }) => {
   if (!bestThirdParty) {
     return (
-      <div className="font-mono text-[10.5px] uppercase tracking-[0.18em] opacity-55">
+      <div className="font-mono font-medium text-[10.5px] uppercase tracking-[0.18em] text-ink-muted">
         No third-party offerings — your own listings shown above
       </div>
     );
@@ -308,7 +308,7 @@ const Footer: FC<{ bestThirdParty: Offering | null }> = ({ bestThirdParty }) => 
       ? bestThirdParty.inventory
       : bestThirdParty.qty;
   return (
-    <div className="font-mono text-[10.5px] uppercase tracking-[0.18em] opacity-65">
+    <div className="font-mono font-medium text-[10.5px] uppercase tracking-[0.18em] text-ink-muted">
       Best ask <MoneyAmount value={bestThirdParty.premium} /> · Up to{" "}
       {inv.toLocaleString()} contracts at this price
     </div>
@@ -319,7 +319,7 @@ const PremiumPill: FC<{ premiumPct: number | null }> = ({ premiumPct }) => {
   if (premiumPct == null) return null;
   const absPct = Math.abs(premiumPct);
   if (absPct < 0.5) {
-    return <span className="font-mono text-[11px] text-ink/70">at fair</span>;
+    return <span className="font-mono text-[11px] text-ink-body">at fair</span>;
   }
   if (premiumPct < 0) {
     return (

@@ -68,7 +68,7 @@ export const SolscanLink: FC<SolscanLinkProps> = ({ pda, ariaLabel }) => {
       rel="noopener noreferrer"
       aria-label={ariaLabel ?? fallbackLabel}
       title="Open on Solscan"
-      className="inline-flex items-center justify-center w-7 h-7 rounded-full border border-rule text-ink/60 hover:border-ink hover:text-ink transition-colors duration-300 ease-opta no-underline"
+      className="inline-flex items-center justify-center w-7 h-7 rounded-full border border-rule text-ink-muted hover:border-ink hover:text-ink transition-colors duration-300 ease-opta no-underline"
     >
       <span aria-hidden="true" className="font-mono text-[11px] leading-none">↗</span>
     </a>

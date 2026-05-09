@@ -121,13 +121,13 @@ export const TradePage: FC = () => {
 
         {data.loading ? (
           <div className="border border-rule rounded-md p-12 text-center">
-            <p className="font-sans italic font-normal leading-[1.55] opacity-60 text-[15px] m-0">
+            <p className="font-sans italic font-medium leading-[1.55] text-ink-body text-[15px] m-0">
               Loading from devnet…
             </p>
           </div>
         ) : data.availableAssets.length === 0 ? (
           <div className="border border-rule rounded-md p-12 text-center">
-            <p className="font-sans italic font-normal leading-[1.55] opacity-60 text-[15px] m-0">
+            <p className="font-sans italic font-medium leading-[1.55] text-ink-body text-[15px] m-0">
               No active markets — visit Markets to create one.
             </p>
           </div>
@@ -207,13 +207,13 @@ const FiveCellBand: FC<{ cells: SummaryCell[] }> = ({ cells }) => (
   <div className="grid grid-cols-2 md:grid-cols-5 gap-px bg-rule border-y border-rule mt-12">
     {cells.map((cell, i) => (
       <div key={i} className="bg-paper p-6 md:p-7">
-        <div className="font-mono text-[11px] uppercase tracking-[0.2em] opacity-60 mb-5">
+        <div className="font-mono font-medium text-[11px] uppercase tracking-[0.2em] text-ink-muted mb-5">
           {cell.label}
         </div>
         <div className="font-mono font-normal text-[clamp(24px,2.6vw,32px)] leading-[0.95] text-ink mb-3">
           {cell.value}
         </div>
-        <div className="font-mono text-[10.5px] uppercase tracking-[0.18em] opacity-55">
+        <div className="font-mono font-medium text-[10.5px] uppercase tracking-[0.18em] text-ink-muted">
           {cell.sub}
         </div>
       </div>

@@ -115,16 +115,16 @@ const Mech: FC<MechProps> = ({ roman, headline, body, tag, staggerIndex, last })
       style={styleVar}
     >
       <Fade className="opta-stag">
-        <div className="font-fraunces-text italic font-light text-[18px] tracking-[0.04em] opacity-55 mb-6">
+        <div className="font-fraunces-text italic font-light text-[18px] tracking-[0.04em] text-ink-muted mb-6">
           {roman}
         </div>
         <h3 className="font-fraunces-mid font-light leading-[1.05] tracking-[-0.02em] text-[clamp(28px,2.8vw,38px)] m-0 mb-4">
           {headline}
         </h3>
-        <p className="text-[15px] leading-[1.6] text-ink opacity-78 max-w-[32ch] m-0">
+        <p className="text-[15px] font-medium leading-[1.6] text-ink-body max-w-[32ch] m-0">
           {body}
         </p>
-        <span className="block mt-6 font-mono text-[10.5px] uppercase tracking-[0.2em] opacity-55">
+        <span className="block mt-6 font-mono font-medium text-[10.5px] uppercase tracking-[0.2em] text-ink-muted">
           {tag}
         </span>
       </Fade>

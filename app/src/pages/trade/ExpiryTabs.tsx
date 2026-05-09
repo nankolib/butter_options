@@ -27,15 +27,15 @@ export const ExpiryTabs: FC<ExpiryTabsProps> = ({ expiries, selected, onSelect }
             type="button"
             onClick={() => onSelect(ts)}
             aria-pressed={active}
-            className={`inline-flex items-center gap-3 rounded-full border px-[16px] py-[8px] font-mono text-[11px] uppercase tracking-[0.18em] transition-colors duration-300 ease-opta ${
+            className={`inline-flex items-center gap-3 rounded-full border px-[16px] py-[8px] font-mono font-medium text-[11px] uppercase tracking-[0.18em] transition-colors duration-300 ease-opta ${
               active
                 ? "border-ink bg-ink text-paper"
-                : "border-rule text-ink opacity-65 hover:opacity-100 hover:border-ink"
+                : "border-rule text-ink-muted hover:text-ink hover:border-ink"
             }`}
           >
             <span>{formatShortDate(ts)}</span>
-            <span aria-hidden="true" className={active ? "opacity-60" : "opacity-55"}>·</span>
-            <span className={active ? "opacity-90" : "opacity-70"}>
+            <span aria-hidden="true" className={active ? "opacity-80" : "opacity-70"}>·</span>
+            <span className={active ? "opacity-90" : "text-ink-body"}>
               {formatCountdown(ts)}
             </span>
           </button>

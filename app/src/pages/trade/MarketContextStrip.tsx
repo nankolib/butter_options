@@ -24,23 +24,23 @@ export const MarketContextStrip: FC<MarketContextStripProps> = ({
   totalOi,
 }) => (
   <div className="flex flex-wrap items-center justify-between gap-y-3 gap-x-6 border-y border-rule py-3 mb-8">
-    <div className="flex flex-wrap items-center gap-x-6 gap-y-2 font-mono text-[11.5px] uppercase tracking-[0.18em]">
+    <div className="flex flex-wrap items-center gap-x-6 gap-y-2 font-mono font-medium text-[11.5px] uppercase tracking-[0.18em]">
       <Stat label="Spot">
         {spot != null ? (
           <>
             <MoneyAmount value={spot} />
-            {stale && <span className="opacity-55"> · delayed</span>}
+            {stale && <span className="text-ink-muted"> · delayed</span>}
           </>
         ) : "—"}
       </Stat>
       <Stat label="24H">
-        <span className="opacity-55">—</span>
+        <span className="text-ink-muted">—</span>
       </Stat>
       <Stat label="IV · Baseline">
         {atmBaselineIv != null ? `${(atmBaselineIv * 100).toFixed(1)}%` : "—"}
       </Stat>
       <Stat label="24H Vol">
-        <span className="opacity-55">—</span>
+        <span className="text-ink-muted">—</span>
       </Stat>
       <Stat label="Open Interest">
         {totalOi > 0 ? totalOi.toLocaleString() : "—"}
@@ -56,7 +56,7 @@ export const MarketContextStrip: FC<MarketContextStripProps> = ({
 
 const Stat: FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
   <span className="inline-flex items-baseline gap-2">
-    <span className="opacity-55">{label}</span>
+    <span className="text-ink-muted">{label}</span>
     <span className="text-ink">{children}</span>
   </span>
 );

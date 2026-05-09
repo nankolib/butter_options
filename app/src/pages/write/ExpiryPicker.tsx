@@ -66,7 +66,7 @@ export const ExpiryPicker: FC<ExpiryPickerProps> = ({ preset, value, onChange })
 
   return (
     <div>
-      <div className="font-mono text-[10.5px] uppercase tracking-[0.2em] opacity-65 mb-2">
+      <div className="font-mono font-medium text-[10.5px] uppercase tracking-[0.2em] text-ink-muted mb-2">
         Expiry
       </div>
 
@@ -77,10 +77,10 @@ export const ExpiryPicker: FC<ExpiryPickerProps> = ({ preset, value, onChange })
             type="button"
             onClick={() => handlePresetClick(p.id)}
             aria-pressed={preset === p.id}
-            className={`rounded-full border px-[14px] py-[6px] font-mono text-[10.5px] uppercase tracking-[0.18em] transition-colors duration-300 ease-opta ${
+            className={`rounded-full border px-[14px] py-[6px] font-mono font-medium text-[10.5px] uppercase tracking-[0.18em] transition-colors duration-300 ease-opta ${
               preset === p.id
                 ? "border-crimson text-ink"
-                : "border-rule text-ink opacity-55 hover:opacity-100 hover:border-ink"
+                : "border-rule text-ink-muted hover:text-ink hover:border-ink"
             }`}
           >
             {p.label}
@@ -91,7 +91,7 @@ export const ExpiryPicker: FC<ExpiryPickerProps> = ({ preset, value, onChange })
       {showInputs && (
         <div className="grid grid-cols-2 gap-3">
           <label>
-            <div className="font-mono text-[10px] uppercase tracking-[0.18em] opacity-55 mb-1">
+            <div className="font-mono font-medium text-[10px] uppercase tracking-[0.18em] text-ink-muted mb-1">
               Date (UTC)
             </div>
             <input
@@ -102,7 +102,7 @@ export const ExpiryPicker: FC<ExpiryPickerProps> = ({ preset, value, onChange })
             />
           </label>
           <label>
-            <div className="font-mono text-[10px] uppercase tracking-[0.18em] opacity-55 mb-1">
+            <div className="font-mono font-medium text-[10px] uppercase tracking-[0.18em] text-ink-muted mb-1">
               Time (UTC)
             </div>
             <input
@@ -115,7 +115,7 @@ export const ExpiryPicker: FC<ExpiryPickerProps> = ({ preset, value, onChange })
         </div>
       )}
 
-      <div className="font-mono text-[10.5px] uppercase tracking-[0.18em] opacity-60 mt-2">
+      <div className="font-mono font-medium text-[10.5px] uppercase tracking-[0.18em] text-ink-muted mt-2">
         {value == null
           ? "—"
           : isPast

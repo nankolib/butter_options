@@ -75,7 +75,7 @@ export const WriterPositionsTable: FC<WriterPositionsTableProps> = ({
             <Th
               title="Premium is paid by buyers at purchase. As contracts in your vault sell, your share becomes claimable."
             >
-              Claimable<span className="opacity-50">*</span>
+              Claimable<span className="text-ink-muted">*</span>
             </Th>
             <Th>State</Th>
             <Th>{""}</Th>
@@ -100,7 +100,7 @@ export const WriterPositionsTable: FC<WriterPositionsTableProps> = ({
 const Th: FC<{ children: ReactNode; title?: string }> = ({ children, title }) => (
   <th
     title={title}
-    className={`text-left font-mono text-[10.5px] uppercase tracking-[0.18em] py-3 pr-4 opacity-60 align-bottom whitespace-nowrap ${
+    className={`text-left font-mono font-medium text-[10.5px] uppercase tracking-[0.18em] py-3 pr-4 text-ink-muted align-bottom whitespace-nowrap ${
       title ? "cursor-help" : ""
     }`}
   >
@@ -137,7 +137,7 @@ const WriterRowEl: FC<{
               {row.asset || "Unknown"}
             </div>
             {fullName && (
-              <div className="font-mono text-[10px] uppercase tracking-[0.18em] opacity-50">
+              <div className="font-mono font-medium text-[10px] uppercase tracking-[0.18em] text-ink-muted">
                 {fullName}
               </div>
             )}
@@ -161,7 +161,7 @@ const WriterRowEl: FC<{
       {/* Expiry */}
       <td className="py-4 pr-4 whitespace-nowrap">
         <div className="font-mono text-[13px]">{formatTableDate(row.expiry)}</div>
-        <div className="font-mono text-[10px] uppercase tracking-[0.16em] opacity-55 mt-0.5">
+        <div className="font-mono font-medium text-[10px] uppercase tracking-[0.16em] text-ink-muted mt-0.5">
           {formatCountdown(row.expiry)}
         </div>
       </td>
@@ -174,7 +174,7 @@ const WriterRowEl: FC<{
       {/* Contracts: minted / sold */}
       <td className="py-4 pr-4 font-mono text-[13px] whitespace-nowrap">
         {row.optionsMinted.toLocaleString()}
-        <span className="opacity-50"> / </span>
+        <span className="text-ink-muted"> / </span>
         {row.optionsSold.toLocaleString()}
       </td>
 
@@ -195,7 +195,7 @@ const WriterRowEl: FC<{
           </span>
         </div>
         {stateSubtitle(row) && (
-          <div className="font-mono text-[10px] uppercase tracking-[0.16em] opacity-55 mt-0.5">
+          <div className="font-mono font-medium text-[10px] uppercase tracking-[0.16em] text-ink-muted mt-0.5">
             {stateSubtitle(row)}
           </div>
         )}
@@ -223,7 +223,7 @@ const WriterRowEl: FC<{
             </button>
           )}
           {row.primaryAction === "settling" && (
-            <span className="font-mono text-[10.5px] uppercase tracking-[0.18em] opacity-55 px-[14px] py-[7px]">
+            <span className="font-mono font-medium text-[10.5px] uppercase tracking-[0.18em] text-ink-muted px-[14px] py-[7px]">
               Settling…
             </span>
           )}
@@ -234,7 +234,7 @@ const WriterRowEl: FC<{
               type="button"
               onClick={() => onAction(row, "burn-unsold")}
               disabled={isBusy}
-              className="font-mono text-[10px] uppercase tracking-[0.18em] underline underline-offset-2 decoration-rule hover:decoration-ink text-ink/60 hover:text-ink transition-colors duration-300 ease-opta disabled:opacity-50 disabled:cursor-not-allowed"
+              className="font-mono font-medium text-[10px] uppercase tracking-[0.18em] underline underline-offset-2 decoration-rule hover:decoration-ink text-ink-muted hover:text-ink transition-colors duration-300 ease-opta disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Burn unsold ({row.unsoldCount}) ↗
             </button>
@@ -274,7 +274,7 @@ function actionStyle(action: WriterRowPrimaryAction): string {
     case "withdraw-collateral":
       return "border-ink bg-ink text-paper hover:bg-transparent hover:text-ink";
     case "settling":
-      return "border-rule text-ink/60";
+      return "border-rule text-ink-muted";
   }
 }
 

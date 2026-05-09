@@ -95,7 +95,7 @@ export const WriterForm: FC<WriterFormProps> = ({
   if (assets.length === 0) {
     return (
       <div className="border border-rule rounded-md p-12 text-center">
-        <p className="font-sans italic font-normal leading-[1.55] opacity-70 text-[15px] m-0 mb-3">
+        <p className="font-sans italic font-medium leading-[1.55] text-ink-body text-[15px] m-0 mb-3">
           No markets registered yet — create one on Markets first.
         </p>
         <Link
@@ -126,10 +126,10 @@ export const WriterForm: FC<WriterFormProps> = ({
               type="button"
               onClick={() => onChange({ ...values, asset: a.ticker })}
               aria-pressed={values.asset === a.ticker}
-              className={`rounded-full border px-[14px] py-[6px] font-mono text-[10.5px] uppercase tracking-[0.18em] transition-colors duration-300 ease-opta ${
+              className={`rounded-full border px-[14px] py-[6px] font-mono font-medium text-[10.5px] uppercase tracking-[0.18em] transition-colors duration-300 ease-opta ${
                 values.asset === a.ticker
                   ? "border-ink bg-ink text-paper"
-                  : "border-rule text-ink opacity-65 hover:opacity-100 hover:border-ink"
+                  : "border-rule text-ink-muted hover:text-ink hover:border-ink"
               }`}
             >
               {a.ticker}
@@ -165,7 +165,7 @@ export const WriterForm: FC<WriterFormProps> = ({
           min="0"
           className="w-full bg-paper-2 border border-rule rounded-sm px-3 py-2 font-mono text-[14px] text-ink focus:outline-none focus:border-ink transition-colors duration-200"
         />
-        <div className="font-mono text-[10px] uppercase tracking-[0.18em] opacity-55 mt-1.5">
+        <div className="font-mono font-medium text-[10px] uppercase tracking-[0.18em] text-ink-muted mt-1.5">
           {moneyness ?? "Spot — enter strike to see moneyness"}
         </div>
       </Field>
@@ -180,18 +180,18 @@ export const WriterForm: FC<WriterFormProps> = ({
           min="1"
           className="w-full bg-paper-2 border border-rule rounded-sm px-3 py-2 font-mono text-[14px] text-ink focus:outline-none focus:border-ink transition-colors duration-200"
         />
-        <div className="font-mono text-[10px] uppercase tracking-[0.18em] opacity-55 mt-1.5">
+        <div className="font-mono font-medium text-[10px] uppercase tracking-[0.18em] text-ink-muted mt-1.5">
           1 contract = 1 unit of underlying
         </div>
       </Field>
 
       {mode === "epoch" ? (
         <div>
-          <div className="font-mono text-[10.5px] uppercase tracking-[0.2em] opacity-65 mb-2">
+          <div className="font-mono font-medium text-[10.5px] uppercase tracking-[0.2em] text-ink-muted mb-2">
             Expiry
           </div>
           <div className="border border-rule-soft rounded-sm p-3 font-mono text-[12px] text-ink">
-            <span className="opacity-65">Settles next Friday · </span>
+            <span className="text-ink-muted">Settles next Friday · </span>
             <span>{epochExpiryLabel ?? "—"}</span>
           </div>
         </div>
@@ -229,7 +229,7 @@ export const WriterForm: FC<WriterFormProps> = ({
 
 const Field: FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
   <div>
-    <div className="font-mono text-[10.5px] uppercase tracking-[0.2em] opacity-65 mb-2">
+    <div className="font-mono font-medium text-[10.5px] uppercase tracking-[0.2em] text-ink-muted mb-2">
       {label}
     </div>
     {children}
@@ -245,10 +245,10 @@ const SideButton: FC<{
     type="button"
     onClick={onClick}
     aria-pressed={active}
-    className={`flex-1 rounded-sm border py-2.5 font-mono text-[11.5px] uppercase tracking-[0.2em] transition-colors duration-300 ease-opta ${
+    className={`flex-1 rounded-sm border py-2.5 font-mono font-medium text-[11.5px] uppercase tracking-[0.2em] transition-colors duration-300 ease-opta ${
       active
         ? "border-ink bg-ink text-paper"
-        : "border-rule text-ink opacity-65 hover:opacity-100 hover:border-ink"
+        : "border-rule text-ink-muted hover:text-ink hover:border-ink"
     }`}
   >
     <span className="inline-flex items-center gap-2 justify-center">
@@ -277,14 +277,14 @@ const AdvancedSection: FC<{
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        className="w-full flex items-center justify-between px-3 py-2 font-mono text-[10.5px] uppercase tracking-[0.18em] opacity-65 hover:opacity-100 transition-opacity duration-200"
+        className="w-full flex items-center justify-between px-3 py-2 font-mono font-medium text-[10.5px] uppercase tracking-[0.18em] text-ink-muted hover:text-ink transition-colors duration-200"
       >
         <span>Advanced</span>
         <span aria-hidden="true">{open ? "−" : "+"}</span>
       </button>
       {open && (
         <div className="px-3 pb-3 pt-1 space-y-2 border-t border-rule-soft">
-          <div className="font-mono text-[10.5px] uppercase tracking-[0.2em] opacity-65">
+          <div className="font-mono font-medium text-[10.5px] uppercase tracking-[0.2em] text-ink-muted">
             Premium per contract (USDC)
           </div>
           <input
@@ -296,7 +296,7 @@ const AdvancedSection: FC<{
             min="0"
             className="w-full bg-paper-2 border border-rule rounded-sm px-3 py-2 font-mono text-[13px] text-ink focus:outline-none focus:border-ink transition-colors duration-200"
           />
-          <div className="font-sans italic font-normal leading-[1.5] opacity-75 text-[12.5px]">
+          <div className="font-sans italic font-medium leading-[1.5] text-ink-body text-[12.5px]">
             Leave empty to use the Black-Scholes-derived premium. Set a positive
             value to override — your vault will list at that price regardless of
             the B-S model.

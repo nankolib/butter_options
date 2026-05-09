@@ -31,7 +31,7 @@ export const MarketsSection: FC<MarketsSectionProps> = ({ rows }) => {
       <div className="flex flex-wrap items-end justify-between gap-4 mb-6">
         <div className="flex items-baseline gap-4">
           <SectionNumber number="01" label="All markets" />
-          <span className="font-mono text-[11.5px] uppercase tracking-[0.18em] opacity-55">
+          <span className="font-mono font-medium text-[11.5px] uppercase tracking-[0.18em] text-ink-muted">
             Showing {visible.length} of {rows.length}
           </span>
         </div>
@@ -43,7 +43,7 @@ export const MarketsSection: FC<MarketsSectionProps> = ({ rows }) => {
         rows={visible}
         emptyState={
           <div className="border border-rule rounded-md p-12 text-center">
-            <p className="font-sans italic font-normal leading-[1.55] opacity-60 text-[15px] m-0">
+            <p className="font-sans italic font-medium leading-[1.55] text-ink-body text-[15px] m-0">
               {rows.length === 0
                 ? "No markets yet."
                 : "No markets match the current filters."}

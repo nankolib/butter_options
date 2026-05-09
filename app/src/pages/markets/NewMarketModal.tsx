@@ -279,14 +279,14 @@ export const NewMarketModal: FC<NewMarketModalProps> = ({
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="font-mono text-[14px] opacity-60 hover:opacity-100 transition-opacity duration-200"
+            className="font-mono text-[14px] text-ink-muted hover:text-ink transition-colors duration-200"
           >
             ✕
           </button>
         </div>
 
         {catalogState.kind === "stale" && (
-          <div className="border border-rule-soft rounded-sm p-3 mb-5 text-[11px] font-mono uppercase tracking-[0.16em] opacity-75">
+          <div className="border border-rule-soft rounded-sm p-3 mb-5 text-[11px] font-mono font-medium uppercase tracking-[0.16em] text-ink-body">
             ⚠ Hermes unreachable — showing cached catalog from{" "}
             {new Date(catalogState.lastRefresh).toLocaleString()}
           </div>
@@ -294,7 +294,7 @@ export const NewMarketModal: FC<NewMarketModalProps> = ({
         {catalogState.kind === "failed" && (
           <div className="border border-rule-soft rounded-sm p-3 mb-5 text-[11px] font-mono uppercase tracking-[0.16em] text-crimson">
             Hermes unreachable & no cached catalog. Use Advanced → paste feed_id hex.
-            <div className="opacity-65 normal-case mt-1.5 tracking-normal">
+            <div className="text-ink-body normal-case mt-1.5 tracking-normal">
               {catalogState.error}
             </div>
           </div>
@@ -331,14 +331,14 @@ export const NewMarketModal: FC<NewMarketModalProps> = ({
                         className={`w-full flex items-center justify-between text-left px-3 py-2 font-mono text-[12px] transition-colors duration-200 ${
                           isSelected
                             ? "bg-ink text-paper"
-                            : "text-ink opacity-80 hover:opacity-100 hover:bg-paper-2"
+                            : "text-ink-body hover:text-ink hover:bg-paper-2"
                         }`}
                       >
                         <span>
                           <span className="font-medium">{entry.suggestedTicker}</span>
-                          <span className="ml-2 opacity-65">{entry.hermesSymbol}</span>
+                          <span className="ml-2 text-ink-muted">{entry.hermesSymbol}</span>
                         </span>
-                        <span className="text-[10px] uppercase tracking-[0.18em] opacity-65">
+                        <span className="font-medium text-[10px] uppercase tracking-[0.18em] text-ink-muted">
                           {ASSET_CLASS_LABEL[entry.suggestedAssetClass]}
                         </span>
                       </button>
@@ -348,7 +348,7 @@ export const NewMarketModal: FC<NewMarketModalProps> = ({
               </ul>
             )}
             {catalogState.kind !== "loading" && query && filtered.length === 0 && (
-              <div className="font-mono text-[10.5px] uppercase tracking-[0.18em] opacity-55 mt-2">
+              <div className="font-mono font-medium text-[10.5px] uppercase tracking-[0.18em] text-ink-muted mt-2">
                 No matches in catalog
               </div>
             )}
@@ -360,7 +360,7 @@ export const NewMarketModal: FC<NewMarketModalProps> = ({
           <button
             type="button"
             onClick={() => setAdvancedOpen((v) => !v)}
-            className="font-mono text-[10.5px] uppercase tracking-[0.18em] opacity-65 hover:opacity-100 hover:text-crimson transition-colors duration-300 ease-opta"
+            className="font-mono font-medium text-[10.5px] uppercase tracking-[0.18em] text-ink-muted hover:text-crimson transition-colors duration-300 ease-opta"
           >
             {advancedOpen ? "← Back to catalog search" : "Advanced — paste feed_id hex"}
           </button>
@@ -381,10 +381,10 @@ export const NewMarketModal: FC<NewMarketModalProps> = ({
                     type="button"
                     onClick={() => setPastedClass(cls)}
                     aria-pressed={pastedClass === cls}
-                    className={`rounded-full border px-3 py-1 font-mono text-[10px] uppercase tracking-[0.18em] transition-colors duration-300 ease-opta ${
+                    className={`rounded-full border px-3 py-1 font-mono font-medium text-[10px] uppercase tracking-[0.18em] transition-colors duration-300 ease-opta ${
                       pastedClass === cls
                         ? "border-ink text-ink"
-                        : "border-rule text-ink opacity-55 hover:opacity-100 hover:border-ink"
+                        : "border-rule text-ink-muted hover:text-ink hover:border-ink"
                     }`}
                   >
                     {ASSET_CLASS_LABEL[cls]}
@@ -417,7 +417,7 @@ export const NewMarketModal: FC<NewMarketModalProps> = ({
                 {assetNameValid ? "✓" : "✕"}
               </span>
             </div>
-            <div className="font-mono text-[10px] uppercase tracking-[0.18em] opacity-55 mt-1.5">
+            <div className="font-mono font-medium text-[10px] uppercase tracking-[0.18em] text-ink-muted mt-1.5">
               1-16 chars · A-Z, 0-9 only · Class:{" "}
               {ASSET_CLASS_LABEL[activeFeed.assetClass]}
             </div>
@@ -428,7 +428,7 @@ export const NewMarketModal: FC<NewMarketModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="flex-1 rounded-full border border-rule px-4 py-3 font-mono text-[11px] uppercase tracking-[0.2em] text-ink/65 hover:text-ink hover:border-ink transition-colors duration-300 ease-opta"
+            className="flex-1 rounded-full border border-rule px-4 py-3 font-mono font-medium text-[11px] uppercase tracking-[0.2em] text-ink-muted hover:text-ink hover:border-ink transition-colors duration-300 ease-opta"
           >
             Cancel
           </button>
@@ -449,7 +449,7 @@ export const NewMarketModal: FC<NewMarketModalProps> = ({
 const Field: FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
   <div className="mb-5">
     {label && (
-      <div className="font-mono text-[10.5px] uppercase tracking-[0.2em] opacity-65 mb-2">
+      <div className="font-mono font-medium text-[10.5px] uppercase tracking-[0.2em] text-ink-muted mb-2">
         {label}
       </div>
     )}

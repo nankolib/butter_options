@@ -107,7 +107,7 @@ export const Hero: FC = () => {
           <Fade
             as="span"
             delay={1300}
-            className="flex items-center gap-[10px] font-mono text-[11px] uppercase tracking-[0.22em] text-ink opacity-70"
+            className="flex items-center gap-[10px] font-mono font-medium text-[11px] uppercase tracking-[0.22em] text-ink-body"
           >
             <span
               aria-hidden="true"

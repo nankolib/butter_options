@@ -32,14 +32,14 @@ export const SectionNumber: FC<SectionNumberProps> = ({
   const numColorClass = tone === "paper" ? "text-paper" : "text-ink";
   return (
     <div
-      className={`flex items-center gap-[14px] font-mono text-[11.5px] uppercase tracking-[0.22em] opacity-85 ${className}`.trim()}
+      className={`flex items-center gap-[14px] font-mono font-medium text-[11.5px] uppercase tracking-[0.22em] ${tone === "paper" ? "text-paper/85" : "text-ink-body"} ${className}`.trim()}
     >
-      <span className="font-serif italic font-normal opacity-55 normal-case tracking-normal">§</span>
+      <span className={`font-serif italic font-normal normal-case tracking-normal ${tone === "paper" ? "opacity-65" : "text-ink-muted"}`}>§</span>
       <span className={numColorClass}>
         {number}
         <em className="font-serif italic text-crimson px-[1px]">·</em>
       </span>
-      <span className="opacity-75">{label}</span>
+      <span className={tone === "paper" ? "opacity-75" : "text-ink-body"}>{label}</span>
     </div>
   );
 };

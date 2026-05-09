@@ -78,7 +78,7 @@ export const PositionsTable: FC<PositionsTableProps> = ({
 };
 
 const Th: FC<{ children: ReactNode }> = ({ children }) => (
-  <th className="text-left font-mono text-[10.5px] uppercase tracking-[0.18em] py-3 pr-4 opacity-60 align-bottom whitespace-nowrap">
+  <th className="text-left font-mono font-medium text-[10.5px] uppercase tracking-[0.18em] py-3 pr-4 text-ink-muted align-bottom whitespace-nowrap">
     {children}
   </th>
 );
@@ -108,7 +108,7 @@ const PositionRow: FC<{
               {p.asset || "Unknown"}
             </div>
             {fullName && (
-              <div className="font-mono text-[10px] uppercase tracking-[0.18em] opacity-50">
+              <div className="font-mono font-medium text-[10px] uppercase tracking-[0.18em] text-ink-muted">
                 {fullName}
               </div>
             )}
@@ -132,7 +132,7 @@ const PositionRow: FC<{
       {/* Expiry — date + countdown */}
       <td className="py-4 pr-4 whitespace-nowrap">
         <div className="font-mono text-[13px]">{formatTableDate(p.expiry)}</div>
-        <div className="font-mono text-[10px] uppercase tracking-[0.16em] opacity-55 mt-0.5">
+        <div className="font-mono font-medium text-[10px] uppercase tracking-[0.16em] text-ink-muted mt-0.5">
           {formatCountdown(p.expiry)}
         </div>
       </td>
@@ -156,7 +156,7 @@ const PositionRow: FC<{
       <td className="py-4 pr-4 font-mono text-[13px] whitespace-nowrap">
         <span className={pnlColor}>
           <MoneyAmount value={p.pnl} showSign />
-          <span className="ml-2 text-[10.5px] opacity-70">
+          <span className="ml-2 text-[10.5px] text-ink-body">
             {formatPnLPercent(p.pnlPercent)}
           </span>
         </span>
@@ -214,9 +214,9 @@ function actionStyle(action: PositionAction): string {
     case "list-resale":
       return "border-ink text-ink hover:bg-ink hover:text-paper";
     case "cancel-resale":
-      return "border-rule text-ink/70 hover:border-ink hover:text-ink";
+      return "border-rule text-ink-body hover:border-ink hover:text-ink";
     case "burn":
-      return "border-rule text-ink/60 hover:border-crimson hover:text-crimson";
+      return "border-rule text-ink-muted hover:border-crimson hover:text-crimson";
     default:
       return "";
   }

@@ -34,7 +34,7 @@ export const Tr: FC<ComponentPropsWithoutRef<"tr">> = ({ children, ...rest }) =>
  */
 export const Th: FC<ComponentPropsWithoutRef<"th">> = ({ children, ...rest }) => (
   <th
-    className="text-left font-mono text-[11px] uppercase tracking-[0.18em] py-3 pr-4 opacity-70 align-bottom"
+    className="text-left font-mono font-medium text-[11px] uppercase tracking-[0.18em] py-3 pr-4 text-ink-body align-bottom"
     {...rest}
   >
     {children}

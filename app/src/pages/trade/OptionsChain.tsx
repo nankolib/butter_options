@@ -65,7 +65,7 @@ export const OptionsChain: FC<OptionsChainProps> = ({
         <ChainCaption asset={asset} expiryLabel={expiryLabel} />
         {emptyState ?? (
           <div className="border border-rule rounded-md p-12 text-center">
-            <p className="font-sans italic font-normal leading-[1.55] opacity-60 text-[15px] m-0">
+            <p className="font-sans italic font-medium leading-[1.55] text-ink-body text-[15px] m-0">
               No markets at this expiry — create one on Markets.
             </p>
           </div>
@@ -131,7 +131,7 @@ const Th: FC<{ children: ReactNode; align: "left" | "center" | "right" }> = ({
   align,
 }) => (
   <th
-    className={`font-mono text-[10.5px] uppercase tracking-[0.18em] py-3 px-3 opacity-60 align-bottom whitespace-nowrap ${
+    className={`font-mono font-medium text-[10.5px] uppercase tracking-[0.18em] py-3 px-3 text-ink-muted align-bottom whitespace-nowrap ${
       align === "right"
         ? "text-right"
         : align === "center"
@@ -212,7 +212,7 @@ const Td: FC<{
   <td
     className={`font-mono text-[12.5px] py-4 px-3 whitespace-nowrap ${
       align === "right" ? "text-right" : align === "center" ? "text-center" : "text-left"
-    } ${muted ? "opacity-50" : ""}`}
+    } ${muted ? "text-ink-muted" : ""}`}
   >
     {children}
   </td>
@@ -235,7 +235,7 @@ const PremiumButton: FC<{
     {depthCount > 0 && (
       <span
         title={`${depthCount} more offering${depthCount === 1 ? "" : "s"}`}
-        className="font-mono text-[10.5px] opacity-55"
+        className="font-mono text-[10.5px] text-ink-muted"
       >
         ·{depthCount}
       </span>
@@ -243,7 +243,7 @@ const PremiumButton: FC<{
     {hasSelfListing && (
       <span
         title="You have an active listing at this cell"
-        className="font-mono italic text-[10.5px] opacity-55"
+        className="font-mono italic text-[10.5px] text-ink-muted"
       >
         ·your listing
       </span>
@@ -299,7 +299,7 @@ const ChainCell: FC<{
 };
 
 const FairPremium: FC<{ value: number }> = ({ value }) => (
-  <span className="opacity-50">
+  <span className="text-ink-muted">
     <MoneyAmount value={value} />
   </span>
 );

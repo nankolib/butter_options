@@ -29,12 +29,18 @@ export const MetaLabel: FC<MetaLabelProps> = ({
 }) => {
   const Tag = as as ElementType;
   const sizeClass = size === "sm" ? "text-[12px]" : "text-[11.5px]";
-  const colorClass = tone === "paper" ? "text-paper" : "text-ink";
-  const opacityClass =
-    tone === "muted" ? "opacity-55" : tone === "paper" ? "opacity-50" : "opacity-70";
+  // Cream surfaces: use full-opacity body/muted tokens (post-readability fix).
+  // Paper-on-dark surfaces (MarketSection): keep the legacy opacity attenuation
+  // since text-ink-* tokens are designed for the cream palette only.
+  const colorClass =
+    tone === "paper"
+      ? "text-paper opacity-75"
+      : tone === "muted"
+        ? "text-ink-muted"
+        : "text-ink-body";
   return (
     <Tag
-      className={`inline-block font-mono uppercase tracking-[0.2em] ${colorClass} ${opacityClass} ${sizeClass} ${className}`.trim()}
+      className={`inline-block font-mono font-medium uppercase tracking-[0.2em] ${colorClass} ${sizeClass} ${className}`.trim()}
     >
       {children}
     </Tag>

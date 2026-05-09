@@ -38,10 +38,10 @@ export const FilterPills: FC<FilterPillsProps> = ({ active, onChange }) => (
           type="button"
           onClick={() => onChange(pill.id)}
           aria-pressed={isActive}
-          className={`rounded-full border px-[14px] py-[6px] font-mono text-[10.5px] uppercase tracking-[0.18em] transition-colors duration-300 ease-opta ${
+          className={`rounded-full border px-[14px] py-[6px] font-mono font-medium text-[10.5px] uppercase tracking-[0.18em] transition-colors duration-300 ease-opta ${
             isActive
               ? "border-crimson text-ink"
-              : "border-rule text-ink opacity-55 hover:opacity-100 hover:border-ink"
+              : "border-rule text-ink-muted hover:text-ink hover:border-ink"
           }`}
         >
           {pill.label}

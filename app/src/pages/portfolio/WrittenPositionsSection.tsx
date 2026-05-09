@@ -49,12 +49,12 @@ export const WrittenPositionsSection: FC<WrittenPositionsSectionProps> = ({
       <section className="mt-16">
         <div className="flex items-baseline gap-4 mb-6">
           <SectionNumber number="02" label="Vaults written" />
-          <span className="font-mono text-[11.5px] uppercase tracking-[0.18em] opacity-55">
+          <span className="font-mono font-medium text-[11.5px] uppercase tracking-[0.18em] text-ink-muted">
             0 vaults
           </span>
         </div>
         <div className="border border-rule rounded-md p-12 text-center">
-          <p className="font-sans italic font-normal leading-[1.55] opacity-65 text-[15px] m-0 mb-4">
+          <p className="font-sans italic font-medium leading-[1.55] text-ink-body text-[15px] m-0 mb-4">
             No vaults written yet.
           </p>
           <Link
@@ -64,7 +64,7 @@ export const WrittenPositionsSection: FC<WrittenPositionsSectionProps> = ({
             Write a vault
             <span aria-hidden="true">→</span>
           </Link>
-          <p className="font-mono text-[10px] uppercase tracking-[0.18em] opacity-50 mt-4 m-0">
+          <p className="font-mono font-medium text-[10px] uppercase tracking-[0.18em] text-ink-muted mt-4 m-0">
             Sell options · Earn premium · USDC
           </p>
         </div>
@@ -77,7 +77,7 @@ export const WrittenPositionsSection: FC<WrittenPositionsSectionProps> = ({
       <div className="flex flex-wrap items-end justify-between gap-4 mb-6">
         <div className="flex items-baseline gap-4">
           <SectionNumber number="02" label="Vaults written" />
-          <span className="font-mono text-[11.5px] uppercase tracking-[0.18em] opacity-55">
+          <span className="font-mono font-medium text-[11.5px] uppercase tracking-[0.18em] text-ink-muted">
             {count} {count === 1 ? "vault" : "vaults"}
           </span>
         </div>
@@ -91,7 +91,7 @@ export const WrittenPositionsSection: FC<WrittenPositionsSectionProps> = ({
         busyLabel={busyLabel}
         emptyState={
           <div className="border border-rule rounded-md p-12 text-center">
-            <p className="font-sans italic font-normal leading-[1.55] opacity-65 text-[15px] m-0">
+            <p className="font-sans italic font-medium leading-[1.55] text-ink-body text-[15px] m-0">
               No vaults match "{filterLabel(filter)}".
             </p>
           </div>

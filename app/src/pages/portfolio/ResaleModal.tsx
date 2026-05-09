@@ -115,7 +115,7 @@ export const ResaleModal: FC<ResaleModalProps> = ({
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="font-mono text-[14px] opacity-60 hover:opacity-100 transition-opacity duration-200"
+            className="font-mono text-[14px] text-ink-muted hover:text-ink transition-colors duration-200"
           >
             ✕
           </button>
@@ -130,11 +130,11 @@ export const ResaleModal: FC<ResaleModalProps> = ({
           <span className="opacity-30">·</span>
           <span className="text-ink">strike ${position.strike.toFixed(2)}</span>
           <span className="opacity-30">·</span>
-          <span className="opacity-65">{Math.round(daysUntilExpiry(position.expiry))}d</span>
+          <span className="text-ink-muted">{Math.round(daysUntilExpiry(position.expiry))}d</span>
         </div>
 
         <label className="block mb-5">
-          <div className="font-mono text-[10.5px] uppercase tracking-[0.2em] opacity-65 mb-2">
+          <div className="font-mono font-medium text-[10.5px] uppercase tracking-[0.2em] text-ink-muted mb-2">
             Contracts to list
           </div>
           <input
@@ -145,13 +145,13 @@ export const ResaleModal: FC<ResaleModalProps> = ({
             max={sellerBalance}
             className="w-full bg-paper-2 border border-rule rounded-sm px-3 py-2 font-mono text-[14px] text-ink focus:outline-none focus:border-ink transition-colors duration-200"
           />
-          <div className="font-mono text-[10px] uppercase tracking-[0.18em] opacity-55 mt-1.5">
+          <div className="font-mono font-medium text-[10px] uppercase tracking-[0.18em] text-ink-muted mt-1.5">
             You hold {sellerBalance.toLocaleString()} contracts
           </div>
         </label>
 
         <label className="block mb-6">
-          <div className="font-mono text-[10.5px] uppercase tracking-[0.2em] opacity-65 mb-2">
+          <div className="font-mono font-medium text-[10.5px] uppercase tracking-[0.2em] text-ink-muted mb-2">
             Total asking price (USDC)
           </div>
           <input
@@ -162,7 +162,7 @@ export const ResaleModal: FC<ResaleModalProps> = ({
             min="0"
             className="w-full bg-paper-2 border border-rule rounded-sm px-3 py-2 font-mono text-[14px] text-ink focus:outline-none focus:border-ink transition-colors duration-200"
           />
-          <div className="font-mono text-[10px] uppercase tracking-[0.18em] opacity-55 mt-1.5">
+          <div className="font-mono font-medium text-[10px] uppercase tracking-[0.18em] text-ink-muted mt-1.5">
             B-S suggested per contract:{" "}
             <span className="text-crimson">${suggestedPerContract.toFixed(4)}</span>
           </div>
@@ -174,7 +174,7 @@ export const ResaleModal: FC<ResaleModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="flex-1 rounded-full border border-rule px-4 py-3 font-mono text-[11px] uppercase tracking-[0.2em] text-ink/65 hover:text-ink hover:border-ink transition-colors duration-300 ease-opta"
+            className="flex-1 rounded-full border border-rule px-4 py-3 font-mono font-medium text-[11px] uppercase tracking-[0.2em] text-ink-muted hover:text-ink hover:border-ink transition-colors duration-300 ease-opta"
           >
             Cancel
           </button>

@@ -42,10 +42,23 @@
   --color-text-secondary: #9CA3AF;
   --color-text-muted: #6B7280;
 
-  /* ----- Opta paper palette (Landing + Docs surfaces) */
+  /* ----- Opta paper palette (Landing + Docs surfaces)
+
+     Body-text contrast policy, established 2026-05-09 after Superteam
+     Pakistan reviewer flagged ~3.5:1 (WCAG AA fail) on body copy:
+       text-ink         → page hero / display ink only. ~17:1 vs paper.
+       text-ink-body    → primary body, prose, table content, modal copy.
+                          ~10:1 vs paper (WCAG AAA). Replaces the former
+                          text-ink + opacity-{50..70} pattern.
+       text-ink-muted   → tracked-uppercase mono labels, secondary buttons.
+                          ~5:1 vs paper (WCAG AA). Replaces opacity-{45..60}
+                          on label-class spans.
+     Never reach for opacity-{40..70} on text again — use a token. */
   --color-paper: #F1ECE2;
   --color-paper-2: #EAE3D5;
   --color-ink: #0A0A08;
+  --color-ink-body: #37332D;
+  --color-ink-muted: #504B41;
   --color-ink-soft: #1A1A16;
   --color-crimson: #D7263D;
   --color-rule: rgba(10, 10, 8, 0.14);

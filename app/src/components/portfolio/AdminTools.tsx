@@ -167,7 +167,7 @@ export const AdminTools: FC<AdminToolsProps> = ({
   if (tuples.length === 0 && !confirmation) {
     return (
       <div className="border border-rule rounded-md p-8 text-center">
-        <p className="m-0 font-sans italic font-normal leading-[1.55] opacity-65 text-[14px]">
+        <p className="m-0 font-sans italic font-medium leading-[1.55] text-ink-body text-[14px]">
           No expired markets need settling.
         </p>
       </div>
@@ -186,11 +186,11 @@ export const AdminTools: FC<AdminToolsProps> = ({
               <div className="flex-1">
                 <div className="font-mono text-[13px] text-ink">
                   {t.asset}
-                  <span className="ml-3 opacity-55">
+                  <span className="ml-3 text-ink-muted">
                     expired {formatExpiry(t.expiry)}
                   </span>
                 </div>
-                <div className="font-mono text-[10.5px] uppercase tracking-[0.18em] opacity-55 mt-1">
+                <div className="font-mono font-medium text-[10.5px] uppercase tracking-[0.18em] text-ink-muted mt-1">
                   {n} vault{n === 1 ? "" : "s"} affected
                 </div>
               </div>
@@ -226,7 +226,7 @@ export const AdminTools: FC<AdminToolsProps> = ({
                 type="button"
                 onClick={() => setConfirmation(null)}
                 aria-label="Close"
-                className="font-mono text-[14px] opacity-60 hover:opacity-100 transition-opacity duration-200"
+                className="font-mono text-[14px] text-ink-muted hover:text-ink transition-colors duration-200"
               >
                 ✕
               </button>
@@ -245,7 +245,7 @@ export const AdminTools: FC<AdminToolsProps> = ({
                     href={getSolscanTxUrl(confirmation.txSignature, cluster)}
                     target="_blank"
                     rel="noreferrer"
-                    className="opacity-80 hover:opacity-100 hover:text-crimson transition-colors duration-200"
+                    className="text-ink-body hover:text-crimson transition-colors duration-200"
                   >
                     {confirmation.txSignature.slice(0, 8)}…
                     {confirmation.txSignature.slice(-6)} ↗
@@ -274,7 +274,7 @@ const Row: FC<{ label: string; children: React.ReactNode }> = ({
   children,
 }) => (
   <div className="flex items-baseline justify-between">
-    <span className="font-mono text-[10.5px] uppercase tracking-[0.2em] opacity-65">
+    <span className="font-mono font-medium text-[10.5px] uppercase tracking-[0.2em] text-ink-muted">
       {label}
     </span>
     <span className="font-mono text-[13px] text-ink">{children}</span>

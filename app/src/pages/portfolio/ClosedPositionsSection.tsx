@@ -40,7 +40,7 @@ export const ClosedPositionsSection: FC<ClosedPositionsSectionProps> = ({
         className="group flex items-baseline gap-4 mb-6"
       >
         <SectionNumber number="03" label="Closed positions" />
-        <span className="font-mono text-[11.5px] uppercase tracking-[0.18em] opacity-55 group-hover:opacity-100 transition-opacity duration-300 ease-opta">
+        <span className="font-mono font-medium text-[11.5px] uppercase tracking-[0.18em] text-ink-muted group-hover:text-ink transition-colors duration-300 ease-opta">
           {count} {count === 1 ? "contract" : "contracts"} {expanded ? "—" : "+"}
         </span>
       </button>
@@ -53,7 +53,7 @@ export const ClosedPositionsSection: FC<ClosedPositionsSectionProps> = ({
           muted
           emptyState={
             <div className="border border-rule rounded-md p-8 text-center">
-              <p className="font-sans italic font-normal leading-[1.55] opacity-65 text-[14px] m-0">
+              <p className="font-sans italic font-medium leading-[1.55] text-ink-body text-[14px] m-0">
                 No closed positions.
               </p>
             </div>

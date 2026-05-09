@@ -36,13 +36,13 @@ export const SummaryBand: FC<SummaryBandProps> = ({ cells }) => (
 
 const SummaryCellEl: FC<{ cell: SummaryCell }> = ({ cell }) => (
   <div className="bg-paper p-6 md:p-8">
-    <div className="font-mono text-[11px] uppercase tracking-[0.2em] opacity-60 mb-5">
+    <div className="font-mono font-medium text-[11px] uppercase tracking-[0.2em] text-ink-muted mb-5">
       {cell.label}
     </div>
     <div className="font-mono font-normal text-[clamp(28px,3.4vw,40px)] leading-[0.95] text-ink mb-3">
       {cell.value}
     </div>
-    <div className="font-mono text-[10.5px] uppercase tracking-[0.18em] opacity-55">
+    <div className="font-mono font-medium text-[10.5px] uppercase tracking-[0.18em] text-ink-muted">
       {cell.sub}
     </div>
   </div>

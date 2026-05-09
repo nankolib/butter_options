@@ -62,7 +62,7 @@ export const MarketsTable: FC<MarketsTableProps> = ({ rows, emptyState }) => {
 };
 
 const Th: FC<{ children: ReactNode }> = ({ children }) => (
-  <th className="text-left font-mono text-[10.5px] uppercase tracking-[0.18em] py-3 pr-4 opacity-60 align-bottom whitespace-nowrap">
+  <th className="text-left font-mono font-medium text-[10.5px] uppercase tracking-[0.18em] py-3 pr-4 text-ink-muted align-bottom whitespace-nowrap">
     {children}
   </th>
 );
@@ -89,7 +89,7 @@ const MarketRowEl: FC<{ row: MarketRow }> = ({ row: r }) => {
               {r.asset || "Unknown"}
             </div>
             {fullName && (
-              <div className="font-mono text-[10px] uppercase tracking-[0.18em] opacity-50">
+              <div className="font-mono font-medium text-[10px] uppercase tracking-[0.18em] text-ink-muted">
                 {fullName}
               </div>
             )}
@@ -113,7 +113,7 @@ const MarketRowEl: FC<{ row: MarketRow }> = ({ row: r }) => {
       {/* Expiry — date + countdown */}
       <td className="py-4 pr-4 whitespace-nowrap">
         <div className="font-mono text-[13px]">{formatTableDate(r.expiry)}</div>
-        <div className="font-mono text-[10px] uppercase tracking-[0.16em] opacity-55 mt-0.5">
+        <div className="font-mono font-medium text-[10px] uppercase tracking-[0.16em] text-ink-muted mt-0.5">
           {formatCountdown(r.expiry)}
         </div>
       </td>

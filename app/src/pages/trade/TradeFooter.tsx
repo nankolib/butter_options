@@ -9,7 +9,7 @@ import type { FC } from "react";
  * exists for future routes.
  */
 export const TradeFooter: FC = () => (
-  <footer className="mt-20 pt-6 border-t border-rule flex flex-wrap items-center justify-between gap-y-3 gap-x-6 font-mono text-[10.5px] uppercase tracking-[0.18em] opacity-60">
+  <footer className="mt-20 pt-6 border-t border-rule flex flex-wrap items-center justify-between gap-y-3 gap-x-6 font-mono font-medium text-[10.5px] uppercase tracking-[0.18em] text-ink-muted">
     <span>© 2026 Opta Labs · Trade Terminal v0.1</span>
     <span className="flex flex-wrap gap-6">
       <DeadLink>Chain Methodology</DeadLink>

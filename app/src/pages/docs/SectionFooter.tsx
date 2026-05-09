@@ -57,7 +57,7 @@ const FooterCard: FC<FooterCardProps> = ({ section, direction }) => {
       to={`/docs/${section.slug}`}
       className={`group block border border-rule rounded-md p-5 no-underline transition-colors duration-300 ease-opta hover:border-ink ${alignClass}`}
     >
-      <div className="font-mono text-[10.5px] uppercase tracking-[0.2em] opacity-60 mb-2 transition-opacity duration-300 ease-opta group-hover:opacity-100">
+      <div className="font-mono font-medium text-[10.5px] uppercase tracking-[0.2em] text-ink-muted mb-2 transition-colors duration-300 ease-opta group-hover:text-ink">
         {eyebrow}
       </div>
       <div className="font-fraunces-text italic text-[18px] leading-snug text-ink">

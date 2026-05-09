@@ -178,7 +178,7 @@ export const WritePage: FC = () => {
                 href={getSolscanTxUrl(lastSuccess.txSignature, cluster)}
                 target="_blank"
                 rel="noreferrer"
-                className="font-mono text-[10.5px] uppercase tracking-[0.18em] opacity-60 hover:opacity-100 hover:text-crimson transition-colors duration-300 ease-opta"
+                className="font-mono font-medium text-[10.5px] uppercase tracking-[0.18em] text-ink-muted hover:text-crimson transition-colors duration-300 ease-opta"
               >
                 {lastSuccess.txSignature.slice(0, 8)}…{lastSuccess.txSignature.slice(-6)} ↗
               </a>
@@ -187,7 +187,7 @@ export const WritePage: FC = () => {
               <button
                 type="button"
                 onClick={() => setLastSuccess(null)}
-                className="font-mono text-[10.5px] uppercase tracking-[0.18em] opacity-55 hover:opacity-100 transition-opacity duration-200"
+                className="font-mono font-medium text-[10.5px] uppercase tracking-[0.18em] text-ink-muted hover:text-ink transition-colors duration-200"
               >
                 Dismiss
               </button>

@@ -28,16 +28,16 @@ export const WriteStatementHeader: FC<WriteStatementHeaderProps> = ({
   );
   return (
     <header className="border-b border-rule pb-12 mb-12">
-      <div className="flex items-center flex-wrap gap-x-[14px] gap-y-2 font-mono text-[11.5px] uppercase tracking-[0.22em] opacity-85 mb-8">
-        <span className="font-serif italic font-normal opacity-55 normal-case tracking-normal">§</span>
+      <div className="flex items-center flex-wrap gap-x-[14px] gap-y-2 font-mono font-medium text-[11.5px] uppercase tracking-[0.22em] text-ink-body mb-8">
+        <span className="font-serif italic font-normal text-ink-muted normal-case tracking-normal">§</span>
         <span className="text-ink">
           Write<em className="font-serif italic text-crimson px-[1px]">·</em>
         </span>
-        <span className="opacity-75">{monthLabel}</span>
+        <span className="text-ink-body">{monthLabel}</span>
         <span className="opacity-30">·</span>
-        <span className="opacity-75">{clusterLabel}</span>
+        <span className="text-ink-body">{clusterLabel}</span>
         <span className="opacity-30">·</span>
-        <span className="opacity-75">v0.1.4</span>
+        <span className="text-ink-body">v0.1.4</span>
       </div>
 
       <div className="flex flex-wrap items-end justify-between gap-8">
@@ -46,10 +46,10 @@ export const WriteStatementHeader: FC<WriteStatementHeaderProps> = ({
         </h1>
 
         <div className="flex flex-wrap items-center gap-6">
-          <span className="font-mono text-[11px] uppercase tracking-[0.2em] opacity-60">
+          <span className="font-mono font-medium text-[11px] uppercase tracking-[0.2em] text-ink-muted">
             As of {timestampLabel}
           </span>
-          <span className="inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.2em] opacity-75">
+          <span className="inline-flex items-center gap-2 font-mono font-medium text-[11px] uppercase tracking-[0.2em] text-ink-body">
             <span aria-hidden="true" className="inline-block w-[6px] h-[6px] rounded-full bg-crimson" />
             Collateral · USDC
           </span>

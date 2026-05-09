@@ -101,7 +101,7 @@ export const LiveQuoteCard: FC<LiveQuoteCardProps> = ({
           {spot != null && !isPlaceholder ? (
             <>
               <MoneyAmount value={spot} />
-              {spotStale && <span className="opacity-55"> · delayed</span>}
+              {spotStale && <span className="text-ink-muted"> · delayed</span>}
             </>
           ) : "—"}
         </Row>
@@ -145,7 +145,7 @@ const Row: FC<{
       emphasis ? "border-y border-rule-soft my-1" : ""
     }`}
   >
-    <span className="font-mono text-[10.5px] uppercase tracking-[0.2em] opacity-60">
+    <span className="font-mono font-medium text-[10.5px] uppercase tracking-[0.2em] text-ink-muted">
       {label}
     </span>
     <span className={`font-mono ${emphasis ? "text-[15px]" : "text-[13px]"} text-ink whitespace-nowrap`}>

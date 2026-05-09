@@ -263,7 +263,7 @@ export const BuyModal: FC<BuyModalProps> = ({
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="font-mono text-[14px] opacity-60 hover:opacity-100 transition-opacity duration-200"
+            className="font-mono text-[14px] text-ink-muted hover:text-ink transition-colors duration-200"
           >
             ✕
           </button>
@@ -301,13 +301,13 @@ export const BuyModal: FC<BuyModalProps> = ({
                   max={selectedInventory}
                   className="w-full bg-paper-2 border border-rule rounded-sm px-3 py-2 font-mono text-[14px] text-ink focus:outline-none focus:border-ink transition-colors duration-200"
                 />
-                <div className="font-mono text-[10px] uppercase tracking-[0.18em] opacity-55 mt-1.5">
+                <div className="font-mono font-medium text-[10px] uppercase tracking-[0.18em] text-ink-muted mt-1.5">
                   Max {selectedInventory.toLocaleString()} available at this source
                 </div>
               </Field>
 
               <div className="border-y border-rule-soft py-3 my-5 flex items-baseline justify-between">
-                <span className="font-mono text-[10.5px] uppercase tracking-[0.2em] opacity-65">
+                <span className="font-mono font-medium text-[10.5px] uppercase tracking-[0.2em] text-ink-muted">
                   Total cost
                 </span>
                 <span className="font-mono text-[18px] text-crimson">
@@ -316,7 +316,7 @@ export const BuyModal: FC<BuyModalProps> = ({
               </div>
 
               <div className="flex items-baseline justify-between mb-2">
-                <span className="font-mono text-[10.5px] uppercase tracking-[0.2em] opacity-60">
+                <span className="font-mono font-medium text-[10.5px] uppercase tracking-[0.2em] text-ink-muted">
                   Wallet USDC
                 </span>
                 <span className="font-mono text-[12px] text-ink">
@@ -366,7 +366,7 @@ export const BuyModal: FC<BuyModalProps> = ({
               )}
 
               {side === "call" && (
-                <p className="m-0 mb-4 font-sans italic font-normal leading-[1.5] opacity-75 text-[12.5px]">
+                <p className="m-0 mb-4 font-sans italic font-medium leading-[1.5] text-ink-body text-[12.5px]">
                   CALL payout is capped at strike per contract. Vaults hold 1× strike as collateral, so a deep ITM move pays the strike, not the full intrinsic value.
                 </p>
               )}
@@ -377,7 +377,7 @@ export const BuyModal: FC<BuyModalProps> = ({
                 <button
                   type="button"
                   onClick={onClose}
-                  className="flex-1 rounded-full border border-rule px-4 py-3 font-mono text-[11px] uppercase tracking-[0.2em] text-ink/65 hover:text-ink hover:border-ink transition-colors duration-300 ease-opta"
+                  className="flex-1 rounded-full border border-rule px-4 py-3 font-mono font-medium text-[11px] uppercase tracking-[0.2em] text-ink-muted hover:text-ink hover:border-ink transition-colors duration-300 ease-opta"
                 >
                   Cancel
                 </button>
@@ -405,7 +405,7 @@ export const BuyModal: FC<BuyModalProps> = ({
 
 const Field: FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
   <div className="mb-5">
-    <div className="font-mono text-[10.5px] uppercase tracking-[0.2em] opacity-65 mb-2">
+    <div className="font-mono font-medium text-[10.5px] uppercase tracking-[0.2em] text-ink-muted mb-2">
       {label}
     </div>
     {children}
@@ -418,7 +418,7 @@ const ConfirmedBlock: FC<{
   onDismiss: () => void;
 }> = ({ txSignature, solscanUrl, onDismiss }) => (
   <div>
-    <p className="m-0 font-sans italic font-normal leading-[1.55] opacity-75 text-[15px] mb-4">
+    <p className="m-0 font-sans italic font-medium leading-[1.55] text-ink-body text-[15px] mb-4">
       Your contracts are in your wallet. Solscan link below; Portfolio
       shows them in your open positions.
     </p>
@@ -426,7 +426,7 @@ const ConfirmedBlock: FC<{
       href={solscanUrl}
       target="_blank"
       rel="noreferrer"
-      className="block font-mono text-[10.5px] uppercase tracking-[0.18em] opacity-65 hover:opacity-100 hover:text-crimson transition-colors duration-300 ease-opta mb-6"
+      className="block font-mono font-medium text-[10.5px] uppercase tracking-[0.18em] text-ink-muted hover:text-crimson transition-colors duration-300 ease-opta mb-6"
     >
       tx · {txSignature.slice(0, 10)}…{txSignature.slice(-8)} ↗
     </a>
@@ -435,7 +435,7 @@ const ConfirmedBlock: FC<{
       <button
         type="button"
         onClick={onDismiss}
-        className="flex-1 rounded-full border border-rule px-4 py-3 font-mono text-[11px] uppercase tracking-[0.2em] text-ink/65 hover:text-ink hover:border-ink transition-colors duration-300 ease-opta"
+        className="flex-1 rounded-full border border-rule px-4 py-3 font-mono font-medium text-[11px] uppercase tracking-[0.2em] text-ink-muted hover:text-ink hover:border-ink transition-colors duration-300 ease-opta"
       >
         Done
       </button>

@@ -135,7 +135,7 @@ export const MigrateFeedTools: FC<MigrateFeedToolsProps> = ({
   if (sortedMarkets.length === 0) {
     return (
       <div className="border border-rule rounded-md p-8 text-center">
-        <p className="m-0 font-sans italic font-normal leading-[1.55] opacity-65 text-[14px]">
+        <p className="m-0 font-sans italic font-medium leading-[1.55] text-ink-body text-[14px]">
           No markets registered yet.
         </p>
       </div>
@@ -147,7 +147,7 @@ export const MigrateFeedTools: FC<MigrateFeedToolsProps> = ({
       <div className="border border-rule rounded-md p-5 space-y-5">
         {/* Asset picker */}
         <div>
-          <div className="font-mono text-[10.5px] uppercase tracking-[0.2em] opacity-65 mb-2">
+          <div className="font-mono font-medium text-[10.5px] uppercase tracking-[0.2em] text-ink-muted mb-2">
             Asset
           </div>
           <div className="flex flex-wrap gap-2">
@@ -160,10 +160,10 @@ export const MigrateFeedTools: FC<MigrateFeedToolsProps> = ({
                   type="button"
                   onClick={() => setSelectedAsset(ticker)}
                   aria-pressed={active}
-                  className={`rounded-full border px-[14px] py-[6px] font-mono text-[10.5px] uppercase tracking-[0.18em] transition-colors duration-300 ease-opta ${
+                  className={`rounded-full border px-[14px] py-[6px] font-mono font-medium text-[10.5px] uppercase tracking-[0.18em] transition-colors duration-300 ease-opta ${
                     active
                       ? "border-ink bg-ink text-paper"
-                      : "border-rule text-ink opacity-65 hover:opacity-100 hover:border-ink"
+                      : "border-rule text-ink-muted hover:text-ink hover:border-ink"
                   }`}
                 >
                   {ticker}
@@ -176,11 +176,11 @@ export const MigrateFeedTools: FC<MigrateFeedToolsProps> = ({
         {/* Current feed (read-only) */}
         {currentMarket && (
           <div>
-            <div className="font-mono text-[10.5px] uppercase tracking-[0.2em] opacity-65 mb-2">
+            <div className="font-mono font-medium text-[10.5px] uppercase tracking-[0.2em] text-ink-muted mb-2">
               Current feed_id
             </div>
             <div
-              className="font-mono text-[12px] text-ink opacity-80 break-all"
+              className="font-mono text-[12px] text-ink-body break-all"
               title={currentHex}
             >
               {currentHex.slice(0, 16)}…{currentHex.slice(-16)}
@@ -191,7 +191,7 @@ export const MigrateFeedTools: FC<MigrateFeedToolsProps> = ({
         {/* New feed input */}
         {currentMarket && (
           <div>
-            <div className="font-mono text-[10.5px] uppercase tracking-[0.2em] opacity-65 mb-2">
+            <div className="font-mono font-medium text-[10.5px] uppercase tracking-[0.2em] text-ink-muted mb-2">
               New feed_id
             </div>
             <div className="flex items-center gap-2">
@@ -216,7 +216,7 @@ export const MigrateFeedTools: FC<MigrateFeedToolsProps> = ({
                 {newHexValid && newHexDiffers ? "✓" : newHexInput ? "✕" : "·"}
               </span>
             </div>
-            <div className="font-mono text-[10px] uppercase tracking-[0.18em] opacity-55 mt-1.5">
+            <div className="font-mono font-medium text-[10px] uppercase tracking-[0.18em] text-ink-muted mt-1.5">
               {newHexValid && !newHexDiffers
                 ? "matches current feed_id — pick a different value"
                 : "64 hex characters · 0x prefix optional"}
@@ -264,7 +264,7 @@ export const MigrateFeedTools: FC<MigrateFeedToolsProps> = ({
                 </span>
               </Row>
             </div>
-            <p className="m-0 mb-5 font-sans italic font-normal leading-[1.5] opacity-75 text-[12.5px]">
+            <p className="m-0 mb-5 font-sans italic font-medium leading-[1.5] text-ink-body text-[12.5px]">
               This rotates the on-chain feed_id pointer. All future settlements
               for this asset will use the new feed.
             </p>
@@ -273,7 +273,7 @@ export const MigrateFeedTools: FC<MigrateFeedToolsProps> = ({
                 type="button"
                 onClick={() => setModal({ kind: "idle" })}
                 disabled={modal.kind === "submitting"}
-                className="flex-1 rounded-full border border-rule px-4 py-3 font-mono text-[11px] uppercase tracking-[0.2em] text-ink/65 hover:text-ink hover:border-ink transition-colors duration-300 ease-opta disabled:opacity-50"
+                className="flex-1 rounded-full border border-rule px-4 py-3 font-mono font-medium text-[11px] uppercase tracking-[0.2em] text-ink-muted hover:text-ink hover:border-ink transition-colors duration-300 ease-opta disabled:opacity-50"
               >
                 Cancel
               </button>
@@ -315,7 +315,7 @@ export const MigrateFeedTools: FC<MigrateFeedToolsProps> = ({
                   href={getSolscanTxUrl(modal.txSig, cluster)}
                   target="_blank"
                   rel="noreferrer"
-                  className="opacity-80 hover:opacity-100 hover:text-crimson transition-colors duration-200"
+                  className="text-ink-body hover:text-crimson transition-colors duration-200"
                 >
                   {modal.txSig.slice(0, 8)}…{modal.txSig.slice(-6)} ↗
                 </a>
@@ -340,7 +340,7 @@ const Row: FC<{ label: string; children: React.ReactNode }> = ({
   children,
 }) => (
   <div className="flex items-baseline justify-between gap-4">
-    <span className="font-mono text-[10.5px] uppercase tracking-[0.2em] opacity-65">
+    <span className="font-mono font-medium text-[10.5px] uppercase tracking-[0.2em] text-ink-muted">
       {label}
     </span>
     <span className="font-mono text-[13px] text-ink whitespace-nowrap">

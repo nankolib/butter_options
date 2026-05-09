@@ -41,7 +41,7 @@ export const OpenPositionsSection: FC<OpenPositionsSectionProps> = ({
       <div className="flex flex-wrap items-end justify-between gap-4 mb-6">
         <div className="flex items-baseline gap-4">
           <SectionNumber number="01" label="Open positions" />
-          <span className="font-mono text-[11.5px] uppercase tracking-[0.18em] opacity-55">
+          <span className="font-mono font-medium text-[11.5px] uppercase tracking-[0.18em] text-ink-muted">
             {count} {count === 1 ? "contract" : "contracts"}
           </span>
         </div>
@@ -54,7 +54,7 @@ export const OpenPositionsSection: FC<OpenPositionsSectionProps> = ({
         busyId={busyId}
         emptyState={
           <div className="border border-rule rounded-md p-12 text-center">
-            <p className="font-sans italic font-normal leading-[1.55] opacity-65 text-[15px] m-0">
+            <p className="font-sans italic font-medium leading-[1.55] text-ink-body text-[15px] m-0">
               {count === 0
                 ? "No open positions yet."
                 : `No positions match "${filterLabel(filter)}".`}

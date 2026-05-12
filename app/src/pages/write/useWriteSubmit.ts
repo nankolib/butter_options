@@ -60,6 +60,15 @@ export type WriteSubmitResult = {
   txSignature: string;
   vaultPda: PublicKey;
   optionMint: PublicKey;
+  /**
+   * True iff a new SharedVault was created in this submit (the existence
+   * check at the top of step 1 returned false and createSharedVault ran).
+   * False iff the writer joined an existing vault (skip-create path).
+   * Used by callers to attribute analytics events accurately — without
+   * this flag, vault_create_success over-counts whenever multiple writers
+   * back the same strike/expiry pair.
+   */
+  vaultCreated: boolean;
 };
 
 export type UseWriteSubmit = {
@@ -332,6 +341,7 @@ export function useWriteSubmit(): UseWriteSubmit {
           txSignature: tx,
           vaultPda: sharedVaultPda,
           optionMint: optionMintPda,
+          vaultCreated: !vaultExists,
         };
       } catch (err: any) {
         throw new Error(decodeError(err));

@@ -12,6 +12,7 @@ import { HairlineRule } from "../../components/layout";
 import { truncateAddress } from "../../utils/format";
 import { inferClusterFromUrl, getSolscanTxUrl } from "../../utils/env";
 import { isWalletReplay } from "../../utils/errorDecoder";
+import { trackOptaEvent } from "../../utils/analytics";
 import { OfferingsPanel } from "./OfferingsPanel";
 import { usePurchaseFlow } from "./usePurchaseFlow";
 import { useResaleBuyFlow } from "./useResaleBuyFlow";
@@ -211,6 +212,20 @@ export const BuyModal: FC<BuyModalProps> = ({
           message: `${qtyNum} ${asset} ${side.toUpperCase()} @ $${strike.toFixed(2)} from ${sourceLabel}`,
           txSignature: result.txSignature,
         });
+        trackOptaEvent(
+          selected.kind === "vault" ? "vault_purchase_success" : "resale_buy_success",
+          {
+            vault: selected.vault.publicKey.toBase58(),
+            asset,
+            strike,
+            expiry,
+            type: side,
+            qty: qtyNum,
+            usdc_value: selected.premium * qtyNum,
+            tx: result.txSignature,
+            cluster,
+          },
+        );
         onSuccess();
       }
     } catch (err: any) {
@@ -226,6 +241,20 @@ export const BuyModal: FC<BuyModalProps> = ({
           title: selected!.kind === "vault" ? "Contracts purchased" : "Listing filled",
           message: `${qtyNum} ${asset} ${side.toUpperCase()} @ $${strike.toFixed(2)} — tx already confirmed`,
         });
+        trackOptaEvent(
+          selected!.kind === "vault" ? "vault_purchase_success" : "resale_buy_success",
+          {
+            vault: selected!.vault.publicKey.toBase58(),
+            asset,
+            strike,
+            expiry,
+            type: side,
+            qty: qtyNum,
+            usdc_value: selected!.premium * qtyNum,
+            tx: "",
+            cluster,
+          },
+        );
         onSuccess();
         onClose();
         return;

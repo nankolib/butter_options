@@ -24,6 +24,7 @@
     "@vercel/speed-insights": "^2.0.0",
     "bn.js": "^5.2.3",
     "buffer": "^6.0.3",
+    "posthog-js": "^1.373.2",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-markdown": "^9.1.0",

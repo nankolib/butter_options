@@ -15,6 +15,7 @@ import {
 import { requiredCollateralPerContract } from "../../utils/collateral";
 import { useWriteSubmit, type WriteSubmitResult } from "./useWriteSubmit";
 import { decodeError } from "../../utils/errorDecoder";
+import { trackOptaEvent } from "../../utils/analytics";
 
 type EpochVaultSectionProps = {
   values: WriterFormValues;
@@ -103,6 +104,28 @@ export const EpochVaultSection: FC<EpochVaultSectionProps> = ({
           title: "Epoch vault written",
           message: `${contractsNum} ${chosen.ticker} ${values.side.toUpperCase()} contracts minted`,
           txSignature: result.txSignature,
+        });
+        if (result.vaultCreated) {
+          trackOptaEvent("vault_create_success", {
+            vault: result.vaultPda.toBase58(),
+            asset: chosen.ticker,
+            strike: strikeNum,
+            expiry: epochExpiryTs,
+            type: values.side,
+            vault_type: "epoch",
+            collateral_usdc: collateral,
+            tx: result.txSignature,
+          });
+        }
+        trackOptaEvent("vault_mint_success", {
+          vault: result.vaultPda.toBase58(),
+          asset: chosen.ticker,
+          strike: strikeNum,
+          expiry: epochExpiryTs,
+          type: values.side,
+          qty: contractsNum,
+          premium_per_contract: Math.max(premiumPerContract, 0.000001),
+          tx: result.txSignature,
         });
         onSuccess({ ...result, kind: "epoch" });
       }

@@ -48,6 +48,7 @@ import {
 } from "../../hooks/useAccounts";
 import { decodeError, isWalletReplay } from "../../utils/errorDecoder";
 import { showToast } from "../../components/Toast";
+import { trackOptaEvent } from "../../utils/analytics";
 import type { WriterRow } from "./writerRows";
 
 // 800K CU mirrors usePortfolioActions; needed for Token-2022 paths
@@ -160,6 +161,10 @@ export function useWriterActions(args: UseWriterActionsArgs): WriterActions {
           message: "USDC credited to your wallet.",
           txSignature: tx,
         });
+        trackOptaEvent("premium_claim_success", {
+          vault: row.vaultPda.toBase58(),
+          tx,
+        });
         onSuccess();
       } catch (err: any) {
         const msg = decodeError(err);
@@ -172,6 +177,10 @@ export function useWriterActions(args: UseWriterActionsArgs): WriterActions {
             type: "success",
             title: "Premium claimed",
             message: "Tx already confirmed; refreshing.",
+          });
+          trackOptaEvent("premium_claim_success", {
+            vault: row.vaultPda.toBase58(),
+            tx: "",
           });
           onSuccess();
           return;
@@ -250,6 +259,10 @@ export function useWriterActions(args: UseWriterActionsArgs): WriterActions {
           message: "Collateral and accrued premium credited to your wallet.",
           txSignature: tx,
         });
+        trackOptaEvent("collateral_withdraw_success", {
+          vault: row.vaultPda.toBase58(),
+          tx,
+        });
         onSuccess();
       } catch (err: any) {
         const msg = decodeError(err);
@@ -258,6 +271,10 @@ export function useWriterActions(args: UseWriterActionsArgs): WriterActions {
             type: "success",
             title: "Withdrawn",
             message: "Tx already confirmed; refreshing.",
+          });
+          trackOptaEvent("collateral_withdraw_success", {
+            vault: row.vaultPda.toBase58(),
+            tx: "",
           });
           onSuccess();
           return;
@@ -341,6 +358,11 @@ export function useWriterActions(args: UseWriterActionsArgs): WriterActions {
           message: `${row.unsoldCount} contracts removed; escrow rent returned.`,
           txSignature: tx,
         });
+        trackOptaEvent("unsold_burn_success", {
+          vault: row.vaultPda.toBase58(),
+          unsold_count: row.unsoldCount,
+          tx,
+        });
         onSuccess();
       } catch (err: any) {
         const msg = decodeError(err);
@@ -349,6 +371,11 @@ export function useWriterActions(args: UseWriterActionsArgs): WriterActions {
             type: "success",
             title: "Unsold burned",
             message: "Tx already confirmed; refreshing.",
+          });
+          trackOptaEvent("unsold_burn_success", {
+            vault: row.vaultPda.toBase58(),
+            unsold_count: row.unsoldCount,
+            tx: "",
           });
           onSuccess();
           return;

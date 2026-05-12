@@ -15,6 +15,7 @@ import {
 import { requiredCollateralPerContract } from "../../utils/collateral";
 import { useWriteSubmit, type WriteSubmitResult } from "./useWriteSubmit";
 import { decodeError } from "../../utils/errorDecoder";
+import { trackOptaEvent } from "../../utils/analytics";
 
 type CustomVaultSectionProps = {
   values: WriterFormValues;
@@ -92,6 +93,28 @@ export const CustomVaultSection: FC<CustomVaultSectionProps> = ({
           title: "Custom vault written",
           message: `${contractsNum} ${chosen.ticker} ${values.side.toUpperCase()} contracts minted`,
           txSignature: result.txSignature,
+        });
+        if (result.vaultCreated) {
+          trackOptaEvent("vault_create_success", {
+            vault: result.vaultPda.toBase58(),
+            asset: chosen.ticker,
+            strike: strikeNum,
+            expiry: values.expiry,
+            type: values.side,
+            vault_type: "custom",
+            collateral_usdc: collateral,
+            tx: result.txSignature,
+          });
+        }
+        trackOptaEvent("vault_mint_success", {
+          vault: result.vaultPda.toBase58(),
+          asset: chosen.ticker,
+          strike: strikeNum,
+          expiry: values.expiry,
+          type: values.side,
+          qty: contractsNum,
+          premium_per_contract: Math.max(premiumPerContract, 0.000001),
+          tx: result.txSignature,
         });
         onSuccess({ ...result, kind: "custom" });
       }

@@ -8,7 +8,7 @@
       "headers": [
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; script-src 'self' https://vercel.live; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://hermes.pyth.network https://hermes-beta.pyth.network https://api.devnet.solana.com https://api.mainnet-beta.solana.com https://*.helius-rpc.com wss://api.devnet.solana.com wss://api.mainnet-beta.solana.com wss://*.helius-rpc.com https://vercel.live wss://vercel.live; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'"
+          "value": "default-src 'self'; script-src 'self' https://vercel.live https://us-assets.i.posthog.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://hermes.pyth.network https://hermes-beta.pyth.network https://api.devnet.solana.com https://api.mainnet-beta.solana.com https://*.helius-rpc.com wss://api.devnet.solana.com wss://api.mainnet-beta.solana.com wss://*.helius-rpc.com https://vercel.live wss://vercel.live https://us.i.posthog.com https://us-assets.i.posthog.com; worker-src 'self' blob:; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'"
         },
         {
           "key": "X-Frame-Options",

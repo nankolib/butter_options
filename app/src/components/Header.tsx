@@ -13,6 +13,7 @@ import {
 import { showToast } from "./Toast";
 import { DEVNET_FAUCET_KEYPAIR, DEVNET_USDC_MINT } from "../utils/constants";
 import { inferClusterFromUrl } from "../utils/env";
+import { trackOptaEvent } from "../utils/analytics";
 
 /**
  * Header — persistent navigation bar across all pages.
@@ -60,6 +61,7 @@ export const Header: FC = () => {
   };
 
   const handleUsdcFaucet = async () => {
+    trackOptaEvent("faucet_click", {});
     if (!publicKey || !connection || !DEVNET_FAUCET_KEYPAIR || !DEVNET_USDC_MINT) {
       showToast({ type: "error", title: "Faucet not configured", message: "Run: npx ts-node scripts/setup-faucet.ts" });
       return;

@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { Header } from "./components/Header";
 import { ToastContainer } from "./components/Toast";
+import { PostHogIdentity } from "./components/PostHogIdentity";
 import { Landing } from "./pages/Landing";
 import { MarketsPage as Markets } from "./pages/markets";
 import { TradePage as Trade } from "./pages/trade";
@@ -54,6 +55,7 @@ function AppShell() {
     <div className="min-h-screen bg-bg-primary text-text-primary">
       {showHeader && <Header />}
       <ToastContainer />
+      <PostHogIdentity />
       <Routes>
         <Route path="/" element={<Landing />} />
         <Route path="/markets" element={<Markets />} />

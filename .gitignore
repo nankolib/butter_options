@@ -38,3 +38,6 @@ files.zip
 
 # Team coordination board (local only)
 TODO.md
+
+# Python bytecode (e.g. from running scripts/gen_bs2002_refs.py)
+__pycache__/

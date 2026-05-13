@@ -112,6 +112,23 @@ pub struct SharedVault {
 
     /// PDA bump seed.
     pub bump: u8,
+
+    /// Cost-of-carry rate at vault creation, in basis points (signed).
+    /// Positive = positive carry (e.g. dividend yield on equities).
+    /// Negative = negative net carry (e.g. commodities with storage costs).
+    /// Defaults to 0 for non-dividend crypto assets.
+    /// For future yield-bearing assets (jitoSOL etc.) this will be set
+    /// non-zero at vault creation.
+    ///
+    /// MUST be the last field in this struct -- pre-Stage-A SharedVault
+    /// accounts on devnet/mainnet were serialized without this field, so
+    /// they're 4 bytes shorter than the new INIT_SPACE. The lazy-realloc
+    /// migration in `claim_premium` (Stage A step 2.3) grows them to the
+    /// new size and zero-fills the trailing bytes -- which then deserialize
+    /// as carry_rate_bps = 0, matching the no-dividend default. Adding any
+    /// new field BEFORE this one would break that migration path because
+    /// existing on-chain bytes for the trailing fields would shift.
+    pub carry_rate_bps: i32,
 }
 
 /// PDA seed prefix for SharedVault accounts.

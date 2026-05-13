@@ -28,9 +28,16 @@ pub mod buy_v2_resale;
 pub mod cancel_v2_resale;
 pub mod auto_cancel_listings;
 
-// CU profiling (test-only; gated by `cu-profile` feature)
+// SharedVault carry_rate_bps schema migration (Stage A)
+pub mod migrate_shared_vault_carry_rate;
+
+// CU profiling + Stage A test scaffolding (gated by `cu-profile` feature)
 #[cfg(feature = "cu-profile")]
 pub mod cu_profile_american;
+#[cfg(feature = "cu-profile")]
+pub mod shrink_shared_vault_for_test;
+#[cfg(feature = "cu-profile")]
+pub mod create_test_shared_vault;
 
 pub use create_market::*;
 pub use initialize_protocol::*;
@@ -58,6 +65,13 @@ pub use buy_v2_resale::*;
 pub use cancel_v2_resale::*;
 pub use auto_cancel_listings::*;
 
-// CU profiling (test-only)
+// SharedVault carry_rate_bps schema migration
+pub use migrate_shared_vault_carry_rate::*;
+
+// CU profiling + Stage A test scaffolding
 #[cfg(feature = "cu-profile")]
 pub use cu_profile_american::*;
+#[cfg(feature = "cu-profile")]
+pub use shrink_shared_vault_for_test::*;
+#[cfg(feature = "cu-profile")]
+pub use create_test_shared_vault::*;

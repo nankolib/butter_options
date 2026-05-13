@@ -32,6 +32,7 @@ pub fn handle_create_shared_vault(
     option_type: OptionType,
     vault_type: VaultType,
     collateral_mint: Pubkey,
+    carry_rate_bps: i32,
 ) -> Result<()> {
     // HIGH-3 (audit Run-6) — defense-in-depth. Reject vaults backed by
     // a market with all-zeros pyth_feed_id. Even if the create-side gate
@@ -113,6 +114,7 @@ pub fn handle_create_shared_vault(
     vault.creator = ctx.accounts.creator.key();
     vault.created_at = clock.unix_timestamp;
     vault.bump = ctx.bumps.shared_vault;
+    vault.carry_rate_bps = carry_rate_bps;
 
     emit!(VaultCreated {
         vault: ctx.accounts.shared_vault.key(),
@@ -128,7 +130,7 @@ pub fn handle_create_shared_vault(
 }
 
 #[derive(Accounts)]
-#[instruction(strike_price: u64, expiry: i64, option_type: OptionType, vault_type: VaultType, collateral_mint: Pubkey)]
+#[instruction(strike_price: u64, expiry: i64, option_type: OptionType, vault_type: VaultType, collateral_mint: Pubkey, carry_rate_bps: i32)]
 pub struct CreateSharedVault<'info> {
     /// The vault creator (first writer). Pays for account creation.
     #[account(mut)]

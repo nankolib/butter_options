@@ -353,7 +353,7 @@ describe("audit-fixes", () => {
     const [vaultUsdcPda] = deriveVaultUsdcPda(vaultPda);
 
     await (program as any).methods
-      .createSharedVault(opts.strike, expiry, opts.optionType, { custom: {} }, usdcMint)
+      .createSharedVault(opts.strike, expiry, opts.optionType, { custom: {} }, usdcMint, 0)
       .accounts({
         creator: writer.publicKey,
         market: marketPda,
@@ -848,7 +848,7 @@ describe("audit-fixes", () => {
       [vaultUsdcPda] = deriveVaultUsdcPda(vaultPda);
 
       await (program as any).methods
-        .createSharedVault(strike, expiry, { call: {} }, { custom: {} }, usdcMint)
+        .createSharedVault(strike, expiry, { call: {} }, { custom: {} }, usdcMint, 0)
         .accounts({
           creator: writer.publicKey,
           market: marketPda,
@@ -1102,7 +1102,7 @@ describe("audit-fixes", () => {
       [vaultUsdcPda] = deriveVaultUsdcPda(vaultPda);
 
       await (program as any).methods
-        .createSharedVault(strike, expiry, { call: {} }, { custom: {} }, usdcMint)
+        .createSharedVault(strike, expiry, { call: {} }, { custom: {} }, usdcMint, 0)
         .accounts({
           creator: writer.publicKey,
           market: marketPda,
@@ -1171,7 +1171,7 @@ describe("audit-fixes", () => {
       const [vUsdcPda] = deriveVaultUsdcPda(vPda);
 
       await (program as any).methods
-        .createSharedVault(smallStrike, expiry, { call: {} }, { custom: {} }, usdcMint)
+        .createSharedVault(smallStrike, expiry, { call: {} }, { custom: {} }, usdcMint, 0)
         .accounts({
           creator: writer.publicKey,
           market: mktPda,

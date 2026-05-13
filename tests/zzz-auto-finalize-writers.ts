@@ -296,7 +296,7 @@ describe("auto-finalize-writers", () => {
 
     // Alice creates the vault — vault.creator = Alice
     await (program as any).methods
-      .createSharedVault(opts.strike, expiry, opts.optionType, { custom: {} }, usdcMint)
+      .createSharedVault(opts.strike, expiry, opts.optionType, { custom: {} }, usdcMint, 0)
       .accounts({
         creator: alice.kp.publicKey,
         market: marketPda,
@@ -445,7 +445,7 @@ describe("auto-finalize-writers", () => {
     const [vaultUsdcPda] = deriveVaultUsdcPda(vaultPda);
 
     await (program as any).methods
-      .createSharedVault(opts.strike, expiry, opts.optionType, { custom: {} }, usdcMint)
+      .createSharedVault(opts.strike, expiry, opts.optionType, { custom: {} }, usdcMint, 0)
       .accounts({
         creator: alice.kp.publicKey,
         market: marketPda,

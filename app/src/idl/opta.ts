@@ -1322,6 +1322,10 @@ export type Opta = {
         {
           "name": "collateralMint",
           "type": "pubkey"
+        },
+        {
+          "name": "carryRateBps",
+          "type": "i32"
         }
       ]
     },
@@ -2084,6 +2088,68 @@ export type Opta = {
           }
         }
       ]
+    },
+    {
+      "name": "migrateSharedVaultCarryRate",
+      "docs": [
+        "One-time SharedVault schema migration that adds the trailing",
+        "carry_rate_bps field to pre-Stage-A vaults. Admin-only. Caller passes",
+        "vault accounts to migrate via remaining_accounts (recommended batch:",
+        "20-30 per call to stay under 1.4M CU). Idempotent: vaults already at",
+        "the new size are skipped. Admin pays the rent delta."
+      ],
+      "discriminator": [
+        0,
+        7,
+        109,
+        21,
+        112,
+        209,
+        61,
+        34
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "docs": [
+            "Admin -- must match protocol_state.admin (CRIT-3 deployer pubkey).",
+            "Pays the rent delta for any grown vaults."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocolState",
+          "docs": [
+            "Used only to assert admin == protocol_state.admin."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
     },
     {
       "name": "mintFromVault",
@@ -4490,6 +4556,27 @@ export type Opta = {
               "PDA bump seed."
             ],
             "type": "u8"
+          },
+          {
+            "name": "carryRateBps",
+            "docs": [
+              "Cost-of-carry rate at vault creation, in basis points (signed).",
+              "Positive = positive carry (e.g. dividend yield on equities).",
+              "Negative = negative net carry (e.g. commodities with storage costs).",
+              "Defaults to 0 for non-dividend crypto assets.",
+              "For future yield-bearing assets (jitoSOL etc.) this will be set",
+              "non-zero at vault creation.",
+              "",
+              "MUST be the last field in this struct -- pre-Stage-A SharedVault",
+              "accounts on devnet/mainnet were serialized without this field, so",
+              "they're 4 bytes shorter than the new INIT_SPACE. The lazy-realloc",
+              "migration in `claim_premium` (Stage A step 2.3) grows them to the",
+              "new size and zero-fills the trailing bytes -- which then deserialize",
+              "as carry_rate_bps = 0, matching the no-dividend default. Adding any",
+              "new field BEFORE this one would break that migration path because",
+              "existing on-chain bytes for the trailing fields would shift."
+            ],
+            "type": "i32"
           }
         ]
       }

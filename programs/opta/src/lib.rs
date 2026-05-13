@@ -94,9 +94,10 @@ pub mod opta {
         option_type: OptionType,
         vault_type: VaultType,
         collateral_mint: Pubkey,
+        carry_rate_bps: i32,
     ) -> Result<()> {
         instructions::create_shared_vault::handle_create_shared_vault(
-            ctx, strike_price, expiry, option_type, vault_type, collateral_mint,
+            ctx, strike_price, expiry, option_type, vault_type, collateral_mint, carry_rate_bps,
         )
     }
 
@@ -230,6 +231,17 @@ pub mod opta {
         instructions::auto_cancel_listings::handle_auto_cancel_listings(ctx)
     }
 
+    /// One-time SharedVault schema migration that adds the trailing
+    /// carry_rate_bps field to pre-Stage-A vaults. Admin-only. Caller passes
+    /// vault accounts to migrate via remaining_accounts (recommended batch:
+    /// 20-30 per call to stay under 1.4M CU). Idempotent: vaults already at
+    /// the new size are skipped. Admin pays the rent delta.
+    pub fn migrate_shared_vault_carry_rate<'info>(
+        ctx: Context<'_, '_, '_, 'info, MigrateSharedVaultCarryRate<'info>>,
+    ) -> Result<()> {
+        instructions::migrate_shared_vault_carry_rate::handle_migrate_shared_vault_carry_rate(ctx)
+    }
+
     // =========================================================================
     // Test-only CU profiling (gated by `cu-profile` Cargo feature).
     // NEVER deploy a cu-profile build to devnet/mainnet.
@@ -242,5 +254,25 @@ pub mod opta {
     #[cfg(feature = "cu-profile")]
     pub fn cu_profile_american(ctx: Context<CuProfileAmerican>) -> Result<()> {
         instructions::cu_profile_american::handle_cu_profile_american(ctx)
+    }
+
+    /// Shrink a SharedVault account back to its pre-Stage-A size (without the
+    /// trailing carry_rate_bps field). Used by tests/realloc-shared-vault.ts
+    /// to simulate a legacy on-chain vault before exercising the lazy-realloc
+    /// migration in claim_premium. Test-only.
+    #[cfg(feature = "cu-profile")]
+    pub fn shrink_shared_vault_for_test(ctx: Context<ShrinkSharedVaultForTest>) -> Result<()> {
+        instructions::shrink_shared_vault_for_test::handle_shrink_shared_vault_for_test(ctx)
+    }
+
+    /// Initialize a bare SharedVault account with default values, bypassing
+    /// the full create_shared_vault validation chain (no market/USDC/epoch/
+    /// Pyth proof dependencies). Used by tests/realloc-shared-vault.ts to
+    /// stand up vaults for the realloc tests. Test-only.
+    #[cfg(feature = "cu-profile")]
+    pub fn create_test_shared_vault(
+        ctx: Context<CreateTestSharedVault>,
+    ) -> Result<()> {
+        instructions::create_test_shared_vault::handle_create_test_shared_vault(ctx)
     }
 }

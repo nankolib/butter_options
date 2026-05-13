@@ -18,6 +18,10 @@ idl-build = ["anchor-lang/idl-build"]
 anchor-debug = []
 custom-heap = []
 custom-panic = []
+# No-op feature so workspace-wide `--features cu-profile` (used to enable
+# the test-only profiling instruction in the opta program) doesn't error
+# here. opta-transfer-hook itself has nothing to profile.
+cu-profile = []
 
 [dependencies]
 anchor-lang = { version = "0.32.1" }

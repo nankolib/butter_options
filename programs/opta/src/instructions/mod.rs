@@ -28,6 +28,10 @@ pub mod buy_v2_resale;
 pub mod cancel_v2_resale;
 pub mod auto_cancel_listings;
 
+// CU profiling (test-only; gated by `cu-profile` feature)
+#[cfg(feature = "cu-profile")]
+pub mod cu_profile_american;
+
 pub use create_market::*;
 pub use initialize_protocol::*;
 pub use migrate_pyth_feed::*;
@@ -53,3 +57,7 @@ pub use list_v2_for_resale::*;
 pub use buy_v2_resale::*;
 pub use cancel_v2_resale::*;
 pub use auto_cancel_listings::*;
+
+// CU profiling (test-only)
+#[cfg(feature = "cu-profile")]
+pub use cu_profile_american::*;

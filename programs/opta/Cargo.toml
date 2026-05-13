@@ -18,6 +18,9 @@ idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
 anchor-debug = []
 custom-heap = []
 custom-panic = []
+# Gates test-only profiling instructions (e.g. cu_profile_american). NEVER
+# enable in default builds or deploy a cu-profile build to devnet/mainnet.
+cu-profile = []
 
 
 [dependencies]
@@ -30,6 +33,9 @@ spl-token-metadata-interface = "0.7.0"
 opta-transfer-hook = { path = "../opta-transfer-hook", features = ["cpi"] }
 solmath = { version = "0.1.2", default-features = false, features = ["bs"] }
 pyth-solana-receiver-sdk = "1.1.0"
+# Direct dep so cu-profile builds can name `solana_program::log::sol_log_compute_units`.
+# Already pulled in transitively by anchor at 2.3.0; this just exposes the API.
+solana-program = "2"
 
 
 [lints.rust]

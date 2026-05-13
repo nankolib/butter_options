@@ -229,4 +229,18 @@ pub mod opta {
     ) -> Result<()> {
         instructions::auto_cancel_listings::handle_auto_cancel_listings(ctx)
     }
+
+    // =========================================================================
+    // Test-only CU profiling (gated by `cu-profile` Cargo feature).
+    // NEVER deploy a cu-profile build to devnet/mainnet.
+    // =========================================================================
+
+    /// Profile compute-unit consumption of the BS-2002 American pricing kernel
+    /// across three scenarios (CALL fast-path, CALL BS-2002 main, PUT via
+    /// McD-S transform). Per-phi breakdown via gated markers inside
+    /// `bs2002_call_price`. Test-only.
+    #[cfg(feature = "cu-profile")]
+    pub fn cu_profile_american(ctx: Context<CuProfileAmerican>) -> Result<()> {
+        instructions::cu_profile_american::handle_cu_profile_american(ctx)
+    }
 }

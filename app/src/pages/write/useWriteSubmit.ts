@@ -212,6 +212,13 @@ export function useWriteSubmit(): UseWriteSubmit {
                   optTypeEnum as any,
                   input.vaultType === "epoch" ? { epoch: {} } : ({ custom: {} } as any),
                   protocolState.usdcMint,
+                  // carry_rate_bps: 0 for all current crypto-only assets; non-zero
+                  // belongs to future yield-bearing assets (jitoSOL etc.) that the
+                  // frontend doesn't yet expose. Per SharedVault::carry_rate_bps
+                  // doc, 0 is the no-dividend default. Wired in by Stage A
+                  // (commit 7e98a46) but never propagated to this call site;
+                  // surfaced + fixed during Stage B Step 8 deploy verification.
+                  0,
                 )
                 .accountsStrict({
                   creator: publicKey,

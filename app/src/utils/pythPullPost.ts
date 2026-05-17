@@ -62,6 +62,7 @@ const COMPUTE_UNIT_PRICE_MICRO_LAMPORTS = 50_000;
 
 const MARKET_SEED = "market";
 const SETTLEMENT_SEED = "settlement";
+const VOL_ORACLE_SEED = "vol_oracle";
 
 // ---------------------------------------------------------------------------
 // Hermes off-chain endpoint helpers
@@ -440,6 +441,150 @@ export async function buildPostUpdateAndMigrateFeedTx(
         protocolState: protocolStatePda,
         priceUpdate: priceUpdatePda,
         market: marketPda,
+      })
+      .instruction();
+
+    return [{ instruction: ix, signers: [] }];
+  });
+
+  return (await builder.buildVersionedTransactions({
+    computeUnitPriceMicroLamports: COMPUTE_UNIT_PRICE_MICRO_LAMPORTS,
+  })) as BuiltTx[];
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2 Stage B Step 7 — VolOracle init + push helpers
+// ---------------------------------------------------------------------------
+//
+// Both follow the same atomic-post pattern as `buildPostUpdateAndCreateMarketTx`:
+// post_update_atomic the fresh Hermes /latest VAA + consume it in the
+// target IX + close. The Pyth Receiver SDK's `closeUpdateAccounts: true`
+// arranges the post + consume + close into one tx and reclaims rent for
+// the ephemeral PriceUpdateV2 account.
+//
+// Init helper is called by the vol-oracle crank on the first sighting of
+// a new feed_id; push helper is called every hour after the oracle exists.
+
+/**
+ * Build atomic post_update + initialize_vol_oracle tx. Permissionless --
+ * the on-chain handler's proof-of-feed gate accepts any signer whose
+ * supplied PriceUpdateV2 has verification_level == Full and matching
+ * feed_id (mirrors create_market post-HIGH-5).
+ */
+export async function buildPostUpdateAndInitializeVolOracleTx(
+  program: Program<Opta>,
+  wallet: SignerWallet,
+  pythFeedIdHex: string,
+  hermesBase: string = DEFAULT_HERMES_BASE,
+): Promise<BuiltTx[]> {
+  const priceUpdateData = await fetchHermesUpdate(pythFeedIdHex, hermesBase);
+
+  const receiver = new PythSolanaReceiver({
+    connection: program.provider.connection,
+    wallet: wallet as any,
+  });
+
+  const builder = receiver.newTransactionBuilder({
+    closeUpdateAccounts: true,
+  });
+
+  await builder.addPostPriceUpdates([priceUpdateData.toString("base64")]);
+
+  await builder.addPriceConsumerInstructions(async (getPriceUpdateAccount) => {
+    const hexKey = `0x${pythFeedIdHex.replace(/^0x/, "").toLowerCase()}`;
+    const priceUpdatePda = getPriceUpdateAccount(hexKey);
+    if (!priceUpdatePda) {
+      throw new Error(`No ephemeral PriceUpdate PDA for feed ${pythFeedIdHex}`);
+    }
+
+    const hex = pythFeedIdHex.replace(/^0x/, "").toLowerCase();
+    if (hex.length !== 64) {
+      throw new Error(
+        `buildPostUpdateAndInitializeVolOracleTx: invalid feed_id hex (expected 64 chars, got ${hex.length})`,
+      );
+    }
+    const feedIdBytes = Array.from({ length: 32 }, (_, i) =>
+      parseInt(hex.slice(i * 2, i * 2 + 2), 16),
+    );
+
+    const [volOraclePda] = PublicKey.findProgramAddressSync(
+      [Buffer.from(VOL_ORACLE_SEED), Buffer.from(feedIdBytes)],
+      program.programId,
+    );
+
+    const ix = await program.methods
+      .initializeVolOracle(feedIdBytes)
+      .accountsStrict({
+        initializer: wallet.publicKey,
+        priceUpdate: priceUpdatePda,
+        volOracle: volOraclePda,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction();
+
+    return [{ instruction: ix, signers: [] }];
+  });
+
+  return (await builder.buildVersionedTransactions({
+    computeUnitPriceMicroLamports: COMPUTE_UNIT_PRICE_MICRO_LAMPORTS,
+  })) as BuiltTx[];
+}
+
+/**
+ * Build atomic post_update + push_vol_sample tx. Permissionless. The
+ * on-chain handler validates feed_id match + EMA conf + 60s freshness +
+ * positive spot, then either seeds the oracle (first push) or applies
+ * the log-return + ring + accumulator update. The crank calls this
+ * hourly per discovered feed_id.
+ */
+export async function buildPostUpdateAndPushVolSampleTx(
+  program: Program<Opta>,
+  wallet: SignerWallet,
+  pythFeedIdHex: string,
+  hermesBase: string = DEFAULT_HERMES_BASE,
+): Promise<BuiltTx[]> {
+  const priceUpdateData = await fetchHermesUpdate(pythFeedIdHex, hermesBase);
+
+  const receiver = new PythSolanaReceiver({
+    connection: program.provider.connection,
+    wallet: wallet as any,
+  });
+
+  const builder = receiver.newTransactionBuilder({
+    closeUpdateAccounts: true,
+  });
+
+  await builder.addPostPriceUpdates([priceUpdateData.toString("base64")]);
+
+  await builder.addPriceConsumerInstructions(async (getPriceUpdateAccount) => {
+    const hexKey = `0x${pythFeedIdHex.replace(/^0x/, "").toLowerCase()}`;
+    const priceUpdatePda = getPriceUpdateAccount(hexKey);
+    if (!priceUpdatePda) {
+      throw new Error(`No ephemeral PriceUpdate PDA for feed ${pythFeedIdHex}`);
+    }
+
+    const hex = pythFeedIdHex.replace(/^0x/, "").toLowerCase();
+    if (hex.length !== 64) {
+      throw new Error(
+        `buildPostUpdateAndPushVolSampleTx: invalid feed_id hex (expected 64 chars, got ${hex.length})`,
+      );
+    }
+    const feedIdBytes = Array.from({ length: 32 }, (_, i) =>
+      parseInt(hex.slice(i * 2, i * 2 + 2), 16),
+    );
+
+    const [volOraclePda] = PublicKey.findProgramAddressSync(
+      [Buffer.from(VOL_ORACLE_SEED), Buffer.from(feedIdBytes)],
+      program.programId,
+    );
+
+    const ix = await program.methods
+      .pushVolSample()
+      .accountsStrict({
+        signer: wallet.publicKey,
+        priceUpdate: priceUpdatePda,
+        volOracle: volOraclePda,
+        systemProgram: SystemProgram.programId,
       })
       .instruction();
 

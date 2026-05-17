@@ -1,6 +1,8 @@
 # Opta — Engineer Handoff
 
-> Updated 2026-05-14 after **Phase 2 Stage A shipped to origin** (commits `3d33abc`, `91b1738`, `7e98a46` on master + main). Stage A is the foundational arc for on-chain American option pricing: BS-2002 closed-form math kernel composed from `solmath` primitives, Python reference generator with 300 cross-validated reference values, `carry_rate_bps` field on `SharedVault`, and an admin-only migration instruction for the schema change. **No production handler calls BS-2002 yet — the kernel is linked-in and tested, but Stage C is when it gets wired into `create_shared_vault` for American vaults.** Devnet program slots are UNCHANGED from May 5 (opta `460518532`, hook `460518751`) — Stage A is pure code addition with no devnet redeploy. The Vercel build will go red on next deploy attempt because the new IDL requires a 6th arg on `createSharedVault` that the frontend doesn't pass yet (Stage H deferral); production traffic continues on the last successful build. **Important framing correction surfaced during Stage A:** the older HANDOFF text "On-chain Black-Scholes via solmath — pricing happens on-chain at ~50K CU" overstated reality. The math LIBRARY is on-chain (linked into the program binary) but no production instruction CURRENTLY calls it — premium pricing today is computed in the writer's browser via `app/src/utils/blackScholes.ts` (TypeScript) and submitted as an instruction argument. Phase 2 fixes this for American options first; European migration follows as a separate later arc. See §1 thesis and §11.5 Phase 2 plan for the honest framing.
+> Updated 2026-05-17 after **Phase 2 Stage B shipped to devnet** (Stage A follow-on FE fix `12e3d8d` + Stage B commit — see `git log master` — on master + main; opta deploy slot `463002816`, hook re-uploaded by Anchor at same source). Stage B is the realized-volatility oracle: per-asset on-chain ring buffer of 720 hourly samples, O(1) accumulator, sample-variance annualized vol with warmup + staleness gates, two new permissionless instructions (`initialize_vol_oracle` + `push_vol_sample`), a pure read function (`realized_vol_annualized`) at 3,802 CU that Stage C will CPI into, and a new hourly side-loop in `crank/bot.ts` that auto-discovers assets + initializes oracles + pushes samples. **11 oracles initialized on devnet at Step 8 smoke; 4 already seeded, 7 will be seeded by the first organic crank tick** (Hermes returned stale-window updates for 7 in the smoke — locked-decision behavior; next tick retries since seed branch skips rate-limit). Same arc landed Stage A's deferred `carry_rate_bps` frontend fix in `useWriteSubmit.ts` (commit `12e3d8d`), which clears the Vercel red the prior Stage A note flagged. **Stage B is still not wired into any production handler** — `realized_vol_annualized` exists but no instruction calls it yet; Stage C is when American vault creation invokes it. The 7-day warmup (168 hourly samples) starts now per asset. **Stage C's code can ship anytime** (write + audit + deploy gates run independently), but `realized_vol_annualized` returns `Warmup` until the per-asset sample count crosses 168 — so the 4 already-seeded assets reach live-readable state **2026-05-24**, the other 7 reach it ~1 hour later (whenever the next organic crank tick first seeds them).
+
+> Note on Stage A framing correction (kept from prior version): the older HANDOFF text "On-chain Black-Scholes via solmath — pricing happens on-chain at ~50K CU" overstated reality. The math LIBRARY is on-chain (linked into the program binary) but no production instruction CURRENTLY calls it — premium pricing today is computed in the writer's browser via `app/src/utils/blackScholes.ts` (TypeScript) and submitted as an instruction argument. Phase 2 fixes this for American options first; European migration follows as a separate later arc. See §1 thesis and §11.5 Phase 2 plan for the honest framing.
 
 > NOTE ON THE RENAME: Project renamed Butter Options → Opta on 2026-04-21. Phase 2 of the rename is complete on disk. Directory layout is `programs/opta/` and `programs/opta-transfer-hook/`. `Anchor.toml` keys are `opta` and `opta_transfer_hook`. PDA seed constants, `declare_id!()` macros, and IDL have been regenerated. The old `butter_options` / `butter-options` identifiers are gone from the codebase.
 
@@ -121,6 +123,41 @@ The foundational arc for on-chain American option pricing. **Pure additive — n
 - IDL refreshed; cu-profile-only test instructions correctly excluded from production IDL via `#[cfg(feature = "cu-profile")]` gating.
 - 28/28 Rust unit tests pass (math + solmath_bridge + epoch + lib). 3/3 TS realloc tests pass on local validator.
 
+### What Stage B landed (2026-05-17, FE follow-on `12e3d8d` + Stage B see `git log master`)
+
+The on-chain realized-volatility oracle for Phase 2's pricing path. **Pure additive — no production handler invokes the new read function yet.** Stage B builds the data + math; Stage C wires it into `create_shared_vault` for American vaults.
+
+**Devnet redeploy at slot `463002816`** (was `460518532` from HIGH-5 on May 5). Hook re-uploaded by Anchor at same source (size delta = 0).
+
+**COMMIT 1 — `12e3d8d`** — Stage A follow-on, frontend `createSharedVault` 6th-arg fix:
+
+- `app/src/pages/write/useWriteSubmit.ts:210` now passes `carry_rate_bps = 0` (correct default for current crypto-only assets per `SharedVault::carry_rate_bps` doc).
+- Surfaced by Stage B Step 8 Gate 6 (frontend `npm run build`); latent since Stage A landed (May 14) because frontend was correct against deployed pre-Stage-A program until the Stage B deploy bundled Stage A's pending IDL change.
+- 1-line code change. Clears the Vercel red the prior Stage A note flagged.
+
+**COMMIT 2 — Stage B (see `git log master`)** — Phase 2 Stage B:
+
+- **New zero_copy state account `VolOracle`** at `programs/opta/src/state/vol_oracle.rs`. 5856 bytes data + 8 disc = 5864 bytes; layout pinned by compile-time `const _: () = assert!(size_of::<VolOracle>() == 5856)`. i128s at front (16-alignment from offset 0 for bytemuck::Pod). Ring buffer 720 i64 samples + O(1) accumulators + last_spot_price + last_sample_ts.
+- **Two new permissionless instructions** (both proof-of-feed-existence gated via Pyth Pull):
+  - `initialize_vol_oracle(feed_id)` — bootstraps oracle PDA `[VOL_ORACLE_SEED, feed_id]`
+  - `push_vol_sample()` — validates Pyth update, computes log return from prior spot, updates ring + accumulators. Seed-or-normal branch on `last_spot_price == 0`. Rate-limited 55min in production (1s under `test-fast-vol`). CU: 9,867 (full path).
+- **New pure read function** `realized_vol_annualized(&VolOracle, now_ts) -> Result<i64>` — sample variance (ddof=1) annualized by `sqrt(8760)`. Three gates: warmup (sample_count < 168), stale (now - last_sample_ts > 6h), math. CU: 3,802 (well under the 8K target). Will be called by Stage C; not yet wired.
+- **New cargo feature `test-fast-vol`** — shrinks rate-limit constant from 55min → 1sec for multi-push tests. Mirrored on opta-transfer-hook as no-op. **NEVER deployed** — verified by Gate 2 IDL grep (`grep -cE '"name": *"(cu_profile_|shrink_shared_vault_for_test|create_test_shared_vault)' target/idl/opta.json` returns 0) + the deployed binary uses 3300s.
+- **CU profile instruments** (gated by `cu-profile`, never deployed): `cu_profile_push_vol_sample`, `cu_profile_realized_vol`.
+- **7 new `OptaError` variants**: `VolOracleNotInitialized`, `VolOracleWarmup`, `VolOracleStale`, `VolOraclePushTooSoon`, `VolOraclePriceStale`, `VolOracleInvalidSpot`, `VolOracleMathError`.
+- **New `bytemuck = { version = "1", features = ["min_const_generics"] }`** dependency — required by Anchor 0.32.1's `#[account(zero_copy)]` macro for the 720-element samples array.
+- **Python reference generator** at `scripts/gen_vol_test_vectors.py` (stdlib-only; no numpy/pip needed). 3 vectors with known sigmas; cross-validates the on-chain integer math within 0.1% relative.
+- **14 Rust unit tests** in `state::vol_oracle::tests` (5 accumulator algebra + 4 gate boundaries + 3 Python-reference correctness + layout assertion + sqrt-constant pin). Runs via `cargo test`, no validator.
+- **11 TS integration tests** in `tests/zzz-vol-oracle.ts` (4 init + 7 push semantics + 1 CU measurement). All passing. 1 long ring-wrap test permanently `.skip` with cross-reference to the equivalent Rust unit test (validator clock-granularity flake).
+- **Vol oracle crank side-loop** at `crank/volOracleCrank.ts`. Spawned by `crank/bot.ts::main()` via fail-loud `Promise.all`; shares bot's `shutdownRequested` flag for clean shutdown. Hourly cadence aligned to wall-clock boundary (not `setTimeout`-from-now — restart-safe). Auto-discovers assets via `safeFetchAll<"optionsMarket">`. `TICK_ONCE=1` env-gated single-tick smoke mode for ops debugging. 7 unit tests in `crank/volOracleCrank.test.ts`.
+- **2 new pythPullPost helpers**: `buildPostUpdateAndInitializeVolOracleTx` + `buildPostUpdateAndPushVolSampleTx`. Same atomic post+consume+close pattern as the existing settle/createMarket helpers.
+- **Devnet smoke verified end-to-end** at Step 8 Gate 7.5: 11 markets discovered, 11 oracles initialized, 4 seeded (`ec5d3998`, `ef0d8b6f`, `ff61491a`, `e62df6c8`), 7 awaiting first organic crank tick (Hermes stale-window failures during smoke — locked-decision behavior).
+- **Step 5 (CU profile) folded into Steps 3+4.** **Step 6 (validator integration tests at warmup boundary) deliberately skipped** — Rust unit tests cover warmup at the boundary already; Stage C exercises the live seam in production.
+
+**Test counts:** pre-Stage-B 28 Rust unit; post-Stage-B 42 Rust unit (+14) + 11 TS vol-oracle + 7 crank unit (= +32 net new tests).
+
+**What Stage B did NOT do (deferred to Stage C):** wire `realized_vol_annualized` into `create_shared_vault`'s American branch; add `get_option_price` read-only instruction for CPI consumers; frontend vol display (Stage H).
+
 ### Earlier audit/feature history (compressed — see git log for detail)
 
 - **Run-6 + Run-7 audit-fix arcs (May 4-5 2026):** Closed 19 of 61 audit findings. All 4 CRITs + all 5 PART 1 HIGHs + all 4 PART 2 HIGHs closed. Remaining open: PART 1 7 MEDs/10 LOWs/8 INFOs (+ CRIT-4 disclosure-only); PART 2 4 MEDs/9 LOWs/6 INFOs. Devnet slots from this arc: opta `460518532`, hook `460518751`. UNCHANGED in Stage A (Stage A is pure code addition, no devnet redeploy).
@@ -225,8 +262,8 @@ Plus **3 cu-profile-gated test-only instructions** (NOT in production IDL): `cu_
 
 | What | Where |
 |---|---|
-| Both programs | **Solana devnet**, program IDs above. **Slots UNCHANGED from May 5:** opta `460518532`, opta_transfer_hook `460518751`. Stage A is pure code addition with no devnet redeploy. Next redeploy is Stage C when American pricing wires into `create_shared_vault`. |
-| Frontend | **Vercel** — `https://opta-solana.vercel.app`. Auto-deploys on push to `main`. Last successful deploy: pre-Stage-A. Next deploy attempt expected to FAIL due to IDL drift (frontend doesn't pass `carry_rate_bps`); Vercel keeps last good deploy serving production. Stage H wires the frontend update. |
+| Both programs | **Solana devnet**, program IDs above. **Slot updated by Stage B redeploy on 2026-05-17:** opta `463002816` (was `460518532` from HIGH-5 on May 5), opta_transfer_hook re-uploaded by Anchor at same source (size delta = 0). Stage A's pending source/IDL changes shipped to chain alongside Stage B's. Next redeploy is Stage C when American pricing wires `realized_vol_annualized` into `create_shared_vault`. |
+| Frontend | **Vercel** — `https://opta-solana.vercel.app`. Auto-deploys on push to `main`. **Vercel red cleared by Stage A FE follow-on in commit `12e3d8d`** — `useWriteSubmit.ts` now passes the 6-arg `createSharedVault`. |
 | Crank bot | Run manually via `npm start` from `crank/`. Reads `OPTA_RPC_URL` and `OPTA_CRANK_KEYPAIR` from env. |
 | Devnet USDC mint | `AytU5HUQRew9VdUdrzQuZvZ7s14pHLiYjAF5WqdK3oxL` |
 | Devnet faucet wallet | Public keypair baked into `app/src/utils/constants.ts` for demo USDC; in-code warnings flag it |
@@ -236,8 +273,9 @@ Plus **3 cu-profile-gated test-only instructions** (NOT in production IDL): `cu_
 
 ## 6. Current State — What Works
 
-- All **22 production instructions** deployed and live on devnet
+- All **24 production instructions** deployed and live on devnet (Stage B added `initialize_vol_oracle` + `push_vol_sample`)
 - **Stage A math kernel + plumbing shipped locally and to origin** (commits `3d33abc`, `91b1738`, `7e98a46`). NOT yet wired into any production handler — Stage C is when American vault creation actually invokes the new math.
+- **Stage B vol oracle shipped + deployed** (FE fix `12e3d8d` + Stage B commit; opta slot `463002816`). 11 oracles initialized on devnet; 4 seeded at smoke; 7-day warmup running. `realized_vol_annualized` ready for Stage C wire-up but no production handler calls it yet.
 - **Full frontend** live on Vercel at the pre-Stage-A IDL: Trade (Deribit-style chain with secondary listings unified into BuyModal), Write, Portfolio (two-ledger), Markets, Docs
 - **Permissionless settlement via Pyth Pull oracle** with EMA-at-expiry pricing and on-chain `publish_time` audit trail
 - **Symmetric 1× strike collateral** for both CALL and PUT; Model B premium framing throughout UI
@@ -260,16 +298,16 @@ Plus **3 cu-profile-gated test-only instructions** (NOT in production IDL): `cu_
 The full Phase 2 plan is documented at **`.context/plans/phase2-american-onchain-pricing-scope.md`** (canonical). Summary:
 
 - **Stage A — SHIPPED to origin May 14 2026.** BS-2002 math kernel + `carry_rate_bps` plumbing + admin migration instruction. See §2 for commits.
-- **Stage B — On-chain realized vol oracle.** ~3-4 weeks. Per-asset on-chain ring buffer storing 720 hourly Pyth spot snapshots + realized-vol calculation function. New crank job samples Pyth hourly.
-- **Stage C — On-chain pricing wired into American `create_shared_vault` + read-only `get_option_price` for CPI.** 1-2 weeks. American branch of `create_shared_vault` computes premium on-chain (drops `premium_per_contract` arg for American). European path UNCHANGED.
+- **Stage B — SHIPPED to devnet 2026-05-17.** Per-asset realized-vol oracle (ring buffer + accumulators + annualized read function + crank side-loop). All 11 current devnet feeds initialized; 7-day warmup running. See §2 for commits + slot.
+- **Stage C — On-chain pricing wired into American `create_shared_vault` + read-only `get_option_price` for CPI.** 1-2 weeks. American branch of `create_shared_vault` computes premium on-chain (drops `premium_per_contract` arg for American). European path UNCHANGED. **Code can ship anytime — independent of warmup. Per-asset `realized_vol_annualized` returns `Warmup` until that asset's sample count crosses 168; the 4 already-seeded assets unlock 2026-05-24, the other 7 unlock ~1 hour later (when first organic crank tick seeds them).**
 - **Stage D — American vault instructions.** 1 week. Mostly branch-guarded reuse of European patterns.
 - **Stage E — Token-2022 metadata `exercise_style` field.** 3 days.
 - **Stage F — `exercise_american` instruction.** 1 week. New on-chain logic; holder burns tokens + claims intrinsic value pre-expiry.
 - **Stage G — Settlement American branch.** 3 days. `settle_expiry` + `auto_finalize_holders` get `exercise_style` check.
-- **Stage H — Frontend.** 1.5 weeks. EUR/AMER toggle, exercise UI, on-chain vol display. Also wires the `carry_rate_bps` 6th arg pass that the post-Stage-A IDL now requires (clears Vercel red).
+- **Stage H — Frontend.** 1.5 weeks. EUR/AMER toggle, exercise UI, on-chain vol display. (Stage A's `carry_rate_bps` 6th-arg pass was bundled with Stage B's deploy in commit `12e3d8d` — that gap is closed.)
 - **Stage I — Audit + deploy.** 1 week + audit turnaround. Estimated $12-18K.
 
-**Total remaining: ~10-12 weeks solo + audit turnaround.**
+**Total remaining: ~9-11 weeks solo + audit turnaround.** (Stage B took 1 session vs the 3-4 week scope estimate.)
 
 ### Audit follow-up backlog (parked, not blocking Phase 2)
 
@@ -343,17 +381,19 @@ The full Phase 2 plan is documented at **`.context/plans/phase2-american-onchain
 
 ## 10. Immediate Next Steps
 
-**Phase 2 Stage B planning is the next session.** Plan first, execute via Claude Code propose-then-apply.
+**Phase 2 Stage C planning is the next session.** Plan first, execute via Claude Code propose-then-apply. Stage B (vol oracle) shipped 2026-05-17; Stage C wires `realized_vol_annualized` into `create_shared_vault`'s American branch + adds the read-only `get_option_price` instruction for CPI consumers.
 
 ### Tier 1 — near-term
 
-1. **Phase 2 Stage B planning** — on-chain realized vol oracle (ring buffer + crank job + vol calc). Reference `.context/plans/phase2-american-onchain-pricing-scope.md` §4 Stage B for the scope outline; open questions to resolve in planning (per the scope doc):
-   - Account layout for ring buffer (single per-asset vs sharded)
-   - O(1) accumulator vs O(720) recompute for vol calc
-   - Gap handling on missed crank ticks
-   - Sample variance vs population variance for std-dev
+1. **Phase 2 Stage C planning** — on-chain pricing in `create_shared_vault` (American branch) + read-only `get_option_price` for CPI. Reference `.context/plans/phase2-american-onchain-pricing-scope.md` §4 Stage C for the scope outline; open questions to resolve in planning (per the scope doc):
+   - `create_shared_vault` signature: drop `premium_per_contract` for American, keep for European?
+   - `get_option_price` CU budget (composes BS-2002 ~85K + `realized_vol_annualized` ~4K + Pyth spot read; total ~100K expected, leaves margin for CPI caller's own work)
+   - Stale-vol-oracle handling (block American vault creation? error variant?)
+   - Buyer-side display: vault stores the computed premium at creation, no mid-life re-pricing
+   - **Pre-flight check**: confirm at least 4 assets have crossed warmup (2026-05-24 unlock date for the assets seeded at Stage B Step 8 smoke; rest unlock as soon as their first organic seed lands)
 2. **HANDOFF cleanup** — already done in this refresh; future sessions inherit the corrected framing automatically.
-3. **Demo video recording** if not already done — "wake up with USDC, no clicks" beat is the differentiated narrative.
+3. **Crank operator setup** — Stage B's vol-oracle side-loop is wired but not running as a persistent service. Operator decision: set up systemd / pm2 / Docker `restart: unless-stopped` against the user's hot wallet + Helius RPC. See `crank/README.md` for the production hot-wallet recommendation pattern.
+4. **Demo video recording** if not already done — "wake up with USDC, no clicks" beat is the differentiated narrative.
 
 ### Tier 2 — quality polish (not blocking Phase 2)
 
@@ -399,6 +439,12 @@ The full Phase 2 plan is documented at **`.context/plans/phase2-american-onchain
 - **BS-2002 fixed-point precision:** never materialize α as a separately-stored value. The `α·S^β = (B*-K)·(S/B*)^β` reformulation is in `bs2002_call_price` for a reason — bypassing it will silently zero out two terms when β is large.
 - **Python reference regen:** `python3 scripts/gen_bs2002_refs.py` runs from Windows Python 3.11 (WSL Python lacks pip by default; Tier 2 fallback per HANDOFF norm). Cross-val tolerance is 1.0% between Python BS-2002 and QL BS-1993; if it ever exceeds 1.0% the script exits non-zero.
 - **The `__shrink_shared_vault_for_test` instruction is cu-profile-gated.** Production migration uses `migrate_shared_vault_carry_rate` (admin-only, not feature-gated, production instruction).
+
+### Stage B specifics
+
+- **`bytemuck` is now a direct dep + needs the `min_const_generics` feature.** Anchor 0.32.1's `#[account(zero_copy)]` macro emits bare `bytemuck::` paths (not `anchor_lang::__private::bytemuck::`), so consumer crates must declare `bytemuck` directly. And bytemuck's default `Pod` impls only cover a small whitelist of array sizes; for the 720-element `samples` array in `VolOracle` we need `features = ["min_const_generics"]`. Both gotchas are documented inline in `programs/opta/Cargo.toml` so the next person bumping deps doesn't drop the feature flag.
+- **`zero_copy` is mandatory for any account > ~3 KB.** The BPF stack ceiling is 4 KB. Anchor's normal `Account<T>` flow Borsh-deserializes the full struct into a stack-allocated value during account validation — `VolOracle`'s 5760-byte samples array overflows immediately. Fix: `#[account(zero_copy)] + #[repr(C)] + AccountLoader<T> + load_init()/load_mut()/load()`. Field order matters for `bytemuck::Pod` compliance: i128 fields go first to lock 16-byte struct alignment from offset 0, then i64s, then smaller types, then explicit `_padding: [u8; 11]` at the end to make total size a multiple of 16. The compile-time `const _: () = assert!(size_of::<VolOracle>() == 5856)` is the canary against silent layout drift.
+- **`test-fast-vol` cargo feature MUST NEVER deploy.** Shrinks `VOL_ORACLE_MIN_PUSH_INTERVAL_SECS` from 55 minutes to 1 second so multi-push integration tests can run against solana-test-validator (no clock-warp helper). Production builds embed the 3300s constant. Verification: `target/idl/opta.json` is feature-agnostic (the constant doesn't appear there), so the IDL grep can't catch this directly — but `cargo clean -p opta` before deploy + a feature-free `anchor build` is the discipline (matches the `cu-profile` never-deploy rule). The hook crate carries a no-op `test-fast-vol` feature mirror so workspace-wide `--features` propagation doesn't error.
 
 ### Testing
 - **Two test runners:** `anchor test` runs full Mocha+Chai via `ts-mocha`. `run-tests.sh` is a thin wrapper with finer-grained control. Default to `run-tests.sh` for iteration.

@@ -243,6 +243,51 @@ pub mod opta {
     }
 
     // =========================================================================
+    // Phase 2 Stage B -- realized-vol oracle
+    // =========================================================================
+
+    /// Bootstrap a per-feed VolOracle PDA. Permissionless; caller supplies
+    /// a fresh PriceUpdateV2 whose feed_id matches the arg as proof-of-
+    /// feed-existence. Plain `init` -- second call for the same feed_id
+    /// reverts.
+    pub fn initialize_vol_oracle(
+        ctx: Context<InitializeVolOracle>,
+        feed_id: [u8; 32],
+    ) -> Result<()> {
+        instructions::initialize_vol_oracle::handle_initialize_vol_oracle(ctx, feed_id)
+    }
+
+    /// Push a fresh Pyth spot sample to a VolOracle. Permissionless. The
+    /// handler validates the Pyth update, computes a log return against
+    /// the prior spot, and updates the ring buffer + O(1) accumulators.
+    /// First push to a fresh oracle takes the seed-only branch (no
+    /// ring/accumulator write; rate limit skipped). Subsequent pushes
+    /// enforce the rate limit (55 min production / 1 sec test-fast-vol).
+    pub fn push_vol_sample(ctx: Context<PushVolSample>) -> Result<()> {
+        instructions::push_vol_sample::handle_push_vol_sample(ctx)
+    }
+
+    /// Hot-path CU profile for push_vol_sample. Calls the ring +
+    /// accumulator update directly with a synthetic log return,
+    /// bracketed by sol_log_compute_units. Test-only.
+    #[cfg(feature = "cu-profile")]
+    pub fn cu_profile_push_vol_sample(
+        ctx: Context<CuProfilePushVolSample>,
+    ) -> Result<()> {
+        instructions::cu_profile_push_vol_sample::handle_cu_profile_push_vol_sample(ctx)
+    }
+
+    /// CU profile for realized_vol_annualized. Synthesizes 720-sample
+    /// accumulators in the oracle account, then measures the read
+    /// function. Test-only.
+    #[cfg(feature = "cu-profile")]
+    pub fn cu_profile_realized_vol(
+        ctx: Context<CuProfileRealizedVol>,
+    ) -> Result<()> {
+        instructions::cu_profile_realized_vol::handle_cu_profile_realized_vol(ctx)
+    }
+
+    // =========================================================================
     // Test-only CU profiling (gated by `cu-profile` Cargo feature).
     // NEVER deploy a cu-profile build to devnet/mainnet.
     // =========================================================================

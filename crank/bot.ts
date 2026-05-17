@@ -38,6 +38,11 @@ import {
   runAutoCancelListings,
   type AutoCancelOptions,
 } from "./autoCancelListings";
+import {
+  runVolOracleCrank,
+  type VolOracleCrankContext,
+  type VolOracleCrankOptions,
+} from "./volOracleCrank";
 
 // ---- Constants -------------------------------------------------------------
 
@@ -652,7 +657,58 @@ async function main(): Promise<void> {
   process.on("SIGINT", () => onSignal("SIGINT"));
   process.on("SIGTERM", () => onSignal("SIGTERM"));
 
-  await runForever(ctx);
+  // ---- Spawn the Stage B vol-oracle crank as a side-loop ------------------
+  // Both loops share the shutdownRequested flag (read by runForever's
+  // while-condition AND volOracleCrank's shouldShutdown callback). Both
+  // also share the AnchorWallet, Connection, Program -- the vol crank just
+  // re-uses ctx's already-bootstrapped clients with its own hermesBase
+  // (same value; the option is here so a future tick-time override doesn't
+  // require touching bot.ts).
+  //
+  // Fail-loud wrapping: Promise.all rejects on the first crash. We catch +
+  // log + exit non-zero so a systemd-style supervisor restarts the process
+  // (rather than letting one crashed loop linger while the other runs).
+  // The graceful-shutdown path (SIGINT/SIGTERM) goes through
+  // shutdownRequested and exits cleanly from both loops -- never hits the
+  // catch handler.
+  const volCrankCtx: VolOracleCrankContext = {
+    connection: ctx.connection,
+    wallet: ctx.wallet,
+    program: ctx.program,
+    hermesBase: ctx.hermesBase,
+    log: (level, msg, fields) =>
+      log(level, msg, { subsystem: "vol-oracle", ...(fields ?? {}) }),
+    shouldShutdown: () => shutdownRequested,
+  };
+  const volCrankOptions: VolOracleCrankOptions = {
+    tickOnce: (process.env.TICK_ONCE ?? "").toLowerCase() === "1"
+      || (process.env.TICK_ONCE ?? "").toLowerCase() === "true",
+  };
+
+  try {
+    await Promise.all([
+      runForever(ctx).catch((err) => {
+        logFatal("settle/finalize loop crashed", {
+          err: String(err),
+          stack: (err as any)?.stack,
+        });
+        throw err;
+      }),
+      runVolOracleCrank(volCrankCtx, volCrankOptions).catch((err) => {
+        logFatal("vol-oracle loop crashed", {
+          err: String(err),
+          stack: (err as any)?.stack,
+        });
+        throw err;
+      }),
+    ]);
+  } catch (err) {
+    // Already logged above by whichever loop's .catch fired first. Exit
+    // non-zero so process supervisors restart us instead of half-running.
+    logFatal("crank exiting due to side-loop crash", { err: String(err) });
+    process.exit(1);
+  }
+
   logInfo("crank stopped cleanly");
 }
 

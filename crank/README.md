@@ -55,6 +55,7 @@ The crank fails fast at boot if `OPTA_RPC_URL` is unset.
 | `OPTA_AUTO_FINALIZE_MAX_ATAS_PER_TICK` | `100` | Per-tick cap on idempotent USDC-ATA creates by the crank wallet. Each ATA create costs ~0.002 SOL of rent paid by the crank wallet, so the default caps tick exposure at ~0.2 SOL. The budget is shared across the holder + writer passes (per-tick total, not per-pass). When exhausted, this tick processes whatever it can and the next tick picks up the rest. |
 | `OPTA_AUTO_FINALIZE_STALE_S` | `3600` (1 hour) | Threshold for "vault has been settled too long without being finalized." Each tick emits a `warn` log line for any vault whose expiry was more than this many seconds ago and is still not fully finalized. Real failures (constraint mismatches, IDL drift) won't self-heal; surfacing them helps the operator notice. |
 | `OPTA_AUTO_FINALIZE_DRY_RUN` | unset (false) | When set to `true`, `1`, or `yes`, the auto-finalize **and auto-cancel** passes enumerate everything (holders, writers, listings, missing ATAs) and emit normal log lines but send NO transactions. Designed as the operator's safety net for a first-time deploy and as a debugging tool for verifying the gpa filter shapes against real on-chain state without spending SOL. |
+| `TICK_ONCE` | unset | (Phase 2 Stage B vol-oracle crank only.) When `1` or `true`, the vol-oracle side-loop runs exactly one tick and exits. Used for devnet smoke / debugging. The settle/auto-finalize main loop is unaffected. |
 
 ### Endpoint selection
 
@@ -237,6 +238,69 @@ below 0.1 SOL. At demo scale (~0.005 SOL/day), one top-up lasts months.
 
 Hammering Ctrl+C twice doesn't speed anything up — the second signal is
 ignored; the first is the one that triggers the shutdown flag.
+
+## Phase 2 Stage B — vol-oracle side-loop
+
+Since Phase 2 Stage B, the crank ALSO runs a second concurrent loop that
+maintains the per-asset realized-vol oracle that Stage C's American
+options pricing depends on. Both loops live in the same process; the
+existing settle + auto-finalize logic in `bot.ts` is unchanged.
+
+### What it does (per hourly tick)
+
+1. Auto-discovers assets by scanning all `optionsMarket` accounts on chain
+   (raw `getProgramAccounts` via `safeFetchAll`, which handles HANDOFF §11
+   orphans). Dedupes by Pyth `feed_id` — one oracle per feed regardless of
+   how many markets reference it.
+2. For each unique `feed_id`, derives the `VolOracle` PDA
+   (`[b"vol_oracle", feed_id]`). If the account doesn't exist:
+   `initialize_vol_oracle` + immediate `push_vol_sample` (seed). If it
+   does: `push_vol_sample` (normal).
+3. Logs a structured outcome per asset with the `subsystem:"vol-oracle"`
+   tag for grep-ability. Sleeps until the next wall-clock hour boundary
+   (NOT setTimeout-from-now — restart-safe alignment).
+
+### Locked design decisions (do not re-litigate without scope reference)
+
+- 30-day window, 720 samples, hourly cadence, 7-day warmup.
+- **Skip-and-mark-staleness.** A failed Hermes fetch, an RPC error, or a
+  per-asset on-chain revert (rate-limit, stale Pyth) logs and moves on
+  to the next asset. NO retry within the same tick; the next hourly
+  tick handles it. The downstream `realized_vol_annualized` staleness
+  gate blocks unsafe reads.
+- Sample variance (ddof=1), matches Deribit DVOL.
+- No admin overrides, no writer vol input.
+
+### Smoke / debugging
+
+```bash
+TICK_ONCE=1 OPTA_RPC_URL="https://devnet.helius-rpc.com/?api-key=..." \
+  npm start
+```
+
+Runs exactly one vol-oracle tick (init missing oracles + push every
+existing oracle) and exits. The settle/auto-finalize main loop is
+unaffected — it still spins up but does its own one-tick pass too
+(because both loops share the shutdown flag set on `TICK_ONCE` exit
+of the vol crank). Use for:
+
+- First-time devnet rollout: confirms `safeFetchAll<"optionsMarket">`
+  enumerates correctly + Hermes posts succeed + on-chain init+seed
+  lands without bricking the oracle.
+- Debugging "why is asset X not in vol logs": single-tick reproduces
+  the discovery + per-asset processing flow with a clean exit.
+
+### Process supervision (vol-oracle + settle live together)
+
+If either loop crashes with an unhandled exception, Promise.all rejects
+and the process exits with code 1 — a supervisor (systemd, pm2, Docker
+`restart: unless-stopped`) restarts the whole crank fresh. Both loops
+re-bootstrap from chain state on restart; no on-disk state to corrupt.
+
+The vol-oracle loop's per-asset failures (Hermes timeouts, individual
+push reverts) are NOT unhandled exceptions — they're caught + logged
+per-asset and the loop continues. Only a tick-level RPC enumeration
+failure or unexpected runtime error escapes to the fail-loud handler.
 
 ## Architecture quick reference
 

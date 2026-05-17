@@ -1776,6 +1776,91 @@ export type Opta = {
       "args": []
     },
     {
+      "name": "initializeVolOracle",
+      "docs": [
+        "Bootstrap a per-feed VolOracle PDA. Permissionless; caller supplies",
+        "a fresh PriceUpdateV2 whose feed_id matches the arg as proof-of-",
+        "feed-existence. Plain `init` -- second call for the same feed_id",
+        "reverts."
+      ],
+      "discriminator": [
+        56,
+        31,
+        16,
+        133,
+        209,
+        199,
+        81,
+        66
+      ],
+      "accounts": [
+        {
+          "name": "initializer",
+          "docs": [
+            "Permissionless. Any signer pays for account creation."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "priceUpdate",
+          "docs": [
+            "Fresh PriceUpdateV2 from the Pyth Receiver program. The handler",
+            "verifies `verification_level == Full` and",
+            "`price_message.feed_id == feed_id` to prove the caller-supplied",
+            "feed_id corresponds to a real Pyth feed. Read-only -- never mutated."
+          ]
+        },
+        {
+          "name": "volOracle",
+          "docs": [
+            "The VolOracle PDA. One per Pyth feed_id. Plain `init` -- a second",
+            "call for the same feed_id reverts (\"account already in use\").",
+            "`AccountLoader` (not `Account`) because zero_copy: see state file."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  111,
+                  108,
+                  95,
+                  111,
+                  114,
+                  97,
+                  99,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "feedId"
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "feedId",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
       "name": "listV2ForResale",
       "docs": [
         "V2 secondary listing — list option tokens for resale.",
@@ -2700,6 +2785,82 @@ export type Opta = {
       ]
     },
     {
+      "name": "pushVolSample",
+      "docs": [
+        "Push a fresh Pyth spot sample to a VolOracle. Permissionless. The",
+        "handler validates the Pyth update, computes a log return against",
+        "the prior spot, and updates the ring buffer + O(1) accumulators.",
+        "First push to a fresh oracle takes the seed-only branch (no",
+        "ring/accumulator write; rate limit skipped). Subsequent pushes",
+        "enforce the rate limit (55 min production / 1 sec test-fast-vol)."
+      ],
+      "discriminator": [
+        14,
+        178,
+        211,
+        15,
+        69,
+        245,
+        145,
+        31
+      ],
+      "accounts": [
+        {
+          "name": "signer",
+          "docs": [
+            "Permissionless. Pays the tx fee only."
+          ],
+          "signer": true
+        },
+        {
+          "name": "priceUpdate",
+          "docs": [
+            "Fresh PriceUpdateV2 from the Pyth Receiver program. Validated",
+            "against the oracle's feed_id and the 60s freshness window."
+          ]
+        },
+        {
+          "name": "volOracle",
+          "docs": [
+            "The VolOracle PDA. Mutated. PDA-validated against the price",
+            "update's feed_id via the `seeds` constraint here; the handler",
+            "re-checks the proof against price_update.price_message.feed_id",
+            "for defense-in-depth against passing a stale PriceUpdateV2 from",
+            "a different feed."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  111,
+                  108,
+                  95,
+                  111,
+                  114,
+                  97,
+                  99,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "volOracle"
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "settleExpiry",
       "docs": [
         "Record the canonical settlement price for an (asset, expiry) tuple",
@@ -3242,6 +3403,19 @@ export type Opta = {
         125,
         117,
         110
+      ]
+    },
+    {
+      "name": "volOracle",
+      "discriminator": [
+        6,
+        86,
+        139,
+        236,
+        75,
+        70,
+        119,
+        72
       ]
     },
     {
@@ -3800,6 +3974,41 @@ export type Opta = {
       "code": 6042,
       "name": "invalidPythFeedId",
       "msg": "Pyth feed ID cannot be all zeros — register a real feed"
+    },
+    {
+      "code": 6043,
+      "name": "volOracleNotInitialized",
+      "msg": "VolOracle account not initialized for this asset"
+    },
+    {
+      "code": 6044,
+      "name": "volOracleWarmup",
+      "msg": "VolOracle in warmup — needs 168 samples (7 days) before reads are valid"
+    },
+    {
+      "code": 6045,
+      "name": "volOracleStale",
+      "msg": "VolOracle stale — most recent sample is older than 6 hours"
+    },
+    {
+      "code": 6046,
+      "name": "volOraclePushTooSoon",
+      "msg": "VolOracle push too soon — must wait at least 55 minutes since last push"
+    },
+    {
+      "code": 6047,
+      "name": "volOraclePriceStale",
+      "msg": "Pyth price update for vol push is older than 60 seconds"
+    },
+    {
+      "code": 6048,
+      "name": "volOracleInvalidSpot",
+      "msg": "Pyth spot price for vol push is zero or negative"
+    },
+    {
+      "code": 6049,
+      "name": "volOracleMathError",
+      "msg": "VolOracle math error (sqrt domain, division-by-zero, or overflow)"
     }
   ],
   "types": [
@@ -5115,6 +5324,128 @@ export type Opta = {
           },
           {
             "name": "full"
+          }
+        ]
+      }
+    },
+    {
+      "name": "volOracle",
+      "serialization": "bytemuck",
+      "repr": {
+        "kind": "c"
+      },
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "sumLogReturns",
+            "docs": [
+              "Running sum of all populated samples (i.e. of `samples[0..sample_count]`).",
+              "i128 chosen for headroom: per-sample magnitude max ~ln(10)*SCALE",
+              "= 2.3e12; sum across 720 samples bounded at ~1.66e15 -- well under",
+              "i128::MAX (1.7e38). O(1) update on each push: add new, subtract evicted.",
+              "Placed first so `#[repr(C)]` gives the struct 16-byte alignment from",
+              "offset 0; reordering this field below an i64 introduces compiler-",
+              "inserted gap bytes that violate bytemuck::Pod."
+            ],
+            "type": "i128"
+          },
+          {
+            "name": "sumLogReturnsSq",
+            "docs": [
+              "Running sum of squared samples (raw i64*i64 product, NOT re-scaled).",
+              "Per-sample bound (2.3e12)^2 = 5.3e24; sum across 720 = 3.8e27;",
+              "fits comfortably in i128. The variance formula descales at read",
+              "time, dividing by SCALE^2 (= 1e24) to recover unit variance."
+            ],
+            "type": "i128"
+          },
+          {
+            "name": "feedId",
+            "docs": [
+              "32-byte Pyth Pull feed ID. PDA seed."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "samples",
+            "docs": [
+              "Ring buffer of hourly log returns at solmath SCALE (1e12).",
+              "`samples[i] = ln(spot_i / spot_{i-1}) * SCALE`. Always 720 slots;",
+              "`sample_count` tracks how many are populated."
+            ],
+            "type": {
+              "array": [
+                "i64",
+                720
+              ]
+            }
+          },
+          {
+            "name": "lastSampleTs",
+            "docs": [
+              "Unix timestamp of the most recent successful push. Drives both",
+              "the push-side rate limit (VOL_ORACLE_MIN_PUSH_INTERVAL_SECS) and",
+              "the read-side staleness gate (VOL_ORACLE_STALENESS_SECS)."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "lastSpotPrice",
+            "docs": [
+              "Spot price at the time of the most recent push, at solmath SCALE",
+              "(1e12). Used by the next push to compute log_return without",
+              "reading Pyth history. Replaces the dropped `spot_prices` array.",
+              "Stored as i64 (positive only): max i64 ~9.2e18 accommodates spot",
+              "prices up to ~$9.2M at SCALE=1e12, comfortably covering BTC and",
+              "every equity Opta currently lists."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "head",
+            "docs": [
+              "Next write index in the ring buffer (0..720). Wraps mod 720."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "sampleCount",
+            "docs": [
+              "Number of populated samples. Saturates at VOL_ORACLE_RING_SIZE.",
+              "American vault creation is gated on >= VOL_ORACLE_WARMUP_SAMPLES."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump seed."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "padding",
+            "docs": [
+              "MANDATORY Pod alignment padding -- NOT reserved future-field space.",
+              "`bytemuck::Pod` requires zero uninitialized bytes; this pads the",
+              "struct to a 16-byte boundary (i128 alignment). Future fields must",
+              "be appended AFTER `bump` and BEFORE this padding, reducing",
+              "`_padding` correspondingly. Any schema change still requires an",
+              "explicit admin migration instruction (same pattern as Stage A",
+              "`migrate_shared_vault_carry_rate`)."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                11
+              ]
+            }
           }
         ]
       }

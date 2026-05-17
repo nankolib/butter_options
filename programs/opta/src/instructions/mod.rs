@@ -31,6 +31,14 @@ pub mod auto_cancel_listings;
 // SharedVault carry_rate_bps schema migration (Stage A)
 pub mod migrate_shared_vault_carry_rate;
 
+// Phase 2 Stage B -- realized-vol oracle
+pub mod initialize_vol_oracle;
+pub mod push_vol_sample;
+#[cfg(feature = "cu-profile")]
+pub mod cu_profile_push_vol_sample;
+#[cfg(feature = "cu-profile")]
+pub mod cu_profile_realized_vol;
+
 // CU profiling + Stage A test scaffolding (gated by `cu-profile` feature)
 #[cfg(feature = "cu-profile")]
 pub mod cu_profile_american;
@@ -67,6 +75,14 @@ pub use auto_cancel_listings::*;
 
 // SharedVault carry_rate_bps schema migration
 pub use migrate_shared_vault_carry_rate::*;
+
+// Phase 2 Stage B -- realized-vol oracle
+pub use initialize_vol_oracle::*;
+pub use push_vol_sample::*;
+#[cfg(feature = "cu-profile")]
+pub use cu_profile_push_vol_sample::*;
+#[cfg(feature = "cu-profile")]
+pub use cu_profile_realized_vol::*;
 
 // CU profiling + Stage A test scaffolding
 #[cfg(feature = "cu-profile")]

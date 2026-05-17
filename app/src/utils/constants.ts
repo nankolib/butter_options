@@ -77,6 +77,11 @@ export const EPOCH_CONFIG_SEED = "epoch_config";
 export const VAULT_RESALE_LISTING_SEED = "vault_resale_listing";
 export const VAULT_RESALE_ESCROW_SEED = "vault_resale_escrow";
 
+// === Phase 2 Stage B — VolOracle seed (per-feed ring buffer) ===
+// MUST match `VOL_ORACLE_SEED` in programs/opta/src/state/vol_oracle.rs.
+// PDA derivation: [VOL_ORACLE_SEED, feed_id] -> oracle PDA.
+export const VOL_ORACLE_SEED = "vol_oracle";
+
 // Feature flag: when true, UI uses v2 shared vault flows.
 // When false, UI uses v1 isolated escrow flows.
 export const USE_V2_VAULTS = true;

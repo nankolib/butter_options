@@ -21,6 +21,14 @@ custom-panic = []
 # Gates test-only profiling instructions (e.g. cu_profile_american). NEVER
 # enable in default builds or deploy a cu-profile build to devnet/mainnet.
 cu-profile = []
+# Phase 2 Stage B Step 3: shrinks VOL_ORACLE_MIN_PUSH_INTERVAL_SECS from
+# 55 minutes (production) to 1 second so multi-push ring-buffer tests can
+# run against solana-test-validator (which advances Clock at wall-clock
+# rate; no warp helper). NEVER enable in default builds or deploy a
+# test-fast-vol build to devnet/mainnet -- production rate-limiting
+# disappears entirely. The .test-fixtures/run-tests.sh launcher passes
+# this feature to anchor build; production deploy scripts must not.
+test-fast-vol = []
 
 
 [dependencies]
@@ -36,6 +44,14 @@ pyth-solana-receiver-sdk = "1.1.0"
 # Direct dep so cu-profile builds can name `solana_program::log::sol_log_compute_units`.
 # Already pulled in transitively by anchor at 2.3.0; this just exposes the API.
 solana-program = "2"
+# Required by Anchor 0.32.1's `#[account(zero_copy)]` macro: emitted code
+# uses bare `bytemuck::` paths so consumers must declare the crate
+# directly even though anchor_lang re-exports it under __private.
+# Consumed by state/vol_oracle.rs (Phase 2 Stage B). The
+# `min_const_generics` feature is required so `[i64; 720]` (and any
+# other ring-buffer-sized array) implements `Pod`; without it bytemuck
+# only impls Pod for arrays of a small whitelisted size set.
+bytemuck = { version = "1", features = ["min_const_generics"] }
 
 
 [lints.rust]

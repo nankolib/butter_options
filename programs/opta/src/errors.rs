@@ -164,4 +164,33 @@ pub enum OptaError {
     // never collide with this.
     #[msg("Pyth feed ID cannot be all zeros — register a real feed")]
     InvalidPythFeedId,
+
+    // =========================================================================
+    // VolOracle errors (Phase 2 Stage B)
+    // =========================================================================
+    // VolOracleNotInitialized is returned by realized_vol_annualized when
+    // its caller passes an uninitialized account; Stage C's
+    // create_shared_vault will surface this on the American branch.
+    // VolOracleWarmup / VolOracleStale gate the read path.
+    // VolOraclePushTooSoon / VolOraclePriceStale gate the push path.
+    #[msg("VolOracle account not initialized for this asset")]
+    VolOracleNotInitialized,
+
+    #[msg("VolOracle in warmup — needs 168 samples (7 days) before reads are valid")]
+    VolOracleWarmup,
+
+    #[msg("VolOracle stale — most recent sample is older than 6 hours")]
+    VolOracleStale,
+
+    #[msg("VolOracle push too soon — must wait at least 55 minutes since last push")]
+    VolOraclePushTooSoon,
+
+    #[msg("Pyth price update for vol push is older than 60 seconds")]
+    VolOraclePriceStale,
+
+    #[msg("Pyth spot price for vol push is zero or negative")]
+    VolOracleInvalidSpot,
+
+    #[msg("VolOracle math error (sqrt domain, division-by-zero, or overflow)")]
+    VolOracleMathError,
 }

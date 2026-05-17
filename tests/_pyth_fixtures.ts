@@ -165,6 +165,33 @@ export const FEED_ID_HEX = {
   BTC: "e62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43",
 };
 
+/// Stage B Step 3: deterministically derived per-test feed IDs so each
+/// VolOracle test gets its own independent oracle PDA. Same SHA-256
+/// scheme as `fixturePubkey` (different namespace prefix to avoid
+/// collisions with the deterministic pubkey side). The feed_id only
+/// needs to be a 32-byte string the program treats as opaque -- it does
+/// not have to be a real Pyth feed because the proof gate checks against
+/// the fixture's own price_message.feed_id which we control.
+export function synthFeedIdHex(label: string): string {
+  return crypto
+    .createHash("sha256")
+    .update("opta:vol_test:feed:" + label)
+    .digest()
+    .subarray(0, 32)
+    .toString("hex");
+}
+
+/// Per-test synthetic feed IDs (computed at module load).
+export const VOL_TEST_FEED_HEX = {
+  T1_SEED: synthFeedIdHex("t1-seed"),
+  T2_RATE_LIMIT: synthFeedIdHex("t2-rate-limit"),
+  T3_REAL_PUSH: synthFeedIdHex("t3-real-push"),
+  T5_MISMATCH_HOST: synthFeedIdHex("t5-mismatch-host"),
+  T6_STALE: synthFeedIdHex("t6-stale"),
+  T7_ZERO_SPOT: synthFeedIdHex("t7-zero-spot"),
+  T4_LONG_RING_WRAP: synthFeedIdHex("t4-long-ring-wrap"),
+};
+
 // ---------------------------------------------------------------------------
 // baseTime persistence (D2-only — 2026-05-03)
 // ---------------------------------------------------------------------------
@@ -229,6 +256,12 @@ export type FixtureSpec = {
   /// conf-gate tests dial this above/at/below the MAX_CONF_BPS=200
   /// boundary to exercise the new check in settle_expiry.
   emaConf?: bigint;
+  /// Optional override for emaPrice. Defaults to `price`. Used by the
+  /// Stage B Step 3 zero-spot fixture (price=0) to keep emaPrice
+  /// nonzero, so the upstream EMA-conf gate is permissive and the
+  /// downstream VolOracleInvalidSpot check is the one that fires. Keeps
+  /// the test robust against future handler reordering.
+  emaPrice?: bigint;
 };
 
 export const ALL_FIXTURES: FixtureSpec[] = [
@@ -289,6 +322,32 @@ export const ALL_FIXTURES: FixtureSpec[] = [
   //   Fixture B: 180-120=+60 ✓ (boundary inclusive), 180-150=+30 ✓
   { name: "sol-250-window-future-90", feedIdHex: FEED_ID_HEX.SOL, price: BigInt("25000000000"), exponent: -8, publishTimeOffsetSec: 90 },
   { name: "sol-250-window-future-180", feedIdHex: FEED_ID_HEX.SOL, price: BigInt("25000000000"), exponent: -8, publishTimeOffsetSec: 180 },
+  // -- Stage B Step 3 VolOracle fixtures (2026-05-17) --------------------------
+  // One per-test feed_id keeps push tests independent. Most fixtures pin
+  // publishTime *far in the future* (offset = +1500 = 25 min ahead of
+  // baseTime) so they remain fresh (publish_time + 60 >= now) even when
+  // run as part of the full alphabetical suite, where `zzz-vol-oracle.ts`
+  // fires 5-10 wall-clock minutes after fixtures are written. The T6
+  // stale fixture is the intentional exception (negative offset).
+  //
+  // Freshness gate is one-sided in push_vol_sample (matches
+  // settle_expiry); Pyth Receiver verification is also one-sided, so a
+  // future publishTime passes both. We never test "future publishTime
+  // rejection" because no such reject exists -- consistent with the
+  // settle_expiry precedent.
+  //
+  // For T7 (zero spot): price = 0 triggers VolOracleInvalidSpot in
+  // push_vol_sample, but emaPrice = 1 keeps the upstream ema-conf gate
+  // permissive so the test sees the spot-positivity error first
+  // (handler order: spot > 0 then conf then freshness).
+  { name: "vol-t1-fresh", feedIdHex: VOL_TEST_FEED_HEX.T1_SEED, price: BigInt("18000000000"), exponent: -8, publishTimeOffsetSec: 1500 },
+  { name: "vol-t2-fresh", feedIdHex: VOL_TEST_FEED_HEX.T2_RATE_LIMIT, price: BigInt("18000000000"), exponent: -8, publishTimeOffsetSec: 1500 },
+  { name: "vol-t3-180",   feedIdHex: VOL_TEST_FEED_HEX.T3_REAL_PUSH, price: BigInt("18000000000"), exponent: -8, publishTimeOffsetSec: 1500 },
+  { name: "vol-t3-250",   feedIdHex: VOL_TEST_FEED_HEX.T3_REAL_PUSH, price: BigInt("25000000000"), exponent: -8, publishTimeOffsetSec: 1530 },
+  { name: "vol-t5-host",  feedIdHex: VOL_TEST_FEED_HEX.T5_MISMATCH_HOST, price: BigInt("18000000000"), exponent: -8, publishTimeOffsetSec: 1500 },
+  { name: "vol-t6-stale", feedIdHex: VOL_TEST_FEED_HEX.T6_STALE, price: BigInt("18000000000"), exponent: -8, publishTimeOffsetSec: -400 },
+  { name: "vol-t7-zero",  feedIdHex: VOL_TEST_FEED_HEX.T7_ZERO_SPOT, price: BigInt(0), exponent: -8, publishTimeOffsetSec: 1500, emaPrice: BigInt(1) },
+  { name: "vol-t4-long-future", feedIdHex: VOL_TEST_FEED_HEX.T4_LONG_RING_WRAP, price: BigInt("9000000000000"), exponent: -8, publishTimeOffsetSec: 1500 },
 ];
 
 /// Write all fixtures to /tmp and return the (name → pubkey) map plus the
@@ -314,7 +373,7 @@ export function writeAllFixtures(outDir: string = "/tmp"): {
       exponent: spec.exponent,
       publishTime: BigInt(now + spec.publishTimeOffsetSec),
       prevPublishTime: BigInt(now + spec.publishTimeOffsetSec - 1),
-      emaPrice: spec.price,
+      emaPrice: spec.emaPrice ?? spec.price,
       emaConf: spec.emaConf ?? BigInt(1_000_000),
     };
     const body = serializePriceUpdateV2(fixture);

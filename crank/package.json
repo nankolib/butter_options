@@ -4,6 +4,9 @@
   "version": "0.1.0",
   "description": "Settle automation crank for Opta — settle_expiry + settle_vault",
   "type": "commonjs",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
     "start": "ts-node -r tsconfig-paths/register bot.ts",
     "typecheck": "tsc --noEmit",

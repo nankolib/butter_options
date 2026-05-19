@@ -17,7 +17,7 @@
 // ============================================================================
 
 import * as anchor from "@coral-xyz/anchor";
-import { Connection, Keypair, PublicKey } from "@solana/web3.js";
+import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey } from "@solana/web3.js";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -61,6 +61,13 @@ const DEFAULT_AUTO_FINALIZE_CU = 1_400_000;
 const DEFAULT_LISTINGS_PER_BATCH = 8;
 const DEFAULT_AUTO_CANCEL_CU = 800_000;
 
+// ---- Wallet-balance defaults (Phase 1 hardening) --------------------------
+const DEFAULT_LOW_BALANCE_WARN_SOL = 0.1;
+const DEFAULT_BALANCE_CHECK_TICKS = 12;
+
+// ---- Heartbeat (Phase 1 hardening) ----------------------------------------
+const HEARTBEAT_INTERVAL_MS = 60 * 60 * 1000;
+
 // ---- Logging ---------------------------------------------------------------
 
 type LogLevel = "info" | "warn" | "error" | "fatal";
@@ -98,6 +105,9 @@ interface CrankContext {
   fullyFinalized: Set<string>;
   // Auto-cancel wiring (Step 6 — V2 secondary listing)
   autoCancelOptions: AutoCancelOptions;
+  // Wallet-balance check (Phase 1 hardening)
+  lowBalanceWarnSol: number;
+  balanceCheckTicks: number;
 }
 
 interface AccountRecord {
@@ -188,6 +198,9 @@ function readEnv(): {
   dryRun: boolean;
   // Auto-cancel wiring (Step 6)
   listingsBatchSize: number;
+  // Phase 1 hardening
+  lowBalanceWarnSol: number;
+  balanceCheckTicks: number;
 } {
   const rpcUrl = process.env.OPTA_RPC_URL;
   if (!rpcUrl) {
@@ -212,6 +225,16 @@ function readEnv(): {
     const n = parseInt(envVal, 10);
     if (!Number.isFinite(n) || n < 1) {
       logFatal(`${name} must be a positive integer`, { value: envVal });
+      process.exit(1);
+    }
+    return n;
+  };
+
+  const parsePositiveFloat = (envVal: string | undefined, defaultVal: number, name: string): number => {
+    if (!envVal) return defaultVal;
+    const n = Number(envVal);
+    if (!Number.isFinite(n) || n <= 0) {
+      logFatal(`${name} must be a positive number`, { value: envVal });
       process.exit(1);
     }
     return n;
@@ -245,6 +268,17 @@ function readEnv(): {
   const dryRunRaw = (process.env.OPTA_AUTO_FINALIZE_DRY_RUN ?? "").toLowerCase();
   const dryRun = dryRunRaw === "true" || dryRunRaw === "1" || dryRunRaw === "yes";
 
+  const lowBalanceWarnSol = parsePositiveFloat(
+    process.env.OPTA_CRANK_LOW_BALANCE_WARN_SOL,
+    DEFAULT_LOW_BALANCE_WARN_SOL,
+    "OPTA_CRANK_LOW_BALANCE_WARN_SOL",
+  );
+  const balanceCheckTicks = parsePositiveInt(
+    process.env.OPTA_CRANK_BALANCE_CHECK_TICKS,
+    DEFAULT_BALANCE_CHECK_TICKS,
+    "OPTA_CRANK_BALANCE_CHECK_TICKS",
+  );
+
   return {
     rpcUrl,
     keypairPath,
@@ -256,6 +290,8 @@ function readEnv(): {
     maxAtasPerTick,
     staleS,
     dryRun,
+    lowBalanceWarnSol,
+    balanceCheckTicks,
   };
 }
 
@@ -363,6 +399,8 @@ async function bootstrapContext(): Promise<CrankContext> {
     staleS: env.staleS,
     fullyFinalized: new Set<string>(),
     autoCancelOptions,
+    lowBalanceWarnSol: env.lowBalanceWarnSol,
+    balanceCheckTicks: env.balanceCheckTicks,
   };
 }
 
@@ -598,7 +636,54 @@ async function tick(ctx: CrankContext): Promise<TickResult> {
   return result;
 }
 
+async function checkWalletBalance(
+  ctx: CrankContext,
+  reason: "boot" | "periodic",
+): Promise<void> {
+  let lamports: number;
+  try {
+    lamports = await ctx.connection.getBalance(ctx.wallet.publicKey);
+  } catch (err) {
+    logError("wallet-balance check failed", {
+      event: "wallet-balance-check",
+      reason,
+      err: String(err),
+    });
+    return;
+  }
+  const balanceSol = lamports / LAMPORTS_PER_SOL;
+  if (lamports === 0) {
+    logFatal("wallet has zero SOL", {
+      event: "wallet-balance-check",
+      reason,
+      balanceSol,
+      thresholdSol: ctx.lowBalanceWarnSol,
+    });
+    process.exit(1);
+  }
+  if (balanceSol < ctx.lowBalanceWarnSol) {
+    logWarn("wallet balance below warn threshold", {
+      event: "wallet-balance-check",
+      reason,
+      balanceSol,
+      thresholdSol: ctx.lowBalanceWarnSol,
+    });
+  } else {
+    logInfo("wallet balance ok", {
+      event: "wallet-balance-check",
+      reason,
+      balanceSol,
+      thresholdSol: ctx.lowBalanceWarnSol,
+    });
+  }
+}
+
 async function runForever(ctx: CrankContext): Promise<void> {
+  let lastHeartbeatMs = Date.now();
+  let tickCountSinceLastHeartbeat = 0;
+  let tickCounter = 0;
+  let lastTickWasIdle = true;
+
   while (!shutdownRequested) {
     const startMs = Date.now();
     try {
@@ -608,15 +693,35 @@ async function runForever(ctx: CrankContext): Promise<void> {
       // vaults that weren't already cached as fully finalized.
       const hadWork =
         result.tuplesFound > 0 || result.finalizeVaultsConsidered > 0;
+      lastTickWasIdle = !hadWork;
       if (hadWork) {
         logInfo("tick complete", { ...result, durationMs: Date.now() - startMs });
       }
     } catch (err) {
+      lastTickWasIdle = false;
       logError("tick failed (will retry next interval)", {
         err: String(err),
         durationMs: Date.now() - startMs,
       });
     }
+
+    tickCounter += 1;
+    tickCountSinceLastHeartbeat += 1;
+
+    if (Date.now() - lastHeartbeatMs >= HEARTBEAT_INTERVAL_MS) {
+      logInfo("settle-loop heartbeat", {
+        event: "settle-loop-heartbeat",
+        tickCountSinceLastHeartbeat,
+        lastTickWasIdle,
+      });
+      lastHeartbeatMs = Date.now();
+      tickCountSinceLastHeartbeat = 0;
+    }
+
+    if (tickCounter % ctx.balanceCheckTicks === 0) {
+      await checkWalletBalance(ctx, "periodic");
+    }
+
     if (shutdownRequested) break;
     await sleep(ctx.tickMs);
   }
@@ -647,7 +752,13 @@ async function main(): Promise<void> {
       computeUnitLimit: ctx.autoCancelOptions.computeUnitLimit,
       dryRun: ctx.autoCancelOptions.dryRun,
     },
+    walletBalanceCheck: {
+      lowBalanceWarnSol: ctx.lowBalanceWarnSol,
+      balanceCheckTicks: ctx.balanceCheckTicks,
+    },
   });
+
+  await checkWalletBalance(ctx, "boot");
 
   const onSignal = (sig: string) => {
     if (shutdownRequested) return; // ignore second signal

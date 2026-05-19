@@ -152,7 +152,7 @@ const SearchField: FC<{ value: string; onChange: (v: string) => void }> = ({
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder=""
-      className="bg-transparent outline-none border-0 w-32 md:w-44 text-ink placeholder:opacity-40 font-mono text-[11px] uppercase tracking-[0.18em]"
+      className="bg-transparent outline-none border-0 w-32 md:w-44 text-ink placeholder:opacity-40 font-mono text-[16px] uppercase tracking-[0.18em]"
     />
     <span
       aria-hidden="true"

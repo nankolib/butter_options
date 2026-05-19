@@ -163,7 +163,7 @@ export const WriterForm: FC<WriterFormProps> = ({
           placeholder="0.00"
           step="0.01"
           min="0"
-          className="w-full bg-paper-2 border border-rule rounded-sm px-3 py-2 font-mono text-[14px] text-ink focus:outline-none focus:border-ink transition-colors duration-200"
+          className="w-full bg-paper-2 border border-rule rounded-sm px-3 py-2 font-mono text-[16px] text-ink focus:outline-none focus:border-ink transition-colors duration-200"
         />
         <div className="font-mono font-medium text-[10px] uppercase tracking-[0.18em] text-ink-muted mt-1.5">
           {moneyness ?? "Spot — enter strike to see moneyness"}
@@ -178,7 +178,7 @@ export const WriterForm: FC<WriterFormProps> = ({
           placeholder="1"
           step="1"
           min="1"
-          className="w-full bg-paper-2 border border-rule rounded-sm px-3 py-2 font-mono text-[14px] text-ink focus:outline-none focus:border-ink transition-colors duration-200"
+          className="w-full bg-paper-2 border border-rule rounded-sm px-3 py-2 font-mono text-[16px] text-ink focus:outline-none focus:border-ink transition-colors duration-200"
         />
         <div className="font-mono font-medium text-[10px] uppercase tracking-[0.18em] text-ink-muted mt-1.5">
           1 contract = 1 unit of underlying
@@ -294,7 +294,7 @@ const AdvancedSection: FC<{
             placeholder="Auto · uses Black-Scholes"
             step="0.01"
             min="0"
-            className="w-full bg-paper-2 border border-rule rounded-sm px-3 py-2 font-mono text-[13px] text-ink focus:outline-none focus:border-ink transition-colors duration-200"
+            className="w-full bg-paper-2 border border-rule rounded-sm px-3 py-2 font-mono text-[16px] text-ink focus:outline-none focus:border-ink transition-colors duration-200"
           />
           <div className="font-sans italic font-medium leading-[1.5] text-ink-body text-[12.5px]">
             Leave empty to use the Black-Scholes-derived premium. Set a positive

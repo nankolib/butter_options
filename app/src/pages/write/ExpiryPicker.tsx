@@ -98,7 +98,7 @@ export const ExpiryPicker: FC<ExpiryPickerProps> = ({ preset, value, onChange })
               type="date"
               value={dateStr}
               onChange={(e) => handleDateChange(e.target.value)}
-              className="w-full bg-paper-2 border border-rule rounded-sm px-3 py-2 font-mono text-[13px] text-ink focus:outline-none focus:border-ink transition-colors duration-200"
+              className="w-full bg-paper-2 border border-rule rounded-sm px-3 py-2 font-mono text-[16px] text-ink focus:outline-none focus:border-ink transition-colors duration-200"
             />
           </label>
           <label>
@@ -109,7 +109,7 @@ export const ExpiryPicker: FC<ExpiryPickerProps> = ({ preset, value, onChange })
               type="time"
               value={timeStr}
               onChange={(e) => handleTimeChange(e.target.value)}
-              className="w-full bg-paper-2 border border-rule rounded-sm px-3 py-2 font-mono text-[13px] text-ink focus:outline-none focus:border-ink transition-colors duration-200"
+              className="w-full bg-paper-2 border border-rule rounded-sm px-3 py-2 font-mono text-[16px] text-ink focus:outline-none focus:border-ink transition-colors duration-200"
             />
           </label>
         </div>

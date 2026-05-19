@@ -299,7 +299,7 @@ export const BuyModal: FC<BuyModalProps> = ({
                   onChange={(e) => setQuantity(e.target.value)}
                   min={1}
                   max={selectedInventory}
-                  className="w-full bg-paper-2 border border-rule rounded-sm px-3 py-2 font-mono text-[14px] text-ink focus:outline-none focus:border-ink transition-colors duration-200"
+                  className="w-full bg-paper-2 border border-rule rounded-sm px-3 py-2 font-mono text-[16px] text-ink focus:outline-none focus:border-ink transition-colors duration-200"
                 />
                 <div className="font-mono font-medium text-[10px] uppercase tracking-[0.18em] text-ink-muted mt-1.5">
                   Max {selectedInventory.toLocaleString()} available at this source

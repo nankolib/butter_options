@@ -143,7 +143,7 @@ export const ResaleModal: FC<ResaleModalProps> = ({
             onChange={(e) => setListQuantity(e.target.value)}
             min={1}
             max={sellerBalance}
-            className="w-full bg-paper-2 border border-rule rounded-sm px-3 py-2 font-mono text-[14px] text-ink focus:outline-none focus:border-ink transition-colors duration-200"
+            className="w-full bg-paper-2 border border-rule rounded-sm px-3 py-2 font-mono text-[16px] text-ink focus:outline-none focus:border-ink transition-colors duration-200"
           />
           <div className="font-mono font-medium text-[10px] uppercase tracking-[0.18em] text-ink-muted mt-1.5">
             You hold {sellerBalance.toLocaleString()} contracts
@@ -160,7 +160,7 @@ export const ResaleModal: FC<ResaleModalProps> = ({
             onChange={(e) => setResalePrice(e.target.value)}
             step="0.01"
             min="0"
-            className="w-full bg-paper-2 border border-rule rounded-sm px-3 py-2 font-mono text-[14px] text-ink focus:outline-none focus:border-ink transition-colors duration-200"
+            className="w-full bg-paper-2 border border-rule rounded-sm px-3 py-2 font-mono text-[16px] text-ink focus:outline-none focus:border-ink transition-colors duration-200"
           />
           <div className="font-mono font-medium text-[10px] uppercase tracking-[0.18em] text-ink-muted mt-1.5">
             B-S suggested per contract:{" "}

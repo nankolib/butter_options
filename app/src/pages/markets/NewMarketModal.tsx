@@ -313,7 +313,7 @@ export const NewMarketModal: FC<NewMarketModalProps> = ({
                   : "Search by ticker or symbol (e.g. SOL, AAPL, EUR)"
               }
               disabled={catalogState.kind === "loading"}
-              className="w-full bg-paper-2 border border-rule rounded-sm px-3 py-2 font-mono text-[13px] text-ink focus:outline-none focus:border-ink transition-colors duration-200 disabled:opacity-50"
+              className="w-full bg-paper-2 border border-rule rounded-sm px-3 py-2 font-mono text-[16px] text-ink focus:outline-none focus:border-ink transition-colors duration-200 disabled:opacity-50"
             />
             {filtered.length > 0 && (
               <ul className="border border-rule-soft rounded-sm mt-2 max-h-[240px] overflow-y-auto">
@@ -371,7 +371,7 @@ export const NewMarketModal: FC<NewMarketModalProps> = ({
                 value={pastedHex}
                 onChange={(e) => setPastedHex(e.target.value)}
                 placeholder="64-char hex (no 0x)"
-                className="w-full bg-paper-2 border border-rule rounded-sm px-3 py-2 font-mono text-[12px] text-ink focus:outline-none focus:border-ink"
+                className="w-full bg-paper-2 border border-rule rounded-sm px-3 py-2 font-mono text-[16px] text-ink focus:outline-none focus:border-ink"
                 spellCheck={false}
               />
               <div className="flex flex-wrap gap-2">
@@ -408,7 +408,7 @@ export const NewMarketModal: FC<NewMarketModalProps> = ({
                 }}
                 placeholder="e.g. SOL"
                 maxLength={16}
-                className="flex-1 bg-paper-2 border border-rule rounded-sm px-3 py-2 font-mono text-[13px] text-ink focus:outline-none focus:border-ink transition-colors duration-200"
+                className="flex-1 bg-paper-2 border border-rule rounded-sm px-3 py-2 font-mono text-[16px] text-ink focus:outline-none focus:border-ink transition-colors duration-200"
               />
               <span
                 className={`font-mono text-[12px] ${assetNameValid ? "text-emerald-700" : "text-crimson"}`}

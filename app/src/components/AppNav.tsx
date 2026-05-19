@@ -52,11 +52,11 @@ export const AppNav: FC = () => {
     <>
     <nav
       aria-label="Primary"
-      className="pointer-events-none fixed inset-x-0 top-0 z-[200] flex items-center justify-between font-mono text-[11.5px] uppercase tracking-[0.18em] text-ink py-[22px] px-[clamp(20px,4vw,56px)] [&>*]:pointer-events-auto"
+      className="pointer-events-none fixed inset-x-0 top-0 z-[200] flex flex-wrap items-center justify-between font-mono text-[11.5px] uppercase tracking-[0.18em] text-ink py-[22px] px-[clamp(20px,4vw,56px)] [&>*]:pointer-events-auto"
     >
       <Wordmark context="light" />
 
-      <div className="hidden md:flex gap-7">
+      <div className="order-last w-full mt-2 flex flex-wrap gap-x-4 gap-y-1 md:order-none md:w-auto md:mt-0 md:flex-nowrap md:gap-7">
         <AppNavLink to="/markets">Markets</AppNavLink>
         <AppNavLink to="/trade">Trade</AppNavLink>
         <AppNavLink to="/write">Write</AppNavLink>
@@ -122,7 +122,7 @@ const AppNavLink: FC<{ to: string; children: ReactNode }> = ({ to, children }) =
   <NavLink
     to={to}
     className={({ isActive }) =>
-      `relative no-underline transition-opacity duration-300 ease-opta hover:opacity-100 ${isActive ? "opacity-100" : "opacity-65"}`
+      `relative inline-block py-2 md:py-0 no-underline transition-opacity duration-300 ease-opta hover:opacity-100 ${isActive ? "opacity-100" : "opacity-65"}`
     }
   >
     {({ isActive }) => (

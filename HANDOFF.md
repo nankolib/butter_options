@@ -2,6 +2,8 @@
 
 > Updated 2026-05-17 after **Phase 2 Stage B shipped to devnet** (Stage A follow-on FE fix `12e3d8d` + Stage B commit — see `git log master` — on master + main; opta deploy slot `463002816`, hook re-uploaded by Anchor at same source). Stage B is the realized-volatility oracle: per-asset on-chain ring buffer of 720 hourly samples, O(1) accumulator, sample-variance annualized vol with warmup + staleness gates, two new permissionless instructions (`initialize_vol_oracle` + `push_vol_sample`), a pure read function (`realized_vol_annualized`) at 3,802 CU that Stage C will CPI into, and a new hourly side-loop in `crank/bot.ts` that auto-discovers assets + initializes oracles + pushes samples. **11 oracles initialized on devnet at Step 8 smoke; 4 already seeded, 7 will be seeded by the first organic crank tick** (Hermes returned stale-window updates for 7 in the smoke — locked-decision behavior; next tick retries since seed branch skips rate-limit). Same arc landed Stage A's deferred `carry_rate_bps` frontend fix in `useWriteSubmit.ts` (commit `12e3d8d`), which clears the Vercel red the prior Stage A note flagged. **Stage B is still not wired into any production handler** — `realized_vol_annualized` exists but no instruction calls it yet; Stage C is when American vault creation invokes it. The 7-day warmup (168 hourly samples) starts now per asset. **Stage C's code can ship anytime** (write + audit + deploy gates run independently), but `realized_vol_annualized` returns `Warmup` until the per-asset sample count crosses 168 — so the 4 already-seeded assets reach live-readable state **2026-05-24**, the other 7 reach it ~1 hour later (whenever the next organic crank tick first seeds them).
 
+> **Demo Day priority — Colosseum Frontier Demo Day 2026-06-02, Islamabad, $7,500 prize pool.** ~14 days remaining as of 2026-05-19. Demo focus: existing **European flow on devnet** (devnet program at slot 463002816 — Stage B's deploy). Active workstream: **mobile responsiveness** (frontend, Tailwind responsive pass across Markets / Trade / Write / Portfolio). **Phase 2 Stage C (American on-chain pricing wire-up) deferred until post-demo** — Stage B vol-oracle warmup continues passively on the VPS through this window. **2026-05-19 fix:** ran `scripts/migrate-shared-vaults-carry-rate.ts` (admin, 2 txs, 27 vaults migrated 236→240 bytes, ~761k lamports cost). This restored Markets/Trade visibility for pre-hackathon options and unblocked new vault creation against legacy-PDA strike/expiry combos.
+
 > Note on Stage A framing correction (kept from prior version): the older HANDOFF text "On-chain Black-Scholes via solmath — pricing happens on-chain at ~50K CU" overstated reality. The math LIBRARY is on-chain (linked into the program binary) but no production instruction CURRENTLY calls it — premium pricing today is computed in the writer's browser via `app/src/utils/blackScholes.ts` (TypeScript) and submitted as an instruction argument. Phase 2 fixes this for American options first; European migration follows as a separate later arc. See §1 thesis and §11.5 Phase 2 plan for the honest framing.
 
 > NOTE ON THE RENAME: Project renamed Butter Options → Opta on 2026-04-21. Phase 2 of the rename is complete on disk. Directory layout is `programs/opta/` and `programs/opta-transfer-hook/`. `Anchor.toml` keys are `opta` and `opta_transfer_hook`. PDA seed constants, `declare_id!()` macros, and IDL have been regenerated. The old `butter_options` / `butter-options` identifiers are gone from the codebase.
@@ -158,6 +160,8 @@ The on-chain realized-volatility oracle for Phase 2's pricing path. **Pure addit
 
 **What Stage B did NOT do (deferred to Stage C):** wire `realized_vol_annualized` into `create_shared_vault`'s American branch; add `get_option_price` read-only instruction for CPI consumers; frontend vol display (Stage H).
 
+**Post-Stage-B follow-on (2026-05-19):** `scripts/migrate-shared-vaults-carry-rate.ts` run against devnet (admin, 2 txs `543JDEY1…` + `3YsFpGbv…`, 27 vaults migrated 236→240 bytes, cost ~761k lamports). On-chain SharedVault census moved from `1 at 240 / 27 at 236 / 14 at 204` to `28 at 240 / 0 at 236 / 14 at 204`. The 14 pre-Phase-2 (204-byte) vaults remain at policy-hidden legacy size — `isPostPhase2Vault` filter would gate them out anyway. Migration was triggered by the May-17 redeploy silently dropping all 41 legacy vaults from `safeFetchAll` (legacy Borsh deser fails on the trailing-byte length mismatch).
+
 ### Earlier audit/feature history (compressed — see git log for detail)
 
 - **Run-6 + Run-7 audit-fix arcs (May 4-5 2026):** Closed 19 of 61 audit findings. All 4 CRITs + all 5 PART 1 HIGHs + all 4 PART 2 HIGHs closed. Remaining open: PART 1 7 MEDs/10 LOWs/8 INFOs (+ CRIT-4 disclosure-only); PART 2 4 MEDs/9 LOWs/6 INFOs. Devnet slots from this arc: opta `460518532`, hook `460518751`. UNCHANGED in Stage A (Stage A is pure code addition, no devnet redeploy).
@@ -263,8 +267,8 @@ Plus **3 cu-profile-gated test-only instructions** (NOT in production IDL): `cu_
 | What | Where |
 |---|---|
 | Both programs | **Solana devnet**, program IDs above. **Slot updated by Stage B redeploy on 2026-05-17:** opta `463002816` (was `460518532` from HIGH-5 on May 5), opta_transfer_hook re-uploaded by Anchor at same source (size delta = 0). Stage A's pending source/IDL changes shipped to chain alongside Stage B's. Next redeploy is Stage C when American pricing wires `realized_vol_annualized` into `create_shared_vault`. |
-| Frontend | **Vercel** — `https://opta-solana.vercel.app`. Auto-deploys on push to `main`. **Vercel red cleared by Stage A FE follow-on in commit `12e3d8d`** — `useWriteSubmit.ts` now passes the 6-arg `createSharedVault`. |
-| Crank bot | Run manually via `npm start` from `crank/`. Reads `OPTA_RPC_URL` and `OPTA_CRANK_KEYPAIR` from env. |
+| Frontend | **Vercel** — `https://opta-solana.vercel.app`. Auto-deploys on push to `main`. **Vercel green at `fb31811`.** Stage A FE follow-on in `12e3d8d` cleared the IDL drift; SharedVault migration on 2026-05-19 cleared the legacy-vault drop in `safeFetchAll`. |
+| Crank bot | **LIVE on Vultr VPS** `root@144.202.58.6` (hostname `bud-fox-agent`, Ubuntu 22.04) as of 2026-05-19. systemd unit `opta-crank.service`, user `opta` (uid 998, `/home/opta`), install at `/opt/opta-crank/` HEAD `fb31811`. `NODE_PATH=/opt/opta-crank/crank/node_modules` in `/opt/opta-crank/.env` resolves `@app/*` cross-imports without installing `app/` deps (sidesteps `app/package-lock.json` `ms@2.0.0` drift). Dedicated devnet keypair `5sHZETYzbbdBQnFLmDCG3gyCikew39pL8kAE5xroGfqa` (1 SOL, gas-payer only, zero admin authority). Phase 1 hardening live: boot+periodic wallet-balance check, per-hour settle-loop heartbeat. |
 | Devnet USDC mint | `AytU5HUQRew9VdUdrzQuZvZ7s14pHLiYjAF5WqdK3oxL` |
 | Devnet faucet wallet | Public keypair baked into `app/src/utils/constants.ts` for demo USDC; in-code warnings flag it |
 | Domain | `opta.fyi` purchased but not yet attached to Vercel — parked |
@@ -288,6 +292,9 @@ Plus **3 cu-profile-gated test-only instructions** (NOT in production IDL): `cu_
 - **CRIT-4 disclosed** via whitepaper §9.6 + BuyModal CALL-only disclaimer
 - **24h holders-first lockup** post-settlement; frontend mirrors via `settled-locked` row state
 - **HIGH-5 permissionless market creation** via Pyth proof-of-existence
+- **Persistent crank on VPS** via systemd `opta-crank.service`. `Restart=on-failure`, `TimeoutStopSec=300`, sandboxed (`NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome=true`, `PrivateTmp=true`).
+- **SharedVault migration complete on devnet** (2026-05-19). 28/42 vaults at current schema; 14 pre-Phase-2 vaults remain hidden by `isPostPhase2Vault` policy filter.
+- **Phase 1 crank hardening** (commit `fb31811`): wallet balance check (boot + periodic), settle-loop heartbeat, Node version pins (`engines >=18.0.0` + `.nvmrc` pinning Node 20).
 
 ---
 
@@ -319,11 +326,10 @@ The full Phase 2 plan is documented at **`.context/plans/phase2-american-onchain
 
 ### Frontend gaps / small bugs (deferred to Stage H or later)
 
-- **Vercel build will go red on next deploy** until Stage H wires the `carry_rate_bps` 6th arg in `app/src/pages/write/useWriteSubmit.ts`. Production traffic served by prior good deploy meanwhile.
+- **Vercel green at `fb31811`** as of 2026-05-19. Stage A FE follow-on (`12e3d8d`) wired the `carry_rate_bps` 6th arg; SharedVault migration cleared the legacy-vault drop. Local `npm run build` clean in 39.78s; only pre-existing warnings (crypto externalized, 500kB chunk, opta-whitepaper-slicer timing).
 - Markets page shows "No markets yet" when an asset is registered but has no vaults.
 - Indicative Premium panel renders `$0.00` for short-dated OTM options (sub-cent rounding).
 - Stale market list on `/markets` after creating a market via AppNav (modal owns own state; Markets page doesn't refetch).
-- Broken BTC PUT vault on devnet (user-reported $750k BTC PUT $75,000 / 8 May vault stuck at `total_options_minted = 0`). Funds recoverable via `withdraw_from_vault` once root cause identified.
 
 ### Minor housekeeping
 
@@ -383,24 +389,27 @@ The full Phase 2 plan is documented at **`.context/plans/phase2-american-onchain
 
 **Phase 2 Stage C planning is the next session.** Plan first, execute via Claude Code propose-then-apply. Stage B (vol oracle) shipped 2026-05-17; Stage C wires `realized_vol_annualized` into `create_shared_vault`'s American branch + adds the read-only `get_option_price` instruction for CPI consumers.
 
-### Tier 1 — near-term
+### Tier 1 — Demo-prep arc (Demo Day 2026-06-02)
+
+1. **Mobile responsiveness audit + fix pass** for Markets, Trade, Write, Portfolio (active workstream). Tailwind responsive sweep; the demo will be shown on phones.
+2. **End-to-end smoke of the European flow on devnet** — verify nothing else is silently degraded post-migration. Create-vault → deposit → mint → list-secondary → buy → settle → auto-finalize → claim path.
+3. **Demo script + presenter notes** — out-of-code; flagging here so it doesn't get lost.
+4. **`opta.fyi` Vercel domain attachment + DNS** — nice-to-have for Demo Day branding. (Previously parked in Tier 2; promoted because of timing.)
+
+### Tier 2 — Deferred to post-2026-06-02 (everything formerly in Tier 1, plus existing quality polish)
 
 1. **Phase 2 Stage C planning** — on-chain pricing in `create_shared_vault` (American branch) + read-only `get_option_price` for CPI. Reference `.context/plans/phase2-american-onchain-pricing-scope.md` §4 Stage C for the scope outline; open questions to resolve in planning (per the scope doc):
    - `create_shared_vault` signature: drop `premium_per_contract` for American, keep for European?
    - `get_option_price` CU budget (composes BS-2002 ~85K + `realized_vol_annualized` ~4K + Pyth spot read; total ~100K expected, leaves margin for CPI caller's own work)
    - Stale-vol-oracle handling (block American vault creation? error variant?)
    - Buyer-side display: vault stores the computed premium at creation, no mid-life re-pricing
-   - **Pre-flight check**: confirm at least 4 assets have crossed warmup (2026-05-24 unlock date for the assets seeded at Stage B Step 8 smoke; rest unlock as soon as their first organic seed lands)
-2. **HANDOFF cleanup** — already done in this refresh; future sessions inherit the corrected framing automatically.
-3. **Crank operator setup** — Stage B's vol-oracle side-loop is wired but not running as a persistent service. Operator decision: set up systemd / pm2 / Docker `restart: unless-stopped` against the user's hot wallet + Helius RPC. See `crank/README.md` for the production hot-wallet recommendation pattern.
+   - **Pre-flight check**: at least 4 assets cross warmup on **2026-05-24** (Stage B Step 8 smoke seeds); other 7 cross warmup on **2026-05-26** (organic crank-tick seeds from 2026-05-19 11:42 UTC).
+2. **HANDOFF cleanup** — current refresh covers the 2026-05-19 state; future sessions inherit corrected framing automatically.
+3. **Crank operator setup** — superseded by the 2026-05-19 VPS deploy (see §5 Crank row). This item is closed; kept here as a sequencing reference.
 4. **Demo video recording** if not already done — "wake up with USDC, no clicks" beat is the differentiated narrative.
-
-### Tier 2 — quality polish (not blocking Phase 2)
-
-1. **Test suite refresh** — fix 38 fixture clock-skew failures via runtime-relative timestamps + bankrun/litesvm adoption (4-8 hours, unblocks 3 skipped CRIT-1 after-window tests).
-2. **PART 1 HIGH-5 full proof-validation arc** for `migrate_pyth_feed` (~250 LOC across 6 files).
-3. **Frontend bug bash:** Markets-page-empty-when-asset-has-no-vaults, Indicative Premium `$0` display floor, AppNav modal stale-list refetch.
-4. **`opta.fyi` Vercel attachment + DNS setup** when otherwise mainnet-ready.
+5. **Test suite refresh** — fix 38 fixture clock-skew failures via runtime-relative timestamps + bankrun/litesvm adoption (4-8 hours, unblocks 3 skipped CRIT-1 after-window tests).
+6. **PART 1 HIGH-5 full proof-validation arc** for `migrate_pyth_feed` (~250 LOC across 6 files).
+7. **Frontend bug bash:** Markets-page-empty-when-asset-has-no-vaults, Indicative Premium `$0` display floor, AppNav modal stale-list refetch.
 
 ### Tier 3 — post-launch / mainnet path
 
@@ -467,6 +476,8 @@ The full Phase 2 plan is documented at **`.context/plans/phase2-american-onchain
 - **IDL regeneration** — every Rust instruction signature change requires `anchor build` + copy to `app/src/idl/`. After Stage A, frontend IDL drift is expected until Stage H.
 - **Cross-package imports from `crank/` to `app/src/`** use `@app/*` tsconfig path alias.
 - **The Phase 2 scope doc at `.context/plans/phase2-american-onchain-pricing-scope.md` is canonical** for all Phase 2 Stage planning. Don't re-decide locked items there without explicit user directive.
+- **Cross-package imports from `crank/` → `app/src/*` require `app/node_modules` at runtime UNLESS `NODE_PATH` points at `crank/node_modules`.** Production VPS uses `NODE_PATH=/opt/opta-crank/crank/node_modules` in `/opt/opta-crank/.env` to sidestep this. If you ever do install `app/` deps on a deploy target, `app/package-lock.json` has a `Missing: ms@2.0.0` drift that rejects `npm ci` — use `npm install --legacy-peer-deps` and discard the lockfile rewrite, or fix the lockfile first.
+- **SharedVault schema migration is operator-driven, not automatic.** `scripts/migrate-shared-vaults-carry-rate.ts` must be run after any Stage-A-class schema change. The docstring saying "DO NOT RUN until Stage C deployment" was overly conservative — the schema migration is self-contained and safe to run independently. **Lesson: never block a script run on a downstream stage that may slip.** (2026-05-19 incident: the docstring was honored too literally, so 41 legacy vaults silently dropped from the UI for 2 days post-Stage-B redeploy.)
 
 ### Repo hygiene
 - `.context/` is gitignored — contains audit outputs, PoCs, and the Phase 2 scope/planning docs. Never commit.
@@ -498,8 +509,8 @@ The earlier "on-chain Black-Scholes" framing overclaimed — the math library wa
 ### Stage status
 
 - **A — BS-2002 math kernel + plumbing — SHIPPED** May 14 2026 (`3d33abc` + `7e98a46`)
-- **B — On-chain realized vol oracle — NEXT** (~3-4 weeks)
-- **C — On-chain pricing wired into American `create_shared_vault` + `get_option_price` for CPI** (~1-2 weeks)
+- **B — On-chain realized vol oracle — SHIPPED** 2026-05-17 (devnet slot `463002816`). Vol oracles **11/11 seeded** as of 2026-05-19; warmup unlock dates **2026-05-24** (4 originals from Step 8 smoke) and **2026-05-26** (7 newer, seeded by the VPS crank's first organic tick at 11:42 UTC). Crank running persistently on Vultr VPS — see §5 Crank row.
+- **C — On-chain pricing wired into American `create_shared_vault` + `get_option_price` for CPI — DEFERRED until post-Demo Day (2026-06-02).** Can ship anytime code-wise but earliest live demo on all 11 feeds is **2026-05-26** anyway (warmup-gated). Resume planning post-demo.
 - **D — American vault instructions** (~1 week)
 - **E — Token-2022 metadata `exercise_style`** (~3 days)
 - **F — `exercise_american` instruction** (~1 week)
@@ -525,12 +536,15 @@ Roadmap framing (Phase 4+): full implied vol oracle aggregating multi-venue opti
 
 ## TL;DR
 
+- **Demo Day priority:** Colosseum Frontier Demo Day **2026-06-02** (Islamabad, $7,500 prize pool). ~14 days remaining as of 2026-05-19. Demo focus: existing European flow on devnet. Active workstream: mobile responsiveness. Phase 2 Stage C deferred until post-demo.
 - **Opta** is a permissionless options primitive on Solana with Token-2022 "living" option tokens, any-asset markets via Pyth, V2 shared-vault liquidity, permissionless auto-finalize. Built for Colosseum Frontier (April 2026); hackathon submitted May 11.
-- **Live on devnet** with frontend on Vercel (`opta-solana.vercel.app`). Devnet slots: opta `460518532`, opta_transfer_hook `460518751` (unchanged since May 5; Stage A is pure code addition with no redeploy).
-- **Phase 2 Stage A SHIPPED May 14 2026.** BS-2002 American option pricing math kernel + carry_rate_bps plumbing + admin migration instruction. Commits `3d33abc`, `91b1738`, `7e98a46` on master + main. Math kernel is linked + tested + ready; not yet called from production (that's Stage C).
-- **Phase 2 plan canonical:** `.context/plans/phase2-american-onchain-pricing-scope.md`. Stage B (on-chain realized vol oracle) is the next arc.
+- **Live on devnet** with frontend on Vercel (`opta-solana.vercel.app`). Devnet slots: opta `463002816` (Stage B redeploy, 2026-05-17), opta_transfer_hook re-uploaded by Anchor at same source.
+- **Phase 2 Stage A + B SHIPPED.** Stage A (May 14, commits `3d33abc` + `7e98a46`): BS-2002 math kernel + `carry_rate_bps` plumbing + admin migration. Stage B (May 17, see `git log master`): vol-oracle ring buffer + crank side-loop. 11/11 oracles seeded; warmup unlocks 2026-05-24 / 2026-05-26. **Stage C deferred until post-Demo Day.**
+- **2026-05-19 SharedVault migration complete.** Ran `scripts/migrate-shared-vaults-carry-rate.ts` (admin, 2 txs, 27 vaults 236→240 bytes). Restored Markets/Trade visibility for pre-hackathon options. 28/42 vaults at current schema; 14 pre-Phase-2 remain hidden by `isPostPhase2Vault` filter.
+- **Crank LIVE on Vultr VPS** `root@144.202.58.6` (bud-fox-agent) as systemd unit `opta-crank.service` since 2026-05-19. Dedicated devnet keypair, 1 SOL, gas-payer only. See §5 Crank row.
+- **Phase 2 plan canonical:** `.context/plans/phase2-american-onchain-pricing-scope.md`. Stage C is next-after-demo.
 - **Honest pricing framing:** the math library is on-chain; production premium today is computed in the writer's browser and submitted as an arg. Phase 2 fixes this for American options first.
 - **Programs ID:** `CtzJ4MJYX6BFvF4g67i5C24tQuwRn6ddKkaE5L84z9Cq` (opta), `83EW6a9o9P5CmGUkQKvVZvsz6v6Dgztiw5M4tVjfZMAG` (transfer hook).
-- **Branches:** master + main mirrored at every commit; both at `7e98a46` as of May 14 2026.
-- **Vercel:** next deploy expected red due to IDL drift (frontend missing the 6th `carry_rate_bps` arg). Prior good deploy continues serving production. Stage H clears the red.
+- **Branches:** master + main mirrored at every commit; both at `fb31811` as of 2026-05-19 (Phase 1 crank hardening).
+- **Vercel:** **green** at `fb31811`. Auto-deploys on push to `main`.
 - **Biggest gotcha:** the protocol runs on Solana devnet but uses Pyth's mainnet feeds. Don't confuse "we're on mainnet" with "Solana mainnet" — protocol is still devnet; only the price oracle endpoint is production.

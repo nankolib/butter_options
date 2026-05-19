@@ -76,7 +76,7 @@ const MarketRowEl: FC<{ row: MarketRow }> = ({ row: r }) => {
   return (
     <tr className={`border-b border-rule-soft align-middle ${rowOpacity}`}>
       {/* Asset */}
-      <td className="py-4 pr-4">
+      <td className="py-2 pr-2 sm:py-4 sm:pr-4">
         <div className="flex items-center gap-3">
           <span
             aria-hidden="true"
@@ -98,7 +98,7 @@ const MarketRowEl: FC<{ row: MarketRow }> = ({ row: r }) => {
       </td>
 
       {/* Side */}
-      <td className="py-4 pr-4">
+      <td className="py-2 pr-2 sm:py-4 sm:pr-4">
         <span className="inline-flex items-center gap-2 font-mono text-[11.5px] uppercase tracking-[0.18em]">
           <span aria-hidden="true" className="inline-block w-[6px] h-[6px] rounded-full bg-crimson" />
           {r.side}
@@ -106,12 +106,12 @@ const MarketRowEl: FC<{ row: MarketRow }> = ({ row: r }) => {
       </td>
 
       {/* Strike */}
-      <td className="py-4 pr-4 font-mono text-[13px] whitespace-nowrap">
+      <td className="py-2 pr-2 sm:py-4 sm:pr-4 font-mono text-[13px] whitespace-nowrap">
         ${r.strike.toFixed(2)}
       </td>
 
       {/* Expiry — date + countdown */}
-      <td className="py-4 pr-4 whitespace-nowrap">
+      <td className="py-2 pr-2 sm:py-4 sm:pr-4 whitespace-nowrap">
         <div className="font-mono text-[13px]">{formatTableDate(r.expiry)}</div>
         <div className="font-mono font-medium text-[10px] uppercase tracking-[0.16em] text-ink-muted mt-0.5">
           {formatCountdown(r.expiry)}
@@ -119,32 +119,32 @@ const MarketRowEl: FC<{ row: MarketRow }> = ({ row: r }) => {
       </td>
 
       {/* Spot */}
-      <td className="py-4 pr-4 font-mono text-[13px] whitespace-nowrap">
+      <td className="py-2 pr-2 sm:py-4 sm:pr-4 font-mono text-[13px] whitespace-nowrap">
         {r.spot != null ? <MoneyAmount value={r.spot} /> : "—"}
       </td>
 
       {/* IV */}
-      <td className="py-4 pr-4 font-mono text-[13px] whitespace-nowrap">
+      <td className="py-2 pr-2 sm:py-4 sm:pr-4 font-mono text-[13px] whitespace-nowrap">
         {r.iv != null ? `${(r.iv * 100).toFixed(1)}%` : "—"}
       </td>
 
       {/* Open Interest */}
-      <td className="py-4 pr-4 font-mono text-[13px] whitespace-nowrap">
+      <td className="py-2 pr-2 sm:py-4 sm:pr-4 font-mono text-[13px] whitespace-nowrap">
         {r.openInterest > 0 ? r.openInterest.toLocaleString() : "—"}
       </td>
 
       {/* Vault TVL */}
-      <td className="py-4 pr-4 font-mono text-[13px] whitespace-nowrap">
+      <td className="py-2 pr-2 sm:py-4 sm:pr-4 font-mono text-[13px] whitespace-nowrap">
         {r.vaultTvl != null ? <MoneyAmount value={r.vaultTvl} /> : "—"}
       </td>
 
       {/* Status */}
-      <td className="py-4 pr-4">
+      <td className="py-2 pr-2 sm:py-4 sm:pr-4">
         <StatusPill status={r.status} />
       </td>
 
       {/* Trade — hidden on non-OPEN rows */}
-      <td className="py-4">
+      <td className="py-2 sm:py-4">
         {isOpen && (
           <Link
             to={tradeHref}

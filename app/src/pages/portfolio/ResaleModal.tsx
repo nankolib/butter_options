@@ -106,7 +106,7 @@ export const ResaleModal: FC<ResaleModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-[300] flex items-center justify-center bg-ink/50 backdrop-blur-sm px-4">
-      <div className="w-full max-w-md bg-paper border border-rule rounded-md p-8 shadow-2xl">
+      <div className="w-full max-w-md bg-paper border border-rule rounded-md p-5 sm:p-8 shadow-2xl">
         <div className="flex items-center justify-between mb-6">
           <h2 className="m-0 font-fraunces-mid font-light text-ink leading-tight tracking-[-0.01em] text-[24px]">
             List for resale

@@ -95,7 +95,7 @@ const PositionRow: FC<{
   return (
     <tr className="border-b border-rule-soft align-middle">
       {/* Asset */}
-      <td className="py-4 pr-4">
+      <td className="py-2 pr-2 sm:py-4 sm:pr-4">
         <div className="flex items-center gap-3">
           <span
             aria-hidden="true"
@@ -117,7 +117,7 @@ const PositionRow: FC<{
       </td>
 
       {/* Side */}
-      <td className="py-4 pr-4">
+      <td className="py-2 pr-2 sm:py-4 sm:pr-4">
         <span className="inline-flex items-center gap-2 font-mono text-[11.5px] uppercase tracking-[0.18em]">
           <span aria-hidden="true" className="inline-block w-[6px] h-[6px] rounded-full bg-crimson" />
           {p.side}
@@ -125,12 +125,12 @@ const PositionRow: FC<{
       </td>
 
       {/* Strike */}
-      <td className="py-4 pr-4 font-mono text-[13px] whitespace-nowrap">
+      <td className="py-2 pr-2 sm:py-4 sm:pr-4 font-mono text-[13px] whitespace-nowrap">
         ${p.strike.toFixed(2)}
       </td>
 
       {/* Expiry — date + countdown */}
-      <td className="py-4 pr-4 whitespace-nowrap">
+      <td className="py-2 pr-2 sm:py-4 sm:pr-4 whitespace-nowrap">
         <div className="font-mono text-[13px]">{formatTableDate(p.expiry)}</div>
         <div className="font-mono font-medium text-[10px] uppercase tracking-[0.16em] text-ink-muted mt-0.5">
           {formatCountdown(p.expiry)}
@@ -138,22 +138,22 @@ const PositionRow: FC<{
       </td>
 
       {/* Contracts */}
-      <td className="py-4 pr-4 font-mono text-[13px]">
+      <td className="py-2 pr-2 sm:py-4 sm:pr-4 font-mono text-[13px]">
         {p.contracts.toLocaleString()}
       </td>
 
       {/* Cost basis */}
-      <td className="py-4 pr-4 font-mono text-[13px] whitespace-nowrap">
+      <td className="py-2 pr-2 sm:py-4 sm:pr-4 font-mono text-[13px] whitespace-nowrap">
         <MoneyAmount value={p.costBasis} />
       </td>
 
       {/* Current value */}
-      <td className="py-4 pr-4 font-mono text-[13px] whitespace-nowrap">
+      <td className="py-2 pr-2 sm:py-4 sm:pr-4 font-mono text-[13px] whitespace-nowrap">
         <MoneyAmount value={p.currentValue} />
       </td>
 
       {/* P&L */}
-      <td className="py-4 pr-4 font-mono text-[13px] whitespace-nowrap">
+      <td className="py-2 pr-2 sm:py-4 sm:pr-4 font-mono text-[13px] whitespace-nowrap">
         <span className={pnlColor}>
           <MoneyAmount value={p.pnl} showSign />
           <span className="ml-2 text-[10.5px] text-ink-body">
@@ -163,7 +163,7 @@ const PositionRow: FC<{
       </td>
 
       {/* Action — Solscan icon + primary action button (D7 retrofit). */}
-      <td className="py-4">
+      <td className="py-2 sm:py-4">
         <div className="flex items-center gap-3 justify-end">
           <SolscanLink pda={solscanTargetFor(p)} />
           {p.action !== "none" && (

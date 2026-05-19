@@ -268,7 +268,7 @@ export const NewMarketModal: FC<NewMarketModalProps> = ({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-lg bg-paper border border-rule rounded-md p-8 shadow-2xl max-h-[90vh] overflow-y-auto"
+        className="w-full max-w-lg bg-paper border border-rule rounded-md p-5 sm:p-8 shadow-2xl max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-6">

@@ -52,7 +52,7 @@ export const MarketsStatementHeader: FC<MarketsStatementHeaderProps> = ({
       </div>
 
       <div className="flex flex-wrap items-end justify-between gap-8">
-        <h1 className="m-0 font-fraunces-display font-light text-ink leading-[0.92] tracking-[-0.04em] text-[clamp(72px,10vw,144px)]">
+        <h1 className="m-0 font-fraunces-display font-light text-ink leading-[0.92] tracking-[-0.04em] text-[clamp(48px,10vw,144px)]">
           Markets<span className="italic font-fraunces-display-em text-crimson">.</span>
         </h1>
 

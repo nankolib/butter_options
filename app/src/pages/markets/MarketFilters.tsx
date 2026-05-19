@@ -156,7 +156,7 @@ const SearchField: FC<{ value: string; onChange: (v: string) => void }> = ({
     />
     <span
       aria-hidden="true"
-      className="text-ink-muted border border-rule rounded-sm px-1.5 py-[1px] text-[9.5px] tracking-[0.2em]"
+      className="hidden sm:inline-block text-ink-muted border border-rule rounded-sm px-1.5 py-[1px] text-[9.5px] tracking-[0.2em]"
     >
       ⌘K
     </span>

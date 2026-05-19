@@ -184,7 +184,7 @@ const ChainRowEl: FC<{
       </Td>
 
       {/* STRIKE */}
-      <td className="px-3 py-4 text-center align-middle">
+      <td className="px-2 py-2 sm:px-3 sm:py-4 text-center align-middle">
         <div className="font-fraunces-text italic font-light text-ink text-[18px] leading-tight">
           ${formatStrike(row.strike)}
         </div>
@@ -210,7 +210,7 @@ const Td: FC<{
   muted?: boolean;
 }> = ({ children, align, muted = false }) => (
   <td
-    className={`font-mono text-[12.5px] py-4 px-3 whitespace-nowrap ${
+    className={`font-mono text-[12.5px] py-2 px-2 sm:py-4 sm:px-3 whitespace-nowrap ${
       align === "right" ? "text-right" : align === "center" ? "text-center" : "text-left"
     } ${muted ? "text-ink-muted" : ""}`}
   >

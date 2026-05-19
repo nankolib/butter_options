@@ -89,7 +89,7 @@ export const ExpiryPicker: FC<ExpiryPickerProps> = ({ preset, value, onChange })
       </div>
 
       {showInputs && (
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <label>
             <div className="font-mono font-medium text-[10px] uppercase tracking-[0.18em] text-ink-muted mb-1">
               Date (UTC)

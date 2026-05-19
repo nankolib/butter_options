@@ -124,7 +124,7 @@ const WriterRowEl: FC<{
   return (
     <tr className="border-b border-rule-soft align-middle">
       {/* Asset */}
-      <td className="py-4 pr-4">
+      <td className="py-2 pr-2 sm:py-4 sm:pr-4">
         <div className="flex items-center gap-3">
           <span
             aria-hidden="true"
@@ -146,7 +146,7 @@ const WriterRowEl: FC<{
       </td>
 
       {/* Side */}
-      <td className="py-4 pr-4">
+      <td className="py-2 pr-2 sm:py-4 sm:pr-4">
         <span className="inline-flex items-center gap-2 font-mono text-[11.5px] uppercase tracking-[0.18em]">
           <span aria-hidden="true" className="inline-block w-[6px] h-[6px] rounded-full bg-crimson" />
           {row.side}
@@ -154,12 +154,12 @@ const WriterRowEl: FC<{
       </td>
 
       {/* Strike */}
-      <td className="py-4 pr-4 font-mono text-[13px] whitespace-nowrap">
+      <td className="py-2 pr-2 sm:py-4 sm:pr-4 font-mono text-[13px] whitespace-nowrap">
         ${row.strike.toFixed(2)}
       </td>
 
       {/* Expiry */}
-      <td className="py-4 pr-4 whitespace-nowrap">
+      <td className="py-2 pr-2 sm:py-4 sm:pr-4 whitespace-nowrap">
         <div className="font-mono text-[13px]">{formatTableDate(row.expiry)}</div>
         <div className="font-mono font-medium text-[10px] uppercase tracking-[0.16em] text-ink-muted mt-0.5">
           {formatCountdown(row.expiry)}
@@ -167,24 +167,24 @@ const WriterRowEl: FC<{
       </td>
 
       {/* Collateral */}
-      <td className="py-4 pr-4 font-mono text-[13px] whitespace-nowrap">
+      <td className="py-2 pr-2 sm:py-4 sm:pr-4 font-mono text-[13px] whitespace-nowrap">
         <MoneyAmount value={row.collateralDeposited} />
       </td>
 
       {/* Contracts: minted / sold */}
-      <td className="py-4 pr-4 font-mono text-[13px] whitespace-nowrap">
+      <td className="py-2 pr-2 sm:py-4 sm:pr-4 font-mono text-[13px] whitespace-nowrap">
         {row.optionsMinted.toLocaleString()}
         <span className="text-ink-muted"> / </span>
         {row.optionsSold.toLocaleString()}
       </td>
 
       {/* Claimable premium */}
-      <td className="py-4 pr-4 font-mono text-[13px] whitespace-nowrap">
+      <td className="py-2 pr-2 sm:py-4 sm:pr-4 font-mono text-[13px] whitespace-nowrap">
         <MoneyAmount value={claimableUsd} />
       </td>
 
       {/* State badge */}
-      <td className="py-4 pr-4 whitespace-nowrap">
+      <td className="py-2 pr-2 sm:py-4 sm:pr-4 whitespace-nowrap">
         <div className="flex items-center gap-2">
           <span
             aria-hidden="true"
@@ -202,7 +202,7 @@ const WriterRowEl: FC<{
       </td>
 
       {/* Action: Solscan icon + primary button + optional burn link */}
-      <td className="py-4">
+      <td className="py-2 sm:py-4">
         <div className="flex items-center gap-3 justify-end">
           <SolscanLink pda={row.vaultPda} />
           {row.primaryAction !== "settling" && (

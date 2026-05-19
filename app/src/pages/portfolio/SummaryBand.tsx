@@ -39,7 +39,7 @@ const SummaryCellEl: FC<{ cell: SummaryCell }> = ({ cell }) => (
     <div className="font-mono font-medium text-[11px] uppercase tracking-[0.2em] text-ink-muted mb-5">
       {cell.label}
     </div>
-    <div className="font-mono font-normal text-[clamp(28px,3.4vw,40px)] leading-[0.95] text-ink mb-3">
+    <div className="font-mono font-normal text-[clamp(18px,3.4vw,40px)] leading-[0.95] text-ink mb-3 whitespace-nowrap overflow-hidden">
       {cell.value}
     </div>
     <div className="font-mono font-medium text-[10.5px] uppercase tracking-[0.18em] text-ink-muted">

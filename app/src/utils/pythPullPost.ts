@@ -56,7 +56,7 @@ export type SignerWallet = {
 export const DEFAULT_HERMES_BASE = "https://hermes.pyth.network";
 
 const HERMES_PRICE_PATH = "/v2/updates/price/latest";
-const HERMES_HISTORICAL_PATH_PREFIX = "/v1/updates/price/";
+const HERMES_HISTORICAL_PATH_PREFIX = "/v2/updates/price/";
 const FETCH_TIMEOUT_MS = 15000;
 const COMPUTE_UNIT_PRICE_MICRO_LAMPORTS = 50_000;
 
@@ -102,9 +102,13 @@ export async function fetchHermesUpdate(
  *  settle_expiry, which requires `publish_time` to sit in
  *  [vault.expiry, vault.expiry + 60].
  *
- *  NOTE: Hermes's historical endpoint lives only on /v1, NOT /v2. The
- *  /v2/updates/price/latest endpoint used elsewhere in this file does
- *  not have a historical sibling on /v2 as of 2026-05-03.
+ *  NOTE: historical lookups go to /v2/updates/price/{publish_time}.
+ *  This used to live only on /v1 (pre-2026-05-20), but Hermes deprecated
+ *  /v1 and migrated the historical endpoint to /v2 alongside the existing
+ *  /v2/updates/price/latest. The /v2 endpoint accepts the same
+ *  encoding=base64 query param and returns identical {binary, parsed}
+ *  shape; binary.data[0] is the Wormhole VAA used by the Pyth Solana
+ *  receiver.
  *
  *  No fallback to /latest on failure — falling back would silently
  *  reintroduce the late-settlement bug. Callers must handle the throw.

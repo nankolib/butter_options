@@ -44,14 +44,20 @@ use crate::errors::OptaError;
 use crate::state::{OptionsMarket, SettlementRecord, MARKET_SEED, SETTLEMENT_SEED};
 use crate::utils::solmath_bridge::pyth_price_to_usdc;
 
-/// Maximum gap between the Pyth update's `publish_time` and the on-chain
-/// clock at settlement time. Bumped from 300s to 86_400s (1 day) because
-/// the historical-fetch flow intentionally posts updates whose
-/// publish_time is near `expiry`, not near `now`. The real protection
-/// against stale-data attacks is the EXPIRY_WINDOW_SECS check below;
-/// this constant is a backstop SLO so we never silently settle
-/// week-old vaults.
-pub const PYTH_MAX_AGE_SECS: u64 = 86_400;
+/// Maximum gap between the Pyth update's `publish_time` and the on-chain clock
+/// at settlement time. Set to 30 days (2_592_000 s) as a wide backstop SLO,
+/// up from the original 1-day value. The real security against stale-data
+/// attacks is the [expiry, expiry+60] window check (EXPIRY_WINDOW_SECS)
+/// applied at gates #5-6 of this instruction — this constant is only a
+/// catch-all that prevents silently settling vaults whose historical Pyth
+/// updates are months or years stale.
+///
+/// Why 30 days: previously 86_400 (1 day) which assumed settle delays would
+/// be operator-noticed in <24h. The 2026-05-19 Hermes /v1 → /v2 cutover
+/// proved that assumption wrong (5-day silent backlog before fix). The new
+/// value tolerates multi-day outages while still preventing settles against
+/// arbitrarily-old historical updates.
+pub const PYTH_MAX_AGE_SECS: u64 = 2_592_000;
 
 /// Maximum gap between Pyth `publish_time` and vault `expiry`. The crank
 /// fetches a historical update at `publish_time = expiry`; Pyth posts

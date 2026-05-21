@@ -30,6 +30,25 @@ pub enum VaultType {
     Custom,
 }
 
+/// Exercise style for the option contracts a vault writes.
+///
+/// **Variant order is load-bearing.** Reordering after Pass 1 ships breaks
+/// every existing vault on-chain — the byte that encodes this enum is a
+/// single Borsh discriminator (0 or 1). Pre-Pass-1 vaults are migrated by
+/// zero-filling the new trailing byte, which deserializes as variant 0
+/// (European). Swapping the order would silently retag every legacy vault
+/// as American. **Do not reorder.**
+///
+/// Phase 2 Stage C Pass 1.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace, Debug)]
+pub enum ExerciseStyle {
+    /// European — exercise only at expiry. Default for all pre-Phase-2 vaults.
+    /// Migrated to via zero-fill on the trailing byte (variant index 0).
+    European,
+    /// American — exercise any time before or at expiry. Stage C onward.
+    American,
+}
+
 #[account]
 #[derive(InitSpace)]
 pub struct SharedVault {
@@ -129,10 +148,35 @@ pub struct SharedVault {
     /// new field BEFORE this one would break that migration path because
     /// existing on-chain bytes for the trailing fields would shift.
     pub carry_rate_bps: i32,
+
+    /// Exercise style for the option contracts minted from this vault.
+    /// European (default) = exercise only at expiry; American = exercise
+    /// anytime up to expiry. Set at vault creation by `create_shared_vault`
+    /// and immutable thereafter.
+    ///
+    /// MUST be the last field in this struct -- pre-Pass-1 SharedVault
+    /// accounts on devnet were serialized without this field, so they're
+    /// 1 byte shorter than the new INIT_SPACE. The admin-only migration
+    /// `migrate_shared_vault_exercise_style` grows them to the new size
+    /// and zero-fills the trailing byte -- which then deserializes as
+    /// exercise_style = European (variant 0), matching the locked default
+    /// for legacy vaults. Adding any new field BEFORE this one would
+    /// break that migration path. Same architectural pattern as
+    /// Stage A's carry_rate_bps append.
+    pub exercise_style: ExerciseStyle,
 }
 
 /// PDA seed prefix for SharedVault accounts.
 pub const SHARED_VAULT_SEED: &[u8] = b"shared_vault";
+
+/// PDA seed prefix for American-style SharedVault accounts. Separate
+/// namespace from `SHARED_VAULT_SEED` so EUR and AMER vaults at the same
+/// `(market, strike, expiry, option_type)` tuple are distinct PDAs.
+/// `create_shared_vault` selects between the two based on the
+/// `exercise_style` instruction arg.
+///
+/// Phase 2 Stage C Pass 1.
+pub const SHARED_VAULT_AMERICAN_SEED: &[u8] = b"shared_vault_american";
 
 /// PDA seed prefix for the vault's USDC token account.
 pub const VAULT_USDC_SEED: &[u8] = b"vault_usdc";
@@ -148,3 +192,46 @@ pub const VAULT_USDC_SEED: &[u8] = b"vault_usdc";
 /// bought, so no holders exist to harm — writers can withdraw immediately
 /// at settle time).
 pub const EXERCISE_WINDOW: i64 = 86_400;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anchor_lang::{AnchorDeserialize, AnchorSerialize};
+
+    #[test]
+    fn exercise_style_european_is_variant_zero() {
+        // CRITICAL: variant order is load-bearing for the migration.
+        // Zero-filled bytes from migrate_shared_vault_exercise_style must
+        // deserialize as European. If anyone reorders the enum, this
+        // test fires and prevents the build from shipping.
+        let mut buf = vec![];
+        ExerciseStyle::European.serialize(&mut buf).unwrap();
+        assert_eq!(buf, vec![0u8], "European must encode to [0x00]");
+    }
+
+    #[test]
+    fn exercise_style_american_is_variant_one() {
+        let mut buf = vec![];
+        ExerciseStyle::American.serialize(&mut buf).unwrap();
+        assert_eq!(buf, vec![1u8], "American must encode to [0x01]");
+    }
+
+    #[test]
+    fn exercise_style_roundtrips() {
+        for style in [ExerciseStyle::European, ExerciseStyle::American] {
+            let mut buf = vec![];
+            style.serialize(&mut buf).unwrap();
+            let decoded = ExerciseStyle::try_from_slice(&buf).unwrap();
+            assert_eq!(style, decoded);
+        }
+    }
+
+    #[test]
+    fn shared_vault_init_space_is_233() {
+        // Locks the byte total against silent drift. If a future field
+        // change shifts this, the migration script's hardcoded constants
+        // and the matching `tests/realloc-shared-vault-exercise-style.ts`
+        // expectations need to be updated in lockstep.
+        assert_eq!(SharedVault::INIT_SPACE, 233);
+    }
+}

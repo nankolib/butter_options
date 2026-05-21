@@ -1,3 +1,4 @@
+// NOTE 2026-05-21: signature brought to Pass-1 compliance during Stage C schema work. End-to-end runnability NOT verified — has been broken against deployed program since ~2026-04. Revive cautiously.
 // =============================================================================
 // scripts/smoke-full-loop.ts — Full V2 secondary listing arc smoke (orchestrator)
 // =============================================================================
@@ -275,7 +276,7 @@ async function main() {
   console.log(`  expiry     : ${expiry} (${EXPIRY_OFFSET_S}s from now)`);
   console.log(`  vault PDA  : ${vaultPda.toBase58()}`);
   await program.methods
-    .createSharedVault(strike, new BN(expiry), optionType, { custom: {} } as any, usdcMint)
+    .createSharedVault(strike, new BN(expiry), optionType, { custom: {} } as any, usdcMint, 0, { european: {} } as any)
     .accountsStrict({
       creator: writer.publicKey,
       market: marketPda,

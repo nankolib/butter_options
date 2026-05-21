@@ -33,6 +33,7 @@ pub fn handle_create_shared_vault(
     vault_type: VaultType,
     collateral_mint: Pubkey,
     carry_rate_bps: i32,
+    exercise_style: ExerciseStyle,
 ) -> Result<()> {
     // HIGH-3 (audit Run-6) — defense-in-depth. Reject vaults backed by
     // a market with all-zeros pyth_feed_id. Even if the create-side gate
@@ -115,6 +116,7 @@ pub fn handle_create_shared_vault(
     vault.created_at = clock.unix_timestamp;
     vault.bump = ctx.bumps.shared_vault;
     vault.carry_rate_bps = carry_rate_bps;
+    vault.exercise_style = exercise_style;
 
     emit!(VaultCreated {
         vault: ctx.accounts.shared_vault.key(),
@@ -130,7 +132,7 @@ pub fn handle_create_shared_vault(
 }
 
 #[derive(Accounts)]
-#[instruction(strike_price: u64, expiry: i64, option_type: OptionType, vault_type: VaultType, collateral_mint: Pubkey, carry_rate_bps: i32)]
+#[instruction(strike_price: u64, expiry: i64, option_type: OptionType, vault_type: VaultType, collateral_mint: Pubkey, carry_rate_bps: i32, exercise_style: ExerciseStyle)]
 pub struct CreateSharedVault<'info> {
     /// The vault creator (first writer). Pays for account creation.
     #[account(mut)]
@@ -139,11 +141,17 @@ pub struct CreateSharedVault<'info> {
     /// The OptionsMarket this vault is for. Must exist and be active.
     pub market: Account<'info, OptionsMarket>,
 
-    /// The SharedVault PDA — unique per (market, strike, expiry, option_type).
+    /// The SharedVault PDA — unique per (market, strike, expiry, option_type,
+    /// exercise_style). EUR and AMER use separate seed prefixes
+    /// (`b"shared_vault"` vs `b"shared_vault_american"`) so both can coexist
+    /// at the same numeric tuple.
     #[account(
         init,
         seeds = [
-            SHARED_VAULT_SEED,
+            match exercise_style {
+                ExerciseStyle::European => SHARED_VAULT_SEED,
+                ExerciseStyle::American => SHARED_VAULT_AMERICAN_SEED,
+            },
             market.key().as_ref(),
             &strike_price.to_le_bytes(),
             &expiry.to_le_bytes(),

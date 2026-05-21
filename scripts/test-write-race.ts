@@ -1,3 +1,4 @@
+// NOTE 2026-05-21: signature brought to Pass-1 compliance during Stage C schema work. End-to-end runnability NOT verified — has been broken against deployed program since ~2026-04. Revive cautiously.
 // =============================================================================
 // scripts/test-write-race.ts — Smoke test for the 3-stage Write orchestrator
 // =============================================================================
@@ -284,6 +285,8 @@ async function main() {
           { put: {} } as any, // TEST_SIDE === "put" — change to { call: {} } if TEST_SIDE flips
           { epoch: {} } as any,
           usdcMint,
+          0,                       // carry_rate_bps: no-dividend default
+          { european: {} } as any, // exercise_style: legacy smoke = European
         )
         .accountsStrict({
           creator: writer.publicKey,

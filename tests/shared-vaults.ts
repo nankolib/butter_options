@@ -401,7 +401,7 @@ describe("shared-vaults", () => {
 
     it("creates epoch vault (valid Friday expiry)", async () => {
       await (program as any).methods
-        .createSharedVault(strike, fridayExpiry, { call: {} }, { epoch: {} }, usdcMint, 0)
+        .createSharedVault(strike, fridayExpiry, { call: {} }, { epoch: {} }, usdcMint, 0, { european: {} })
         .accounts({
           creator: writerA.publicKey,
           market: marketPda,
@@ -449,7 +449,7 @@ describe("shared-vaults", () => {
       [customVaultUsdcPda] = deriveVaultUsdcPda(customVaultPda);
 
       await (program as any).methods
-        .createSharedVault(strike, customExpiry, { call: {} }, { custom: {} }, usdcMint, 0)
+        .createSharedVault(strike, customExpiry, { call: {} }, { custom: {} }, usdcMint, 0, { european: {} })
         .accounts({
           creator: writerA.publicKey,
           market: customMarketPda,
@@ -494,7 +494,7 @@ describe("shared-vaults", () => {
 
       try {
         await (program as any).methods
-          .createSharedVault(strike, tuesdayExpiry, { call: {} }, { epoch: {} }, usdcMint, 0)
+          .createSharedVault(strike, tuesdayExpiry, { call: {} }, { epoch: {} }, usdcMint, 0, { european: {} })
           .accounts({
             creator: writerA.publicKey,
             market: badMarketPda,
@@ -529,7 +529,7 @@ describe("shared-vaults", () => {
 
       try {
         await (program as any).methods
-          .createSharedVault(strike, pastExpiry, { call: {} }, { custom: {} }, usdcMint, 0)
+          .createSharedVault(strike, pastExpiry, { call: {} }, { custom: {} }, usdcMint, 0, { european: {} })
           .accounts({
             creator: writerA.publicKey,
             market: pastMarketPda, // This market won't exist, but we hit expiry check first
@@ -566,7 +566,7 @@ describe("shared-vaults", () => {
 
       try {
         await (program as any).methods
-          .createSharedVault(altStrike, fridayExpiry, { call: {} }, { epoch: {} }, fakeMint, 0)
+          .createSharedVault(altStrike, fridayExpiry, { call: {} }, { epoch: {} }, fakeMint, 0, { european: {} })
           .accounts({
             creator: writerA.publicKey,
             market: marketPda,
@@ -1275,7 +1275,7 @@ describe("shared-vaults", () => {
     it("PUT vault accepts a tight 1× strike × N deposit and mints N contracts", async () => {
       // Step 1: Create the PUT vault (epoch type, same expiry as the CALL vault).
       await (program as any).methods
-        .createSharedVault(strike, fridayExpiry, { put: {} }, { epoch: {} }, usdcMint, 0)
+        .createSharedVault(strike, fridayExpiry, { put: {} }, { epoch: {} }, usdcMint, 0, { european: {} })
         .accounts({
           creator: writerC.publicKey,
           market: marketPda,

@@ -95,9 +95,10 @@ pub mod opta {
         vault_type: VaultType,
         collateral_mint: Pubkey,
         carry_rate_bps: i32,
+        exercise_style: ExerciseStyle,
     ) -> Result<()> {
         instructions::create_shared_vault::handle_create_shared_vault(
-            ctx, strike_price, expiry, option_type, vault_type, collateral_mint, carry_rate_bps,
+            ctx, strike_price, expiry, option_type, vault_type, collateral_mint, carry_rate_bps, exercise_style,
         )
     }
 
@@ -242,6 +243,18 @@ pub mod opta {
         instructions::migrate_shared_vault_carry_rate::handle_migrate_shared_vault_carry_rate(ctx)
     }
 
+    /// One-time SharedVault schema migration that adds the trailing
+    /// exercise_style field to pre-Pass-1 vaults. Admin-only.
+    /// Caller passes vault accounts via remaining_accounts (recommended
+    /// batch: 20-30 per call). Idempotent: vaults already at the new
+    /// size are skipped. Zero-fill on the new byte deserializes as
+    /// ExerciseStyle::European (variant 0). Admin pays the rent delta.
+    pub fn migrate_shared_vault_exercise_style<'info>(
+        ctx: Context<'_, '_, '_, 'info, MigrateSharedVaultExerciseStyle<'info>>,
+    ) -> Result<()> {
+        instructions::migrate_shared_vault_exercise_style::handle_migrate_shared_vault_exercise_style(ctx)
+    }
+
     // =========================================================================
     // Phase 2 Stage B -- realized-vol oracle
     // =========================================================================
@@ -308,6 +321,18 @@ pub mod opta {
     #[cfg(feature = "cu-profile")]
     pub fn shrink_shared_vault_for_test(ctx: Context<ShrinkSharedVaultForTest>) -> Result<()> {
         instructions::shrink_shared_vault_for_test::handle_shrink_shared_vault_for_test(ctx)
+    }
+
+    /// Shrink a SharedVault account back to its pre-Pass-1 size (without
+    /// the trailing exercise_style field). Used by
+    /// tests/realloc-shared-vault-exercise-style.ts to simulate a legacy
+    /// on-chain vault before exercising the
+    /// migrate_shared_vault_exercise_style instruction. Test-only.
+    #[cfg(feature = "cu-profile")]
+    pub fn shrink_shared_vault_to_pre_exercise_style_for_test(
+        ctx: Context<ShrinkSharedVaultToPreExerciseStyleForTest>,
+    ) -> Result<()> {
+        instructions::shrink_shared_vault_to_pre_exercise_style_for_test::handle_shrink_shared_vault_to_pre_exercise_style_for_test(ctx)
     }
 
     /// Initialize a bare SharedVault account with default values, bypassing

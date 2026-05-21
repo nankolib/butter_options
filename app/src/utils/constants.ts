@@ -66,6 +66,7 @@ export const RESALE_ESCROW_SEED = "resale_escrow";
 
 // === V2 Vault Seeds ===
 export const SHARED_VAULT_SEED = "shared_vault";
+export const SHARED_VAULT_AMERICAN_SEED = "shared_vault_american";
 export const VAULT_USDC_SEED = "vault_usdc";
 export const WRITER_POSITION_SEED = "writer_position";
 export const VAULT_MINT_RECORD_SEED = "vault_mint_record";

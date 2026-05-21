@@ -296,6 +296,7 @@ describe("auto-finalize-holders", () => {
     await (program as any).methods
       .createSharedVault(
         opts.strike, expiry, opts.optionType, { custom: {} }, usdcMint, 0,
+        { european: {} },
       )
       .accounts({
         creator: writer.publicKey,

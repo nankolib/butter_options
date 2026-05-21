@@ -1201,7 +1201,10 @@
         {
           "name": "shared_vault",
           "docs": [
-            "The SharedVault PDA — unique per (market, strike, expiry, option_type)."
+            "The SharedVault PDA — unique per (market, strike, expiry, option_type,",
+            "exercise_style). EUR and AMER use separate seed prefixes",
+            "(`b\"shared_vault\"` vs `b\"shared_vault_american\"`) so both can coexist",
+            "at the same numeric tuple."
           ],
           "writable": true
         },
@@ -1320,6 +1323,14 @@
         {
           "name": "carry_rate_bps",
           "type": "i32"
+        },
+        {
+          "name": "exercise_style",
+          "type": {
+            "defined": {
+              "name": "ExerciseStyle"
+            }
+          }
         }
       ]
     },
@@ -2186,6 +2197,69 @@
         209,
         61,
         34
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "docs": [
+            "Admin -- must match protocol_state.admin (CRIT-3 deployer pubkey).",
+            "Pays the rent delta for any grown vaults."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "docs": [
+            "Used only to assert admin == protocol_state.admin."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "migrate_shared_vault_exercise_style",
+      "docs": [
+        "One-time SharedVault schema migration that adds the trailing",
+        "exercise_style field to pre-Pass-1 vaults. Admin-only.",
+        "Caller passes vault accounts via remaining_accounts (recommended",
+        "batch: 20-30 per call). Idempotent: vaults already at the new",
+        "size are skipped. Zero-fill on the new byte deserializes as",
+        "ExerciseStyle::European (variant 0). Admin pays the rent delta."
+      ],
+      "discriminator": [
+        162,
+        61,
+        8,
+        235,
+        197,
+        20,
+        99,
+        193
       ],
       "accounts": [
         {
@@ -4058,6 +4132,32 @@
       }
     },
     {
+      "name": "ExerciseStyle",
+      "docs": [
+        "Exercise style for the option contracts a vault writes.",
+        "",
+        "**Variant order is load-bearing.** Reordering after Pass 1 ships breaks",
+        "every existing vault on-chain — the byte that encodes this enum is a",
+        "single Borsh discriminator (0 or 1). Pre-Pass-1 vaults are migrated by",
+        "zero-filling the new trailing byte, which deserializes as variant 0",
+        "(European). Swapping the order would silently retag every legacy vault",
+        "as American. **Do not reorder.**",
+        "",
+        "Phase 2 Stage C Pass 1."
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "European"
+          },
+          {
+            "name": "American"
+          }
+        ]
+      }
+    },
+    {
       "name": "HoldersFinalized",
       "type": {
         "kind": "struct",
@@ -4780,6 +4880,30 @@
               "existing on-chain bytes for the trailing fields would shift."
             ],
             "type": "i32"
+          },
+          {
+            "name": "exercise_style",
+            "docs": [
+              "Exercise style for the option contracts minted from this vault.",
+              "European (default) = exercise only at expiry; American = exercise",
+              "anytime up to expiry. Set at vault creation by `create_shared_vault`",
+              "and immutable thereafter.",
+              "",
+              "MUST be the last field in this struct -- pre-Pass-1 SharedVault",
+              "accounts on devnet were serialized without this field, so they're",
+              "1 byte shorter than the new INIT_SPACE. The admin-only migration",
+              "`migrate_shared_vault_exercise_style` grows them to the new size",
+              "and zero-fills the trailing byte -- which then deserializes as",
+              "exercise_style = European (variant 0), matching the locked default",
+              "for legacy vaults. Adding any new field BEFORE this one would",
+              "break that migration path. Same architectural pattern as",
+              "Stage A's carry_rate_bps append."
+            ],
+            "type": {
+              "defined": {
+                "name": "ExerciseStyle"
+              }
+            }
           }
         ]
       }

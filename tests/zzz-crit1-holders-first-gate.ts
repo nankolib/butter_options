@@ -305,7 +305,7 @@ describe("CRIT-1 holders-first gate", () => {
     const [vaultUsdcPda] = deriveVaultUsdcPda(vaultPda);
 
     await (program as any).methods
-      .createSharedVault(opts.strike, opts.expiry, opts.optionType, { custom: {} }, usdcMint, 0)
+      .createSharedVault(opts.strike, opts.expiry, opts.optionType, { custom: {} }, usdcMint, 0, { european: {} })
       .accounts({
         creator: alice.kp.publicKey,
         market: marketPda,
@@ -429,7 +429,7 @@ describe("CRIT-1 holders-first gate", () => {
     const [vaultUsdcPda] = deriveVaultUsdcPda(vaultPda);
 
     await (program as any).methods
-      .createSharedVault(opts.strike, opts.expiry, opts.optionType, { custom: {} }, usdcMint, 0)
+      .createSharedVault(opts.strike, opts.expiry, opts.optionType, { custom: {} }, usdcMint, 0, { european: {} })
       .accounts({
         creator: alice.kp.publicKey,
         market: marketPda,

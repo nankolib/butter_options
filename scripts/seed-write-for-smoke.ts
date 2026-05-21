@@ -1,3 +1,4 @@
+// NOTE 2026-05-21: signature brought to Pass-1 compliance during Stage C schema work. End-to-end runnability NOT verified — has been broken against deployed program since ~2026-04. Revive cautiously.
 // =============================================================================
 // scripts/seed-write-for-smoke.ts — Seed a fresh writer-owned vaultMint
 // =============================================================================
@@ -334,6 +335,8 @@ async function main() {
         optionType,
         { custom: {} } as any,
         usdcMint,
+        0,                          // carry_rate_bps: no-dividend default
+        { european: {} } as any,    // exercise_style: legacy smoke = European
       )
       .accountsStrict({
         creator: writer.publicKey,

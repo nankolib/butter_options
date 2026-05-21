@@ -22,7 +22,7 @@
 
 use anchor_lang::prelude::*;
 
-use crate::state::{OptionType, SharedVault, VaultType};
+use crate::state::{ExerciseStyle, OptionType, SharedVault, VaultType};
 
 pub fn handle_create_test_shared_vault(
     ctx: Context<CreateTestSharedVault>,
@@ -48,6 +48,7 @@ pub fn handle_create_test_shared_vault(
     vault.created_at = 0;
     vault.bump = 0;
     vault.carry_rate_bps = 0;
+    vault.exercise_style = ExerciseStyle::European;
     Ok(())
 }
 

@@ -65,6 +65,14 @@ const DEFAULT_AUTO_CANCEL_CU = 800_000;
 const DEFAULT_LOW_BALANCE_WARN_SOL = 0.1;
 const DEFAULT_BALANCE_CHECK_TICKS = 12;
 
+// ---- Hermes 429 adaptive backoff (settle-loop) ----------------------------
+const DEFAULT_HERMES_BACKOFF_BASE_MS = 500;
+const DEFAULT_HERMES_BACKOFF_CEILING_MS = 10_000;
+/** Multiplicative-increase factor on 429/5xx. Hardcoded to keep env surface lean. */
+const HERMES_BACKOFF_MULTIPLIER = 2;
+/** Consecutive-success threshold before halving currentMs back toward BASE. */
+const HERMES_BACKOFF_RECOVER_AFTER_N_OK = 3;
+
 // ---- Heartbeat (Phase 1 hardening) ----------------------------------------
 const HEARTBEAT_INTERVAL_MS = 60 * 60 * 1000;
 
@@ -91,6 +99,11 @@ function redactRpc(url: string): string {
 
 // ---- Context ---------------------------------------------------------------
 
+interface HermesBackoffState {
+  currentMs: number;
+  consecutiveOk: number;
+}
+
 interface CrankContext {
   connection: Connection;
   wallet: anchor.Wallet;
@@ -108,6 +121,10 @@ interface CrankContext {
   // Wallet-balance check (Phase 1 hardening)
   lowBalanceWarnSol: number;
   balanceCheckTicks: number;
+  // Hermes 429 adaptive backoff (settle-loop only — independent from vol-oracle)
+  hermesBackoff: HermesBackoffState;
+  hermesBackoffBaseMs: number;
+  hermesBackoffCeilingMs: number;
 }
 
 interface AccountRecord {
@@ -128,6 +145,9 @@ interface TickResult {
   tuplesFound: number;
   tuplesProcessed: number;
   errors: number;
+  errorsRateLimit: number;
+  errorsHermesNoUpdate: number;
+  errorsOther: number;
   // Auto-finalize wiring (Step 5)
   finalizeVaultsConsidered: number;
   finalizeVaultsAttempted: number;
@@ -201,6 +221,9 @@ function readEnv(): {
   // Phase 1 hardening
   lowBalanceWarnSol: number;
   balanceCheckTicks: number;
+  // Hermes 429 adaptive backoff
+  hermesBackoffBaseMs: number;
+  hermesBackoffCeilingMs: number;
 } {
   const rpcUrl = process.env.OPTA_RPC_URL;
   if (!rpcUrl) {
@@ -279,6 +302,17 @@ function readEnv(): {
     "OPTA_CRANK_BALANCE_CHECK_TICKS",
   );
 
+  const hermesBackoffBaseMs = parsePositiveInt(
+    process.env.OPTA_HERMES_BACKOFF_BASE_MS,
+    DEFAULT_HERMES_BACKOFF_BASE_MS,
+    "OPTA_HERMES_BACKOFF_BASE_MS",
+  );
+  const hermesBackoffCeilingMs = parsePositiveInt(
+    process.env.OPTA_HERMES_BACKOFF_CEILING_MS,
+    DEFAULT_HERMES_BACKOFF_CEILING_MS,
+    "OPTA_HERMES_BACKOFF_CEILING_MS",
+  );
+
   return {
     rpcUrl,
     keypairPath,
@@ -292,6 +326,8 @@ function readEnv(): {
     dryRun,
     lowBalanceWarnSol,
     balanceCheckTicks,
+    hermesBackoffBaseMs,
+    hermesBackoffCeilingMs,
   };
 }
 
@@ -401,6 +437,9 @@ async function bootstrapContext(): Promise<CrankContext> {
     autoCancelOptions,
     lowBalanceWarnSol: env.lowBalanceWarnSol,
     balanceCheckTicks: env.balanceCheckTicks,
+    hermesBackoff: { currentMs: env.hermesBackoffBaseMs, consecutiveOk: 0 },
+    hermesBackoffBaseMs: env.hermesBackoffBaseMs,
+    hermesBackoffCeilingMs: env.hermesBackoffCeilingMs,
   };
 }
 
@@ -410,6 +449,22 @@ let shutdownRequested = false;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Classify a settle-loop failure into a coarse category for backoff control. */
+function classifySettleError(
+  err: unknown,
+): "rate-limit" | "hermes-no-update" | "other" {
+  const s = String(err);
+  if (
+    s.includes("HTTP 429") ||
+    s.includes("HTTP 503") ||
+    s.includes("HTTP 502")
+  ) {
+    return "rate-limit";
+  }
+  if (s.includes("HTTP 404")) return "hermes-no-update";
+  return "other";
 }
 
 async function tick(ctx: CrankContext): Promise<TickResult> {
@@ -422,6 +477,9 @@ async function tick(ctx: CrankContext): Promise<TickResult> {
     tuplesFound: 0,
     tuplesProcessed: 0,
     errors: 0,
+    errorsRateLimit: 0,
+    errorsHermesNoUpdate: 0,
+    errorsOther: 0,
     finalizeVaultsConsidered: 0,
     finalizeVaultsAttempted: 0,
     finalizeVaultsCachedDone: 0,
@@ -446,6 +504,12 @@ async function tick(ctx: CrankContext): Promise<TickResult> {
 
     for (const t of tuples) {
       if (shutdownRequested) break;
+
+      // Adaptive backoff: pace Hermes by currentMs (starts at BASE, grows on
+      // 429/5xx, halves toward BASE after N consecutive OKs). Even success
+      // paths sleep — the controlled floor is what prevents the N-tuple burst.
+      await sleep(ctx.hermesBackoff.currentMs);
+
       try {
         const settleResult = await settleAllForExpiry(
           ctx.program,
@@ -464,16 +528,57 @@ async function tick(ctx: CrankContext): Promise<TickResult> {
           vaultBatchTxs: settleResult.vaultSigs.length,
           resumed: settleResult.atomicSig === null,
         });
+        // Recovery: only meaningful when currentMs is above the base floor.
+        if (ctx.hermesBackoff.currentMs > ctx.hermesBackoffBaseMs) {
+          ctx.hermesBackoff.consecutiveOk += 1;
+          if (
+            ctx.hermesBackoff.consecutiveOk >= HERMES_BACKOFF_RECOVER_AFTER_N_OK
+          ) {
+            const next = Math.max(
+              Math.floor(ctx.hermesBackoff.currentMs / 2),
+              ctx.hermesBackoffBaseMs,
+            );
+            logInfo("hermes backoff recovered", {
+              prevMs: ctx.hermesBackoff.currentMs,
+              newMs: next,
+            });
+            ctx.hermesBackoff.currentMs = next;
+            ctx.hermesBackoff.consecutiveOk = 0;
+          }
+        }
       } catch (err) {
+        const cls = classifySettleError(err);
         result.errors += 1;
-        logError("tuple settle failed (will retry next tick)", {
-          asset: t.asset,
-          expiry: t.expiry,
-          err: String(err),
-          // Common cause post-2026-05-03: Hermes returned no historical
-          // VAA at or after vault.expiry yet (Pyth lag, or a non-supported
-          // feed window). The crank retries on the next tick.
-        });
+        if (cls === "rate-limit") {
+          result.errorsRateLimit += 1;
+          ctx.hermesBackoff.currentMs = Math.min(
+            ctx.hermesBackoff.currentMs * HERMES_BACKOFF_MULTIPLIER,
+            ctx.hermesBackoffCeilingMs,
+          );
+          ctx.hermesBackoff.consecutiveOk = 0;
+          logWarn("tuple settle rate-limited by Hermes (backoff increased)", {
+            asset: t.asset,
+            expiry: t.expiry,
+            err: String(err),
+            hermesBackoffMs: ctx.hermesBackoff.currentMs,
+          });
+        } else if (cls === "hermes-no-update") {
+          result.errorsHermesNoUpdate += 1;
+          // 404 = Pyth hasn't published a VAA at/after expiry yet. Retry next
+          // tick is the right remediation; backoff state unchanged.
+          logInfo("tuple settle deferred: no Pyth update at expiry", {
+            asset: t.asset,
+            expiry: t.expiry,
+            err: String(err),
+          });
+        } else {
+          result.errorsOther += 1;
+          logError("tuple settle failed (will retry next tick)", {
+            asset: t.asset,
+            expiry: t.expiry,
+            err: String(err),
+          });
+        }
       }
     }
     result.tuplesProcessed = tuples.length - result.errors;
@@ -695,7 +800,14 @@ async function runForever(ctx: CrankContext): Promise<void> {
         result.tuplesFound > 0 || result.finalizeVaultsConsidered > 0;
       lastTickWasIdle = !hadWork;
       if (hadWork) {
-        logInfo("tick complete", { ...result, durationMs: Date.now() - startMs });
+        logInfo("tick complete", {
+          ...result,
+          durationMs: Date.now() - startMs,
+          hermesBackoff: {
+            currentMs: ctx.hermesBackoff.currentMs,
+            consecutiveOk: ctx.hermesBackoff.consecutiveOk,
+          },
+        });
       }
     } catch (err) {
       lastTickWasIdle = false;
@@ -755,6 +867,11 @@ async function main(): Promise<void> {
     walletBalanceCheck: {
       lowBalanceWarnSol: ctx.lowBalanceWarnSol,
       balanceCheckTicks: ctx.balanceCheckTicks,
+    },
+    hermesBackoff: {
+      baseMs: ctx.hermesBackoffBaseMs,
+      ceilingMs: ctx.hermesBackoffCeilingMs,
+      currentMs: ctx.hermesBackoff.currentMs,
     },
   });
 

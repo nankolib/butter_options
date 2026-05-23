@@ -433,6 +433,7 @@ The full Phase 2 plan is documented at **`.context/plans/phase2-american-onchain
 - **Devnet clock skew:** add 30-60s buffer when waiting for expiry in test scripts.
 - **WSL `/tmp` doesn't persist between invocations.** Each `wsl bash -c` is a fresh session.
 - **Solana CLI default RPC** is set to devnet. If a future session runs against localhost it will silently fail.
+- **PowerShell 5.1 `Invoke-RestMethod` corrupts non-ASCII in JSON body strings.** Em-dashes, arrows, and other multi-byte UTF-8 chars get demoted to single-byte ASCII at the HTTP transport layer even when the in-memory source string is verifiably correct (confirmed via `[System.Text.Encoding]::UTF8.GetBytes($src)` hex dump pre-send). The corruption happens inside `Invoke-RestMethod`'s body serialization, not in `ConvertTo-Json` or the .NET string. Fix: send body as raw UTF-8 bytes — `$bytes = [System.Text.Encoding]::UTF8.GetBytes($json); Invoke-RestMethod ... -Body $bytes -ContentType 'application/json; charset=utf-8'`. Discovered 2026-05-24 during ClickUp Docs setup; cost 2 orphan docs + 3 API attempts before root-causing. Diagnose with `($resp.RawContentStream.ToArray())` hex-dump on the response side. Bonus ClickUp-specific gotcha discovered alongside: ClickUp v3 Docs API returns 405 on both `PUT /workspaces/{id}/docs/{id}` and `DELETE /workspaces/{id}/docs/{id}` — title updates and doc deletion are UI-only.
 
 ### Build / runtime
 - **Buffer polyfill must be imported first** in `main.tsx` via `app/src/polyfills.ts`.

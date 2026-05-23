@@ -314,6 +314,17 @@ pub mod opta {
         instructions::cu_profile_american::handle_cu_profile_american(ctx)
     }
 
+    /// CU profile for the FULL American branch pipeline of mint_from_vault:
+    /// VolOracle load + realized_vol_annualized + american_call_price /
+    /// american_put_price. Synthesizes oracle accumulator state in-line so
+    /// no warmup wait is needed. Test-only.
+    #[cfg(feature = "cu-profile")]
+    pub fn cu_profile_mint_from_vault_american(
+        ctx: Context<CuProfileMintFromVaultAmerican>,
+    ) -> Result<()> {
+        instructions::cu_profile_mint_from_vault_american::handle_cu_profile_mint_from_vault_american(ctx)
+    }
+
     /// Shrink a SharedVault account back to its pre-Stage-A size (without the
     /// trailing carry_rate_bps field). Used by tests/realloc-shared-vault.ts
     /// to simulate a legacy on-chain vault before exercising the lazy-realloc

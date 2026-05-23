@@ -45,6 +45,8 @@ pub mod cu_profile_realized_vol;
 #[cfg(feature = "cu-profile")]
 pub mod cu_profile_american;
 #[cfg(feature = "cu-profile")]
+pub mod cu_profile_mint_from_vault_american;
+#[cfg(feature = "cu-profile")]
 pub mod shrink_shared_vault_for_test;
 #[cfg(feature = "cu-profile")]
 pub mod shrink_shared_vault_to_pre_exercise_style_for_test;
@@ -92,6 +94,8 @@ pub use cu_profile_realized_vol::*;
 // CU profiling + Stage A test scaffolding
 #[cfg(feature = "cu-profile")]
 pub use cu_profile_american::*;
+#[cfg(feature = "cu-profile")]
+pub use cu_profile_mint_from_vault_american::*;
 #[cfg(feature = "cu-profile")]
 pub use shrink_shared_vault_for_test::*;
 #[cfg(feature = "cu-profile")]

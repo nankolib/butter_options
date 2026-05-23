@@ -1586,6 +1586,105 @@ export type Opta = {
       ]
     },
     {
+      "name": "getOptionPrice",
+      "docs": [
+        "AMER-only BS-2002 pricing view. Read-only; CPI-callable.",
+        "Returns OptionPriceQuote (premium + vol/spot snapshot + ts) for the",
+        "supplied hypothetical option against a live VolOracle. European",
+        "reverts with ViewNotSupportedForEuropean — use the off-chain BS",
+        "pricer (app/src/utils/blackScholes.ts) for EUR quotes. Shares the",
+        "`price_american` helper with mint_from_vault, so same-block quotes",
+        "match what a mint would charge."
+      ],
+      "discriminator": [
+        233,
+        38,
+        28,
+        199,
+        162,
+        22,
+        173,
+        25
+      ],
+      "accounts": [
+        {
+          "name": "market",
+          "docs": [
+            "The OptionsMarket — provides `pyth_feed_id` used as the VolOracle",
+            "PDA seed. Read-only."
+          ]
+        },
+        {
+          "name": "volOracle",
+          "docs": [
+            "VolOracle PDA for the market's Pyth feed. Read-only.",
+            "Bump derived canonically (not from stored bump) since the view has",
+            "no perf-critical CU budget and avoids a load-before-account-ctx",
+            "dance for an account that gets re-loaded inside the handler."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  111,
+                  108,
+                  95,
+                  111,
+                  114,
+                  97,
+                  99,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.pyth_feed_id",
+                "account": "optionsMarket"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "strike",
+          "type": "u64"
+        },
+        {
+          "name": "expiryTs",
+          "type": "i64"
+        },
+        {
+          "name": "optionType",
+          "type": {
+            "defined": {
+              "name": "optionType"
+            }
+          }
+        },
+        {
+          "name": "exerciseStyle",
+          "type": {
+            "defined": {
+              "name": "exerciseStyle"
+            }
+          }
+        },
+        {
+          "name": "carryRateBps",
+          "type": "i32"
+        }
+      ],
+      "returns": {
+        "defined": {
+          "name": "optionPriceQuote"
+        }
+      }
+    },
+    {
       "name": "initializeEpochConfig",
       "docs": [
         "Initialize the epoch schedule (admin-only, one-time setup)."
@@ -4127,6 +4226,11 @@ export type Opta = {
       "code": 6050,
       "name": "americanPricingFailed",
       "msg": "American BS-2002 pricing failed — see tx log for raw variant"
+    },
+    {
+      "code": 6051,
+      "name": "viewNotSupportedForEuropean",
+      "msg": "get_option_price view does not support European style; use frontend pricer"
     }
   ],
   "types": [
@@ -4323,6 +4427,50 @@ export type Opta = {
           {
             "name": "resalePremium",
             "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "optionPriceQuote",
+      "docs": [
+        "View-instruction return type. AnchorSerialize/Deserialize for IDL +",
+        "`.view()` decode on the client; Copy/Clone/Debug for ergonomic Rust",
+        "consumption (no allocations)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "premiumPerContract",
+            "docs": [
+              "Quoted premium per contract in USDC smallest units (6 decimals).",
+              "Matches VaultMint.premium_per_contract scale."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "volUsedScaled",
+            "docs": [
+              "Realized vol used in the computation, at solmath SCALE 1e12. From",
+              "realized_vol_annualized over the oracle's 30d window."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "spotUsedScaled",
+            "docs": [
+              "Spot used in the computation, at solmath SCALE 1e12. From",
+              "VolOracle.last_spot_price."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "computedAtTs",
+            "docs": [
+              "On-chain Clock unix_timestamp at the moment the quote was computed."
+            ],
+            "type": "i64"
           }
         ]
       }

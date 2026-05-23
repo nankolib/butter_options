@@ -36,6 +36,9 @@ pub mod migrate_shared_vault_exercise_style;
 // Phase 2 Stage B -- realized-vol oracle
 pub mod initialize_vol_oracle;
 pub mod push_vol_sample;
+
+// Phase 2 Stage C Pass 3 -- AMER pricing view
+pub mod get_option_price;
 #[cfg(feature = "cu-profile")]
 pub mod cu_profile_push_vol_sample;
 #[cfg(feature = "cu-profile")]
@@ -46,6 +49,8 @@ pub mod cu_profile_realized_vol;
 pub mod cu_profile_american;
 #[cfg(feature = "cu-profile")]
 pub mod cu_profile_mint_from_vault_american;
+#[cfg(feature = "cu-profile")]
+pub mod cu_profile_get_option_price;
 #[cfg(feature = "cu-profile")]
 pub mod shrink_shared_vault_for_test;
 #[cfg(feature = "cu-profile")]
@@ -86,6 +91,9 @@ pub use migrate_shared_vault_exercise_style::*;
 // Phase 2 Stage B -- realized-vol oracle
 pub use initialize_vol_oracle::*;
 pub use push_vol_sample::*;
+
+// Phase 2 Stage C Pass 3 -- AMER pricing view
+pub use get_option_price::*;
 #[cfg(feature = "cu-profile")]
 pub use cu_profile_push_vol_sample::*;
 #[cfg(feature = "cu-profile")]
@@ -96,6 +104,8 @@ pub use cu_profile_realized_vol::*;
 pub use cu_profile_american::*;
 #[cfg(feature = "cu-profile")]
 pub use cu_profile_mint_from_vault_american::*;
+#[cfg(feature = "cu-profile")]
+pub use cu_profile_get_option_price::*;
 #[cfg(feature = "cu-profile")]
 pub use shrink_shared_vault_for_test::*;
 #[cfg(feature = "cu-profile")]

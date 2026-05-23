@@ -280,6 +280,26 @@ pub mod opta {
         instructions::push_vol_sample::handle_push_vol_sample(ctx)
     }
 
+    /// AMER-only BS-2002 pricing view. Read-only; CPI-callable.
+    /// Returns OptionPriceQuote (premium + vol/spot snapshot + ts) for the
+    /// supplied hypothetical option against a live VolOracle. European
+    /// reverts with ViewNotSupportedForEuropean — use the off-chain BS
+    /// pricer (app/src/utils/blackScholes.ts) for EUR quotes. Shares the
+    /// `price_american` helper with mint_from_vault, so same-block quotes
+    /// match what a mint would charge.
+    pub fn get_option_price(
+        ctx: Context<GetOptionPrice>,
+        strike: u64,
+        expiry_ts: i64,
+        option_type: OptionType,
+        exercise_style: ExerciseStyle,
+        carry_rate_bps: i32,
+    ) -> Result<OptionPriceQuote> {
+        instructions::get_option_price::handle_get_option_price(
+            ctx, strike, expiry_ts, option_type, exercise_style, carry_rate_bps,
+        )
+    }
+
     /// Hot-path CU profile for push_vol_sample. Calls the ring +
     /// accumulator update directly with a synthetic log return,
     /// bracketed by sol_log_compute_units. Test-only.
@@ -323,6 +343,17 @@ pub mod opta {
         ctx: Context<CuProfileMintFromVaultAmerican>,
     ) -> Result<()> {
         instructions::cu_profile_mint_from_vault_american::handle_cu_profile_mint_from_vault_american(ctx)
+    }
+
+    /// CU profile for the Pass 3 `price_american` helper (the path
+    /// `get_option_price` executes per call). Plants synthetic vol oracle
+    /// state then measures Call q=5% + Put q=5% (both BS-2002 main path).
+    /// Test-only.
+    #[cfg(feature = "cu-profile")]
+    pub fn cu_profile_get_option_price(
+        ctx: Context<CuProfileGetOptionPrice>,
+    ) -> Result<()> {
+        instructions::cu_profile_get_option_price::handle_cu_profile_get_option_price(ctx)
     }
 
     /// Shrink a SharedVault account back to its pre-Stage-A size (without the

@@ -202,4 +202,11 @@ pub enum OptaError {
     // warrant individual IDL surface area.
     #[msg("American BS-2002 pricing failed — see tx log for raw variant")]
     AmericanPricingFailed,
+
+    // Phase 2 Stage C Pass 3 — get_option_price view.
+    // The view instruction does not price European options on-chain; the
+    // off-chain pricer (app/src/utils/blackScholes.ts) is the canonical
+    // EUR source and avoids burning CU on a value the client already has.
+    #[msg("get_option_price view does not support European style; use frontend pricer")]
+    ViewNotSupportedForEuropean,
 }

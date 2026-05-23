@@ -30,18 +30,10 @@ const MONTHS: [&str; 12] = [
     "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
 ];
 
-/// Risk-free rate used by on-chain American BS-2002 pricing, at solmath
-/// SCALE = 1e12. Set to 5% to match the Stage A pricing reference + every
-/// existing BS-2002 unit test. PARKED: future arc lifts this to a stored
-/// ProtocolState field (`risk_free_rate_bps: u16`) once multi-rate support
-/// is needed. Until then, this constant is the single source of truth.
-const RISK_FREE_RATE_SCALED: u128 = solmath::SCALE / 20; // 5%
-
 // FIX I-04: Use shared time utilities instead of duplicated code
 use crate::utils::time::timestamp_to_month_day;
 use crate::utils::collateral::required_collateral_per_contract;
-use crate::utils::american_pricing::{american_call_price, american_put_price};
-use crate::utils::solmath_bridge::{usdc_to_scale, scale_to_usdc, seconds_to_time_scale};
+use crate::utils::american_pricing::quote::{price_american, AmericanQuoteInputs};
 
 pub fn handle_mint_from_vault(
     ctx: Context<MintFromVault>,
@@ -372,19 +364,19 @@ pub fn handle_mint_from_vault(
     )?;
 
     // =========================================================================
-    // Phase 2 Stage C Pass 2 — premium source.
+    // Phase 2 Stage C — premium source.
     //
     // European branch: existing behavior, stores the `premium_per_contract`
     // arg verbatim (off-chain BS in app/src/utils/blackScholes.ts is the
     // canonical EUR source).
     //
-    // American on-chain pricing — Pass 2 Step 1. Spot from
-    // VolOracle.last_spot_price (1h-fresh, 6h-gated). Vol from
-    // realized_vol_annualized (30d window, 168-sample warmup). Premium
-    // computed via BS-2002. Frontend `premium_per_contract` arg is IGNORED
-    // on this branch — the top-of-handler `> 0` validation still fires
-    // (preserving European behavior), so frontend may pass any positive
-    // sentinel (e.g. 1) on American mints.
+    // American branch: on-chain pricing via the shared `price_american`
+    // helper (Pass 3 extraction). Spot from VolOracle.last_spot_price
+    // (1h-fresh, 6h-gated). Vol from realized_vol_annualized (30d window,
+    // 168-sample warmup). Premium computed via BS-2002. Frontend
+    // `premium_per_contract` arg is IGNORED on this branch — the top-of-
+    // handler `> 0` validation still fires (preserving European behavior),
+    // so frontend may pass any positive sentinel (e.g. 1) on American mints.
     //
     // Expected CU: ~890K worst case (CALL ~231K, PUT ~261K, plus VolOracle
     // load + read). Frontend must set ComputeBudget = 1.4M on American mints.
@@ -393,58 +385,17 @@ pub fn handle_mint_from_vault(
         ExerciseStyle::European => premium_per_contract,
         ExerciseStyle::American => {
             let oracle = ctx.accounts.vol_oracle.load()?;
-            let now = clock.unix_timestamp;
-
-            // Freshness gate on the spot snapshot. Independent of the
-            // realized_vol staleness gate (which fires inside the read fn);
-            // both use the same 6h threshold against last_sample_ts.
-            require!(
-                now.saturating_sub(oracle.last_sample_ts) <= 6 * 3600,
-                OptaError::VolOracleStale
-            );
-
-            // Spot at SCALE (already 1e12).
-            require!(oracle.last_spot_price > 0, OptaError::VolOracleInvalidSpot);
-            let spot_scaled: u128 = oracle.last_spot_price as u128;
-
-            // Vol at SCALE (i64). Propagates Warmup/Stale/NotInitialized verbatim.
-            let vol_scaled: i64 = realized_vol_annualized(&*oracle, now)?;
-            let sigma_u128: u128 = vol_scaled as u128;
-
-            // TTE: vault.expiry was already gated > now above; defensive
-            // re-check at the conversion boundary via seconds_to_time_scale.
-            let tte_secs: i64 = vault.expiry - now;
-            let t_scaled: u128 = seconds_to_time_scale(tte_secs)?;
-
-            // Strike: u64 USDC (6-dec) -> u128 SCALE (12-dec).
-            let strike_scaled: u128 = usdc_to_scale(vault.strike_price)?;
-
-            // Carry: i32 bps -> i128 SCALE fraction. bps * SCALE_I / 10_000.
-            let carry_scaled: i128 = (vault.carry_rate_bps as i128)
-                .checked_mul(solmath::SCALE_I)
-                .ok_or(OptaError::MathOverflow)?
-                / 10_000;
-
-            let r_scaled: u128 = RISK_FREE_RATE_SCALED;
-
-            let premium_scaled: u128 = match vault.option_type {
-                OptionType::Call => american_call_price(
-                    spot_scaled, strike_scaled, r_scaled, carry_scaled,
-                    sigma_u128, t_scaled,
-                ),
-                OptionType::Put => american_put_price(
-                    spot_scaled, strike_scaled, r_scaled, carry_scaled,
-                    sigma_u128, t_scaled,
-                ),
-            }
-            .map_err(|e| {
-                msg!("BS-2002 American pricing failed: {:?}", e);
-                OptaError::AmericanPricingFailed
-            })?;
-
-            let premium_usdc = scale_to_usdc(premium_scaled)?;
-            require!(premium_usdc > 0, OptaError::InvalidPremium);
-            premium_usdc
+            let quote = price_american(
+                &*oracle,
+                clock.unix_timestamp,
+                AmericanQuoteInputs {
+                    strike: vault.strike_price,
+                    expiry_ts: vault.expiry,
+                    option_type: vault.option_type,
+                    carry_rate_bps: vault.carry_rate_bps,
+                },
+            )?;
+            quote.premium_per_contract
         }
     };
 

@@ -24,6 +24,7 @@ import {
 import {
   TOKEN_2022_PROGRAM_ID,
   TRANSFER_HOOK_PROGRAM_ID,
+  VOL_ORACLE_SEED,
   deriveExtraAccountMetaListPda,
   deriveHookStatePda,
 } from "../../utils/constants";
@@ -303,6 +304,20 @@ export function useWriteSubmit(): UseWriteSubmit {
         const [extraAccountMetaList] = deriveExtraAccountMetaListPda(optionMintPda);
         const [hookState] = deriveHookStatePda(optionMintPda);
 
+        // Phase 2 Stage C Pass 2: vol_oracle is now a REQUIRED account on
+        // mint_from_vault (uniform context across EUR + AMER). The PDA is
+        // keyed on the market's Pyth feed_id. The handler reads it only on
+        // the American branch; EUR mints carry the account but never touch it.
+        //
+        // Stage H will branch here on vault.exerciseStyle:
+        //   - European (this path today): pass the TS-computed premium verbatim
+        //   - American: pass premium=1 sentinel + setComputeUnitLimit(1_400_000)
+        const pythFeedIdBuf = Buffer.from(input.market.account.pythFeedId);
+        const [volOraclePda] = PublicKey.findProgramAddressSync(
+          [Buffer.from(VOL_ORACLE_SEED), pythFeedIdBuf],
+          program.programId,
+        );
+
         const tx = await submitStageWithRecovery(
           "Mint",
           () =>
@@ -313,6 +328,7 @@ export function useWriteSubmit(): UseWriteSubmit {
                 sharedVault: sharedVaultPda,
                 writerPosition: writerPositionPda,
                 market: marketPda,
+                volOracle: volOraclePda,
                 protocolState: protocolStatePda,
                 optionMint: optionMintPda,
                 purchaseEscrow: purchaseEscrowPda,

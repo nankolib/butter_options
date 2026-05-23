@@ -193,4 +193,13 @@ pub enum OptaError {
 
     #[msg("VolOracle math error (sqrt domain, division-by-zero, or overflow)")]
     VolOracleMathError,
+
+    // Phase 2 Stage C Pass 2 — American on-chain pricing.
+    // Single wrapper for any BS-2002 internal error (InvalidSpot,
+    // InvalidStrike, InvalidCarry, BoundaryOverflow, SolMath). The raw
+    // variant is logged via msg! at the call site for diagnostics; the
+    // 5 underlying variants are defensive on validated inputs and do not
+    // warrant individual IDL surface area.
+    #[msg("American BS-2002 pricing failed — see tx log for raw variant")]
+    AmericanPricingFailed,
 }

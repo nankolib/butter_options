@@ -30,9 +30,18 @@ const MONTHS: [&str; 12] = [
     "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
 ];
 
+/// Risk-free rate used by on-chain American BS-2002 pricing, at solmath
+/// SCALE = 1e12. Set to 5% to match the Stage A pricing reference + every
+/// existing BS-2002 unit test. PARKED: future arc lifts this to a stored
+/// ProtocolState field (`risk_free_rate_bps: u16`) once multi-rate support
+/// is needed. Until then, this constant is the single source of truth.
+const RISK_FREE_RATE_SCALED: u128 = solmath::SCALE / 20; // 5%
+
 // FIX I-04: Use shared time utilities instead of duplicated code
 use crate::utils::time::timestamp_to_month_day;
 use crate::utils::collateral::required_collateral_per_contract;
+use crate::utils::american_pricing::{american_call_price, american_put_price};
+use crate::utils::solmath_bridge::{usdc_to_scale, scale_to_usdc, seconds_to_time_scale};
 
 pub fn handle_mint_from_vault(
     ctx: Context<MintFromVault>,
@@ -363,13 +372,90 @@ pub fn handle_mint_from_vault(
     )?;
 
     // =========================================================================
+    // Phase 2 Stage C Pass 2 — premium source.
+    //
+    // European branch: existing behavior, stores the `premium_per_contract`
+    // arg verbatim (off-chain BS in app/src/utils/blackScholes.ts is the
+    // canonical EUR source).
+    //
+    // American on-chain pricing — Pass 2 Step 1. Spot from
+    // VolOracle.last_spot_price (1h-fresh, 6h-gated). Vol from
+    // realized_vol_annualized (30d window, 168-sample warmup). Premium
+    // computed via BS-2002. Frontend `premium_per_contract` arg is IGNORED
+    // on this branch — the top-of-handler `> 0` validation still fires
+    // (preserving European behavior), so frontend may pass any positive
+    // sentinel (e.g. 1) on American mints.
+    //
+    // Expected CU: ~890K worst case (CALL ~231K, PUT ~261K, plus VolOracle
+    // load + read). Frontend must set ComputeBudget = 1.4M on American mints.
+    // =========================================================================
+    let resolved_premium: u64 = match vault.exercise_style {
+        ExerciseStyle::European => premium_per_contract,
+        ExerciseStyle::American => {
+            let oracle = ctx.accounts.vol_oracle.load()?;
+            let now = clock.unix_timestamp;
+
+            // Freshness gate on the spot snapshot. Independent of the
+            // realized_vol staleness gate (which fires inside the read fn);
+            // both use the same 6h threshold against last_sample_ts.
+            require!(
+                now.saturating_sub(oracle.last_sample_ts) <= 6 * 3600,
+                OptaError::VolOracleStale
+            );
+
+            // Spot at SCALE (already 1e12).
+            require!(oracle.last_spot_price > 0, OptaError::VolOracleInvalidSpot);
+            let spot_scaled: u128 = oracle.last_spot_price as u128;
+
+            // Vol at SCALE (i64). Propagates Warmup/Stale/NotInitialized verbatim.
+            let vol_scaled: i64 = realized_vol_annualized(&*oracle, now)?;
+            let sigma_u128: u128 = vol_scaled as u128;
+
+            // TTE: vault.expiry was already gated > now above; defensive
+            // re-check at the conversion boundary via seconds_to_time_scale.
+            let tte_secs: i64 = vault.expiry - now;
+            let t_scaled: u128 = seconds_to_time_scale(tte_secs)?;
+
+            // Strike: u64 USDC (6-dec) -> u128 SCALE (12-dec).
+            let strike_scaled: u128 = usdc_to_scale(vault.strike_price)?;
+
+            // Carry: i32 bps -> i128 SCALE fraction. bps * SCALE_I / 10_000.
+            let carry_scaled: i128 = (vault.carry_rate_bps as i128)
+                .checked_mul(solmath::SCALE_I)
+                .ok_or(OptaError::MathOverflow)?
+                / 10_000;
+
+            let r_scaled: u128 = RISK_FREE_RATE_SCALED;
+
+            let premium_scaled: u128 = match vault.option_type {
+                OptionType::Call => american_call_price(
+                    spot_scaled, strike_scaled, r_scaled, carry_scaled,
+                    sigma_u128, t_scaled,
+                ),
+                OptionType::Put => american_put_price(
+                    spot_scaled, strike_scaled, r_scaled, carry_scaled,
+                    sigma_u128, t_scaled,
+                ),
+            }
+            .map_err(|e| {
+                msg!("BS-2002 American pricing failed: {:?}", e);
+                OptaError::AmericanPricingFailed
+            })?;
+
+            let premium_usdc = scale_to_usdc(premium_scaled)?;
+            require!(premium_usdc > 0, OptaError::InvalidPremium);
+            premium_usdc
+        }
+    };
+
+    // =========================================================================
     // Initialize the VaultMint record (tracks per-mint state)
     // =========================================================================
     let vault_mint = &mut ctx.accounts.vault_mint_record;
     vault_mint.vault = ctx.accounts.shared_vault.key();
     vault_mint.writer = ctx.accounts.writer.key();
     vault_mint.option_mint = *mint_info.key;
-    vault_mint.premium_per_contract = premium_per_contract;
+    vault_mint.premium_per_contract = resolved_premium;
     vault_mint.quantity_minted = quantity;
     vault_mint.quantity_sold = 0;
     vault_mint.created_at = created_at;
@@ -393,7 +479,7 @@ pub fn handle_mint_from_vault(
         writer: ctx.accounts.writer.key(),
         mint: *mint_info.key,
         quantity,
-        premium_per_contract,
+        premium_per_contract: resolved_premium,
     });
 
     Ok(())
@@ -425,6 +511,22 @@ pub struct MintFromVault<'info> {
     /// The OptionsMarket — for strike price, expiry, asset info in metadata.
     #[account(constraint = market.key() == shared_vault.market)]
     pub market: Account<'info, OptionsMarket>,
+
+    /// VolOracle PDA for the market's Pyth feed.
+    ///
+    /// REQUIRED on both European and American mints (uniform-context pattern
+    /// — no `Option<>`). The handler reads it only on the American branch;
+    /// EUR mints carry the account but never touch it. Rationale: avoids
+    /// Anchor's `Option<AccountLoader>` friction and keeps the instruction
+    /// signature uniform across both styles. Caveat: any market whose
+    /// VolOracle PDA hasn't been initialized yet cannot be minted from —
+    /// Step 2's deploy sequencing must ensure all live markets have a
+    /// seeded oracle (sweep before IDL update).
+    #[account(
+        seeds = [VOL_ORACLE_SEED, market.pyth_feed_id.as_ref()],
+        bump = vol_oracle.load()?.bump,
+    )]
+    pub vol_oracle: AccountLoader<'info, VolOracle>,
 
     /// Protocol state — mint authority and permanent delegate for Token-2022.
     #[account(

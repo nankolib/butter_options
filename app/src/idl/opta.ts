@@ -2387,6 +2387,45 @@ export type Opta = {
           ]
         },
         {
+          "name": "volOracle",
+          "docs": [
+            "VolOracle PDA for the market's Pyth feed.",
+            "",
+            "REQUIRED on both European and American mints (uniform-context pattern",
+            "— no `Option<>`). The handler reads it only on the American branch;",
+            "EUR mints carry the account but never touch it. Rationale: avoids",
+            "Anchor's `Option<AccountLoader>` friction and keeps the instruction",
+            "signature uniform across both styles. Caveat: any market whose",
+            "VolOracle PDA hasn't been initialized yet cannot be minted from —",
+            "Step 2's deploy sequencing must ensure all live markets have a",
+            "seeded oracle (sweep before IDL update)."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  111,
+                  108,
+                  95,
+                  111,
+                  114,
+                  97,
+                  99,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.pyth_feed_id",
+                "account": "optionsMarket"
+              }
+            ]
+          }
+        },
+        {
           "name": "protocolState",
           "docs": [
             "Protocol state — mint authority and permanent delegate for Token-2022."
@@ -4083,6 +4122,11 @@ export type Opta = {
       "code": 6049,
       "name": "volOracleMathError",
       "msg": "VolOracle math error (sqrt domain, division-by-zero, or overflow)"
+    },
+    {
+      "code": 6050,
+      "name": "americanPricingFailed",
+      "msg": "American BS-2002 pricing failed — see tx log for raw variant"
     }
   ],
   "types": [

@@ -89,7 +89,7 @@ describe("get_option_price view (Phase 2 Stage C Pass 3)", () => {
   let bestSpotMicro: bigint;
 
   before(async function () {
-    this.timeout(60_000);
+    this.timeout(180_000);
 
     // Standalone provider — no anchor.workspace dependency, no Anchor.toml
     // assumption. Pulls RPC + wallet from env per Anchor convention.
@@ -132,21 +132,32 @@ describe("get_option_price view (Phase 2 Stage C Pass 3)", () => {
     };
     let best: Row | null = null;
 
+    // Pre-decode + derive every oracle PDA, then batch via getMultipleAccountsInfo
+    // (100/req max). 445 sequential getAccountInfo calls on public devnet RPC
+    // run ~60-130s; batched ~5-10s.
+    const rows: { asset: string; market: PublicKey; oracle: PublicKey }[] = [];
     for (const a of marketAccts) {
       const dec = decodeOptionsMarket(a.account.data);
       if (!dec) continue;
       const [oracle] = deriveVolOracle(dec.pythFeedId);
-      const info = await conn.getAccountInfo(oracle);
-      if (!info) continue;
-      const ov = decodeVolOracleLight(info.data);
-      if (!best || ov.sampleCount > best.sampleCount) {
-        best = {
-          asset: dec.assetName,
-          market: a.pubkey,
-          oracle,
-          sampleCount: ov.sampleCount,
-          lastSpot: ov.lastSpotPrice,
-        };
+      rows.push({ asset: dec.assetName, market: a.pubkey, oracle });
+    }
+    for (let i = 0; i < rows.length; i += 100) {
+      const slice = rows.slice(i, i + 100);
+      const infos = await conn.getMultipleAccountsInfo(slice.map((r) => r.oracle));
+      for (let j = 0; j < slice.length; j++) {
+        const info = infos[j];
+        if (!info) continue;
+        const ov = decodeVolOracleLight(info.data);
+        if (!best || ov.sampleCount > best.sampleCount) {
+          best = {
+            asset: slice[j].asset,
+            market: slice[j].market,
+            oracle: slice[j].oracle,
+            sampleCount: ov.sampleCount,
+            lastSpot: ov.lastSpotPrice,
+          };
+        }
       }
     }
 

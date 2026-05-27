@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import fs from "node:fs";
 import path from "node:path";
+import { execSync } from "node:child_process";
 import { SECTIONS } from "./src/pages/docs/sections";
 
 const SLICE_QUERY = "?slice";
@@ -99,11 +100,57 @@ function sliceWhitepaper(
   return { abstract, sections };
 }
 
+/**
+ * Resolve a stable build identifier baked into the client bundle and
+ * published at /version.json. Priority:
+ *   1. VERCEL_GIT_COMMIT_SHA (injected by Vercel at build) — 7-char short
+ *   2. local `git rev-parse --short HEAD` (local prod builds)
+ *   3. Date.now() (detached / CI edge cases with no git)
+ * Using the commit SHA means a redeploy of the same commit yields the same
+ * id, so the version checker never false-positives on a rebuild.
+ */
+function resolveBuildId(): string {
+  const sha = process.env.VERCEL_GIT_COMMIT_SHA;
+  if (sha && sha.length > 0) return sha.slice(0, 7);
+  try {
+    return execSync("git rev-parse --short HEAD", {
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .toString()
+      .trim();
+  } catch {
+    return String(Date.now());
+  }
+}
+
+/**
+ * opta-version-emitter — writes dist/version.json at build time so the
+ * deployed app can poll it and compare against its baked __BUILD_ID__.
+ * Build-only: the dev server never serves it, so useVersionCheck simply
+ * fails silent in dev.
+ */
+function versionEmitter(buildId: string): Plugin {
+  return {
+    name: "opta-version-emitter",
+    apply: "build",
+    generateBundle() {
+      this.emitFile({
+        type: "asset",
+        fileName: "version.json",
+        source: JSON.stringify({ buildId }),
+      });
+    },
+  };
+}
+
+const BUILD_ID = resolveBuildId();
+
 export default defineConfig({
-  plugins: [whitepaperSlicer(), react(), tailwindcss()],
+  plugins: [whitepaperSlicer(), versionEmitter(BUILD_ID), react(), tailwindcss()],
   define: {
     global: "globalThis",
     "process.env": "{}",
+    __BUILD_ID__: JSON.stringify(BUILD_ID),
   },
   resolve: {
     alias: {

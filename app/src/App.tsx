@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { Header } from "./components/Header";
 import { ToastContainer } from "./components/Toast";
+import { useVersionCheck } from "./hooks/useVersionCheck";
 import { Landing } from "./pages/Landing";
 import { MarketsPage as Markets } from "./pages/markets";
 import { TradePage as Trade } from "./pages/trade";
@@ -48,6 +49,7 @@ const matchesAny = (path: string, patterns: readonly string[]) =>
  */
 function AppShell() {
   const location = useLocation();
+  useVersionCheck();
   const showHeader = !matchesAny(location.pathname, HEADER_HIDDEN_PATHS);
 
   return (

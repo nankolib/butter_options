@@ -8,6 +8,10 @@ export interface ToastMessage {
   title: string;
   message?: string;
   txSignature?: string;
+  /** When true, the toast does not auto-dismiss (manual ✕ or action only). */
+  sticky?: boolean;
+  /** Optional action button rendered below the message. */
+  action?: { label: string; onClick: () => void };
 }
 
 /** Global toast state — simple pub/sub. */
@@ -30,9 +34,11 @@ export const ToastContainer: FC = () => {
   useEffect(() => {
     const handler = (toast: ToastMessage) => {
       setToasts((prev) => [...prev, toast]);
-      setTimeout(() => {
-        setToasts((prev) => prev.filter((t) => t.id !== toast.id));
-      }, 6000);
+      if (!toast.sticky) {
+        setTimeout(() => {
+          setToasts((prev) => prev.filter((t) => t.id !== toast.id));
+        }, 6000);
+      }
     };
     listeners.push(handler);
     return () => {
@@ -74,6 +80,14 @@ export const ToastContainer: FC = () => {
                 >
                   View on Solscan
                 </a>
+              )}
+              {toast.action && (
+                <button
+                  onClick={toast.action.onClick}
+                  className="text-xs font-semibold text-sol-purple hover:underline mt-2 inline-block"
+                >
+                  {toast.action.label}
+                </button>
               )}
             </div>
             <button

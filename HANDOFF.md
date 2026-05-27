@@ -468,7 +468,7 @@ The full Phase 2 plan is documented at **`.context/plans/phase2-american-onchain
 ### Hermes / Pyth specifics
 - **Mainnet Hermes is the default**, not Beta. Beta has guardian-set sync issues against Solana devnet's Wormhole Core Bridge.
 - **`pyth-solana-receiver-sdk` does NOT expose `get_ema_price_no_older_than`** despite SDK skimming. Read the source manually.
-- **Hermes historical endpoint is `/v1`, not `/v2`.** Latest is `/v2/updates/price/latest`; historical for backfills is `/v1/updates/price/{publish_time}`.
+- **Hermes historical endpoint is `/v2`.** Both latest (`/v2/updates/price/latest`) and historical (`/v2/updates/price/{publish_time}`) live on `/v2`. The `/v1` historical endpoint was **decommissioned in the 2026-05-20 Pyth cutover** (commit 126604d) and now returns HTTP 404 for *every* timestamp, recent or old. Do not use `/v1`.
 
 ### Anchor IDL
 - **`anchor deploy` always re-uploads the IDL** even when bytes are identical.

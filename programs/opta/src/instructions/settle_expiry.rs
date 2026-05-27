@@ -7,8 +7,9 @@
 //                      vault expiry, within a 60s window.
 //
 // The crank fetches a HISTORICAL Pyth update whose publish_time is at
-// or just after vault expiry (Hermes /v1/updates/price/{ts} endpoint),
-// posts it via the Pyth Receiver, and consumes it here. We read EMA
+// or just after vault expiry (Hermes /v2/updates/price/{ts} endpoint —
+// /v1 was decommissioned in the 2026-05-20 Pyth cutover), posts it via
+// the Pyth Receiver, and consumes it here. We read EMA
 // (price_update.price_message.ema_price) rather than spot to dampen
 // final-tick noise — the EMA is signed/verified via the same Wormhole
 // VAA + Merkle path as spot, so verification guarantees are identical.

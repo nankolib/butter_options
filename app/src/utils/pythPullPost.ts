@@ -132,7 +132,13 @@ export async function fetchHistoricalHermesUpdate(
   try {
     const resp = await fetch(url, { signal: ac.signal });
     if (!resp.ok) {
-      throw new Error(`Hermes historical price HTTP ${resp.status} for ts=${ts}`);
+      // Capture the body so the toast distinguishes a decommissioned
+      // endpoint (empty body — e.g. a stale client still on /v1) from a
+      // genuinely-missing feed (/v2 returns "Price ids not found: 0x…").
+      const body = await resp.text().catch(() => "<no body>");
+      throw new Error(
+        `Hermes historical price HTTP ${resp.status} for ts=${ts}: ${body}`,
+      );
     }
     json = await resp.json();
   } finally {

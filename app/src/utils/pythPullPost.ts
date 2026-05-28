@@ -60,6 +60,19 @@ const HERMES_HISTORICAL_PATH_PREFIX = "/v2/updates/price/";
 const FETCH_TIMEOUT_MS = 15000;
 const COMPUTE_UNIT_PRICE_MICRO_LAMPORTS = 50_000;
 
+// ---------------------------------------------------------------------------
+// Window-walk tunables (see fetchHistoricalHermesUpdateInWindow)
+// ---------------------------------------------------------------------------
+const WALK_PROBE_OFFSETS_S = [0, 1, 3, 7, 15, 30, 60] as const;
+/** When the first 200 lands at one of these offsets and the preceding offset
+ *  was 404, do a backward linear refine over the small bracket between them
+ *  to recover an earlier publish_time. Larger brackets ([15..30], [30..60])
+ *  intentionally skip refine to bound the request budget. */
+const WALK_REFINE_PREV_OFFSET: Record<number, number> = { 3: 1, 7: 3 };
+const WALK_THROTTLE_MS = 500;
+const WALK_RATE_LIMIT_RETRY_MS = 2000;
+const WALK_MAX_CONSECUTIVE_429 = 2;
+
 const MARKET_SEED = "market";
 const SETTLEMENT_SEED = "settlement";
 const VOL_ORACLE_SEED = "vol_oracle";
@@ -96,22 +109,55 @@ export async function fetchHermesUpdate(
   return Buffer.from(b64, "base64");
 }
 
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Low-level Hermes historical probe. Returns an explicit result rather
+ *  than throwing on HTTP errors, so the window-walker can distinguish
+ *  404 / 429 / 5xx and decide whether to retry, throttle, or abort.
+ *  Network and parse errors still propagate as thrown exceptions. */
+type HermesProbeResult =
+  | { ok: true; body: Buffer }
+  | { ok: false; status: number; bodyText: string };
+
+async function probeHistoricalHermes(
+  feedIdHex: string,
+  ts: number,
+  hermesBase: string,
+): Promise<HermesProbeResult> {
+  const hex = feedIdHex.replace(/^0x/, "").toLowerCase();
+  const url = `${hermesBase}${HERMES_HISTORICAL_PATH_PREFIX}${ts}?ids[]=0x${hex}&encoding=base64`;
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const resp = await fetch(url, { signal: ac.signal });
+    if (!resp.ok) {
+      const bodyText = await resp.text().catch(() => "<no body>");
+      return { ok: false, status: resp.status, bodyText };
+    }
+    const json = await resp.json();
+    const b64 = json?.binary?.data?.[0];
+    if (typeof b64 !== "string") {
+      // Synthetic non-2xx so the walker treats malformed responses as a
+      // "miss" at this offset rather than throwing mid-walk.
+      return { ok: false, status: 502, bodyText: "<missing binary.data[0]>" };
+    }
+    return { ok: true, body: Buffer.from(b64, "base64") };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Fetch the binary Wormhole VAA for a single feed_id at a SPECIFIC
- *  historical unix timestamp. Hermes returns the first price update
- *  whose publish_time is at or after the requested timestamp. Used by
- *  settle_expiry, which requires `publish_time` to sit in
- *  [vault.expiry, vault.expiry + 60].
+ *  historical unix timestamp. Single-shot — throws on the first non-2xx.
+ *  Used directly only by tests / future single-shot callers; the
+ *  settlement path goes through fetchHistoricalHermesUpdateInWindow
+ *  instead so small Hermes archive holes near the exact expiry second
+ *  don't fail the settle.
  *
  *  NOTE: historical lookups go to /v2/updates/price/{publish_time}.
- *  This used to live only on /v1 (pre-2026-05-20), but Hermes deprecated
- *  /v1 and migrated the historical endpoint to /v2 alongside the existing
- *  /v2/updates/price/latest. The /v2 endpoint accepts the same
- *  encoding=base64 query param and returns identical {binary, parsed}
- *  shape; binary.data[0] is the Wormhole VAA used by the Pyth Solana
- *  receiver.
- *
- *  No fallback to /latest on failure — falling back would silently
- *  reintroduce the late-settlement bug. Callers must handle the throw.
+ *  /v1 was decommissioned in the 2026-05-20 Pyth cutover.
  */
 export async function fetchHistoricalHermesUpdate(
   feedIdHex: string,
@@ -123,34 +169,142 @@ export async function fetchHistoricalHermesUpdate(
       `fetchHistoricalHermesUpdate: invalid timestamp ${publishTimeUnixSeconds}`,
     );
   }
-  const hex = feedIdHex.replace(/^0x/, "").toLowerCase();
   const ts = Math.floor(publishTimeUnixSeconds);
-  const url = `${hermesBase}${HERMES_HISTORICAL_PATH_PREFIX}${ts}?ids[]=0x${hex}&encoding=base64`;
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), FETCH_TIMEOUT_MS);
-  let json: any;
-  try {
-    const resp = await fetch(url, { signal: ac.signal });
-    if (!resp.ok) {
-      // Capture the body so the toast distinguishes a decommissioned
-      // endpoint (empty body — e.g. a stale client still on /v1) from a
-      // genuinely-missing feed (/v2 returns "Price ids not found: 0x…").
-      const body = await resp.text().catch(() => "<no body>");
-      throw new Error(
-        `Hermes historical price HTTP ${resp.status} for ts=${ts}: ${body}`,
-      );
-    }
-    json = await resp.json();
-  } finally {
-    clearTimeout(timer);
-  }
-  const b64 = json?.binary?.data?.[0];
-  if (typeof b64 !== "string") {
+  const result = await probeHistoricalHermes(feedIdHex, ts, hermesBase);
+  if (!result.ok) {
     throw new Error(
-      `Hermes historical response missing binary.data[0] for ts=${ts}`,
+      `Hermes historical price HTTP ${result.status} for ts=${ts}: ${result.bodyText}`,
     );
   }
-  return Buffer.from(b64, "base64");
+  return result.body;
+}
+
+/** Settlement-aware historical fetch. Walks the on-chain settlement
+ *  window forward looking for a Hermes update Hermes can serve, so a
+ *  small archive gap near the exact expiry second doesn't fail the
+ *  settle. settle_expiry.rs requires publish_time ∈ [expiry, expiry+60],
+ *  and Hermes /v2/updates/price/{ts} returns the update AT (within a
+ *  tiny tolerance) the requested second or 404 — it does NOT walk
+ *  forward arbitrarily — so we walk client-side.
+ *
+ *  Strategy (worst case 10 requests):
+ *    1. Exponential probe at offsets [0, 1, 3, 7, 15, 30, 60] s past
+ *       expiry. First 200 wins.
+ *    2. If the first 200 was at offset 3 or 7 AND the immediately-prior
+ *       exp offset was a confirmed 404, linear-refine BACKWARD over the
+ *       small bracket between them to find an earlier publish_time
+ *       (better price-pinning). Wider brackets (15..30, 30..60) skip
+ *       refine — sub-30s pinning sacrificed for request budget.
+ *    3. 429 handling: each probe gets one 2 s rate-limit retry. If TWO
+ *       probes in a row come back 429-after-retry, abort the walk early
+ *       with an HTTP-429-classified error (different recovery path on
+ *       the crank than 404).
+ *    4. 500 ms throttle between consecutive probes.
+ *
+ *  On full-walk failure, throws with substring "HTTP 404" so the crank's
+ *  classifySettleError routes to the hermes-no-update backoff path.
+ *  On 429 abort, throws with substring "HTTP 429" for the rate-limit
+ *  backoff path. */
+export async function fetchHistoricalHermesUpdateInWindow(
+  feedIdHex: string,
+  expiry: number,
+  windowSecs: number,
+  hermesBase: string = DEFAULT_HERMES_BASE,
+): Promise<Buffer> {
+  if (!Number.isFinite(expiry) || expiry <= 0) {
+    throw new Error(
+      `fetchHistoricalHermesUpdateInWindow: invalid expiry ${expiry}`,
+    );
+  }
+  if (!Number.isFinite(windowSecs) || windowSecs < 0) {
+    throw new Error(
+      `fetchHistoricalHermesUpdateInWindow: invalid windowSecs ${windowSecs}`,
+    );
+  }
+
+  const offsets = WALK_PROBE_OFFSETS_S.filter((o) => o <= windowSecs);
+  const probedStatus = new Map<number, number>();
+  const probedData = new Map<number, Buffer>();
+  let consecutive429 = 0;
+
+  // Probe a single offset within the walker. Handles the 2s/one-shot
+  // 429 retry inline and tracks consecutive 429s. Return values:
+  //   "ok"          – 200, body stashed in probedData[offset]
+  //   "miss"        – any non-2xx (404, 5xx, or single 429-after-retry)
+  //   "abort-429"   – two probes in a row hit 429-after-retry → caller throws
+  async function walkProbe(
+    offset: number,
+  ): Promise<"ok" | "miss" | "abort-429"> {
+    const ts = expiry + offset;
+    let result = await probeHistoricalHermes(feedIdHex, ts, hermesBase);
+    if (!result.ok && result.status === 429) {
+      await sleepMs(WALK_RATE_LIMIT_RETRY_MS);
+      result = await probeHistoricalHermes(feedIdHex, ts, hermesBase);
+    }
+    if (!result.ok && result.status === 429) {
+      // Post-retry still 429 — counts against the consecutive-429 budget.
+      consecutive429 += 1;
+      probedStatus.set(offset, 429);
+      if (consecutive429 >= WALK_MAX_CONSECUTIVE_429) return "abort-429";
+      return "miss";
+    }
+    // Any non-429 outcome (including 200 / 404 / 5xx) resets the counter.
+    consecutive429 = 0;
+    if (result.ok) {
+      probedData.set(offset, result.body);
+      probedStatus.set(offset, 200);
+      return "ok";
+    }
+    probedStatus.set(offset, result.status);
+    return "miss";
+  }
+
+  // ---- Phase 1: exponential probe across the offsets ----
+  let firstOkOffset: number | null = null;
+  for (let i = 0; i < offsets.length; i++) {
+    if (i > 0) await sleepMs(WALK_THROTTLE_MS);
+    const r = await walkProbe(offsets[i]);
+    if (r === "abort-429") {
+      // MUST keep "HTTP 429" substring — bot.ts:466 classifySettleError uses
+      // it to route to the rate-limit backoff path. Removing it routes to
+      // "other" → wrong backoff (the data-gap recovery, which is wrong here).
+      throw new Error(
+        `Hermes rate-limited, try again in a moment. [HTTP 429, expiry=${expiry}]`,
+      );
+    }
+    if (r === "ok") {
+      firstOkOffset = offsets[i];
+      break;
+    }
+  }
+
+  if (firstOkOffset === null) {
+    // MUST keep "HTTP 404" substring — bot.ts:466 classifySettleError uses
+    // it to route to the hermes-no-update backoff path. Removing it routes
+    // to "other" → wrong backoff (the rate-limit recovery, which is wrong here).
+    throw new Error(
+      `No Hermes price update available in the 60-second window after expiry. Try again in a few minutes — likely a temporary archive gap. [HTTP 404, expiry=${expiry}, probes=${probedStatus.size}]`,
+    );
+  }
+
+  // ---- Phase 2: refine within small brackets (3→1, 7→3) only ----
+  const refinePrev = WALK_REFINE_PREV_OFFSET[firstOkOffset];
+  if (refinePrev !== undefined && probedStatus.get(refinePrev) === 404) {
+    for (let off = refinePrev + 1; off < firstOkOffset; off++) {
+      await sleepMs(WALK_THROTTLE_MS);
+      const r = await walkProbe(off);
+      if (r === "abort-429") {
+        // MUST keep "HTTP 429" substring — see note above.
+        throw new Error(
+          `Hermes rate-limited, try again in a moment. [HTTP 429, expiry=${expiry}]`,
+        );
+      }
+      if (r === "ok") {
+        return probedData.get(off)!;
+      }
+    }
+  }
+  return probedData.get(firstOkOffset)!;
 }
 
 /** Fetch the parsed display price (USD float + publish_time). Used by the
@@ -197,11 +351,14 @@ export async function buildPostUpdateAndSettleTx(
   feedIdHex: string,
   hermesBase: string = DEFAULT_HERMES_BASE,
 ): Promise<BuiltTx[]> {
-  // Historical fetch — VAA whose publish_time is at-or-after vault expiry.
+  // Historical fetch — VAA whose publish_time is at-or-after vault expiry,
+  // walked forward within the on-chain settlement window so small Hermes
+  // archive holes near the exact expiry second don't fail the settle.
   // settle_expiry then enforces the 60s window on-chain.
-  const priceUpdateData = await fetchHistoricalHermesUpdate(
+  const priceUpdateData = await fetchHistoricalHermesUpdateInWindow(
     feedIdHex,
     expiry,
+    60, // must match settle_expiry.rs:67 EXPIRY_WINDOW_SECS
     hermesBase,
   );
 

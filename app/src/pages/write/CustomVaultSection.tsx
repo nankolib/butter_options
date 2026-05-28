@@ -15,6 +15,11 @@ import {
 import { requiredCollateralPerContract } from "../../utils/collateral";
 import { useWriteSubmit, type WriteSubmitResult } from "./useWriteSubmit";
 import { decodeError } from "../../utils/errorDecoder";
+import {
+  isMarketHours,
+  buildMarketClosedTooltip,
+  type AssetClass,
+} from "../../utils/marketHours";
 
 type CustomVaultSectionProps = {
   values: WriterFormValues;
@@ -48,6 +53,21 @@ export const CustomVaultSection: FC<CustomVaultSectionProps> = ({
     () => assets.find((a) => a.ticker === values.asset) ?? null,
     [assets, values.asset],
   );
+
+  // W3 market-hours gate. Equity (2) and ETF (4) expiries outside NYSE
+  // regular session would produce un-settleable vaults (Pyth equity feeds
+  // only publish during market hours). Tooltip surfaces the next valid
+  // session + delta from now; W3 refinement (2) keeps the user from
+  // silently shifting forward without seeing the time gap.
+  const marketHoursBlock = useMemo<{ tooltip: string } | null>(() => {
+    if (!chosen || values.expiry == null) return null;
+    const assetClass = chosen.market.account.assetClass as AssetClass;
+    const result = isMarketHours(values.expiry, assetClass);
+    if (result.ok) return null;
+    return {
+      tooltip: buildMarketClosedTooltip(result, Math.floor(Date.now() / 1000)),
+    };
+  }, [chosen, values.expiry]);
 
   const handleSubmit = async () => {
     if (!chosen || strikeNum <= 0 || contractsNum <= 0 || values.expiry == null) return;
@@ -127,6 +147,7 @@ export const CustomVaultSection: FC<CustomVaultSectionProps> = ({
           stageLabel={stageLabel}
           onSubmit={handleSubmit}
           onConnectClick={() => setVisible(true)}
+          marketHoursBlock={marketHoursBlock}
         />
         <LiveQuoteCard
           asset={values.asset}

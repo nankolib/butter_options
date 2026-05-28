@@ -15,6 +15,11 @@ import {
 import { requiredCollateralPerContract } from "../../utils/collateral";
 import { useWriteSubmit, type WriteSubmitResult } from "./useWriteSubmit";
 import { decodeError } from "../../utils/errorDecoder";
+import {
+  isMarketHours,
+  buildMarketClosedTooltip,
+  type AssetClass,
+} from "../../utils/marketHours";
 
 type EpochVaultSectionProps = {
   values: WriterFormValues;
@@ -59,6 +64,20 @@ export const EpochVaultSection: FC<EpochVaultSectionProps> = ({
     () => assets.find((a) => a.ticker === values.asset) ?? null,
     [assets, values.asset],
   );
+
+  // W3 market-hours gate. Epoch expiry is fixed at 08:00 UTC, which is
+  // ALWAYS before NYSE opens (13:30 UTC DST / 14:30 UTC standard) — so for
+  // equity/ETF assets the Epoch flow is structurally un-settleable until
+  // EpochConfig supports a per-asset-class hour. v1 blocks at submit.
+  const marketHoursBlock = useMemo<{ tooltip: string } | null>(() => {
+    if (!chosen) return null;
+    const assetClass = chosen.market.account.assetClass as AssetClass;
+    const result = isMarketHours(epochExpiryTs, assetClass);
+    if (result.ok) return null;
+    return {
+      tooltip: buildMarketClosedTooltip(result, Math.floor(Date.now() / 1000)),
+    };
+  }, [chosen, epochExpiryTs]);
 
   const handleSubmit = async () => {
     if (!chosen || strikeNum <= 0 || contractsNum <= 0) return;
@@ -144,6 +163,7 @@ export const EpochVaultSection: FC<EpochVaultSectionProps> = ({
           stageLabel={stageLabel}
           onSubmit={handleSubmit}
           onConnectClick={() => setVisible(true)}
+          marketHoursBlock={marketHoursBlock}
         />
         <LiveQuoteCard
           asset={values.asset}

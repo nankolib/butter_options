@@ -28,6 +28,14 @@ type CustomVaultSectionProps = {
   spotForChosenAsset: number | null;
   spotStale: boolean;
   onSuccess: (result: WriteSubmitResult & { kind: "epoch" | "custom" }) => void;
+  /** W1 vol-oracle gate: tickers whose VolOracle PDA is missing on chain.
+   *  Drives the asset-chip "oracle pending" badge in WriterForm and the
+   *  inline form-level block when the chosen ticker is unseeded. */
+  unseededTickers: ReadonlySet<string>;
+  /** Submit-click pre-flight that re-checks the chosen asset's oracle PDA
+   *  against the chain — catches the race where the crank just seeded it
+   *  but the cache hasn't refreshed. Returns true iff oracle exists now. */
+  checkVolOracle: (feedIdHex: string) => Promise<boolean>;
 };
 
 /**
@@ -41,6 +49,8 @@ export const CustomVaultSection: FC<CustomVaultSectionProps> = ({
   spotForChosenAsset,
   spotStale,
   onSuccess,
+  unseededTickers,
+  checkVolOracle,
 }) => {
   const { connected } = useWallet();
   const { setVisible } = useWalletModal();
@@ -69,9 +79,32 @@ export const CustomVaultSection: FC<CustomVaultSectionProps> = ({
     };
   }, [chosen, values.expiry]);
 
+  // W1 vol-oracle gate. The chosen asset's VolOracle PDA must be seeded
+  // on chain — otherwise mint_from_vault reverts with Anchor 3007.
+  const volOracleBlock = useMemo<{ tooltip: string } | null>(() => {
+    if (!chosen) return null;
+    if (!unseededTickers.has(chosen.ticker)) return null;
+    return {
+      tooltip: `Vol oracle for ${chosen.ticker} not yet seeded. New markets need ~1 hour for the oracle crank to initialize the oracle. Try again later, or contact support if this persists past 24 hours.`,
+    };
+  }, [chosen, unseededTickers]);
+
   const handleSubmit = async () => {
     if (!chosen || strikeNum <= 0 || contractsNum <= 0 || values.expiry == null) return;
     try {
+      // W1 submit-click pre-flight. Even if the cache says "unseeded,"
+      // re-check the chain right now — the crank may have seeded the
+      // oracle since the last scan. If still missing, refuse with a
+      // friendly toast rather than letting stage 3 (mint_from_vault)
+      // revert with 3007 mid-flight.
+      const feedIdHex = Buffer.from(chosen.market.account.pythFeedId as number[]).toString("hex");
+      const oracleOk = await checkVolOracle(feedIdHex);
+      if (!oracleOk) {
+        throw new Error(
+          `Vol oracle for ${chosen.ticker} not yet seeded. New markets need ~1 hour for the oracle crank to initialize the oracle. Try again later, or contact support if this persists past 24 hours.`,
+        );
+      }
+
       // MED-6: prefer Advanced-mode override if writer provided a valid
       // positive value. Empty string or invalid input falls back to the
       // Black-Scholes-derived default (matches LiveQuoteCard's preview).
@@ -148,6 +181,8 @@ export const CustomVaultSection: FC<CustomVaultSectionProps> = ({
           onSubmit={handleSubmit}
           onConnectClick={() => setVisible(true)}
           marketHoursBlock={marketHoursBlock}
+          volOracleBlock={volOracleBlock}
+          unseededTickers={unseededTickers}
         />
         <LiveQuoteCard
           asset={values.asset}

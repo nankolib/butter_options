@@ -7,6 +7,7 @@ import { useProgram } from "../../hooks/useProgram";
 import { inferClusterFromUrl, getSolscanTxUrl } from "../../utils/env";
 import { safeFetchAll } from "../../hooks/useFetchAccounts";
 import { usePythPrices } from "../../hooks/usePythPrices";
+import { useVolOracleStatus } from "../../hooks/useVolOracleStatus";
 import { usePaperPalette } from "../../hooks";
 import { hexFromBytes } from "../../utils/format";
 import { PaperGrain, HairlineRule } from "../../components/layout";
@@ -91,6 +92,23 @@ export const WritePage: FC = () => {
     [assets],
   );
   const { prices: spotPrices, stale: pricesStale } = usePythPrices(feeds);
+
+  // W1 vol-oracle coverage gate. Hourly polling crank leaves a race window
+  // between create_market and the crank's initialize_vol_oracle; W1 surfaces
+  // the gap to the user as "Oracle pending" instead of a confusing 3007
+  // on submit. Re-derives unseeded set into ticker-keyed for the UI layer.
+  const volOracleStatus = useVolOracleStatus(
+    useMemo(() => feeds.map((f) => f.feedIdHex), [feeds]),
+  );
+  const unseededTickers = useMemo<Set<string>>(() => {
+    const out = new Set<string>();
+    for (const f of feeds) {
+      if (volOracleStatus.unseeded.has(f.feedIdHex.toLowerCase().replace(/^0x/, ""))) {
+        out.add(f.ticker);
+      }
+    }
+    return out;
+  }, [feeds, volOracleStatus.unseeded]);
 
   const epochExpiryTs = useMemo(() => nextFridayUtc8(), []);
   const epochExpiryLabel = useMemo(
@@ -210,6 +228,8 @@ export const WritePage: FC = () => {
           epochExpiryTs={epochExpiryTs}
           epochExpiryLabel={epochExpiryLabel}
           onSuccess={handleSuccess}
+          unseededTickers={unseededTickers}
+          checkVolOracle={volOracleStatus.checkOne}
         />
 
         <div className="mt-16">
@@ -223,6 +243,8 @@ export const WritePage: FC = () => {
           spotForChosenAsset={customValues.asset ? spotPrices[customValues.asset] ?? null : null}
           spotStale={pricesStale}
           onSuccess={handleSuccess}
+          unseededTickers={unseededTickers}
+          checkVolOracle={volOracleStatus.checkOne}
         />
       </main>
     </div>

@@ -33,6 +33,9 @@ type EpochVaultSectionProps = {
   epochExpiryLabel: string;
   /** Called on successful submit so the page can render its banner. */
   onSuccess: (result: WriteSubmitResult & { kind: "epoch" | "custom" }) => void;
+  /** W1 vol-oracle gate inputs. See CustomVaultSection for full notes. */
+  unseededTickers: ReadonlySet<string>;
+  checkVolOracle: (feedIdHex: string) => Promise<boolean>;
 };
 
 /**
@@ -52,6 +55,8 @@ export const EpochVaultSection: FC<EpochVaultSectionProps> = ({
   epochExpiryTs,
   epochExpiryLabel,
   onSuccess,
+  unseededTickers,
+  checkVolOracle,
 }) => {
   const { connected } = useWallet();
   const { setVisible } = useWalletModal();
@@ -79,9 +84,27 @@ export const EpochVaultSection: FC<EpochVaultSectionProps> = ({
     };
   }, [chosen, epochExpiryTs]);
 
+  // W1 vol-oracle gate. See CustomVaultSection for full notes.
+  const volOracleBlock = useMemo<{ tooltip: string } | null>(() => {
+    if (!chosen) return null;
+    if (!unseededTickers.has(chosen.ticker)) return null;
+    return {
+      tooltip: `Vol oracle for ${chosen.ticker} not yet seeded. New markets need ~1 hour for the oracle crank to initialize the oracle. Try again later, or contact support if this persists past 24 hours.`,
+    };
+  }, [chosen, unseededTickers]);
+
   const handleSubmit = async () => {
     if (!chosen || strikeNum <= 0 || contractsNum <= 0) return;
     try {
+      // W1 submit-click pre-flight — see CustomVaultSection for full notes.
+      const feedIdHex = Buffer.from(chosen.market.account.pythFeedId as number[]).toString("hex");
+      const oracleOk = await checkVolOracle(feedIdHex);
+      if (!oracleOk) {
+        throw new Error(
+          `Vol oracle for ${chosen.ticker} not yet seeded. New markets need ~1 hour for the oracle crank to initialize the oracle. Try again later, or contact support if this persists past 24 hours.`,
+        );
+      }
+
       // MED-6: prefer Advanced-mode override if writer provided a valid
       // positive value. Empty string or invalid input falls back to the
       // Black-Scholes-derived default (matches LiveQuoteCard's preview).
@@ -164,6 +187,8 @@ export const EpochVaultSection: FC<EpochVaultSectionProps> = ({
           onSubmit={handleSubmit}
           onConnectClick={() => setVisible(true)}
           marketHoursBlock={marketHoursBlock}
+          volOracleBlock={volOracleBlock}
+          unseededTickers={unseededTickers}
         />
         <LiveQuoteCard
           asset={values.asset}

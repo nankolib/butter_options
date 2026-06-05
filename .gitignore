@@ -15,6 +15,7 @@ scripts/.last-*.json
 .env.*
 .env.local
 .env.production
+.opta-*.env
 
 # Keypairs
 *-keypair.json

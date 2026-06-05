@@ -87,8 +87,11 @@ pub fn handle_withdraw_from_vault(
     let option_type_byte = [vault.option_type as u8];
     let vault_bump = [vault.bump];
 
+    // Stage D: namespace prefix from the single-source-of-truth helper so the
+    // signer matches American vaults too. European resolves to the identical
+    // SHARED_VAULT_SEED bytes used before Stage D — zero EUR behavior change.
     let vault_seeds: &[&[u8]] = &[
-        SHARED_VAULT_SEED,
+        vault_namespace_seed(vault.exercise_style),
         market_key.as_ref(),
         &strike_bytes,
         &expiry_bytes,

@@ -22,6 +22,7 @@ use spl_token_2022::extension::ExtensionType;
 
 use crate::errors::OptaError;
 use crate::events::VaultMinted;
+use crate::feature_flags::AMERICAN_ENABLED;
 use crate::state::*;
 
 // Month abbreviations — same as write_option.rs for identical metadata
@@ -384,6 +385,13 @@ pub fn handle_mint_from_vault(
     let resolved_premium: u64 = match vault.exercise_style {
         ExerciseStyle::European => premium_per_contract,
         ExerciseStyle::American => {
+            // Phase 2 Stage D — American arm gate. Runtime check against the
+            // compile-time AMERICAN_ENABLED const (default false until Stage I).
+            // The European arm above NEVER references the flag, so EUR mints are
+            // byte-identical to today. NEVER ship a build with american-enabled
+            // until Stage I (see feature_flags.rs).
+            require!(AMERICAN_ENABLED, OptaError::AmericanVaultsDisabled);
+
             let oracle = ctx.accounts.vol_oracle.load()?;
             let quote = price_american(
                 &*oracle,

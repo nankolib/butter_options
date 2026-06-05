@@ -26,6 +26,10 @@ cu-profile = []
 # `--features test-fast-vol` (passed by .test-fixtures/run-tests.sh)
 # would otherwise error here. opta-transfer-hook has no vol oracle.
 test-fast-vol = []
+# No-op feature mirroring opta's `american-enabled` (Phase 2 Stage D).
+# Workspace-wide cargo `--features american-enabled` would otherwise error
+# here. opta-transfer-hook has no American-gated code path.
+american-enabled = []
 
 [dependencies]
 anchor-lang = { version = "0.32.1" }

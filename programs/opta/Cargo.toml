@@ -29,6 +29,12 @@ cu-profile = []
 # disappears entirely. The .test-fixtures/run-tests.sh launcher passes
 # this feature to anchor build; production deploy scripts must not.
 test-fast-vol = []
+# Phase 2 Stage D: flips feature_flags::AMERICAN_ENABLED to true so the
+# American vault arms (create_shared_vault, mint_from_vault) are reachable.
+# Used ONLY to run the American test suite before Stage I. NEVER deploy a
+# build with this feature enabled — at Stage I flip the not(feature) default
+# in feature_flags.rs to true and deploy FEATURE-FREE instead.
+american-enabled = []
 
 
 [dependencies]

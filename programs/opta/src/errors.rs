@@ -209,4 +209,12 @@ pub enum OptaError {
     // EUR source and avoids burning CU on a value the client already has.
     #[msg("get_option_price view does not support European style; use frontend pricer")]
     ViewNotSupportedForEuropean,
+
+    // Phase 2 Stage D — American vaults feature gate.
+    // Returned by the American arm of create_shared_vault and mint_from_vault
+    // when feature_flags::AMERICAN_ENABLED is false (the default until Stage I).
+    // European arms NEVER reference the flag, so this can only surface on
+    // American vaults. Error code 6052.
+    #[msg("American vaults are disabled — AMERICAN_ENABLED is false (flip at Stage I)")]
+    AmericanVaultsDisabled,
 }

@@ -4231,6 +4231,11 @@ export type Opta = {
       "code": 6051,
       "name": "viewNotSupportedForEuropean",
       "msg": "get_option_price view does not support European style; use frontend pricer"
+    },
+    {
+      "code": 6052,
+      "name": "americanVaultsDisabled",
+      "msg": "American vaults are disabled — AMERICAN_ENABLED is false (flip at Stage I)"
     }
   ],
   "types": [

@@ -178,6 +178,34 @@ pub const SHARED_VAULT_SEED: &[u8] = b"shared_vault";
 /// Phase 2 Stage C Pass 1.
 pub const SHARED_VAULT_AMERICAN_SEED: &[u8] = b"shared_vault_american";
 
+/// **Single source of truth for the SharedVault PDA seed namespace.**
+///
+/// Returns the seed-prefix byte string that, combined with
+/// `(market, strike, expiry, option_type)`, derives a vault's PDA:
+/// `SHARED_VAULT_SEED` for European, `SHARED_VAULT_AMERICAN_SEED` for
+/// American.
+///
+/// EVERY handler that signs a USDC payout *as the vault PDA* MUST build its
+/// `signer_seeds` with this helper rather than hardcoding `SHARED_VAULT_SEED`.
+/// Hardcoding the European prefix on an American vault re-derives a signer
+/// that does not match the account, so the CPI transfer fails (the Stage D
+/// bug). This is the one place EUR vs AMER is decided — `withdraw_from_vault`
+/// and `claim_premium` consume it today; Stage G's settlement handlers
+/// (`withdraw_post_settlement`, `auto_finalize_holders`, `auto_finalize_writers`)
+/// will consume it when they get full American treatment.
+///
+/// Returns `&'static [u8]` (the prefix only, not full signer seeds) so call
+/// sites keep their existing stack-local `strike_bytes` / `expiry_bytes` /
+/// `bump` arrays without lifetime gymnastics.
+///
+/// Phase 2 Stage D.
+pub fn vault_namespace_seed(style: ExerciseStyle) -> &'static [u8] {
+    match style {
+        ExerciseStyle::European => SHARED_VAULT_SEED,
+        ExerciseStyle::American => SHARED_VAULT_AMERICAN_SEED,
+    }
+}
+
 /// PDA seed prefix for the vault's USDC token account.
 pub const VAULT_USDC_SEED: &[u8] = b"vault_usdc";
 
@@ -224,6 +252,70 @@ mod tests {
             let decoded = ExerciseStyle::try_from_slice(&buf).unwrap();
             assert_eq!(style, decoded);
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 2 Stage D — vault_namespace_seed is the single source of truth for
+    // vault-PDA signer seeds. These are the PRIMARY regression for the Stage D
+    // bug: a hardcoded SHARED_VAULT_SEED signer fails on American vaults.
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn vault_namespace_seed_american_is_american_prefix() {
+        assert_eq!(
+            vault_namespace_seed(ExerciseStyle::American),
+            SHARED_VAULT_AMERICAN_SEED,
+        );
+        assert_eq!(
+            vault_namespace_seed(ExerciseStyle::American),
+            b"shared_vault_american",
+        );
+    }
+
+    #[test]
+    fn vault_namespace_seed_european_is_byte_identical_to_today() {
+        // Proves zero EUR behavior change: the helper returns the EXACT bytes
+        // the handlers hardcoded before Stage D.
+        assert_eq!(
+            vault_namespace_seed(ExerciseStyle::European),
+            SHARED_VAULT_SEED,
+        );
+        assert_eq!(
+            vault_namespace_seed(ExerciseStyle::European),
+            b"shared_vault",
+        );
+    }
+
+    #[test]
+    fn vault_namespace_seed_derives_distinct_pdas_for_same_tuple() {
+        // Same (market, strike, expiry, option_type) under each namespace must
+        // resolve to DIFFERENT PDAs — the whole point of the seed split, and
+        // why a European-seeded signer can never authorize an American vault.
+        let market = Pubkey::new_unique();
+        let strike: u64 = 200_000_000;
+        let expiry: i64 = 1_800_000_000;
+        let option_type_byte = [OptionType::Call as u8];
+
+        let derive = |style: ExerciseStyle| {
+            Pubkey::find_program_address(
+                &[
+                    vault_namespace_seed(style),
+                    market.as_ref(),
+                    &strike.to_le_bytes(),
+                    &expiry.to_le_bytes(),
+                    &option_type_byte,
+                ],
+                &crate::ID,
+            )
+            .0
+        };
+
+        let eur = derive(ExerciseStyle::European);
+        let amer = derive(ExerciseStyle::American);
+        assert_ne!(
+            eur, amer,
+            "EUR and AMER vaults at the same tuple must be distinct PDAs",
+        );
     }
 
     #[test]

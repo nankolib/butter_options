@@ -19,6 +19,7 @@ use anchor_spl::token::{Token, TokenAccount, Mint as SplMint};
 
 use crate::errors::OptaError;
 use crate::events::VaultCreated;
+use crate::feature_flags::AMERICAN_ENABLED;
 use crate::state::*;
 use crate::utils::epoch::is_valid_epoch_expiry;
 
@@ -35,6 +36,15 @@ pub fn handle_create_shared_vault(
     carry_rate_bps: i32,
     exercise_style: ExerciseStyle,
 ) -> Result<()> {
+    // Phase 2 Stage D — American arm gate. Runtime check against the
+    // compile-time AMERICAN_ENABLED const (default false until Stage I). The
+    // European arm NEVER references the flag, so EUR vault creation is
+    // byte-identical to today. NEVER ship a build with american-enabled until
+    // Stage I (see feature_flags.rs).
+    if exercise_style == ExerciseStyle::American {
+        require!(AMERICAN_ENABLED, OptaError::AmericanVaultsDisabled);
+    }
+
     // HIGH-3 (audit Run-6) — defense-in-depth. Reject vaults backed by
     // a market with all-zeros pyth_feed_id. Even if the create-side gate
     // (HIGH-2 + zero-check in create_market) regresses, no collateral

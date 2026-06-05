@@ -57,6 +57,8 @@ pub mod shrink_shared_vault_for_test;
 pub mod shrink_shared_vault_to_pre_exercise_style_for_test;
 #[cfg(feature = "cu-profile")]
 pub mod create_test_shared_vault;
+#[cfg(feature = "test-synth-vol")]
+pub mod synth_warm_vol_oracle;
 
 pub use create_market::*;
 pub use initialize_protocol::*;
@@ -112,3 +114,5 @@ pub use shrink_shared_vault_for_test::*;
 pub use shrink_shared_vault_to_pre_exercise_style_for_test::*;
 #[cfg(feature = "cu-profile")]
 pub use create_test_shared_vault::*;
+#[cfg(feature = "test-synth-vol")]
+pub use synth_warm_vol_oracle::*;

@@ -388,4 +388,20 @@ pub mod opta {
     ) -> Result<()> {
         instructions::create_test_shared_vault::handle_create_test_shared_vault(ctx)
     }
+
+    /// Plant warmed VolOracle state (sample_count=720, fresh last_sample_ts,
+    /// V2-reference accumulators, caller-supplied spot) so American pricing
+    /// reads Ok past warmup/stale/math gates without 168 rate-limited pushes.
+    /// Gated by `test-synth-vol`. NEVER deploy a test-synth-vol build — it
+    /// lets anyone overwrite an oracle's vol state. Test-only.
+    #[cfg(feature = "test-synth-vol")]
+    pub fn synth_warm_vol_oracle(
+        ctx: Context<SynthWarmVolOracle>,
+        spot_price_scaled: i64,
+        last_sample_ts: i64,
+    ) -> Result<()> {
+        instructions::synth_warm_vol_oracle::handle_synth_warm_vol_oracle(
+            ctx, spot_price_scaled, last_sample_ts,
+        )
+    }
 }

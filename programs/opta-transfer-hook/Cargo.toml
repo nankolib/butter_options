@@ -30,6 +30,10 @@ test-fast-vol = []
 # Workspace-wide cargo `--features american-enabled` would otherwise error
 # here. opta-transfer-hook has no American-gated code path.
 american-enabled = []
+# No-op feature mirroring opta's `test-synth-vol` (fixture-rot remediation).
+# Workspace-wide cargo `--features test-synth-vol` would otherwise error here.
+# opta-transfer-hook has no vol oracle.
+test-synth-vol = []
 
 [dependencies]
 anchor-lang = { version = "0.32.1" }

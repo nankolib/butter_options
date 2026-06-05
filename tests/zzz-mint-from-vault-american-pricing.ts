@@ -40,12 +40,14 @@ import {
 } from "@solana/spl-token";
 import { assert } from "chai";
 import BN from "bn.js";
-import { fixturePubkey } from "./_pyth_fixtures";
+import { fixturePubkey, AMER_PRICE_FEED_HEX } from "./_pyth_fixtures";
+import { synthWarmVolOracle, spotScaled, staleTs } from "./_vol_oracle_helpers";
 
-const SOL_FEED_ID = Array.from(
-  Buffer.from("ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d", "hex"),
-);
-const SOL_180_FRESH = fixturePubkey("sol-180-fresh");
+// Dedicated isolated feed for this suite so its cold/warm/stale oracle states
+// don't collide with other files that warm the SOL oracle (e.g.
+// zzz-american-vault-lifecycle.ts). Backed by the amer-price-fresh fixture.
+const FEED_ID = Array.from(Buffer.from(AMER_PRICE_FEED_HEX, "hex"));
+const FEED_FIXTURE = fixturePubkey("amer-price-fresh");
 
 // Suite-specific asset name avoids collision with concurrent test suites in
 // the same validator session.
@@ -62,12 +64,12 @@ function usdc(amount: number): BN {
   return new BN(amount * 1_000_000);
 }
 
-// Wrapped in describe.skip pending fixture-rot fix (Tier-2). The tests are
-// correct as written; they fail in `before all` because the validator's
-// Pyth PriceUpdateV2 fixtures are not loaded -- the same fixture-loading
-// issue that causes 97 cascading failures in the existing suite. Unskip
-// once fixture infrastructure is regenerated (separate arc).
-describe.skip("zzz-mint-from-vault-american-pricing (Stage C Pass 2 Step 2)", function () {
+// UN-SKIPPED by the fixture-rot remediation arc. Runs under the harness built
+// with test-fast-vol,american-enabled,test-synth-vol. (a)/(c)/(d) drive the
+// oracle through warmed / stale / zero-spot states via synth_warm_vol_oracle
+// on a DEDICATED feed (isolated from other files' SOL oracle). (b) runs first
+// against the cold oracle; (f) proves the q=0 guard.
+describe("zzz-mint-from-vault-american-pricing (Stage C Pass 2 Step 2)", function () {
   this.timeout(120_000);
 
   const provider = anchor.AnchorProvider.env();
@@ -164,18 +166,22 @@ describe.skip("zzz-mint-from-vault-american-pricing (Stage C Pass 2 Step 2)", fu
   }
 
   before(async () => {
-    // Fresh USDC mint per suite (matches zzz-stage-c-schema.ts pattern).
-    usdcMint = await createMint(
-      provider.connection, payer, payer.publicKey, null, 6,
-    );
-
-    // Protocol state — init if not present.
+    // Protocol state is a session-wide singleton. Reuse its USDC mint when it
+    // already exists (create_shared_vault enforces usdc_mint ==
+    // protocol_state.usdc_mint); minting our own would trip ConstraintRaw 2003.
     [protocolStatePda] = PublicKey.findProgramAddressSync(
       [Buffer.from("protocol_v2")],
       program.programId,
     );
-    const protoExisting = await provider.connection.getAccountInfo(protocolStatePda);
-    if (!protoExisting) {
+    if (await provider.connection.getAccountInfo(protocolStatePda)) {
+      const protocolState = await (program.account as any).protocolState.fetch(
+        protocolStatePda,
+      );
+      usdcMint = protocolState.usdcMint;
+    } else {
+      usdcMint = await createMint(
+        provider.connection, payer, payer.publicKey, null, 6,
+      );
       const [treasuryPda] = PublicKey.findProgramAddressSync(
         [Buffer.from("treasury_v2")],
         program.programId,
@@ -200,12 +206,12 @@ describe.skip("zzz-mint-from-vault-american-pricing (Stage C Pass 2 Step 2)", fu
     );
     if (!(await provider.connection.getAccountInfo(marketPda))) {
       await (program.methods as any)
-        .createMarket(TEST_ASSET, SOL_FEED_ID, 0)
+        .createMarket(TEST_ASSET, FEED_ID, 0)
         .accounts({
           creator: payer.publicKey,
           protocolState: protocolStatePda,
           market: marketPda,
-          priceUpdate: SOL_180_FRESH,
+          priceUpdate: FEED_FIXTURE,
           systemProgram: SystemProgram.programId,
         })
         .rpc();
@@ -213,15 +219,15 @@ describe.skip("zzz-mint-from-vault-american-pricing (Stage C Pass 2 Step 2)", fu
 
     // VolOracle (fresh — sample_count=0, will trigger Warmup on AMER mint).
     [volOraclePda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("vol_oracle"), Buffer.from(SOL_FEED_ID)],
+      [Buffer.from("vol_oracle"), Buffer.from(FEED_ID)],
       program.programId,
     );
     if (!(await provider.connection.getAccountInfo(volOraclePda))) {
       await (program.methods as any)
-        .initializeVolOracle(SOL_FEED_ID)
+        .initializeVolOracle(FEED_ID)
         .accountsStrict({
           initializer: payer.publicKey,
-          priceUpdate: SOL_180_FRESH,
+          priceUpdate: FEED_FIXTURE,
           volOracle: volOraclePda,
           systemProgram: SystemProgram.programId,
         })
@@ -229,7 +235,7 @@ describe.skip("zzz-mint-from-vault-american-pricing (Stage C Pass 2 Step 2)", fu
     }
   });
 
-  it("(b) AMER mint with fresh oracle reverts VolOracleWarmup", async () => {
+  it("(b) AMER mint with un-pushed oracle (last_sample_ts=0) reverts VolOracleStale", async () => {
     const { kp: writer, usdcAta: writerUsdc } = await setupWriter();
     const strike = usdc(100); // $100
     const expiry = new BN(Math.floor(Date.now() / 1000) + 7200);
@@ -303,12 +309,16 @@ describe.skip("zzz-mint-from-vault-american-pricing (Stage C Pass 2 Step 2)", fu
         .preInstructions([EXTRA_CU_800K])
         .signers([writer])
         .rpc();
-      assert.fail("AMER mint should have reverted with VolOracleWarmup");
+      assert.fail("AMER mint should have reverted with VolOracleStale");
     } catch (err: any) {
+      // An un-pushed oracle has last_sample_ts=0, so price_american's 6h
+      // staleness gate (which runs BEFORE realized_vol's warmup gate) is the
+      // first to fire. The warmup gate itself is covered by the Rust unit test
+      // realized_vol_warmup_blocks_below_168 and the synth-based (a)/(c)/(d).
       assert.include(
         String(err),
-        "VolOracleWarmup",
-        "expected VolOracleWarmup; got: " + String(err),
+        "VolOracleStale",
+        "expected VolOracleStale; got: " + String(err),
       );
     }
   });
@@ -394,11 +404,113 @@ describe.skip("zzz-mint-from-vault-american-pricing (Stage C Pass 2 Step 2)", fu
   });
 
   // ---------------------------------------------------------------------------
-  // Skipped tests — require warmed-up VolOracle (>= 168 hourly samples).
-  // Feasibility blocked on a future test-synth-vol feature flag.
+  // Warmed/stale/zero-spot tests — un-skipped via the test-synth-vol synth
+  // instruction (synthWarmVolOracle), which plants oracle state on the
+  // dedicated feed directly. Each uses a distinct strike to avoid vault PDA
+  // collision in the shared validator session.
   // ---------------------------------------------------------------------------
-  it.skip("(a) AMER mint with warmed oracle: computed premium > 0 [Tier-2: needs test-synth-vol]", () => {});
-  it.skip("(c) AMER mint with last_sample_ts > 6h -> VolOracleStale [Tier-2: needs test-synth-vol]", () => {});
-  it.skip("(d) AMER mint with last_spot_price = 0 -> VolOracleInvalidSpot [Tier-2: needs test-synth-vol]", () => {});
-  it.skip("(f) AMER q=0 fast-path == European fast-path [Tier-2: needs test-synth-vol]", () => {});
+
+  // Create an AMER vault + deposit, returning the handles a mint needs.
+  async function createDepositAmer(writer: Keypair, writerUsdc: PublicKey, strike: BN) {
+    const expiry = new BN(Math.floor(Date.now() / 1000) + 7200);
+    const vault = deriveSharedVault("shared_vault_american", strike, expiry, 0);
+    const vaultUsdc = deriveVaultUsdc(vault);
+    await (program.methods as any)
+      .createSharedVault(strike, expiry, { call: {} }, { custom: {} }, usdcMint, 0, { american: {} })
+      .accounts({
+        creator: writer.publicKey, market: marketPda, sharedVault: vault,
+        vaultUsdcAccount: vaultUsdc, usdcMint, protocolState: protocolStatePda,
+        epochConfig: null, tokenProgram: TOKEN_PROGRAM_ID, systemProgram: SystemProgram.programId,
+      })
+      .preInstructions([EXTRA_CU_400K]).signers([writer]).rpc();
+    const writerPos = deriveWriterPos(vault, writer.publicKey);
+    await (program.methods as any)
+      .depositToVault(usdc(1000))
+      .accounts({
+        writer: writer.publicKey, sharedVault: vault, writerPosition: writerPos,
+        writerUsdcAccount: writerUsdc, vaultUsdcAccount: vaultUsdc,
+        protocolState: protocolStatePda, tokenProgram: TOKEN_PROGRAM_ID, systemProgram: SystemProgram.programId,
+      })
+      .signers([writer]).rpc();
+    return { vault, writerPos };
+  }
+
+  // Build (not send) a mint_from_vault for the given quantity.
+  function mintBuilder(writer: Keypair, vault: PublicKey, writerPos: PublicKey, quantity: BN) {
+    const createdAt = new BN(Math.floor(Date.now() / 1000));
+    const optMint = deriveVaultOptionMint(vault, writer.publicKey, createdAt);
+    const escrow = deriveVaultPurchaseEscrow(vault, writer.publicKey, createdAt);
+    const vaultMint = deriveVaultMintRecord(optMint);
+    const builder = (program.methods as any)
+      .mintFromVault(quantity, usdc(1) /* sentinel; AMER ignores */, createdAt)
+      .accounts({
+        writer: writer.publicKey, sharedVault: vault, writerPosition: writerPos,
+        market: marketPda, volOracle: volOraclePda, protocolState: protocolStatePda,
+        optionMint: optMint, purchaseEscrow: escrow, vaultMintRecord: vaultMint,
+        transferHookProgram: HOOK_PROGRAM_ID, extraAccountMetaList: deriveExtraMetaList(optMint),
+        hookState: deriveHookState(optMint), systemProgram: SystemProgram.programId,
+        token2022Program: TOKEN_2022_PROGRAM_ID, rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+      })
+      .preInstructions([EXTRA_CU_800K]).signers([writer]);
+    return { vaultMint, builder };
+  }
+
+  it("(a) AMER mint with warmed oracle: computed premium > 0", async () => {
+    // Warm the dedicated oracle: 720 samples, fresh ts, $500 spot (ITM vs the
+    // $110 strike, so the 2h BS-2002 premium is comfortably > 0 — an OTM 2h
+    // option would round to 0 USDC and trip InvalidPremium, which is a pricing
+    // edge case, not the thing this test proves).
+    await synthWarmVolOracle(program, FEED_ID, spotScaled(500), payer.publicKey);
+    const { kp: writer, usdcAta: writerUsdc } = await setupWriter();
+    const { vault, writerPos } = await createDepositAmer(writer, writerUsdc, usdc(110));
+    const { vaultMint, builder } = mintBuilder(writer, vault, writerPos, new BN(1));
+    await builder.rpc();
+    const rec = await (program.account as any).vaultMint.fetch(vaultMint);
+    assert.isTrue(rec.premiumPerContract.gtn(0), "American premium computed on-chain > 0");
+  });
+
+  it("(c) AMER mint with last_sample_ts > 6h -> VolOracleStale", async () => {
+    // Warmed but stale: last_sample_ts 7h ago.
+    await synthWarmVolOracle(program, FEED_ID, spotScaled(100), payer.publicKey, staleTs(7));
+    const { kp: writer, usdcAta: writerUsdc } = await setupWriter();
+    const { vault, writerPos } = await createDepositAmer(writer, writerUsdc, usdc(120));
+    const { builder } = mintBuilder(writer, vault, writerPos, new BN(1));
+    try {
+      await builder.rpc();
+      assert.fail("expected VolOracleStale");
+    } catch (err: any) {
+      assert.include(String(err), "VolOracleStale", "got: " + String(err));
+    }
+  });
+
+  it("(d) AMER mint with last_spot_price = 0 -> VolOracleInvalidSpot", async () => {
+    // Warmed + fresh but zero spot.
+    await synthWarmVolOracle(program, FEED_ID, new BN(0), payer.publicKey);
+    const { kp: writer, usdcAta: writerUsdc } = await setupWriter();
+    const { vault, writerPos } = await createDepositAmer(writer, writerUsdc, usdc(130));
+    const { builder } = mintBuilder(writer, vault, writerPos, new BN(1));
+    try {
+      await builder.rpc();
+      assert.fail("expected VolOracleInvalidSpot");
+    } catch (err: any) {
+      assert.include(String(err), "VolOracleInvalidSpot", "got: " + String(err));
+    }
+  });
+
+  it("(f) AMER mint with quantity = 0 -> InvalidContractSize", async () => {
+    // Reinterpreted from the original placeholder "(f) q=0 fast-path": mint_from_vault
+    // rejects quantity 0 at the top guard (before any oracle read), for BOTH styles —
+    // the American q=0 path behaves identically to European. Oracle is warmed so the
+    // revert is provably the quantity gate, not warmup.
+    await synthWarmVolOracle(program, FEED_ID, spotScaled(500), payer.publicKey);
+    const { kp: writer, usdcAta: writerUsdc } = await setupWriter();
+    const { vault, writerPos } = await createDepositAmer(writer, writerUsdc, usdc(140));
+    const { builder } = mintBuilder(writer, vault, writerPos, new BN(0));
+    try {
+      await builder.rpc();
+      assert.fail("expected InvalidContractSize");
+    } catch (err: any) {
+      assert.include(String(err), "InvalidContractSize", "got: " + String(err));
+    }
+  });
 });

@@ -64,12 +64,13 @@ import {
 } from "@solana/spl-token";
 import { assert } from "chai";
 import BN from "bn.js";
-import { fixturePubkey } from "./_pyth_fixtures";
+import { fixturePubkey, AMER_LIFE_FEED_HEX } from "./_pyth_fixtures";
+import { synthWarmVolOracle, spotScaled } from "./_vol_oracle_helpers";
 
-const SOL_FEED_ID = Array.from(
-  Buffer.from("ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d", "hex"),
-);
-const SOL_180_FRESH = fixturePubkey("sol-180-fresh");
+// Dedicated isolated feed: warming this oracle must not pollute the real SOL
+// oracle that zzz-vol-oracle.ts initializes + inspects with cold-field asserts.
+const SOL_FEED_ID = Array.from(Buffer.from(AMER_LIFE_FEED_HEX, "hex"));
+const SOL_180_FRESH = fixturePubkey("amer-life-fresh");
 
 // Suite-specific asset name avoids collision with concurrent test suites.
 const TEST_ASSET = "AMERLIFETEST";
@@ -85,8 +86,10 @@ function usdc(amount: number): BN {
   return new BN(amount * 1_000_000);
 }
 
-// describe.skip — see header. Un-skips at fixture-rot remediation (before Stage F).
-describe.skip("zzz-american-vault-lifecycle (Stage D seed-fix proof)", function () {
+// UN-SKIPPED by the fixture-rot remediation arc. Runs under the harness built
+// with test-fast-vol,american-enabled,test-synth-vol: american-enabled makes the
+// American arms reachable (no 6052), test-synth-vol warms the oracle below.
+describe("zzz-american-vault-lifecycle (Stage D seed-fix proof)", function () {
   this.timeout(180_000);
 
   const provider = anchor.AnchorProvider.env();
@@ -184,10 +187,6 @@ describe.skip("zzz-american-vault-lifecycle (Stage D seed-fix proof)", function 
   }
 
   before(async () => {
-    usdcMint = await createMint(
-      provider.connection, payer, payer.publicKey, null, 6,
-    );
-
     [protocolStatePda] = PublicKey.findProgramAddressSync(
       [Buffer.from("protocol_v2")],
       program.programId,
@@ -196,7 +195,19 @@ describe.skip("zzz-american-vault-lifecycle (Stage D seed-fix proof)", function 
       [Buffer.from("treasury_v2")],
       program.programId,
     );
-    if (!(await provider.connection.getAccountInfo(protocolStatePda))) {
+    // Reuse the singleton protocol's USDC mint when it already exists (other
+    // files initialize it first); create_shared_vault enforces usdc_mint ==
+    // protocol_state.usdc_mint. All test files share the provider wallet as
+    // mint authority, so funding wallets from the reused mint still works.
+    if (await provider.connection.getAccountInfo(protocolStatePda)) {
+      const protocolState = await (program.account as any).protocolState.fetch(
+        protocolStatePda,
+      );
+      usdcMint = protocolState.usdcMint;
+    } else {
+      usdcMint = await createMint(
+        provider.connection, payer, payer.publicKey, null, 6,
+      );
       await (program.methods as any)
         .initializeProtocol()
         .accounts({
@@ -227,9 +238,11 @@ describe.skip("zzz-american-vault-lifecycle (Stage D seed-fix proof)", function 
         .rpc();
     }
 
-    // NOTE: at un-skip time this oracle must be WARMED (>= 168 samples) via the
-    // future test-synth-vol synth instruction, else the American mint below
-    // reverts VolOracleWarmup before the seed-fix steps are reached.
+    // Initialize then WARM the oracle. The American mint reads
+    // realized_vol_annualized, which gates on sample_count >= 168 + 6h
+    // freshness. test-synth-vol's synth_warm_vol_oracle plants 720 samples,
+    // fresh ts, and a $100 spot (SCALE 1e12) directly — no 168 rate-limited
+    // pushes needed (infeasible on solana-test-validator; see scope doc).
     [volOraclePda] = PublicKey.findProgramAddressSync(
       [Buffer.from("vol_oracle"), Buffer.from(SOL_FEED_ID)],
       program.programId,
@@ -245,6 +258,8 @@ describe.skip("zzz-american-vault-lifecycle (Stage D seed-fix proof)", function 
         })
         .rpc();
     }
+    // Warm to 720 samples with spot $100 (≈ strike for sane ATM moneyness).
+    await synthWarmVolOracle(program, SOL_FEED_ID, spotScaled(100), payer.publicKey);
   });
 
   it("full American lifecycle: create → deposit → mint → purchase → claim_premium → withdraw_from_vault", async () => {
@@ -281,9 +296,12 @@ describe.skip("zzz-american-vault-lifecycle (Stage D seed-fix proof)", function 
     assert.exists(amerVault.exerciseStyle.american, "vault must be American");
 
     // --- deposit (writer-signed; unaffected by seed bug) --------------------
+    // Deposit $2000 so that after minting 10 CALL contracts (1× strike =
+    // $100 each = $1000 committed) there is $1000 of FREE collateral left for
+    // the withdraw_from_vault seed-fix proof below.
     const writerPos = deriveWriterPos(vault, writer.publicKey);
     await (program.methods as any)
-      .depositToVault(usdc(1000))
+      .depositToVault(usdc(2000))
       .accounts({
         writer: writer.publicKey,
         sharedVault: vault,

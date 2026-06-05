@@ -1,6 +1,8 @@
 {
   "license": "ISC",
   "scripts": {
+    "test": "bash ./.test-fixtures/run-tests.sh \"tests/**/*.ts\"",
+    "test:file": "bash ./.test-fixtures/run-tests.sh",
     "lint:fix": "prettier */*.js \"*/**/*{.js,.ts}\" -w",
     "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check"
   },

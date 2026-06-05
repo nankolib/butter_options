@@ -35,6 +35,14 @@ test-fast-vol = []
 # build with this feature enabled — at Stage I flip the not(feature) default
 # in feature_flags.rs to true and deploy FEATURE-FREE instead.
 american-enabled = []
+# Phase 2 fixture-rot remediation: gates the test-only `synth_warm_vol_oracle`
+# instruction, which plants warmed VolOracle state (sample_count=720, fresh
+# ts, V2 accumulators, caller spot) so American pricing reads Ok without 168
+# rate-limited pushes. NEVER enable in default builds or deploy a
+# test-synth-vol build — it lets anyone overwrite an oracle's vol state,
+# destroying pricing integrity. The .test-fixtures launcher passes this for
+# the American suite; production deploy scripts must not.
+test-synth-vol = []
 
 
 [dependencies]

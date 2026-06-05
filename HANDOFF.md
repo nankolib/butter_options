@@ -203,7 +203,11 @@ The on-chain realized-volatility oracle for Phase 2's pricing path. **Pure addit
 - Same Solana stack pins as `app/`
 
 ### Tests
-- Mocha + Chai + `ts-mocha` at repo root, invoked by `anchor test` (or by `run-tests.sh` for finer-grained control)
+- Mocha + Chai + `ts-mocha` at repo root.
+- **CANONICAL COMMAND: `npm test`** (= `bash ./.test-fixtures/run-tests.sh "tests/**/*.ts"`), or a single file via `npm run test:file tests/<file>.ts`. The harness builds with the test-only feature set (`test-fast-vol,american-enabled,test-synth-vol`), **regenerates runtime-relative Pyth `PriceUpdateV2` fixtures**, launches a manual `solana-test-validator` with `--account` flags to load them, then runs `ts-mocha`.
+- **DO NOT use `anchor test` / bare `ts-mocha`.** `Anchor.toml [test.validator]` has no `--account` entries, so those paths launch a **bare validator with zero fixtures** — every `settle_expiry` / `initialize_vol_oracle` / `push_vol_sample` then reverts `AccountNotInitialized (3012)` on `price_update`, cascading widely. This is the "fixture-rot / 97-failures" phantom: the fixtures were never broken — the wrong launch command was. The working harness has always been `run-tests.sh`; `npm test` now points at it.
+- **Fixture-rot remediation (2026-06-06):** fixed two real regressions — the Pass-2 `vol_oracle` uniform-context account (vault tests now `ensureVolOracle` before minting; killed the 3007s) and protocol-state mint contamination (tests reuse the singleton's USDC mint; killed the 2003s). Added the `test-synth-vol` instruction (`synth_warm_vol_oracle`) to plant a warmed oracle so American pricing tests run without 168 rate-limited pushes. **NEVER deploy a `test-synth-vol` build** (same rule as `cu-profile` / `test-fast-vol`; verified by IDL grep = 0).
+- **Settle-dependent suites are `describe.skip` with `[needs bankrun setClock — Stage G]`:** `auto-finalize-holders`, `auto-finalize-writers`, `CRIT-1 holders-first gate`, and individual settle tests in `opta` / `zzz-audit-fixes` / `shared-vaults`. They settle a vault whose expiry the test computes at run time, but fixtures carry fixed publish_times written at suite start — the 60s settle window can't align over a multi-minute suite (PriceUpdateBeforeExpiry / ExpiryInPast). Deterministic only under bankrun's per-test `setClock`; bankrun adoption is deferred to Stage G. These were already failing pre-remediation — not a regression.
 
 ### External services
 - **Pyth Network** — on-chain oracle for pricing + settlement via the Pull oracle (PriceUpdateV2)

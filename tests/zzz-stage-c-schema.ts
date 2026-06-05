@@ -82,25 +82,31 @@ describe("zzz-stage-c-schema (Stage C Pass 1)", function () {
     );
     await provider.connection.confirmTransaction(sig, "confirmed");
 
-    // Fresh USDC mint per test run.
-    usdcMint = await createMint(
-      provider.connection,
-      payer,
-      payer.publicKey,
-      null,
-      6,
-    );
-
-    // Protocol state -- initialize if not already done. Other test files
-    // running in the same validator session may have done this already;
-    // initializeProtocol is `init` so a second call reverts. We tolerate
-    // the existing state.
+    // Protocol state is a session-wide singleton. Other test files running
+    // first in the same validator session initialize it with THEIR USDC mint;
+    // create_shared_vault enforces `usdc_mint == protocol_state.usdc_mint`, so
+    // we MUST reuse the existing protocol's mint rather than minting our own
+    // (minting our own trips ConstraintRaw 2003 — the fixture-rot
+    // protocol-state-contamination failure). Mirrors the reuse idiom in
+    // shared-vaults.ts / zzz-audit-fixes.ts / zzz-auto-finalize-*.ts.
     [protocolStatePda] = PublicKey.findProgramAddressSync(
       [Buffer.from("protocol_v2")],
       program.programId,
     );
     const existing = await provider.connection.getAccountInfo(protocolStatePda);
-    if (!existing) {
+    if (existing) {
+      const protocolState = await (program.account as any).protocolState.fetch(
+        protocolStatePda,
+      );
+      usdcMint = protocolState.usdcMint;
+    } else {
+      usdcMint = await createMint(
+        provider.connection,
+        payer,
+        payer.publicKey,
+        null,
+        6,
+      );
       const [treasuryPda] = PublicKey.findProgramAddressSync(
         [Buffer.from("treasury_v2")],
         program.programId,

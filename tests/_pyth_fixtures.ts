@@ -181,6 +181,17 @@ export function synthFeedIdHex(label: string): string {
     .toString("hex");
 }
 
+/// Dedicated synthetic feed for the American-pricing suite
+/// (tests/zzz-mint-from-vault-american-pricing.ts). Isolated from the real SOL
+/// feed so that suite's cold/warm/stale oracle states don't collide with other
+/// files that warm the SOL oracle (e.g. zzz-american-vault-lifecycle.ts).
+export const AMER_PRICE_FEED_HEX = synthFeedIdHex("amer-price-dedicated");
+
+/// Dedicated synthetic feed for the American lifecycle suite
+/// (tests/zzz-american-vault-lifecycle.ts). Isolated so warming it doesn't
+/// pollute the real SOL oracle that zzz-vol-oracle.ts initializes + inspects.
+export const AMER_LIFE_FEED_HEX = synthFeedIdHex("amer-life-dedicated");
+
 /// Per-test synthetic feed IDs (computed at module load).
 export const VOL_TEST_FEED_HEX = {
   T1_SEED: synthFeedIdHex("t1-seed"),
@@ -348,6 +359,12 @@ export const ALL_FIXTURES: FixtureSpec[] = [
   { name: "vol-t6-stale", feedIdHex: VOL_TEST_FEED_HEX.T6_STALE, price: BigInt("18000000000"), exponent: -8, publishTimeOffsetSec: -400 },
   { name: "vol-t7-zero",  feedIdHex: VOL_TEST_FEED_HEX.T7_ZERO_SPOT, price: BigInt(0), exponent: -8, publishTimeOffsetSec: 1500, emaPrice: BigInt(1) },
   { name: "vol-t4-long-future", feedIdHex: VOL_TEST_FEED_HEX.T4_LONG_RING_WRAP, price: BigInt("9000000000000"), exponent: -8, publishTimeOffsetSec: 1500 },
+  // Dedicated American-pricing feed ($100 spot, far-future publish_time so it
+  // stays a valid proof-of-feed for create_market / initialize_vol_oracle even
+  // when that suite runs late). Oracle warmth is controlled per-test via the
+  // synth_warm_vol_oracle (test-synth-vol) instruction, not this fixture.
+  { name: "amer-price-fresh", feedIdHex: AMER_PRICE_FEED_HEX, price: BigInt("10000000000"), exponent: -8, publishTimeOffsetSec: 1500 },
+  { name: "amer-life-fresh", feedIdHex: AMER_LIFE_FEED_HEX, price: BigInt("10000000000"), exponent: -8, publishTimeOffsetSec: 1500 },
 ];
 
 /// Write all fixtures to /tmp and return the (name → pubkey) map plus the

@@ -73,15 +73,25 @@ describe("zzz-vol-oracle (Stage B Step 2)", () => {
   it("initializes a VolOracle for SOL with valid Pyth fixture", async () => {
     const [oraclePda] = deriveVolOracle(program.programId, SOL_FEED_ID);
 
-    await program.methods
-      .initializeVolOracle(SOL_FEED_ID)
-      .accountsStrict({
-        initializer: wallet.publicKey,
-        priceUpdate: SOL_FIXTURE,
-        volOracle: oraclePda,
-        systemProgram: SystemProgram.programId,
-      })
-      .rpc();
+    // The fixture-rot remediation made EUR vault-test before hooks idempotently
+    // cold-init the SOL oracle (ensureVolOracle), so by the time this file runs
+    // (alphabetically last) the SOL oracle may already exist. Tolerate that —
+    // the cold-field assertions below verify it's still a freshly-initialized
+    // (un-pushed) oracle regardless of which file created it. Nothing pushes to
+    // the SOL oracle (EUR mints don't), so sample_count stays 0.
+    try {
+      await program.methods
+        .initializeVolOracle(SOL_FEED_ID)
+        .accountsStrict({
+          initializer: wallet.publicKey,
+          priceUpdate: SOL_FIXTURE,
+          volOracle: oraclePda,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+    } catch (err: any) {
+      if (!String(err).includes("already in use")) throw err;
+    }
 
     const oracle = await program.account.volOracle.fetch(oraclePda);
     assert.deepEqual(Array.from(oracle.feedId), SOL_FEED_ID, "feed_id stored");

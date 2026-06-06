@@ -192,6 +192,11 @@ export const AMER_PRICE_FEED_HEX = synthFeedIdHex("amer-price-dedicated");
 /// pollute the real SOL oracle that zzz-vol-oracle.ts initializes + inspects.
 export const AMER_LIFE_FEED_HEX = synthFeedIdHex("amer-life-dedicated");
 
+/// Dedicated synthetic feed for the Stage E metadata suite
+/// (tests/zzz-metadata-exercise-style.ts). Isolated so warming it (American
+/// case) doesn't collide with the other American suites' oracle states.
+export const AMER_META_FEED_HEX = synthFeedIdHex("amer-meta-dedicated");
+
 /// Per-test synthetic feed IDs (computed at module load).
 export const VOL_TEST_FEED_HEX = {
   T1_SEED: synthFeedIdHex("t1-seed"),
@@ -365,6 +370,7 @@ export const ALL_FIXTURES: FixtureSpec[] = [
   // synth_warm_vol_oracle (test-synth-vol) instruction, not this fixture.
   { name: "amer-price-fresh", feedIdHex: AMER_PRICE_FEED_HEX, price: BigInt("10000000000"), exponent: -8, publishTimeOffsetSec: 1500 },
   { name: "amer-life-fresh", feedIdHex: AMER_LIFE_FEED_HEX, price: BigInt("10000000000"), exponent: -8, publishTimeOffsetSec: 1500 },
+  { name: "amer-meta-fresh", feedIdHex: AMER_META_FEED_HEX, price: BigInt("10000000000"), exponent: -8, publishTimeOffsetSec: 1500 },
 ];
 
 /// Write all fixtures to /tmp and return the (name → pubkey) map plus the

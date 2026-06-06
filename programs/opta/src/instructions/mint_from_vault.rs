@@ -260,6 +260,13 @@ pub fn handle_mint_from_vault(
         ("collateral_per_token", collateral_per_token.to_string()),
         ("market_pda", ctx.accounts.market.key().to_string()),
         ("vault_pda", ctx.accounts.shared_vault.key().to_string()),
+        // Stage E: exercise style as a lowercase human word ("european"/
+        // "american"), mirroring option_type. Sourced from the in-context vault
+        // (set immutably at create_shared_vault). Written on EVERY new mint,
+        // European included; no backfill of pre-Stage-E mints (default-on-read
+        // treats a missing key as European). The metadata account's 854-byte
+        // over-fund (above) absorbs this extra pair via Token-2022 auto-realloc.
+        ("exercise_style", vault.exercise_style.metadata_str().to_string()),
     ];
 
     for (key, value) in additional_fields {

@@ -49,6 +49,19 @@ pub enum ExerciseStyle {
     American,
 }
 
+impl ExerciseStyle {
+    /// Single source of truth for the lowercase human-word rendering of this
+    /// enum on the option mint's Token-2022 metadata (`exercise_style` key).
+    /// Mirrors the lowercase-word convention `option_type` uses for
+    /// "call"/"put". Phase 2 Stage E.
+    pub fn metadata_str(&self) -> &'static str {
+        match self {
+            ExerciseStyle::European => "european",
+            ExerciseStyle::American => "american",
+        }
+    }
+}
+
 #[account]
 #[derive(InitSpace)]
 pub struct SharedVault {
@@ -242,6 +255,16 @@ mod tests {
         let mut buf = vec![];
         ExerciseStyle::American.serialize(&mut buf).unwrap();
         assert_eq!(buf, vec![1u8], "American must encode to [0x01]");
+    }
+
+    #[test]
+    fn exercise_style_metadata_str_mapping() {
+        // Phase 2 Stage E — the lowercase-word rendering written onto each new
+        // option mint's Token-2022 `exercise_style` metadata pair. Locked so a
+        // future rename can't silently change the on-chain literal that
+        // default-on-read frontends will key against.
+        assert_eq!(ExerciseStyle::European.metadata_str(), "european");
+        assert_eq!(ExerciseStyle::American.metadata_str(), "american");
     }
 
     #[test]

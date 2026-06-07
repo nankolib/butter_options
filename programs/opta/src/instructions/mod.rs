@@ -18,6 +18,7 @@ pub mod withdraw_from_vault;
 pub mod claim_premium;
 pub mod settle_vault;
 pub mod exercise_from_vault;
+pub mod exercise_american;
 pub mod withdraw_post_settlement;
 pub mod auto_finalize_holders;
 pub mod auto_finalize_writers;
@@ -32,6 +33,8 @@ pub mod auto_cancel_listings;
 pub mod migrate_shared_vault_carry_rate;
 // SharedVault exercise_style schema migration (Stage C Pass 1)
 pub mod migrate_shared_vault_exercise_style;
+// SharedVault early-exercise tracking schema migration (Stage F)
+pub mod migrate_shared_vault_exercise_tracking;
 
 // Phase 2 Stage B -- realized-vol oracle
 pub mod initialize_vol_oracle;
@@ -76,6 +79,7 @@ pub use withdraw_from_vault::*;
 pub use claim_premium::*;
 pub use settle_vault::*;
 pub use exercise_from_vault::*;
+pub use exercise_american::*;
 pub use withdraw_post_settlement::*;
 pub use auto_finalize_holders::*;
 pub use auto_finalize_writers::*;
@@ -89,6 +93,7 @@ pub use auto_cancel_listings::*;
 // SharedVault carry_rate_bps schema migration
 pub use migrate_shared_vault_carry_rate::*;
 pub use migrate_shared_vault_exercise_style::*;
+pub use migrate_shared_vault_exercise_tracking::*;
 
 // Phase 2 Stage B -- realized-vol oracle
 pub use initialize_vol_oracle::*;

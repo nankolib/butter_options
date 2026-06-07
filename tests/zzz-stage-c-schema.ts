@@ -12,7 +12,9 @@
 //   - exercise_style field roundtrips via Anchor account fetch
 //   - exercise_style byte sits at offset 8 + 232 = 240 in account data and
 //     decodes to variant 0 (European) or variant 1 (American)
-//   - SharedVault account size on disk is 241 bytes (8 disc + 233 INIT_SPACE)
+//   - SharedVault account size on disk is 257 bytes (8 disc + 249 INIT_SPACE)
+//     post-Stage-F (was 241 pre-Stage-F; +16 for exercised_options +
+//     early_exercise_payout, appended AFTER exercise_style so offset 240 holds)
 //
 // Does NOT exercise mint pricing or get_option_price (Pass 2/3).
 //
@@ -56,8 +58,10 @@ const TEST_ASSET = "STAGECTEST";
 // shared_vault.rs InitSpace) = 240.
 const EXERCISE_STYLE_BYTE_OFFSET = 240;
 
-// Expected account on-disk size post-Pass-1 (8 discriminator + 233 INIT_SPACE).
-const POST_PASS1_VAULT_SIZE = 241;
+// Expected account on-disk size post-Stage-F (8 discriminator + 249 INIT_SPACE).
+// Was 241 pre-Stage-F; +16 bytes for exercised_options + early_exercise_payout
+// (appended after exercise_style, so EXERCISE_STYLE_BYTE_OFFSET = 240 is unchanged).
+const POST_PASS1_VAULT_SIZE = 257;
 
 describe("zzz-stage-c-schema (Stage C Pass 1)", function () {
   this.timeout(60_000);

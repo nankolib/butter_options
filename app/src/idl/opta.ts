@@ -1470,6 +1470,114 @@ export type Opta = {
       ]
     },
     {
+      "name": "exerciseAmerican",
+      "docs": [
+        "Early (pre-expiry) American exercise. The holder burns `quantity`",
+        "tokens and receives cash-settled capped intrinsic in USDC from the",
+        "vault (CALL/PUT capped at 1× collateral per contract). American-only",
+        "and gated off via AMERICAN_ENABLED until Stage I. Spot is read from a",
+        "fresh PriceUpdateV2 the exerciser supplies. Increments the vault's",
+        "early-exercise counters only; settlement nets them in Stage G."
+      ],
+      "discriminator": [
+        241,
+        75,
+        206,
+        124,
+        107,
+        254,
+        131,
+        81
+      ],
+      "accounts": [
+        {
+          "name": "holder",
+          "docs": [
+            "The option token holder exercising early."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "sharedVault",
+          "docs": [
+            "The (unsettled, pre-expiry) American shared vault."
+          ],
+          "writable": true
+        },
+        {
+          "name": "market",
+          "docs": [
+            "The vault's market — provides the canonical `pyth_feed_id` the supplied",
+            "price update is validated against."
+          ]
+        },
+        {
+          "name": "priceUpdate",
+          "docs": [
+            "Fresh PriceUpdateV2 from the Pyth Receiver (exerciser posts it in the",
+            "same tx). Validated for Full verification + feed_id + confidence +",
+            "freshness in the handler."
+          ]
+        },
+        {
+          "name": "vaultMintRecord",
+          "docs": [
+            "Validates option_mint belongs to this vault (same guard as",
+            "exercise_from_vault)."
+          ]
+        },
+        {
+          "name": "optionMint",
+          "docs": [
+            "The Token-2022 option mint."
+          ],
+          "writable": true
+        },
+        {
+          "name": "holderOptionAccount",
+          "docs": [
+            "Holder's option token account (Token-2022)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "vaultUsdcAccount",
+          "docs": [
+            "Vault's USDC account — payout source."
+          ],
+          "writable": true
+        },
+        {
+          "name": "holderUsdcAccount",
+          "docs": [
+            "Holder's USDC account — receives the cash-settled payout."
+          ],
+          "writable": true
+        },
+        {
+          "name": "token2022Program",
+          "docs": [
+            "Token-2022 program — for burning option tokens."
+          ],
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "tokenProgram",
+          "docs": [
+            "Standard SPL Token program — for the USDC transfer."
+          ],
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "quantity",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "exerciseFromVault",
       "docs": [
         "Exercise option tokens from a settled vault."
@@ -2365,6 +2473,69 @@ export type Opta = {
         20,
         99,
         193
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "docs": [
+            "Admin -- must match protocol_state.admin (CRIT-3 deployer pubkey).",
+            "Pays the rent delta for any grown vaults."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocolState",
+          "docs": [
+            "Used only to assert admin == protocol_state.admin."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "migrateSharedVaultExerciseTracking",
+      "docs": [
+        "One-time SharedVault schema migration that adds the trailing",
+        "exercised_options + early_exercise_payout fields (Stage F) to",
+        "pre-Stage-F vaults. Admin-only. Caller passes vault accounts via",
+        "remaining_accounts (recommended batch: 20 per call). Idempotent:",
+        "vaults already at the new size are skipped. Zero-fill on the new 16",
+        "bytes deserializes as 0/0 (no early exercises). Admin pays the rent delta."
+      ],
+      "discriminator": [
+        175,
+        112,
+        143,
+        170,
+        148,
+        99,
+        73,
+        249
       ],
       "accounts": [
         {
@@ -4236,6 +4407,11 @@ export type Opta = {
       "code": 6052,
       "name": "americanVaultsDisabled",
       "msg": "American vaults are disabled — AMERICAN_ENABLED is false (flip at Stage I)"
+    },
+    {
+      "code": 6053,
+      "name": "notAmericanOption",
+      "msg": "Option is not American-style — early exercise is not available"
     }
   ],
   "types": [
@@ -5107,6 +5283,31 @@ export type Opta = {
                 "name": "exerciseStyle"
               }
             }
+          },
+          {
+            "name": "exercisedOptions",
+            "docs": [
+              "Phase 2 Stage F — early-exercise accounting (the F→G handshake).",
+              "",
+              "Cumulative count of option contracts exercised EARLY (pre-expiry) via",
+              "`exercise_american`, and the cumulative USDC (6-dec) paid out for them.",
+              "Stage F only increments these two counters; it does NOT mutate",
+              "total_collateral / total_options_sold / collateral_remaining. Stage G's",
+              "settlement math consumes them to avoid double-paying contracts that were",
+              "already cash-settled early.",
+              "",
+              "MUST be the last two fields. Pre-Stage-F vaults were serialized without",
+              "them (16 bytes shorter than the new INIT_SPACE). The admin-only",
+              "`migrate_shared_vault_exercise_tracking` grows them and zero-fills the",
+              "trailing bytes — which deserialize as 0/0, the correct default for a",
+              "vault that has had no early exercises. Same append+migrate discipline as",
+              "carry_rate_bps (Stage A) and exercise_style (Stage C Pass 1)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "earlyExercisePayout",
+            "type": "u64"
           }
         ]
       }

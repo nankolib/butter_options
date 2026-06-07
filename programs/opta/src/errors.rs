@@ -217,4 +217,10 @@ pub enum OptaError {
     // American vaults. Error code 6052.
     #[msg("American vaults are disabled — AMERICAN_ENABLED is false (flip at Stage I)")]
     AmericanVaultsDisabled,
+
+    // Phase 2 Stage F — early American exercise.
+    // Returned by exercise_american when the vault's exercise_style is
+    // European (early exercise is an American-only feature). Error code 6053.
+    #[msg("Option is not American-style — early exercise is not available")]
+    NotAmericanOption,
 }

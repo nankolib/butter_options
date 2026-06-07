@@ -197,6 +197,11 @@ export const AMER_LIFE_FEED_HEX = synthFeedIdHex("amer-life-dedicated");
 /// case) doesn't collide with the other American suites' oracle states.
 export const AMER_META_FEED_HEX = synthFeedIdHex("amer-meta-dedicated");
 
+/// Dedicated synthetic feed for the Stage F early-exercise suite
+/// (tests/zzz-exercise-american.ts). Isolated so its warmed oracle + the
+/// per-spot price fixtures below don't collide with other suites.
+export const AMER_EXEC_FEED_HEX = synthFeedIdHex("amer-exec-dedicated");
+
 /// Per-test synthetic feed IDs (computed at module load).
 export const VOL_TEST_FEED_HEX = {
   T1_SEED: synthFeedIdHex("t1-seed"),
@@ -371,6 +376,16 @@ export const ALL_FIXTURES: FixtureSpec[] = [
   { name: "amer-price-fresh", feedIdHex: AMER_PRICE_FEED_HEX, price: BigInt("10000000000"), exponent: -8, publishTimeOffsetSec: 1500 },
   { name: "amer-life-fresh", feedIdHex: AMER_LIFE_FEED_HEX, price: BigInt("10000000000"), exponent: -8, publishTimeOffsetSec: 1500 },
   { name: "amer-meta-fresh", feedIdHex: AMER_META_FEED_HEX, price: BigInt("10000000000"), exponent: -8, publishTimeOffsetSec: 1500 },
+  // Stage F early-exercise: dedicated feed. amer-exec-fresh ($100) is the
+  // proof-of-feed for create_market / initialize_vol_oracle (no freshness gate
+  // there). The per-spot fixtures drive exercise_american's EMA read — all share
+  // AMER_EXEC_FEED_HEX so they pass the feed_id gate, with distinct EMA prices
+  // to hit each case. Far-future publish_time keeps them inside settle's
+  // PYTH_MAX_AGE backstop regardless of how late the zzz suite runs.
+  { name: "amer-exec-fresh", feedIdHex: AMER_EXEC_FEED_HEX, price: BigInt("10000000000"), exponent: -8, publishTimeOffsetSec: 1500 },
+  { name: "amer-exec-150",   feedIdHex: AMER_EXEC_FEED_HEX, price: BigInt("15000000000"), exponent: -8, publishTimeOffsetSec: 1500 },
+  { name: "amer-exec-250",   feedIdHex: AMER_EXEC_FEED_HEX, price: BigInt("25000000000"), exponent: -8, publishTimeOffsetSec: 1500 },
+  { name: "amer-exec-080",   feedIdHex: AMER_EXEC_FEED_HEX, price: BigInt("8000000000"),  exponent: -8, publishTimeOffsetSec: 1500 },
 ];
 
 /// Write all fixtures to /tmp and return the (name → pubkey) map plus the

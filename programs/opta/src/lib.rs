@@ -164,6 +164,19 @@ pub mod opta {
         instructions::exercise_from_vault::handle_exercise_from_vault(ctx, quantity)
     }
 
+    /// Early (pre-expiry) American exercise. The holder burns `quantity`
+    /// tokens and receives cash-settled capped intrinsic in USDC from the
+    /// vault (CALL/PUT capped at 1× collateral per contract). American-only
+    /// and gated off via AMERICAN_ENABLED until Stage I. Spot is read from a
+    /// fresh PriceUpdateV2 the exerciser supplies. Increments the vault's
+    /// early-exercise counters only; settlement nets them in Stage G.
+    pub fn exercise_american(
+        ctx: Context<ExerciseAmerican>,
+        quantity: u64,
+    ) -> Result<()> {
+        instructions::exercise_american::handle_exercise_american(ctx, quantity)
+    }
+
     /// Withdraw remaining collateral after vault settlement.
     pub fn withdraw_post_settlement(ctx: Context<WithdrawPostSettlement>) -> Result<()> {
         instructions::withdraw_post_settlement::handle_withdraw_post_settlement(ctx)
@@ -254,6 +267,18 @@ pub mod opta {
         ctx: Context<'_, '_, '_, 'info, MigrateSharedVaultExerciseStyle<'info>>,
     ) -> Result<()> {
         instructions::migrate_shared_vault_exercise_style::handle_migrate_shared_vault_exercise_style(ctx)
+    }
+
+    /// One-time SharedVault schema migration that adds the trailing
+    /// exercised_options + early_exercise_payout fields (Stage F) to
+    /// pre-Stage-F vaults. Admin-only. Caller passes vault accounts via
+    /// remaining_accounts (recommended batch: 20 per call). Idempotent:
+    /// vaults already at the new size are skipped. Zero-fill on the new 16
+    /// bytes deserializes as 0/0 (no early exercises). Admin pays the rent delta.
+    pub fn migrate_shared_vault_exercise_tracking<'info>(
+        ctx: Context<'_, '_, '_, 'info, MigrateSharedVaultExerciseTracking<'info>>,
+    ) -> Result<()> {
+        instructions::migrate_shared_vault_exercise_tracking::handle_migrate_shared_vault_exercise_tracking(ctx)
     }
 
     // =========================================================================

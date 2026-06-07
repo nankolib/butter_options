@@ -177,6 +177,24 @@ pub struct SharedVault {
     /// break that migration path. Same architectural pattern as
     /// Stage A's carry_rate_bps append.
     pub exercise_style: ExerciseStyle,
+
+    /// Phase 2 Stage F — early-exercise accounting (the F→G handshake).
+    ///
+    /// Cumulative count of option contracts exercised EARLY (pre-expiry) via
+    /// `exercise_american`, and the cumulative USDC (6-dec) paid out for them.
+    /// Stage F only increments these two counters; it does NOT mutate
+    /// total_collateral / total_options_sold / collateral_remaining. Stage G's
+    /// settlement math consumes them to avoid double-paying contracts that were
+    /// already cash-settled early.
+    ///
+    /// MUST be the last two fields. Pre-Stage-F vaults were serialized without
+    /// them (16 bytes shorter than the new INIT_SPACE). The admin-only
+    /// `migrate_shared_vault_exercise_tracking` grows them and zero-fills the
+    /// trailing bytes — which deserialize as 0/0, the correct default for a
+    /// vault that has had no early exercises. Same append+migrate discipline as
+    /// carry_rate_bps (Stage A) and exercise_style (Stage C Pass 1).
+    pub exercised_options: u64,
+    pub early_exercise_payout: u64,
 }
 
 /// PDA seed prefix for SharedVault accounts.
@@ -342,11 +360,16 @@ mod tests {
     }
 
     #[test]
-    fn shared_vault_init_space_is_233() {
+    fn shared_vault_init_space_is_249() {
         // Locks the byte total against silent drift. If a future field
         // change shifts this, the migration script's hardcoded constants
-        // and the matching `tests/realloc-shared-vault-exercise-style.ts`
-        // expectations need to be updated in lockstep.
-        assert_eq!(SharedVault::INIT_SPACE, 233);
+        // and the matching `tests/realloc-shared-vault-exercise-style.ts` /
+        // `tests/zzz-stage-c-schema.ts` expectations need to be updated in
+        // lockstep.
+        //
+        // 233 (pre-Stage-F) + 16 (Stage F: exercised_options u64 +
+        // early_exercise_payout u64) = 249. On-disk account size is
+        // 8 (discriminator) + 249 = 257.
+        assert_eq!(SharedVault::INIT_SPACE, 249);
     }
 }

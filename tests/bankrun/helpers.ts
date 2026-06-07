@@ -99,10 +99,14 @@ const optIdx = (o: any) => ("put" in o ? 1 : 0);
 const svSeed = (style: "european" | "american") =>
   style === "american" ? "shared_vault_american" : "shared_vault";
 
-/** Pre-bake a funded classic USDC ATA; returns the ATA. */
-export function usdcAta(e: Env, owner: PublicKey, amount = 10_000_000_000n): PublicKey {
+/** Idempotently ensure a funded classic USDC ATA; returns the ATA.
+ * MUST be idempotent: re-baking (overwriting amount) on a later call would reset
+ * the balance and corrupt balance-delta assertions in claim/withdraw helpers. */
+export async function usdcAta(e: Env, owner: PublicKey, amount = 10_000_000_000n): Promise<PublicKey> {
   const ata = getAssociatedTokenAddressSync(e.usdcMint, owner, false, TOKEN_PROGRAM_ID);
-  prebakeTokenAccount(e.h.context, ata, e.usdcMint, owner, amount);
+  if (!(await e.h.context.banksClient.getAccount(ata))) {
+    prebakeTokenAccount(e.h.context, ata, e.usdcMint, owner, amount);
+  }
   return ata;
 }
 export async function bal(e: Env, ata: PublicKey): Promise<bigint> {
@@ -139,7 +143,7 @@ export async function deposit(e: Env, vault: PublicKey, vaultUsdc: PublicKey, wr
   const writerPos = pda([Buffer.from("writer_position"), vault.toBuffer(), writer.publicKey.toBuffer()]);
   await e.opta.methods.depositToVault(usdc(amountUsd)).accountsStrict({
     writer: writer.publicKey, sharedVault: vault, writerPosition: writerPos,
-    writerUsdcAccount: usdcAta(e, writer.publicKey), vaultUsdcAccount: vaultUsdc,
+    writerUsdcAccount: await usdcAta(e, writer.publicKey), vaultUsdcAccount: vaultUsdc,
     protocolState: e.protocolState, tokenProgram: TOKEN_PROGRAM_ID, systemProgram: SystemProgram.programId,
   }).signers([writer]).rpc();
   return writerPos;
@@ -165,7 +169,7 @@ export async function mint(
 
 export async function purchase(e: Env, vault: PublicKey, writerPos: PublicKey, m: any, vaultUsdc: PublicKey, buyer: Keypair, qty: number) {
   const buyerOptionAta = getAssociatedTokenAddressSync(m.optionMint, buyer.publicKey, false, TOKEN_2022_PROGRAM_ID);
-  const buyerUsdc = usdcAta(e, buyer.publicKey);
+  const buyerUsdc = await usdcAta(e, buyer.publicKey);
   const ataIx = createAssociatedTokenAccountIdempotentInstruction(
     e.admin.publicKey, buyerOptionAta, buyer.publicKey, m.optionMint, TOKEN_2022_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID);
   await e.opta.methods.purchaseFromVault(new BN(qty), usdc(100000)).accountsStrict({
@@ -254,6 +258,31 @@ export async function withdrawPostSettlement(e: Env, vault: PublicKey, writerPos
 
 function deriveVaultUsdc(vault: PublicKey): PublicKey {
   return pda([Buffer.from("vault_usdc"), vault.toBuffer()]);
+}
+
+export async function claimPremium(e: Env, vault: PublicKey, writerPos: PublicKey, writer: Keypair) {
+  await e.opta.methods.claimPremium().accountsStrict({
+    writer: writer.publicKey, sharedVault: vault, writerPosition: writerPos,
+    vaultUsdcAccount: deriveVaultUsdc(vault), writerUsdcAccount: await usdcAta(e, writer.publicKey),
+    protocolState: e.protocolState, tokenProgram: TOKEN_PROGRAM_ID,
+  }).signers([writer]).rpc();
+}
+
+export async function withdrawFromVault(e: Env, vault: PublicKey, writerPos: PublicKey, writer: Keypair, shares: number) {
+  await e.opta.methods.withdrawFromVault(usdc(shares)).accountsStrict({
+    writer: writer.publicKey, sharedVault: vault, writerPosition: writerPos,
+    vaultUsdcAccount: deriveVaultUsdc(vault), writerUsdcAccount: await usdcAta(e, writer.publicKey),
+    protocolState: e.protocolState, tokenProgram: TOKEN_PROGRAM_ID,
+  }).signers([writer]).rpc();
+}
+
+/** Inject `delta` micro-USDC of "dust" into a token account by bumping its amount field (bytes 64..72). */
+export async function bumpTokenAmount(e: Env, ata: PublicKey, delta: number) {
+  const acc = await e.h.context.banksClient.getAccount(ata);
+  if (!acc) throw new Error("token account not found for dust injection");
+  const data = Buffer.from(acc.data);
+  data.writeBigUInt64LE(data.readBigUInt64LE(64) + BigInt(delta), 64);
+  e.h.context.setAccount(ata, { lamports: acc.lamports, data, owner: acc.owner, executable: acc.executable, rentEpoch: Number(acc.rentEpoch) });
 }
 
 /** Fund a fresh actor keypair with SOL + return it. */

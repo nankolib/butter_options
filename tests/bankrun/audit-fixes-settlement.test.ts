@@ -14,7 +14,8 @@ import { assert } from "chai";
 import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import {
   setupEnv, createVault, deposit, mint, purchase, settle, exerciseFromVault,
-  withdrawPostSettlement, usdc, bal, exists, actor, getClockUnix, setClockUnix, BN, EXERCISE_WINDOW,
+  withdrawPostSettlement, claimPremium, bumpTokenAmount,
+  usdc, bal, exists, actor, getClockUnix, setClockUnix, BN, EXERCISE_WINDOW,
 } from "./helpers";
 const wAta = (mint: any, owner: any) => getAssociatedTokenAddressSync(mint, owner, false, TOKEN_PROGRAM_ID);
 
@@ -92,5 +93,25 @@ describe("bankrun: audit-fixes settlement (CRIT-01 / HIGH-01)", function () {
     const paid = (await bal(e, wusdc)) - before;
     console.log(`    HIGH-01 writer payout=${paid} (collateral $1300 + auto-claimed premium)`);
     assert.isTrue(paid > 1_300_000_000n, "payout exceeds bare collateral → premium auto-claimed");
+  });
+
+  it("DUST: last-writer withdraw sweeps premium-rounding dust + closes vault USDC account", async () => {
+    const e = await setupEnv("DUST", "audit-dust");
+    const writer = actor(e), buyer = actor(e);
+    const now = await getClockUnix(e.h.context);
+    const expiry = new BN(now + 7 * 86_400);
+    const { vault, vaultUsdc } = await createVault(e, "european", usdc(150), expiry, { call: {} }, writer);
+    const wp = await deposit(e, vault, vaultUsdc, writer, 1000);
+    const m = await mint(e, vault, wp, writer, 1, now, false);
+    await purchase(e, vault, wp, m, vaultUsdc, buyer, 1);
+    await claimPremium(e, vault, wp, writer); // vault now holds collateral + any rounding
+    // Inject 3 micro-USDC dust (simulates multi-writer accumulator truncation residual).
+    await bumpTokenAmount(e, vaultUsdc, 3);
+
+    await settle(e, vault, expiry, 50); // OTM → collateral returns to writer
+    await setClockUnix(e.h.context, expiry.toNumber() + EXERCISE_WINDOW + 60);
+    // Without the dust-sweep fix this reverts (close_account requires exact 0 balance).
+    await withdrawPostSettlement(e, vault, wp, writer);
+    assert.isFalse(await exists(e, vaultUsdc), "vault USDC account closed despite the 3-micro dust residual");
   });
 });

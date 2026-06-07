@@ -980,7 +980,7 @@ describe("shared-vaults", () => {
   // before this file; it mutates shared protocol/market state). Not a product
   // bug — coverage is proven standalone. Un-skips with the Stage G test-infra
   // pass (per-file protocol/market namespacing + bankrun).
-  describe.skip("5. Premium Claims [full-suite contamination; passes standalone — Stage G test-isolation]", () => {
+  describe.skip("5. Premium Claims [ported to tests/bankrun/contamination-premium.test.ts — Stage G Pass 3b]", () => {
     it("Writer A claims premium (2/3 share)", async () => {
       const [writerAPosPda] = deriveWriterPositionPda(epochVaultPda, writerA.publicKey);
 
@@ -1069,7 +1069,7 @@ describe("shared-vaults", () => {
   // SKIPPED (fixture-rot): cascades from the same full-suite premium-accounting
   // contamination as describe 5 (withdraw requires premium claimed first).
   // PASSES STANDALONE. Stage G test-isolation un-skips. See describe 5.
-  describe.skip("6. Withdrawal [full-suite contamination; passes standalone — Stage G test-isolation]", () => {
+  describe.skip("6. Withdrawal [ported to tests/bankrun/contamination-premium.test.ts — Stage G Pass 3b]", () => {
     it("Writer B withdraws free collateral", async () => {
       const [writerBPosPda] = deriveWriterPositionPda(epochVaultPda, writerB.publicKey);
 

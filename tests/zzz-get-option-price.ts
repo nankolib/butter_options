@@ -22,58 +22,29 @@
 
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
-import { PublicKey, Connection, Keypair } from "@solana/web3.js";
+import { PublicKey, Connection, Keypair, SystemProgram, ComputeBudgetProgram } from "@solana/web3.js";
 import BN from "bn.js";
 import { expect } from "chai";
-import { createHash } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import { Opta } from "../target/types/opta";
+import { GOP_FEED_HEX, fixturePubkey } from "./_pyth_fixtures";
+import { synthWarmVolOracle, spotScaled } from "./_vol_oracle_helpers";
+
+// Stage G Pass 3b: deterministic localnet conversion. Instead of devnet
+// discovery + warmup-skips, set up a DEDICATED market + synth-warmed oracle
+// (test-synth-vol feature) so the American .view() quote path is deterministic.
+const GOP_ASSET = "GOPVIEW";
+const GOP_FEED = Array.from(Buffer.from(GOP_FEED_HEX, "hex"));
+const GOP_FIXTURE = fixturePubkey("gop-view-fresh");
 
 const PROGRAM_ID = new PublicKey("CtzJ4MJYX6BFvF4g67i5C24tQuwRn6ddKkaE5L84z9Cq");
 const VOL_ORACLE_SEED = Buffer.from("vol_oracle");
 const WARMUP_SAMPLES = 168;
 
-const OPTIONS_MARKET_DISCRIMINATOR = createHash("sha256")
-  .update("account:OptionsMarket")
-  .digest()
-  .subarray(0, 8);
-
-// Borsh-encoded OptionsMarket layout (mirrors programs/opta/src/state/market.rs):
-//   8 disc + 4 + N asset_name (Borsh String) + 32 pyth_feed_id + 1 asset_class + 1 bump
-function decodeOptionsMarket(
-  data: Buffer,
-): { assetName: string; pythFeedId: Buffer } | null {
-  if (data.length < 8 + 4) return null;
-  let offset = 8;
-  const nameLen = data.readUInt32LE(offset);
-  offset += 4;
-  if (nameLen > 16 || data.length < offset + nameLen + 32) return null;
-  const assetName = data.subarray(offset, offset + nameLen).toString("utf8");
-  offset += nameLen;
-  const pythFeedId = data.subarray(offset, offset + 32);
-  return { assetName, pythFeedId };
-}
-
-// VolOracle zero_copy layout (mirrors programs/opta/src/state/vol_oracle.rs):
-//   8 disc + 16 sum + 16 sum_sq + 32 feed_id + 5760 samples
-//   + 8 last_sample_ts + 8 last_spot_price + 2 head + 2 sample_count
-//   + 1 bump + 11 _padding = 5864 total
-const VOL_ORACLE_LAST_TS_OFFSET = 8 + 16 + 16 + 32 + 5760;        // 5832
-const VOL_ORACLE_LAST_SPOT_OFFSET = VOL_ORACLE_LAST_TS_OFFSET + 8; // 5840
-const VOL_ORACLE_SAMPLE_COUNT_OFFSET = VOL_ORACLE_LAST_SPOT_OFFSET + 8 + 2; // 5850
-
-function decodeVolOracleLight(data: Buffer): {
-  sampleCount: number;
-  lastSampleTs: number;
-  lastSpotPrice: bigint;
-} {
-  return {
-    sampleCount: data.readUInt16LE(VOL_ORACLE_SAMPLE_COUNT_OFFSET),
-    lastSampleTs: Number(data.readBigInt64LE(VOL_ORACLE_LAST_TS_OFFSET)),
-    lastSpotPrice: data.readBigInt64LE(VOL_ORACLE_LAST_SPOT_OFFSET),
-  };
-}
+// Stage G Pass 3b: the devnet-discovery decoders (OptionsMarket / VolOracle
+// light decoders + discriminator) were removed — before() now sets up a
+// dedicated warmed oracle directly, so no on-chain scanning is needed.
 
 function deriveVolOracle(feedId: Buffer): [PublicKey, number] {
   return PublicKey.findProgramAddressSync([VOL_ORACLE_SEED, feedId], PROGRAM_ID);
@@ -111,69 +82,54 @@ describe("get_option_price view (Phase 2 Stage C Pass 3)", () => {
     console.log(`  RPC:    ${rpc}`);
     console.log(`  Program: ${PROGRAM_ID.toBase58()}`);
 
-    const marketAccts = await conn.getProgramAccounts(PROGRAM_ID, {
-      filters: [
-        {
-          memcmp: {
-            offset: 0,
-            bytes: anchor.utils.bytes.bs58.encode(OPTIONS_MARKET_DISCRIMINATOR),
-          },
-        },
-      ],
-    });
-    console.log(`  Found ${marketAccts.length} OptionsMarket accounts on devnet.`);
+    // Stage G Pass 3b: deterministic dedicated setup (replaces devnet discovery).
+    // protocol_state is a session singleton inited by an earlier file under the
+    // run-tests.sh suite; reuse it. Create a dedicated market + cold oracle
+    // (idempotent), then synth-warm to a full ring so the AMER quote path runs.
+    const protocolStatePda = PublicKey.findProgramAddressSync(
+      [Buffer.from("protocol_v2")], PROGRAM_ID,
+    )[0];
+    const [marketPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("market"), Buffer.from(GOP_ASSET)], PROGRAM_ID,
+    );
+    const [oraclePda] = deriveVolOracle(Buffer.from(GOP_FEED));
 
-    type Row = {
-      asset: string;
-      market: PublicKey;
-      oracle: PublicKey;
-      sampleCount: number;
-      lastSpot: bigint;
-    };
-    let best: Row | null = null;
+    try {
+      await (program as any).methods
+        .createMarket(GOP_ASSET, GOP_FEED, 0)
+        .accounts({
+          creator: provider.wallet.publicKey,
+          protocolState: protocolStatePda,
+          priceUpdate: GOP_FIXTURE,
+          market: marketPda,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+    } catch (_) { /* idempotent: market may already exist */ }
 
-    // Pre-decode + derive every oracle PDA, then batch via getMultipleAccountsInfo
-    // (100/req max). 445 sequential getAccountInfo calls on public devnet RPC
-    // run ~60-130s; batched ~5-10s.
-    const rows: { asset: string; market: PublicKey; oracle: PublicKey }[] = [];
-    for (const a of marketAccts) {
-      const dec = decodeOptionsMarket(a.account.data);
-      if (!dec) continue;
-      const [oracle] = deriveVolOracle(dec.pythFeedId);
-      rows.push({ asset: dec.assetName, market: a.pubkey, oracle });
-    }
-    for (let i = 0; i < rows.length; i += 100) {
-      const slice = rows.slice(i, i + 100);
-      const infos = await conn.getMultipleAccountsInfo(slice.map((r) => r.oracle));
-      for (let j = 0; j < slice.length; j++) {
-        const info = infos[j];
-        if (!info) continue;
-        const ov = decodeVolOracleLight(info.data);
-        if (!best || ov.sampleCount > best.sampleCount) {
-          best = {
-            asset: slice[j].asset,
-            market: slice[j].market,
-            oracle: slice[j].oracle,
-            sampleCount: ov.sampleCount,
-            lastSpot: ov.lastSpotPrice,
-          };
-        }
-      }
-    }
+    try {
+      await (program as any).methods
+        .initializeVolOracle(GOP_FEED)
+        .accountsStrict({
+          initializer: provider.wallet.publicKey,
+          priceUpdate: GOP_FIXTURE,
+          volOracle: oraclePda,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+    } catch (_) { /* idempotent: oracle may already exist */ }
 
-    if (!best) throw new Error("No markets with vol oracles found on devnet.");
-    bestMarket = best.market;
-    bestOracle = best.oracle;
-    bestAsset = best.asset;
-    bestSampleCount = best.sampleCount;
-    bestSpotMicro = best.lastSpot;
+    // Warm to 720 samples @ $100 spot (test-synth-vol). After this the AMER
+    // quote path reads Ok deterministically — no devnet/warmup gating.
+    await synthWarmVolOracle(program, GOP_FEED, spotScaled(100), provider.wallet.publicKey);
 
-    console.log(`  Picked oracle (highest sample_count):`);
-    console.log(`    asset:        ${bestAsset}`);
-    console.log(`    market:       ${bestMarket.toBase58()}`);
-    console.log(`    vol_oracle:   ${bestOracle.toBase58()}`);
-    console.log(`    sample_count: ${bestSampleCount} / ${WARMUP_SAMPLES} warmup`);
-    console.log(`    last_spot:    ${bestSpotMicro.toString()} (SCALE 1e12)`);
+    bestMarket = marketPda;
+    bestOracle = oraclePda;
+    bestAsset = GOP_ASSET;
+    bestSampleCount = WARMUP_SAMPLES;                 // warmed ≥ 168
+    bestSpotMicro = BigInt("100000000000000");        // $100 at SCALE 1e12
+
+    console.log(`  Dedicated warmed oracle: ${bestAsset} ${bestOracle.toBase58()} (sample_count=${bestSampleCount})`);
   });
 
   // Build a strike near current spot. spot is at SCALE 1e12; strike is u64
@@ -203,6 +159,9 @@ describe("get_option_price view (Phase 2 Stage C Pass 3)", () => {
         0,
       )
       .accounts({ market: bestMarket, volOracle: bestOracle } as any)
+      // BS-2002 American pricing exceeds the default 200K sim CU (PUT ~210K+);
+      // bump so the .view() simulation completes (the CALL fits under 200K).
+      .preInstructions([ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 })])
       .view();
   }
 
@@ -212,27 +171,10 @@ describe("get_option_price view (Phase 2 Stage C Pass 3)", () => {
   // skip with a logged note. Re-run any time after the warmup count crosses
   // 168.
 
-  it("(a) AMER call returns sane quote (or skips on warmup)", async function () {
+  it("(a) AMER call returns sane quote (deterministic, synth-warmed)", async function () {
     this.timeout(30_000);
-    if (bestSampleCount < WARMUP_SAMPLES) {
-      console.log(
-        `  SKIP: oracle sample_count=${bestSampleCount} < ${WARMUP_SAMPLES} warmup threshold`,
-      );
-      this.skip();
-    }
     const before = Math.floor(Date.now() / 1000);
-    let quote: any;
-    try {
-      quote = await viewQuote({ call: {} }, { american: {} });
-    } catch (err: any) {
-      // Best-effort introspection: this suite is designed for devnet (real
-      // warmed oracles). On localnet the picked oracle (whichever file warmed
-      // it) may be stale/under-warmed/wrong-moneyness for this option — skip
-      // rather than fail. The deterministic American pricing coverage lives in
-      // zzz-american-vault-lifecycle.ts + zzz-mint-from-vault-american-pricing.ts.
-      console.log(`  SKIP: picked oracle did not produce a quote (${String(err).slice(0, 80)})`);
-      this.skip();
-    }
+    const quote: any = await viewQuote({ call: {} }, { american: {} });
     const after = Math.floor(Date.now() / 1000);
 
     console.log(
@@ -247,24 +189,10 @@ describe("get_option_price view (Phase 2 Stage C Pass 3)", () => {
     expect(ts).to.be.lte(after + 60);
   });
 
-  it("(b) AMER put returns sane quote (or skips on warmup)", async function () {
+  it("(b) AMER put returns sane quote (deterministic, synth-warmed)", async function () {
     this.timeout(30_000);
-    if (bestSampleCount < WARMUP_SAMPLES) {
-      console.log(
-        `  SKIP: oracle sample_count=${bestSampleCount} < ${WARMUP_SAMPLES} warmup threshold`,
-      );
-      this.skip();
-    }
     const before = Math.floor(Date.now() / 1000);
-    let quote: any;
-    try {
-      quote = await viewQuote({ put: {} }, { american: {} });
-    } catch (err: any) {
-      // Best-effort introspection: on localnet the picked oracle may be
-      // stale/under-warmed/wrong-moneyness for a PUT — skip rather than fail.
-      console.log(`  SKIP: picked oracle did not produce a put quote (${String(err).slice(0, 80)})`);
-      this.skip();
-    }
+    const quote: any = await viewQuote({ put: {} }, { american: {} });
     const after = Math.floor(Date.now() / 1000);
 
     console.log(
@@ -305,21 +233,9 @@ describe("get_option_price view (Phase 2 Stage C Pass 3)", () => {
     }
     expect(threw, "EUR .view() should have thrown").to.equal(true);
 
-    // SKIP 2026-05-24: detect Pass-3-not-yet-deployed case. Deployed devnet
-    // bytecode pre-Pass-3 returns InstructionFallbackNotFound (code 101 / 0x65)
-    // because the get_option_price discriminator is unknown. Once Pass 3 is
-    // live on devnet this branch stops triggering and the 6051 assertion below
-    // runs unconditionally. Re-run this test after deploy.
+    // Pass 3b: get_option_price is in the local test-feature build, so the EUR
+    // view reaches the handler and reverts 6051 (no not-yet-deployed branch).
     const haystack = [msg, ...(logs || [])].join("\n");
-    const isNotYetDeployed =
-      /InstructionFallbackNotFound|\bcustom program error: 0x65\b/.test(haystack);
-    if (isNotYetDeployed) {
-      console.log(
-        `  SKIP: get_option_price not yet deployed on devnet (Pass 3 deploy is a separate step)`,
-      );
-      this.skip();
-    }
-
     const matches =
       code === 6051 ||
       name === "ViewNotSupportedForEuropean" ||

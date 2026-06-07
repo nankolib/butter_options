@@ -807,7 +807,7 @@ describe("audit-fixes", () => {
   // SKIPPED (fixture-rot): same full-suite premium-accounting contamination as
   // shared-vaults describe 5 (the before-all mints/purchases/claims, which net 0
   // in the full suite). PASSES STANDALONE. Stage G test-isolation un-skips.
-  describe.skip("MEDIUM-01: withdraw_from_vault requires premium claimed first [full-suite contamination; passes standalone — Stage G]", () => {
+  describe.skip("MEDIUM-01: withdraw_from_vault requires premium claimed first [ported to tests/bankrun/contamination-premium.test.ts — Stage G Pass 3b]", () => {
     let writer: Keypair;
     let buyer: Keypair;
     let writerUsdcAccount: PublicKey;
@@ -1059,7 +1059,7 @@ describe("audit-fixes", () => {
   // ==========================================================================
   // SKIPPED (fixture-rot): same full-suite premium-accounting contamination —
   // first claim nets 0 in the full suite. PASSES STANDALONE. Stage G un-skips.
-  describe.skip("Premium accrues correctly after partial share withdrawal [full-suite contamination; passes standalone — Stage G]", () => {
+  describe.skip("Premium accrues correctly after partial share withdrawal [ported to tests/bankrun/contamination-premium.test.ts — Stage G Pass 3b]", () => {
     let writer: Keypair;
     let buyer: Keypair;
     let writerUsdcAccount: PublicKey;
@@ -1436,7 +1436,7 @@ describe("audit-fixes", () => {
   // Last writer withdrawal succeeds with premium rounding dust
   // ==========================================================================
   // SKIPPED (fixture-rot): settles a vault — needs bankrun setClock (Stage G).
-  describe.skip("Last writer withdrawal succeeds with premium rounding dust [needs bankrun setClock — Stage G]", () => {
+  describe.skip("Last writer withdrawal succeeds with premium rounding dust [ported to tests/bankrun/audit-fixes-settlement.test.ts — Stage G Pass 3b]", () => {
     let ctx: Awaited<ReturnType<typeof setupVaultScenario>>;
     const strike = usdc(150); // $150 — differentiated for vault PDA uniqueness (was PRMS)
 

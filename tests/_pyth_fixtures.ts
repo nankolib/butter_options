@@ -202,6 +202,12 @@ export const AMER_META_FEED_HEX = synthFeedIdHex("amer-meta-dedicated");
 /// per-spot price fixtures below don't collide with other suites.
 export const AMER_EXEC_FEED_HEX = synthFeedIdHex("amer-exec-dedicated");
 
+/// Dedicated synthetic feed for the get_option_price view suite
+/// (tests/zzz-get-option-price.ts) — Stage G Pass 3b localnet conversion.
+/// Isolated so its dedicated market+warmed oracle don't collide with other
+/// suites' oracle states.
+export const GOP_FEED_HEX = synthFeedIdHex("gop-view-dedicated");
+
 /// Per-test synthetic feed IDs (computed at module load).
 export const VOL_TEST_FEED_HEX = {
   T1_SEED: synthFeedIdHex("t1-seed"),
@@ -386,6 +392,7 @@ export const ALL_FIXTURES: FixtureSpec[] = [
   { name: "amer-exec-150",   feedIdHex: AMER_EXEC_FEED_HEX, price: BigInt("15000000000"), exponent: -8, publishTimeOffsetSec: 1500 },
   { name: "amer-exec-250",   feedIdHex: AMER_EXEC_FEED_HEX, price: BigInt("25000000000"), exponent: -8, publishTimeOffsetSec: 1500 },
   { name: "amer-exec-080",   feedIdHex: AMER_EXEC_FEED_HEX, price: BigInt("8000000000"),  exponent: -8, publishTimeOffsetSec: 1500 },
+  { name: "gop-view-fresh",  feedIdHex: GOP_FEED_HEX,       price: BigInt("10000000000"), exponent: -8, publishTimeOffsetSec: 1500 },
 ];
 
 /// Write all fixtures to /tmp and return the (name → pubkey) map plus the

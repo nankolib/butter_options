@@ -361,7 +361,7 @@ describe("zzz-exercise-american (Stage F)", function () {
   // ---------------------------------------------------------------------------
   // Deferred to Stage G (need bankrun setClock / American settlement path).
   // ---------------------------------------------------------------------------
-  describe.skip("Stage G deferrals [needs bankrun setClock]", () => {
+  describe.skip("Stage G deferrals [ported to tests/bankrun/exercise-american-stageg.test.ts — Stage G Pass 3a]", () => {
     it("post-expiry reject: now ≥ expiry → OptionExpired", async () => {
       // The require!(now < expiry) gate ships in Stage F; proving it fires
       // needs a clock advanced past expiry (bankrun setClock), unavailable on

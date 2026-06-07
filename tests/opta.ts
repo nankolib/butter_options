@@ -443,7 +443,7 @@ describe("opta", () => {
   // with a fixed-publish-time fixture; publish_time < expiry → PriceUpdateBeforeExpiry
   // (6038). The D2/CRIT-2 describes below stay active (they anchor expiry to the
   // fixture baseTime). Deterministic only under bankrun setClock — Stage G.
-  describe.skip("settle_expiry [needs bankrun setClock — Stage G]", () => {
+  describe.skip("settle_expiry [ported to tests/bankrun/settle-expiry.test.ts — Stage G Pass 3a]", () => {
     // Pre-loaded fixture pubkeys (see tests/_pyth_fixtures.ts).
     const SOL_FRESH_PK = fixturePubkey("sol-180-fresh");
     const SOL_STALE_PK = fixturePubkey("sol-180-stale");

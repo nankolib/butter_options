@@ -122,7 +122,7 @@ function usdc(amount: number): BN {
 // runs (minutes after fixtures are written) — ExpiryInPast (6001) at vault creation.
 // Plus the 3 after-window it.skips already needed clock warp. The whole gate suite
 // is deterministic only under bankrun setClock — Stage G. Pre-existing, not a regression.
-describe.skip("CRIT-1 holders-first gate [needs bankrun setClock — Stage G]", () => {
+describe.skip("CRIT-1 holders-first gate [ported to tests/bankrun/crit1-holders-first.test.ts — Stage G Pass 3a]", () => {
   const connection = new anchor.web3.Connection(
     "http://127.0.0.1:8899",
     { commitment: "confirmed" },

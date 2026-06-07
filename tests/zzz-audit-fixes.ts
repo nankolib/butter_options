@@ -476,7 +476,7 @@ describe("audit-fixes", () => {
   // SKIPPED (fixture-rot): settles a vault; settle window can't align with
   // fixed-publish-time fixtures over a multi-minute suite — needs bankrun
   // setClock (Stage G). Pre-existing failure, not a regression.
-  describe.skip("CRITICAL-01: ITM settlement — no double-deduction, no stuck funds [needs bankrun setClock — Stage G]", () => {
+  describe.skip("CRITICAL-01: ITM settlement — no double-deduction, no stuck funds [ported to tests/bankrun/audit-fixes-settlement.test.ts — Stage G Pass 3a]", () => {
     let ctx: Awaited<ReturnType<typeof setupVaultScenario>>;
     const strike = usdc(100); // $100 strike
     const deposit = usdc(1000); // 1000 USDC
@@ -616,7 +616,7 @@ describe("audit-fixes", () => {
   // CRITICAL-01: OTM settlement — writers get everything back
   // ==========================================================================
   // SKIPPED (fixture-rot): settles a vault — needs bankrun setClock (Stage G).
-  describe.skip("CRITICAL-01: OTM settlement — writers get everything back [needs bankrun setClock — Stage G]", () => {
+  describe.skip("CRITICAL-01: OTM settlement — writers get everything back [ported to tests/bankrun/audit-fixes-settlement.test.ts — Stage G Pass 3a]", () => {
     let ctx: Awaited<ReturnType<typeof setupVaultScenario>>;
     const strike = usdc(110); // $110 — differentiated from ITM ($100) for vault PDA uniqueness
     const deposit = usdc(1200); // 5 contracts × $110 × 1 = $550 required; deposit over-collateralizes
@@ -706,7 +706,7 @@ describe("audit-fixes", () => {
   // HIGH-01: withdraw_post_settlement auto-claims unclaimed premium
   // ==========================================================================
   // SKIPPED (fixture-rot): settles a vault — needs bankrun setClock (Stage G).
-  describe.skip("HIGH-01: withdraw_post_settlement auto-claims unclaimed premium [needs bankrun setClock — Stage G]", () => {
+  describe.skip("HIGH-01: withdraw_post_settlement auto-claims unclaimed premium [ported to tests/bankrun/audit-fixes-settlement.test.ts — Stage G Pass 3a]", () => {
     let ctx: Awaited<ReturnType<typeof setupVaultScenario>>;
     const strike = usdc(120); // $120 — differentiated for vault PDA uniqueness
     const deposit = usdc(1300); // 5 contracts × $120 × 1 = $600 required; deposit over-collateralizes

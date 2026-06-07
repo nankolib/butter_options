@@ -86,7 +86,7 @@ const HOOK_PROGRAM_ID = new PublicKey("83EW6a9o9P5CmGUkQKvVZvsz6v6Dgztiw5M4tVjfZ
 // relative to its own run time, so the window can't align — PriceUpdateBeforeExpiry
 // (6038). Deterministic fix needs bankrun setClock (per-test clock control) —
 // scheduled for Stage G. Pre-existing failure, not a regression.
-describe.skip("auto-finalize-holders [needs bankrun setClock — Stage G]", () => {
+describe.skip("auto-finalize-holders [ported to tests/bankrun/auto-finalize-holders.test.ts — Stage G Pass 3a]", () => {
   const connection = new anchor.web3.Connection(
     "http://127.0.0.1:8899",
     { commitment: "confirmed" },

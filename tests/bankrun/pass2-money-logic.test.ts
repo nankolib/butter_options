@@ -189,8 +189,11 @@ describe("bankrun Pass-2 money-logic (Stage G)", function () {
     const w1 = Keypair.generate(), buyer = Keypair.generate();
     [w1, buyer].forEach((k) => fundWallet(h.context, k));
     // Re-warm the oracle relative to the CURRENT (shared, advancing) clock.
+    // ts = now+1 (not now) so this warm tx is never byte-identical to the
+    // before()-hook warm when the clock hasn't advanced yet (first `it`) —
+    // bankrun dedups identical-signature txs as "already processed".
     const now = await getClockUnix(h.context);
-    await synthWarmVolOracle(opta, FEED_ID, spotScaled(100), admin().publicKey, new BN(now));
+    await synthWarmVolOracle(opta, FEED_ID, spotScaled(100), admin().publicKey, new BN(now + 1));
     const expiry = now + 7 * 86_400;
     const { vault, vaultUsdc, writerPositions } = await makeAmericanVault(100, expiry, [w1], [2000]);
     const m = await mintFrom(vault, writerPositions[0], w1, 10, now);

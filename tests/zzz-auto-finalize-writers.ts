@@ -89,7 +89,7 @@ const HOOK_PROGRAM_ID = new PublicKey("83EW6a9o9P5CmGUkQKvVZvsz6v6Dgztiw5M4tVjfZ
 // the settle window can't align with fixed-publish-time fixtures when the file
 // runs minutes after fixtures are written — PriceUpdateBeforeExpiry (6038).
 // Deterministic fix needs bankrun setClock — Stage G. Pre-existing, not a regression.
-describe.skip("auto-finalize-writers [needs bankrun setClock — Stage G]", () => {
+describe.skip("auto-finalize-writers [ported to tests/bankrun/auto-finalize-writers.test.ts — Stage G Pass 3a]", () => {
   const connection = new anchor.web3.Connection(
     "http://127.0.0.1:8899",
     { commitment: "confirmed" },

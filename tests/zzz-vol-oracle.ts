@@ -538,7 +538,7 @@ describe("zzz-vol-oracle (Stage B Step 2)", () => {
   //
   // Re-enable when the codebase adopts bankrun (separate arc).
   it.skip(
-    "ring buffer wraps correctly at the 720th sample (covered by Rust unit tests)",
+    "ring buffer wraps correctly at the 720th sample (covered by Rust unit tests; saturation edge ported to tests/bankrun/vol-oracle-ringwrap.test.ts — Stage G Pass 3a)",
     () => {},
   );
 

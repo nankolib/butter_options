@@ -60,18 +60,28 @@ pub fn handle_settle_vault(ctx: Context<SettleVault>) -> Result<()> {
         }
     };
 
+    // Stage G F→G handshake: early-exercised contracts (exercise_american) are
+    // already cash-settled and their tokens burned, so the at-expiry holder
+    // total counts only the LIVE sold supply. European vaults never early-
+    // exercise (exercised_options == 0), so this subtracts 0 — byte-identical.
+    let live_sold = vault.total_options_sold.saturating_sub(vault.exercised_options);
     let total_payout = payout_per_contract
-        .checked_mul(vault.total_options_sold)
+        .checked_mul(live_sold)
         .ok_or(OptaError::MathOverflow)?;
 
     // Cap payout at total collateral (can't pay out more than exists)
     let total_payout = std::cmp::min(total_payout, vault.total_collateral);
 
-    // FIX CRITICAL-01: Do NOT pre-deduct exercise payouts from collateral_remaining.
-    // collateral_remaining starts at total_collateral.
-    // exercise_from_vault will deduct each exercise payout individually.
-    // Writers get whatever remains after all exercises via withdraw_post_settlement.
-    let collateral_remaining = vault.total_collateral;
+    // FIX CRITICAL-01: Do NOT pre-deduct at-expiry exercise payouts here;
+    // exercise_from_vault / auto_finalize_holders deduct each one from
+    // collateral_remaining individually post-settlement.
+    //
+    // Stage G F→G handshake: early-exercise USDC (exercise_american) has ALREADY
+    // left the vault pre-settlement, so the writer-claimable pool starts at
+    // total_collateral MINUS that drawdown. European: early_exercise_payout == 0
+    // → unchanged. saturating_sub (not checked) is defensive — the per-contract
+    // cap guarantees payout never exceeds collateral, but never panic at settle.
+    let collateral_remaining = vault.total_collateral.saturating_sub(vault.early_exercise_payout);
 
     // Update vault state
     let vault_key = ctx.accounts.shared_vault.key();

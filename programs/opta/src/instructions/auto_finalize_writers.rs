@@ -91,6 +91,7 @@ pub fn handle_auto_finalize_writers<'info>(
     let expiry = ctx.accounts.shared_vault.expiry;
     let option_type = ctx.accounts.shared_vault.option_type;
     let vault_bump = ctx.accounts.shared_vault.bump;
+    let exercise_style = ctx.accounts.shared_vault.exercise_style; // Stage G Pass 2 seed sweep
     let collateral_mint = ctx.accounts.shared_vault.collateral_mint;
 
     let mut writers_processed: u32 = 0;
@@ -194,7 +195,7 @@ pub fn handle_auto_finalize_writers<'info>(
         let option_type_byte = [option_type as u8];
         let vault_bump_arr = [vault_bump];
         let vault_seeds: &[&[u8]] = &[
-            SHARED_VAULT_SEED,
+            vault_namespace_seed(exercise_style), // Stage G Pass 2 (EUR byte-identical)
             market_key.as_ref(),
             &strike_bytes,
             &expiry_bytes,
@@ -287,7 +288,7 @@ pub fn handle_auto_finalize_writers<'info>(
         let option_type_byte = [option_type as u8];
         let vault_bump_arr = [vault_bump];
         let vault_seeds: &[&[u8]] = &[
-            SHARED_VAULT_SEED,
+            vault_namespace_seed(exercise_style), // Stage G Pass 2 (EUR byte-identical)
             market_key.as_ref(),
             &strike_bytes,
             &expiry_bytes,

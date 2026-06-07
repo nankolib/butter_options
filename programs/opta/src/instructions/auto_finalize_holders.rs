@@ -53,6 +53,7 @@ pub fn handle_auto_finalize_holders<'info>(
     let expiry = ctx.accounts.shared_vault.expiry;
     let market_key = ctx.accounts.shared_vault.market;
     let vault_bump = ctx.accounts.shared_vault.bump;
+    let exercise_style = ctx.accounts.shared_vault.exercise_style; // Stage G Pass 2 seed sweep
     let collateral_mint = ctx.accounts.shared_vault.collateral_mint;
 
     let option_mint_key = ctx.accounts.option_mint.key();
@@ -188,8 +189,9 @@ pub fn handle_auto_finalize_holders<'info>(
             let expiry_bytes = expiry.to_le_bytes();
             let option_type_byte = [option_type as u8];
             let vault_bump_arr = [vault_bump];
+            // Stage G Pass 2: American-aware vault-PDA signer (European byte-identical).
             let vault_seeds: &[&[u8]] = &[
-                SHARED_VAULT_SEED,
+                vault_namespace_seed(exercise_style),
                 market_key.as_ref(),
                 &strike_bytes,
                 &expiry_bytes,

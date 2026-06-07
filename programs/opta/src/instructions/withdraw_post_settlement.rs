@@ -77,8 +77,11 @@ pub fn handle_withdraw_post_settlement(ctx: Context<WithdrawPostSettlement>) -> 
     let option_type_byte = [vault.option_type as u8];
     let vault_bump = [vault.bump];
 
+    // Stage G Pass 2: route the vault-PDA signer through vault_namespace_seed so
+    // American vaults (American-prefix PDA) sign correctly. European returns
+    // SHARED_VAULT_SEED byte-identical — zero EUR change.
     let vault_seeds: &[&[u8]] = &[
-        SHARED_VAULT_SEED,
+        vault_namespace_seed(vault.exercise_style),
         market_key.as_ref(),
         &strike_bytes,
         &expiry_bytes,

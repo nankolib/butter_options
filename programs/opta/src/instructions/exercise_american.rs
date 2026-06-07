@@ -42,18 +42,17 @@ use crate::utils::collateral::required_collateral_per_contract;
 use crate::utils::exercise_intrinsic::exercise_capped_intrinsic;
 use crate::utils::solmath_bridge::pyth_price_to_usdc;
 
-/// Clock-relative staleness backstop on the supplied price update, in seconds.
-/// This mirrors settle_expiry's staleness discipline as locked in Stage F
-/// decision (a): settle's only clock-relative gate is the PYTH_MAX_AGE backstop
-/// (`publish_time + PYTH_MAX_AGE >= clock`). Settle's tight 60s window is
-/// anchored to EXPIRY (a settlement-specific concept) and does not apply to a
-/// live pre-expiry read, so it is not replicated here.
+/// Max age of the supplied price update at exercise time, in seconds: the
+/// price's `publish_time` must be within 60s of the on-chain clock (now). Early
+/// exercise needs a CURRENT price; a stale/historical print would let a holder
+/// cherry-pick a favorable spot (bounded by the per-contract cap, but real
+/// value extraction). 60s reuses settle_expiry's EXPIRY_WINDOW_SECS magnitude.
 ///
-/// NOTE (Stage I / audit): 30 days is loose for a "current price" read. A
-/// tighter live-freshness bound is a deliberate audit consideration; the whole
-/// instruction is gated off via AMERICAN_ENABLED until then, so no exposure
-/// ships before that review.
-const PYTH_MAX_AGE_SECS: i64 = 2_592_000;
+/// Stage G Pass 2 tightened this from the loose 30d PYTH_MAX_AGE backstop that
+/// Stage F shipped (decision (a) flip-blocker for the Stage I AMERICAN_ENABLED
+/// flip). Deterministically testable only under bankrun setClock (a static
+/// fixture's publish_time can't be aligned to a moving validator wall-clock).
+const PRICE_MAX_AGE_SECS: i64 = 60;
 
 /// Max Pyth EMA confidence width tolerated, in bps of the EMA price. Same
 /// value + check as settle_expiry::MAX_CONF_BPS (CRIT-2): reject wide-conf
@@ -130,10 +129,14 @@ pub fn handle_exercise_american(
         OptaError::PriceConfidenceTooWide
     );
 
-    // Staleness backstop vs the clock (mirror settle's PYTH_MAX_AGE gate; see
-    // the const doc for why settle's expiry-anchored 60s window is not used).
+    // Tight freshness gate (Stage G Pass 2): the price must be CURRENT — its
+    // publish_time no more than PRICE_MAX_AGE_SECS (60s) BEFORE now. Reuses the
+    // same PriceTooOld error the loose backstop threw (zero IDL delta). Single-
+    // sided per spec: a future-dated publish_time yields a negative diff and
+    // passes (Pyth/receiver verification already bounds forward skew); only a
+    // price older than 60s reverts.
     require!(
-        publish_time.saturating_add(PYTH_MAX_AGE_SECS) >= clock.unix_timestamp,
+        clock.unix_timestamp.saturating_sub(publish_time) <= PRICE_MAX_AGE_SECS,
         GetPriceError::PriceTooOld
     );
 

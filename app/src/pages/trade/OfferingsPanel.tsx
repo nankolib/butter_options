@@ -5,6 +5,11 @@ import { MoneyAmount } from "../../components/MoneyAmount";
 import { HairlineRule } from "../../components/layout";
 import { truncateAddress } from "../../utils/format";
 import type { Offering } from "./useTradeData";
+import { describeOptionPriceQuoteStatus } from "../../utils/optionPriceQuote";
+import type {
+  OptionPriceQuote,
+  OptionPriceQuoteFailure,
+} from "../../utils/optionPriceQuote";
 
 type OfferingsPanelProps = {
   asset: string;
@@ -24,6 +29,17 @@ type OfferingsPanelProps = {
   selected: Offering | null;
   /** Selection callback. Self-listings invoke a no-op — the panel guards. */
   onSelect: (o: Offering) => void;
+  /**
+   * Cell exercise style. "american" swaps the header's Fair/IV from the
+   * off-chain Black-Scholes preview to the on-chain get_option_price quote
+   * (premium + realized vol), with a timestamp/oracle-spot sub-line. Defaults
+   * "european" so existing call sites are unaffected.
+   */
+  exerciseStyle?: "european" | "american";
+  /** On-chain quote for American cells (from useOptionPriceQuote). */
+  amerQuote?: OptionPriceQuote | null;
+  amerLoading?: boolean;
+  amerError?: OptionPriceQuoteFailure | null;
 };
 
 /**
@@ -55,7 +71,23 @@ export const OfferingsPanel: FC<OfferingsPanelProps> = ({
   offerings,
   selected,
   onSelect,
+  exerciseStyle = "european",
+  amerQuote = null,
+  amerLoading = false,
+  amerError = null,
 }) => {
+  const isAmerican = exerciseStyle === "american";
+  // For American cells the "fair" reference (header strip + the premium-vs-fair
+  // pills) is the on-chain quote premium; falls back to the B-S fairPremium
+  // until the quote resolves. IV likewise comes from the protocol's realized
+  // vol. European is byte-identical to before.
+  const fairRef =
+    isAmerican && amerQuote ? amerQuote.premiumPerContract : fairPremium;
+  const displayIv = isAmerican ? amerQuote?.volAnnualized ?? null : ivSmiled;
+  const amerStatus = isAmerican
+    ? describeOptionPriceQuoteStatus(amerLoading, amerError, amerQuote)
+    : null;
+
   const expiryLabel = useMemo(() => formatTableDate(expiry), [expiry]);
   const dteLabel = useMemo(() => {
     const days = Math.max(0, Math.floor((expiry - Date.now() / 1000) / 86400));
@@ -114,11 +146,21 @@ export const OfferingsPanel: FC<OfferingsPanelProps> = ({
             {stale && spot != null && <span> · delayed</span>}
           </span>
           <span>
-            Fair <MoneyAmount value={fairPremium} />
+            {isAmerican ? "Quote" : "Fair"}{" "}
+            {isAmerican ? (
+              amerQuote ? <MoneyAmount value={amerQuote.premiumPerContract} /> : "—"
+            ) : (
+              <MoneyAmount value={fairPremium} />
+            )}
           </span>
-          <span>IV {(ivSmiled * 100).toFixed(1)}%</span>
+          <span>IV {displayIv != null ? `${(displayIv * 100).toFixed(1)}%` : "—"}</span>
           <span>{dteLabel}</span>
         </div>
+        {amerStatus && (
+          <div className="font-mono font-medium text-[10px] uppercase tracking-[0.16em] text-ink-muted mt-1.5 leading-[1.5]">
+            {amerStatus}
+          </div>
+        )}
       </div>
 
       <HairlineRule className="mb-5" />
@@ -127,7 +169,8 @@ export const OfferingsPanel: FC<OfferingsPanelProps> = ({
       {vaultOffering ? (
         <VaultCard
           offering={vaultOffering}
-          fairPremium={fairPremium}
+          fairPremium={fairRef}
+          isAmerican={isAmerican}
           isSelected={selectedKey === offeringKey(vaultOffering)}
           onSelect={() => onSelect(vaultOffering)}
         />
@@ -151,7 +194,7 @@ export const OfferingsPanel: FC<OfferingsPanelProps> = ({
               <ResaleRow
                 key={o.listing.publicKey.toBase58()}
                 offering={o}
-                fairPremium={fairPremium}
+                fairPremium={fairRef}
                 isSelected={selectedKey === offeringKey(o)}
                 onSelect={() => {
                   if (o.isSelfListing) return;
@@ -177,9 +220,10 @@ export const OfferingsPanel: FC<OfferingsPanelProps> = ({
 const VaultCard: FC<{
   offering: Extract<Offering, { kind: "vault" }>;
   fairPremium: number;
+  isAmerican: boolean;
   isSelected: boolean;
   onSelect: () => void;
-}> = ({ offering, fairPremium, isSelected, onSelect }) => {
+}> = ({ offering, fairPremium, isAmerican, isSelected, onSelect }) => {
   const premiumPct = computePremiumPct(offering.premium, fairPremium);
   return (
     <button
@@ -212,7 +256,9 @@ const VaultCard: FC<{
         <PremiumPill premiumPct={premiumPct} />
       </div>
       <div className="font-mono font-medium text-[10px] uppercase tracking-[0.18em] text-ink-muted">
-        Live premium · Black-Scholes derived
+        {isAmerican
+          ? "Live premium · BS-2002 priced on-chain"
+          : "Live premium · Black-Scholes derived"}
       </div>
     </button>
   );

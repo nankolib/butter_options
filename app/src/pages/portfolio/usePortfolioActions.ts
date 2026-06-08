@@ -23,11 +23,17 @@ import {
   deriveExtraAccountMetaListPda,
   deriveHookStatePda,
 } from "../../utils/constants";
-import { usdcToNumber } from "../../utils/format";
+import { usdcToNumber, hexFromBytes } from "../../utils/format";
+import { requiredCollateralPerContract } from "../../utils/collateral";
 import {
   deriveVaultResaleListing,
   deriveVaultResaleEscrow,
 } from "../../hooks/useAccounts";
+import {
+  buildPostUpdateAndExerciseAmericanTx,
+  submitWithFallback,
+  fetchHermesParsedPrice,
+} from "../../utils/pythPullPost";
 import { decodeError, isWalletReplay } from "../../utils/errorDecoder";
 import { showToast } from "../../components/Toast";
 import type { Position } from "./positions";
@@ -38,6 +44,10 @@ export type PortfolioActions = {
   /** Position id (option-mint base58) currently being acted on; `null` when idle. Drives row-level button disabled state. */
   busyId: string | null;
   exercise: (p: Position) => Promise<void>;
+  /** American early exercise (pre-expiry). Posts a fresh PriceUpdateV2 + calls
+   *  exercise_american. Dark until Stage I — deriveAction only emits the
+   *  "exercise-american" action when AMERICAN_ENABLED_UI is true. */
+  exerciseAmerican: (p: Position) => Promise<void>;
   listResale: (p: Position, premiumUsd: number, tokenAmount: number) => Promise<void>;
   cancelResale: (p: Position) => Promise<void>;
   burn: (p: Position) => Promise<void>;
@@ -82,6 +92,32 @@ export function usePortfolioActions(onSuccess: () => void): PortfolioActions {
           return;
         }
         showToast({ type: "error", title: "Exercise failed", message: msg });
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [program, provider, publicKey, onSuccess],
+  );
+
+  const exerciseAmerican = useCallback(
+    async (p: Position) => {
+      if (!program || !provider || !publicKey) return;
+      setBusyId(p.id);
+      try {
+        await exerciseAmericanV2({ program, provider, publicKey, position: p });
+        onSuccess();
+      } catch (err: any) {
+        const msg = decodeError(err);
+        if (isWalletReplay(err)) {
+          showToast({
+            type: "success",
+            title: "Exercised early",
+            message: "Tx already confirmed; refreshing.",
+          });
+          onSuccess();
+          return;
+        }
+        showToast({ type: "error", title: "Early exercise failed", message: msg });
       } finally {
         setBusyId(null);
       }
@@ -182,7 +218,7 @@ export function usePortfolioActions(onSuccess: () => void): PortfolioActions {
     [provider, publicKey, onSuccess],
   );
 
-  return { busyId, exercise, listResale, cancelResale, burn };
+  return { busyId, exercise, exerciseAmerican, listResale, cancelResale, burn };
 }
 
 // ---------------------------------------------------------------------------
@@ -248,6 +284,92 @@ async function exerciseV2({
     title: "Exercised!",
     message: `${position.contracts} contracts burned. Received $${totalPayout} USDC.`,
     txSignature: tx,
+  });
+}
+
+async function exerciseAmericanV2({
+  program,
+  provider,
+  publicKey,
+  position,
+}: {
+  program: any;
+  provider: any;
+  publicKey: PublicKey;
+  position: Position;
+}) {
+  const { vault, vaultMint } = position.source;
+  const v = vault.account;
+  const marketPda = v.market as PublicKey;
+
+  const [protocolStatePda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("protocol_v2")],
+    program.programId,
+  );
+  const protocolState = await program.account.protocolState.fetch(protocolStatePda);
+  const usdcMint = protocolState.usdcMint as PublicKey;
+  const optionMint = vaultMint.account.optionMint as PublicKey;
+
+  const holderUsdcAccount = await getAssociatedTokenAddress(usdcMint, publicKey);
+  const holderOptionAccount = getAssociatedTokenAddressSync(
+    optionMint,
+    publicKey,
+    false,
+    TOKEN_2022_PROGRAM_ID,
+  );
+
+  // Feed hex: prefer the joined market body (present on most held positions);
+  // fall back to a direct fetch if this position surfaced without its market.
+  let feedIdBytes: number[];
+  const mktBody = position.source.market;
+  if (mktBody?.pythFeedId) {
+    feedIdBytes = mktBody.pythFeedId as number[];
+  } else {
+    const fetched = await program.account.optionsMarket.fetch(marketPda);
+    feedIdBytes = fetched.pythFeedId as number[];
+  }
+  const feedIdHex = hexFromBytes(feedIdBytes);
+
+  // Atomic post fresh /latest PriceUpdateV2 + exercise_american + close, 1.4M CU.
+  const txs = await buildPostUpdateAndExerciseAmericanTx(program, provider.wallet, {
+    feedIdHex,
+    quantity: position.contracts,
+    sharedVault: vault.publicKey,
+    market: marketPda,
+    vaultMintRecord: vaultMint.publicKey,
+    optionMint,
+    holderOptionAccount,
+    vaultUsdcAccount: v.vaultUsdcAccount as PublicKey,
+    holderUsdcAccount,
+  });
+  const sig = await submitWithFallback(program.provider.connection, provider.wallet, txs);
+
+  // Capped-intrinsic payout estimate (display only) from a live Hermes spot:
+  // CALL min(spot − strike, collateral/contract), PUT strike − spot.
+  const isCall = "call" in v.optionType;
+  const strike = usdcToNumber(v.strikePrice);
+  let payoutMsg = "";
+  const parsed = await fetchHermesParsedPrice(feedIdHex).catch(() => null);
+  if (parsed && parsed.price > 0) {
+    const collateralPerContract = requiredCollateralPerContract(
+      strike,
+      isCall ? "call" : "put",
+    );
+    const rawIntrinsic = isCall
+      ? Math.max(0, parsed.price - strike)
+      : Math.max(0, strike - parsed.price);
+    const cappedPerContract = isCall
+      ? Math.min(rawIntrinsic, collateralPerContract)
+      : rawIntrinsic;
+    const total = (cappedPerContract * position.contracts).toFixed(2);
+    payoutMsg = ` Received ~$${total} USDC.`;
+  }
+
+  showToast({
+    type: "success",
+    title: "Exercised early!",
+    message: `${position.contracts} contracts burned.${payoutMsg}`,
+    txSignature: sig,
   });
 }
 

@@ -40,6 +40,9 @@ export type Offering =
       kind: "vault";
       premium: number;
       inventory: number;
+      /** Parent vault's exercise style — drives the on-chain (American) vs
+       *  Black-Scholes (European) preview path in BuyModal/OfferingsPanel. */
+      exerciseStyle: "european" | "american";
       vaultMint: { publicKey: PublicKey; account: any };
       vault: { publicKey: PublicKey; account: any };
       market: any;
@@ -48,6 +51,7 @@ export type Offering =
       kind: "resale";
       premium: number;
       qty: number;
+      exerciseStyle: "european" | "american";
       seller: PublicKey;
       createdAt: number;
       isSelfListing: boolean;
@@ -365,6 +369,14 @@ export function useTradeData(): UseTradeData {
         if (!parentMkt || parentMkt.account.assetName !== selectedAsset) continue;
 
         const vIsCall = "call" in parentVault.account.optionType;
+        // ExerciseStyle Anchor enum: { european:{} } | { american:{} }. Same
+        // guarded shape-check as optionType; default european for any legacy
+        // vault that decoded without the field.
+        const vStyle: "european" | "american" =
+          parentVault.account.exerciseStyle &&
+          "american" in parentVault.account.exerciseStyle
+            ? "american"
+            : "european";
         const minted = vm.account.quantityMinted?.toNumber?.() ?? 0;
         const sold = vm.account.quantitySold?.toNumber?.() ?? 0;
         const unsold = minted - sold;
@@ -391,6 +403,7 @@ export function useTradeData(): UseTradeData {
             kind: "resale",
             premium: usdcToNumber(listing.account.pricePerContract),
             qty,
+            exerciseStyle: vStyle,
             seller,
             createdAt,
             isSelfListing: connectedWallet ? seller.equals(connectedWallet) : false,
@@ -415,6 +428,7 @@ export function useTradeData(): UseTradeData {
           kind: "vault",
           premium: price,
           inventory: unsold,
+          exerciseStyle: vStyle,
           vaultMint: vm,
           vault: parentVault,
           market: parentMkt.account,

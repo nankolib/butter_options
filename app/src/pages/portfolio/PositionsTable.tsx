@@ -2,6 +2,7 @@ import type { FC, ReactNode } from "react";
 import type { PublicKey } from "@solana/web3.js";
 import { MoneyAmount } from "../../components/MoneyAmount";
 import { SolscanLink } from "../../utils/solscan";
+import { ExerciseStyleBadge } from "./ExerciseStyleBadge";
 import type { Position, PositionAction } from "./positions";
 
 const ASSET_FULL_NAME: Record<string, string> = {
@@ -116,12 +117,15 @@ const PositionRow: FC<{
         </div>
       </td>
 
-      {/* Side */}
+      {/* Side + exercise-style badge */}
       <td className="py-2 pr-2 sm:py-4 sm:pr-4">
         <span className="inline-flex items-center gap-2 font-mono text-[11.5px] uppercase tracking-[0.18em]">
           <span aria-hidden="true" className="inline-block w-[6px] h-[6px] rounded-full bg-crimson" />
           {p.side}
         </span>
+        <div className="mt-1.5">
+          <ExerciseStyleBadge style={p.exerciseStyle} />
+        </div>
       </td>
 
       {/* Strike */}
@@ -176,9 +180,10 @@ const PositionRow: FC<{
               )}`}
             >
               {isBusy ? "…" : actionLabel(p.action)}
-              {!isBusy && p.action === "exercise" && (
-                <span aria-hidden="true">→</span>
-              )}
+              {!isBusy &&
+                (p.action === "exercise" || p.action === "exercise-american") && (
+                  <span aria-hidden="true">→</span>
+                )}
             </button>
           )}
         </div>
@@ -196,6 +201,8 @@ function actionLabel(action: PositionAction): string {
   switch (action) {
     case "exercise":
       return "Exercise";
+    case "exercise-american":
+      return "Exercise Early";
     case "list-resale":
       return "List for Resale";
     case "cancel-resale":
@@ -210,6 +217,7 @@ function actionLabel(action: PositionAction): string {
 function actionStyle(action: PositionAction): string {
   switch (action) {
     case "exercise":
+    case "exercise-american":
       return "border-ink bg-ink text-paper hover:bg-transparent hover:text-ink";
     case "list-resale":
       return "border-ink text-ink hover:bg-ink hover:text-paper";

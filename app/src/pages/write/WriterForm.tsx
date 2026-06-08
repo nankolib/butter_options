@@ -3,10 +3,18 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { PublicKey } from "@solana/web3.js";
 import { ExpiryPicker, type ExpiryPresetId } from "./ExpiryPicker";
+import { AMERICAN_ENABLED_UI } from "../../utils/constants";
 
 export type WriterFormValues = {
   asset: string | null;
   side: "call" | "put";
+  /**
+   * Option exercise style. European = exercise at expiry only (default).
+   * American = early exercise allowed. American is gated behind
+   * AMERICAN_ENABLED_UI; the toggle's American button is disabled while the
+   * flag is off (Stage H dark-launch).
+   */
+  exerciseStyle: "european" | "american";
   /** Strike in USDC (human-readable). Empty string when unset. */
   strike: string;
   contracts: string;
@@ -187,6 +195,34 @@ export const WriterForm: FC<WriterFormProps> = ({
         </div>
       </Field>
 
+      <Field label="Exercise style">
+        <div className="flex gap-2">
+          <SideButton
+            active={values.exerciseStyle === "european"}
+            onClick={() => onChange({ ...values, exerciseStyle: "european" })}
+          >
+            European
+          </SideButton>
+          <SideButton
+            active={values.exerciseStyle === "american"}
+            disabled={!AMERICAN_ENABLED_UI}
+            title={!AMERICAN_ENABLED_UI ? "American — coming soon" : undefined}
+            onClick={() =>
+              AMERICAN_ENABLED_UI && onChange({ ...values, exerciseStyle: "american" })
+            }
+          >
+            American
+          </SideButton>
+        </div>
+        <div className="font-mono font-medium text-[10px] uppercase tracking-[0.18em] text-ink-muted mt-1.5">
+          {AMERICAN_ENABLED_UI
+            ? values.exerciseStyle === "american"
+              ? "Early exercise allowed — priced on-chain"
+              : "Exercise at expiry only"
+            : "American (early exercise) — coming soon"}
+        </div>
+      </Field>
+
       <Field label="Strike (USDC)">
         <input
           type="number"
@@ -306,12 +342,19 @@ const SideButton: FC<{
   active: boolean;
   onClick: () => void;
   children: React.ReactNode;
-}> = ({ active, onClick, children }) => (
+  /** When true, the button is non-interactive + dimmed (e.g. American while
+   *  AMERICAN_ENABLED_UI is false). */
+  disabled?: boolean;
+  /** Hover tooltip — used for the "coming soon" copy on disabled options. */
+  title?: string;
+}> = ({ active, onClick, children, disabled = false, title }) => (
   <button
     type="button"
     onClick={onClick}
+    disabled={disabled}
+    title={title}
     aria-pressed={active}
-    className={`flex-1 rounded-sm border py-2.5 font-mono font-medium text-[11.5px] uppercase tracking-[0.2em] transition-colors duration-300 ease-opta ${
+    className={`flex-1 rounded-sm border py-2.5 font-mono font-medium text-[11.5px] uppercase tracking-[0.2em] transition-colors duration-300 ease-opta disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-ink-muted disabled:hover:border-rule ${
       active
         ? "border-ink bg-ink text-paper"
         : "border-rule text-ink-muted hover:text-ink hover:border-ink"

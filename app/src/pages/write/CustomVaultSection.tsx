@@ -131,6 +131,7 @@ export const CustomVaultSection: FC<CustomVaultSectionProps> = ({
       const result = await submit({
         market: chosen.market,
         side: values.side,
+        exerciseStyle: values.exerciseStyle,
         strike: strikeNum,
         expiry: values.expiry,
         contracts: contractsNum,
@@ -187,6 +188,8 @@ export const CustomVaultSection: FC<CustomVaultSectionProps> = ({
         <LiveQuoteCard
           asset={values.asset}
           side={values.side}
+          exerciseStyle={values.exerciseStyle}
+          market={chosen?.market ?? null}
           strike={strikeNum}
           expiry={values.expiry}
           contracts={contractsNum}

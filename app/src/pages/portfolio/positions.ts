@@ -5,6 +5,7 @@ import {
   getDefaultVolatility,
 } from "../../utils/blackScholes";
 import { usdcToNumber } from "../../utils/format";
+import { AMERICAN_ENABLED_UI } from "../../utils/constants";
 
 export type PositionState =
   | "active"
@@ -14,6 +15,7 @@ export type PositionState =
 
 export type PositionAction =
   | "exercise"
+  | "exercise-american"
   | "list-resale"
   | "cancel-resale"
   | "burn"
@@ -49,6 +51,8 @@ export type Position = {
   vaultPda: PublicKey;
   asset: string;
   side: "call" | "put";
+  /** Vault exercise style — drives the EUR/AMER badge. Defaults european. */
+  exerciseStyle: "european" | "american";
   strike: number;
   expiry: number;
   contracts: number;
@@ -132,6 +136,11 @@ export function buildPositions(args: BuildPositionsArgs): Position[] {
     if (balance <= 0) continue;
     const v = vault.account;
     const isCall = "call" in v.optionType;
+    // ExerciseStyle is an Anchor enum decoded as { european: {} } | { american: {} }.
+    // Same shape-check pattern as optionType above. Guard for undefined so a
+    // legacy/unmigrated vault that slips through decode defaults to european.
+    const exerciseStyle: "european" | "american" =
+      v.exerciseStyle && "american" in v.exerciseStyle ? "american" : "european";
     const strike = usdcToNumber(v.strikePrice);
     const expiry = typeof v.expiry === "number" ? v.expiry : v.expiry.toNumber();
     const isSettled = !!v.isSettled;
@@ -172,12 +181,18 @@ export function buildPositions(args: BuildPositionsArgs): Position[] {
     const mintKey = (vaultMint.account.optionMint as PublicKey).toBase58();
     const isListedForResale = listingByMint.has(mintKey);
 
+    // Current-spot intrinsic check, for American early-exercise gating.
+    // Buyer ITM: CALL spot > strike, PUT strike > spot.
+    const spotNow = assetName ? spotPrices[assetName] ?? 0 : 0;
+    const isItm = spotNow > 0 && (isCall ? spotNow > strike : strike > spotNow);
+
     result.push({
       id: mintKey,
       source: { kind: "v2", vault, vaultMint, market },
       vaultPda: vault.publicKey,
       asset: assetName || "?",
       side: isCall ? "call" : "put",
+      exerciseStyle,
       strike,
       expiry,
       contracts: balance,
@@ -187,7 +202,7 @@ export function buildPositions(args: BuildPositionsArgs): Position[] {
       pnlPercent,
       state,
       isListedForResale,
-      action: deriveAction(state, isListedForResale),
+      action: deriveAction(state, isListedForResale, exerciseStyle === "american", isItm),
     });
   }
 
@@ -249,7 +264,16 @@ function computeStateAndValue(args: {
 function deriveAction(
   state: PositionState,
   isListedForResale: boolean,
+  isAmerican: boolean,
+  isItm: boolean,
 ): PositionAction {
+  // American early-exercise: holder can exercise an ITM American option BEFORE
+  // expiry (state still "active"). Gated behind AMERICAN_ENABLED_UI so the
+  // affordance is dark until the Stage I pair-flip — until then American
+  // active positions fall through to the resale path like European ones.
+  if (AMERICAN_ENABLED_UI && isAmerican && state === "active" && isItm) {
+    return "exercise-american";
+  }
   if (state === "settled-itm") return "exercise";
   if (state === "settled-otm") return "burn";
   if (state === "expired-unsettled") return "none";

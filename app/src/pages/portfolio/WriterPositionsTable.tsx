@@ -19,6 +19,7 @@ import type { PublicKey } from "@solana/web3.js";
 import { MoneyAmount } from "../../components/MoneyAmount";
 import { SolscanLink } from "../../utils/solscan";
 import { usdcToNumber } from "../../utils/format";
+import { ExerciseStyleBadge } from "./ExerciseStyleBadge";
 import type {
   WriterRow,
   WriterRowState,
@@ -145,12 +146,15 @@ const WriterRowEl: FC<{
         </div>
       </td>
 
-      {/* Side */}
+      {/* Side + exercise-style badge */}
       <td className="py-2 pr-2 sm:py-4 sm:pr-4">
         <span className="inline-flex items-center gap-2 font-mono text-[11.5px] uppercase tracking-[0.18em]">
           <span aria-hidden="true" className="inline-block w-[6px] h-[6px] rounded-full bg-crimson" />
           {row.side}
         </span>
+        <div className="mt-1.5">
+          <ExerciseStyleBadge style={row.exerciseStyle} />
+        </div>
       </td>
 
       {/* Strike */}

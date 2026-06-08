@@ -28,7 +28,9 @@ import {
   Signer,
   TransactionMessage,
   TransactionInstruction,
+  ComputeBudgetProgram,
 } from "@solana/web3.js";
+import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
 import BN from "bn.js";
 import { Program } from "@coral-xyz/anchor";
 import type { Opta } from "../idl/opta";
@@ -756,6 +758,91 @@ export async function buildPostUpdateAndPushVolSampleTx(
       .instruction();
 
     return [{ instruction: ix, signers: [] }];
+  });
+
+  return (await builder.buildVersionedTransactions({
+    computeUnitPriceMicroLamports: COMPUTE_UNIT_PRICE_MICRO_LAMPORTS,
+  })) as BuiltTx[];
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2 Stage H — atomic post_update + exercise_american (early exercise)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build atomic post_update + exercise_american tx. Mirrors the vol-sample
+ * sibling shape: post a FRESH Hermes /latest VAA + consume it in
+ * exercise_american + close. We use /latest (NOT the settlement window-walk):
+ * American early-exercise wants a CURRENT spot, and the handler enforces a
+ * tight 60s freshness gate (Stage G Pass 2), which /latest comfortably meets.
+ *
+ * The handler burns `quantity` option tokens and pays capped intrinsic USDC
+ * from the vault. 1.4M CU covers the Token-2022 burn + Pyth post/consume +
+ * payout. 11-account context vs exercise_from_vault: ADDS price_update, DROPS
+ * protocol_state. The holder's USDC ATA is assumed to exist (the holder bought
+ * the option with USDC) — same precondition as exercise_from_vault. Reuse
+ * submitWithFallback to sign + send. Dark until Stage I (AMERICAN_ENABLED gates
+ * the handler on-chain).
+ */
+export async function buildPostUpdateAndExerciseAmericanTx(
+  program: Program<Opta>,
+  wallet: SignerWallet,
+  params: {
+    feedIdHex: string;
+    quantity: number;
+    sharedVault: PublicKey;
+    market: PublicKey;
+    vaultMintRecord: PublicKey;
+    optionMint: PublicKey;
+    holderOptionAccount: PublicKey;
+    vaultUsdcAccount: PublicKey;
+    holderUsdcAccount: PublicKey;
+  },
+  hermesBase: string = DEFAULT_HERMES_BASE,
+): Promise<BuiltTx[]> {
+  const priceUpdateData = await fetchHermesUpdate(params.feedIdHex, hermesBase);
+
+  const receiver = new PythSolanaReceiver({
+    connection: program.provider.connection,
+    wallet: wallet as any,
+  });
+
+  const builder = receiver.newTransactionBuilder({ closeUpdateAccounts: true });
+  await builder.addPostPriceUpdates([priceUpdateData.toString("base64")]);
+
+  await builder.addPriceConsumerInstructions(async (getPriceUpdateAccount) => {
+    const hexKey = `0x${params.feedIdHex.replace(/^0x/, "").toLowerCase()}`;
+    const priceUpdatePda = getPriceUpdateAccount(hexKey);
+    if (!priceUpdatePda) {
+      throw new Error(`No ephemeral PriceUpdate PDA for feed ${params.feedIdHex}`);
+    }
+
+    const ix = await program.methods
+      .exerciseAmerican(new BN(params.quantity))
+      .accountsStrict({
+        holder: wallet.publicKey,
+        sharedVault: params.sharedVault,
+        market: params.market,
+        priceUpdate: priceUpdatePda,
+        vaultMintRecord: params.vaultMintRecord,
+        optionMint: params.optionMint,
+        holderOptionAccount: params.holderOptionAccount,
+        vaultUsdcAccount: params.vaultUsdcAccount,
+        holderUsdcAccount: params.holderUsdcAccount,
+        token2022Program: TOKEN_2022_PROGRAM_ID,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .instruction();
+
+    return [
+      // 1.4M CU — Token-2022 burn + Pyth consume + USDC payout. Same bump the
+      // American mint + auto-finalize paths use.
+      {
+        instruction: ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+        signers: [],
+      },
+      { instruction: ix, signers: [] },
+    ];
   });
 
   return (await builder.buildVersionedTransactions({

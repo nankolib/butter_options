@@ -33,6 +33,10 @@ import { decodeError, isWalletReplay } from "../../utils/errorDecoder";
 
 const EXTRA_CU_400K = ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 });
 const EXTRA_CU_800K = ComputeBudgetProgram.setComputeUnitLimit({ units: 800_000 });
+// American mint prices BS-2002 on-chain (solmath) — heavier than the EUR
+// path's TS-supplied premium. 1.4M matches the crank's auto-finalize budget
+// and the Stage D scope note for mint_from_vault's American branch.
+const EXTRA_CU_1_4M = ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 });
 
 // On-chain seed constant — must match Rust (programs/opta/src/state/market.rs:65).
 //   MARKET_SEED = b"market"
@@ -44,6 +48,8 @@ export type WriteSubmitInput = {
    *  the caller is expected to register the asset via Markets first. */
   market: { publicKey: PublicKey; account: any };
   side: "call" | "put";
+  /** Exercise style. European (default) or American (Stage H toggle). */
+  exerciseStyle: "european" | "american";
   /** Strike in USDC (human-readable, e.g. 220). */
   strike: number;
   /** Expiry as Unix seconds. */
@@ -158,6 +164,11 @@ export function useWriteSubmit(): UseWriteSubmit {
         const asset = input.market.account.assetName as string;
         const optTypeEnum = input.side === "call" ? { call: {} } : { put: {} };
         const optTypeIndex = input.side === "call" ? 0 : 1;
+        // ExerciseStyle Anchor enum, encoded { european: {} } | { american: {} }
+        // — same shape as optTypeEnum. Stage H toggle drives this; the enum
+        // detail stays inside the hook (callers pass "european" | "american").
+        const isAmerican = input.exerciseStyle === "american";
+        const exerciseStyleEnum = isAmerican ? { american: {} } : { european: {} };
 
         const strikeBN = toUsdcBN(input.strike);
         const expiryBN = new BN(input.expiry);
@@ -216,11 +227,11 @@ export function useWriteSubmit(): UseWriteSubmit {
                   // carry_rate_bps: 0 for all current crypto-only assets. See
                   // SharedVault::carry_rate_bps doc for the no-dividend default.
                   0,
-                  // exercise_style: European hardcoded — Stage C Pass 1 frontend
-                  // gate. The American write path (and the EUR/AMER toggle UI)
-                  // ships in Stage H. Passing European preserves byte-identical
-                  // current behavior for all vault creates.
-                  { european: {} } as any,
+                  // exercise_style: driven by the Stage H EUR/AMER toggle. While
+                  // AMERICAN_ENABLED_UI is false the toggle can't select American,
+                  // so this stays European in production; an American value here
+                  // (flag flipped at Stage I) creates an American vault.
+                  exerciseStyleEnum as any,
                 )
                 .accountsStrict({
                   creator: publicKey,
@@ -309,9 +320,13 @@ export function useWriteSubmit(): UseWriteSubmit {
         // keyed on the market's Pyth feed_id. The handler reads it only on
         // the American branch; EUR mints carry the account but never touch it.
         //
-        // Stage H will branch here on vault.exerciseStyle:
-        //   - European (this path today): pass the TS-computed premium verbatim
-        //   - American: pass premium=1 sentinel + setComputeUnitLimit(1_400_000)
+        // Stage H branch on exerciseStyle (matches mint_from_vault.rs):
+        //   - European: pass the TS-computed premium verbatim + 800K CU.
+        //   - American: the handler IGNORES the supplied premium and prices
+        //     BS-2002 on-chain, so we pass a premium=1 sentinel (non-zero to
+        //     pass the > 0 arg guard) + a 1.4M CU budget for the solmath path.
+        const mintPremiumBN = isAmerican ? new BN(1) : premiumBN;
+        const mintCuIx = isAmerican ? EXTRA_CU_1_4M : EXTRA_CU_800K;
         const pythFeedIdBuf = Buffer.from(input.market.account.pythFeedId);
         const [volOraclePda] = PublicKey.findProgramAddressSync(
           [Buffer.from(VOL_ORACLE_SEED), pythFeedIdBuf],
@@ -322,7 +337,7 @@ export function useWriteSubmit(): UseWriteSubmit {
           "Mint",
           () =>
             program.methods
-              .mintFromVault(contractsBN, premiumBN, createdAt)
+              .mintFromVault(contractsBN, mintPremiumBN, createdAt)
               .accountsStrict({
                 writer: publicKey,
                 sharedVault: sharedVaultPda,
@@ -340,7 +355,7 @@ export function useWriteSubmit(): UseWriteSubmit {
                 token2022Program: TOKEN_2022_PROGRAM_ID,
                 rent: SYSVAR_RENT_PUBKEY,
               })
-              .preInstructions([EXTRA_CU_800K])
+              .preInstructions([mintCuIx])
               .rpc({ commitment: "confirmed" }),
           async () => {
             try {

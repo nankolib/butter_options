@@ -131,6 +131,7 @@ export const EpochVaultSection: FC<EpochVaultSectionProps> = ({
       const result = await submit({
         market: chosen.market,
         side: values.side,
+        exerciseStyle: values.exerciseStyle,
         strike: strikeNum,
         expiry: epochExpiryTs,
         contracts: contractsNum,
@@ -193,6 +194,8 @@ export const EpochVaultSection: FC<EpochVaultSectionProps> = ({
         <LiveQuoteCard
           asset={values.asset}
           side={values.side}
+          exerciseStyle={values.exerciseStyle}
+          market={chosen?.market ?? null}
           strike={strikeNum}
           expiry={epochExpiryTs}
           contracts={contractsNum}

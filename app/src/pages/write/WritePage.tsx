@@ -127,6 +127,7 @@ export const WritePage: FC = () => {
   const [epochValues, setEpochValues] = useState<WriterFormValues>({
     asset: null,
     side: "call",
+    exerciseStyle: "european",
     strike: "",
     contracts: "1",
     expiry: epochExpiryTs,
@@ -137,6 +138,7 @@ export const WritePage: FC = () => {
   const [customValues, setCustomValues] = useState<WriterFormValues>({
     asset: null,
     side: "call",
+    exerciseStyle: "european",
     strike: "",
     contracts: "1",
     expiry: Math.floor(Date.now() / 1000) + 24 * 3600,

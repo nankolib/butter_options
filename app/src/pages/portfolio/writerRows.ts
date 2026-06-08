@@ -85,6 +85,8 @@ export type WriterRow = {
   /** Asset ticker, e.g. "SOL". "?" if marketMap lookup fails. */
   asset: string;
   side: "call" | "put";
+  /** Vault exercise style — drives the EUR/AMER badge. Defaults european. */
+  exerciseStyle: "european" | "american";
   strike: number;
   /** Unix seconds. */
   expiry: number;
@@ -198,6 +200,10 @@ export function buildWriterRows(args: BuildWriterRowsArgs): WriterRow[] {
     // v.optionType` shape check, which works whether the decoder gave us
     // { call: {} } or { put: {} }.
     const isCall = "call" in v.optionType;
+    // ExerciseStyle Anchor enum: { european: {} } | { american: {} }. Same
+    // shape-check as optionType; guard undefined → european for legacy vaults.
+    const exerciseStyle: "european" | "american" =
+      v.exerciseStyle && "american" in v.exerciseStyle ? "american" : "european";
     const strike = usdcToNumber(v.strikePrice);
     const expiry = asNumber(v.expiry);
     const market = marketMap.get((v.market as PublicKey).toBase58()) ?? null;
@@ -309,6 +315,7 @@ export function buildWriterRows(args: BuildWriterRowsArgs): WriterRow[] {
       vaultPda: vault.publicKey,
       asset,
       side: isCall ? "call" : "put",
+      exerciseStyle,
       strike,
       expiry,
       state,

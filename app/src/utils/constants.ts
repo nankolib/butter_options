@@ -88,6 +88,22 @@ export const VOL_ORACLE_SEED = "vol_oracle";
 export const USE_V2_VAULTS = true;
 
 // ============================================================================
+// Phase 2 — American options UI gate (Stage H / Stage I pair-flip)
+// ============================================================================
+// Gates every user-facing American affordance in the frontend: the Write
+// EUR/AMER toggle's American button (disabled + "coming soon" while false)
+// and the Portfolio early-exercise button. Ships FALSE in Stage H — the
+// American surface is dark-launched (built + build-verified, unreachable in
+// production) so Stage I is a flag-flip + audit only.
+//
+// ⚠️ STAGE I PAIR-FLIP — flip this AND the Rust `AMERICAN_ENABLED` default
+// (programs/opta/src/utils/feature_flags.rs: not(feature) → true, then deploy
+// FEATURE-FREE) TOGETHER. Never ship `true` here before Stage I: a true UI
+// flag against a false on-chain flag sends American creates that revert 6052
+// (AmericanVaultsDisabled). The two flags are a matched set.
+export const AMERICAN_ENABLED_UI = false;
+
+// ============================================================================
 // Phase 2 demo cutoff
 // ============================================================================
 // Hide vaults created before the Phase 2 redeploy (2026-04-26 ~18:00 UTC).

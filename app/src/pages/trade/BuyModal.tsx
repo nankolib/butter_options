@@ -6,6 +6,7 @@ import { getAssociatedTokenAddress, getAccount, TOKEN_PROGRAM_ID } from "@solana
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { useProgram } from "../../hooks/useProgram";
+import { useOptionPriceQuote } from "../../hooks/useOptionPriceQuote";
 import { showToast } from "../../components/Toast";
 import { MoneyAmount } from "../../components/MoneyAmount";
 import { HairlineRule } from "../../components/layout";
@@ -135,6 +136,39 @@ export const BuyModal: FC<BuyModalProps> = ({
     }
     return max;
   }, [offerings]);
+
+  // ---- American on-chain quote (lazy, single-strike, on modal open) ----
+  // The cell's exercise style comes from its offerings' parent vault. While no
+  // American vaults exist this is always "european" (dark path) and the hook
+  // stays disabled; with an American offering present it fetches the live
+  // BS-2002 quote that OfferingsPanel surfaces in its header strip.
+  const headOffering = selected ?? offerings[0] ?? null;
+  const cellStyle: "european" | "american" = headOffering?.exerciseStyle ?? "european";
+  const quoteMarket = useMemo(
+    () =>
+      headOffering
+        ? {
+            publicKey: headOffering.vault.account.market as PublicKey,
+            account: headOffering.market as { pythFeedId: number[] },
+          }
+        : null,
+    [headOffering],
+  );
+  const quoteParams =
+    cellStyle === "american" && headOffering
+      ? {
+          strike,
+          expiryTs: expiry,
+          side,
+          exerciseStyle: "american" as const,
+          carryRateBps: Number(headOffering.vault.account.carryRateBps ?? 0),
+        }
+      : null;
+  const {
+    quote: amerQuote,
+    error: amerError,
+    loading: amerLoading,
+  } = useOptionPriceQuote(cellStyle === "american", quoteMarket, quoteParams);
 
   // Esc dismiss
   useEffect(() => {
@@ -289,6 +323,10 @@ export const BuyModal: FC<BuyModalProps> = ({
               offerings={offerings}
               selected={selected}
               onSelect={setSelected}
+              exerciseStyle={cellStyle}
+              amerQuote={amerQuote}
+              amerLoading={amerLoading}
+              amerError={amerError}
             />
 
             <div className="mt-6">

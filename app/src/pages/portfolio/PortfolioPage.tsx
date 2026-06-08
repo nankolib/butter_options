@@ -355,6 +355,9 @@ export const PortfolioPage: FC = () => {
         case "exercise":
           actions.exercise(p);
           break;
+        case "exercise-american":
+          actions.exerciseAmerican(p);
+          break;
         case "list-resale":
           setResaleTarget(p);
           break;

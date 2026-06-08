@@ -913,15 +913,27 @@ async function main(): Promise<void> {
       || (process.env.TICK_ONCE ?? "").toLowerCase() === "true",
   };
 
-  try {
-    await Promise.all([
-      runForever(ctx).catch((err) => {
-        logFatal("settle/finalize loop crashed", {
-          err: String(err),
-          stack: (err as any)?.stack,
-        });
-        throw err;
-      }),
+  // The settle/finalize loop always runs. The vol-oracle side-loop is
+  // env-gated: set OPTA_VOL_CRANK_DISABLED=1 to skip spawning it entirely.
+  // Gated OFF while American is dark (post-Stage-H) — the hourly pushes are
+  // pure waste until American pricing reads the oracles. RE-ENABLE AT STAGE I
+  // (unset the env / set != "1") so the oracles re-warm before the flag flip.
+  const loops: Array<Promise<void>> = [
+    runForever(ctx).catch((err) => {
+      logFatal("settle/finalize loop crashed", {
+        err: String(err),
+        stack: (err as any)?.stack,
+      });
+      throw err;
+    }),
+  ];
+
+  if ((process.env.OPTA_VOL_CRANK_DISABLED ?? "") === "1") {
+    logInfo("vol-oracle side-loop DISABLED via OPTA_VOL_CRANK_DISABLED=1", {
+      note: "re-enable at Stage I so oracles re-warm for American pricing",
+    });
+  } else {
+    loops.push(
       runVolOracleCrank(volCrankCtx, volCrankOptions).catch((err) => {
         logFatal("vol-oracle loop crashed", {
           err: String(err),
@@ -929,7 +941,11 @@ async function main(): Promise<void> {
         });
         throw err;
       }),
-    ]);
+    );
+  }
+
+  try {
+    await Promise.all(loops);
   } catch (err) {
     // Already logged above by whichever loop's .catch fired first. Exit
     // non-zero so process supervisors restart us instead of half-running.

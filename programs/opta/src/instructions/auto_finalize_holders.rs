@@ -32,6 +32,8 @@ use anchor_spl::token_2022::Token2022;
 use crate::errors::OptaError;
 use crate::events::HoldersFinalized;
 use crate::state::*;
+use crate::utils::collateral::required_collateral_per_contract;
+use crate::utils::exercise_intrinsic::exercise_capped_intrinsic;
 
 pub fn handle_auto_finalize_holders<'info>(
     ctx: Context<'_, '_, '_, 'info, AutoFinalizeHolders<'info>>,
@@ -61,28 +63,42 @@ pub fn handle_auto_finalize_holders<'info>(
     let protocol_bump = ctx.accounts.protocol_state.bump;
     let protocol_key = ctx.accounts.protocol_state.key();
 
-    // Same formula as exercise_from_vault.rs:46-63 — single-asset payout per
-    // contract. Computed once outside the loop because settlement_price,
-    // strike_price and option_type are vault-wide.
-    let payout_per_contract: u64 = match option_type {
-        OptionType::Call => {
-            if settlement_price > strike_price {
-                settlement_price
-                    .checked_sub(strike_price)
-                    .ok_or(OptaError::MathOverflow)?
-            } else {
-                0
+    // Per-contract settlement payout (same base formula as exercise_from_vault).
+    // AM-MED-1: AMERICAN caps EACH contract at collateral_per_token (= strike)
+    // via the SAME helper as early exercise (exercise_capped_intrinsic), closing
+    // the hold-to-settlement edge where a deep-ITM CALL could extract
+    // settlement−strike (> strike) per contract instead of the strike cap it
+    // gets on early exercise. EUROPEAN keeps the uncapped intrinsic —
+    // byte-identical to pre-cap; only the aggregate collateral_remaining pool
+    // clamp (below) applies to it. Computed once outside the loop because
+    // settlement_price, strike_price and option_type are vault-wide.
+    let payout_per_contract: u64 = match exercise_style {
+        ExerciseStyle::American => exercise_capped_intrinsic(
+            option_type,
+            settlement_price,
+            strike_price,
+            required_collateral_per_contract(strike_price, option_type),
+        ),
+        ExerciseStyle::European => match option_type {
+            OptionType::Call => {
+                if settlement_price > strike_price {
+                    settlement_price
+                        .checked_sub(strike_price)
+                        .ok_or(OptaError::MathOverflow)?
+                } else {
+                    0
+                }
             }
-        }
-        OptionType::Put => {
-            if strike_price > settlement_price {
-                strike_price
-                    .checked_sub(settlement_price)
-                    .ok_or(OptaError::MathOverflow)?
-            } else {
-                0
+            OptionType::Put => {
+                if strike_price > settlement_price {
+                    strike_price
+                        .checked_sub(settlement_price)
+                        .ok_or(OptaError::MathOverflow)?
+                } else {
+                    0
+                }
             }
-        }
+        },
     };
 
     let mut holders_processed: u32 = 0;

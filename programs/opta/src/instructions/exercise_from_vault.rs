@@ -20,6 +20,8 @@ use anchor_spl::token_2022::Token2022;
 use crate::errors::OptaError;
 use crate::events::VaultExercised;
 use crate::state::*;
+use crate::utils::collateral::required_collateral_per_contract;
+use crate::utils::exercise_intrinsic::exercise_capped_intrinsic;
 
 pub fn handle_exercise_from_vault(
     ctx: Context<ExerciseFromVault>,
@@ -43,23 +45,35 @@ pub fn handle_exercise_from_vault(
     let settlement_price = vault.settlement_price;
     let strike_price = vault.strike_price;
 
-    let payout_per_contract = match vault.option_type {
-        OptionType::Call => {
-            if settlement_price > strike_price {
-                settlement_price.checked_sub(strike_price)
-                    .ok_or(OptaError::MathOverflow)?
-            } else {
-                0
+    // AM-MED-1: AMERICAN caps each contract at collateral_per_token (= strike)
+    // via the SAME helper as early exercise; EUROPEAN keeps the uncapped
+    // intrinsic (byte-identical to pre-cap — only the collateral_remaining clamp
+    // below applies). Mirrors auto_finalize_holders.
+    let payout_per_contract = match vault.exercise_style {
+        ExerciseStyle::American => exercise_capped_intrinsic(
+            vault.option_type,
+            settlement_price,
+            strike_price,
+            required_collateral_per_contract(strike_price, vault.option_type),
+        ),
+        ExerciseStyle::European => match vault.option_type {
+            OptionType::Call => {
+                if settlement_price > strike_price {
+                    settlement_price.checked_sub(strike_price)
+                        .ok_or(OptaError::MathOverflow)?
+                } else {
+                    0
+                }
             }
-        }
-        OptionType::Put => {
-            if strike_price > settlement_price {
-                strike_price.checked_sub(settlement_price)
-                    .ok_or(OptaError::MathOverflow)?
-            } else {
-                0
+            OptionType::Put => {
+                if strike_price > settlement_price {
+                    strike_price.checked_sub(settlement_price)
+                        .ok_or(OptaError::MathOverflow)?
+                } else {
+                    0
+                }
             }
-        }
+        },
     };
 
     require!(payout_per_contract > 0, OptaError::OptionNotInTheMoney);

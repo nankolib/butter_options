@@ -16,10 +16,13 @@
 // this per-contract cap is the ONLY structural protection at early-exercise
 // time.
 //
-// NOTE: settlement (settle_vault / exercise_from_vault / auto_finalize_holders)
-// keeps its OWN pool-level cap and is NOT routed through this helper — European
-// settlement stays byte-identical. This helper is exclusively the early-exercise
-// path.
+// NOTE: AMERICAN settlement (exercise_from_vault / auto_finalize_holders) now
+// ALSO routes its per-contract payout through this helper (AM-MED-1), so an
+// American contract is capped at collateral_per_token identically whether it is
+// exercised early or held to settlement. EUROPEAN settlement is NOT routed
+// through it — it keeps its uncapped per-contract intrinsic + the aggregate
+// pool clamp and stays byte-identical. settle_vault's emitted aggregate event
+// is likewise unchanged.
 // =============================================================================
 
 use crate::state::OptionType;

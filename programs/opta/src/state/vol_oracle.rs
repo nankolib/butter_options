@@ -146,6 +146,21 @@ pub const VOL_ORACLE_MIN_PUSH_INTERVAL_SECS: i64 = 1;
 #[cfg(not(feature = "test-fast-vol"))]
 pub const VOL_ORACLE_MIN_PUSH_INTERVAL_SECS: i64 = 55 * 60;
 
+/// Maximum tolerated gap between two consecutive pushes (2 hours = 2× the
+/// nominal ~1h cadence). When `now - last_sample_ts` EXCEEDS this, the next
+/// push is treated as a RESEED, not a sample (audit AM-MED-2): the price move
+/// accumulated over the gap would otherwise be recorded as a single hourly
+/// log return and mis-annualized by `sqrt(8760)`, injecting an outlier that
+/// inflates realized vol for as long as it lives in the ring (up to 30 days).
+/// On a gap the handler refreshes `last_spot_price` + `last_sample_ts` ONLY —
+/// no ring write, no accumulator change, no `sample_count` increment — so the
+/// next on-cadence push computes a correct ~1h return off the refreshed spot.
+///
+/// Deliberately NOT shrunk by `test-fast-vol`: this is a cadence-semantic
+/// guard, not a rate limit. Tests exercise it by advancing a synthetic
+/// `now_ts` past the gap rather than waiting wall-clock.
+pub const VOL_ORACLE_MAX_SAMPLE_GAP_SECS: i64 = 7200;
+
 /// Pyth update freshness threshold for the push path. publish_time must
 /// be within this many seconds of the on-chain clock at push time.
 /// Mirrors the philosophy of settle_expiry's EXPIRY_WINDOW_SECS but is

@@ -36,8 +36,8 @@ use solmath::arithmetic::fp_div;
 
 use crate::errors::OptaError;
 use crate::state::{
-    VolOracle, VOL_ORACLE_MIN_PUSH_INTERVAL_SECS, VOL_ORACLE_PYTH_MAX_AGE_SECS,
-    VOL_ORACLE_RING_SIZE, VOL_ORACLE_SEED,
+    VolOracle, VOL_ORACLE_MAX_SAMPLE_GAP_SECS, VOL_ORACLE_MIN_PUSH_INTERVAL_SECS,
+    VOL_ORACLE_PYTH_MAX_AGE_SECS, VOL_ORACLE_RING_SIZE, VOL_ORACLE_SEED,
 };
 use crate::utils::solmath_bridge::pyth_price_to_scale;
 
@@ -148,6 +148,33 @@ pub fn handle_push_vol_sample(ctx: Context<PushVolSample>) -> Result<()> {
         oracle.last_sample_ts = now;
         msg!(
             "VolOracle seeded: pda={} spot={} ts={}",
+            ctx.accounts.vol_oracle.key(),
+            new_spot_i64,
+            now,
+        );
+        return Ok(());
+    }
+
+    // ---- 3a-bis. Gap-reseed branch (audit AM-MED-2) -----------------------
+    // If the oracle went unpushed for longer than VOL_ORACLE_MAX_SAMPLE_GAP_SECS
+    // (e.g. a crank outage), the price move accumulated over that gap must NOT
+    // be recorded as a single hourly log return: ln(new_spot / last_spot) over
+    // a multi-period gap, annualized by sqrt(8760), injects an outlier that
+    // inflates realized vol for as long as it lives in the ring (up to 30 days).
+    // Instead RESEED — adopt the new spot as the baseline and record NO sample.
+    // The next on-cadence push then computes a correct ~1h return off this
+    // refreshed spot. Mirrors the last_spot_price == 0 seed branch above
+    // (spot + ts only; ring, accumulators, and sample_count untouched).
+    //
+    // Placed BEFORE the rate-limit check because a gap this large trivially
+    // satisfies it; the reseed is the intended action, not a normal push.
+    // Note: this prevents FUTURE gap pollution; it does not clear an outlier
+    // already resident in the ring from a pre-existing gap.
+    if now.saturating_sub(oracle.last_sample_ts) > VOL_ORACLE_MAX_SAMPLE_GAP_SECS {
+        oracle.last_spot_price = new_spot_i64;
+        oracle.last_sample_ts = now;
+        msg!(
+            "VolOracle reseeded after gap: pda={} spot={} ts={} (no sample recorded)",
             ctx.accounts.vol_oracle.key(),
             new_spot_i64,
             now,

@@ -43,6 +43,14 @@ american-enabled = []
 # destroying pricing integrity. The .test-fixtures launcher passes this for
 # the American suite; production deploy scripts must not.
 test-synth-vol = []
+# LOW-5 fail-closed marker for the deployable-artifact guard (see lib.rs). Any
+# build carrying a test/dev feature (test-fast-vol / test-synth-vol / cu-profile)
+# OR `american-enabled` MUST also pass `testing`, else compilation aborts via
+# compile_error!. Test harnesses pass `--features testing …`; production deploys
+# are FEATURE-FREE and never set this. Forgetting it on a test build fails loudly
+# (fail-closed); the only way test code reaches a deploy is a deliberate
+# `--features testing` on a production build.
+testing = []
 
 
 [dependencies]

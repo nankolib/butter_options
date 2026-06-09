@@ -3,7 +3,7 @@
   "scripts": {
     "test": "bash ./.test-fixtures/run-tests.sh \"tests/**/*.ts\" --exclude \"tests/bankrun/**\"",
     "test:file": "bash ./.test-fixtures/run-tests.sh",
-    "test:bankrun": "anchor build -- --features 'test-fast-vol american-enabled test-synth-vol' && ts-mocha -p ./tsconfig.json -t 180000 \"tests/bankrun/**/*.test.ts\"",
+    "test:bankrun": "anchor build -- --features 'testing test-fast-vol american-enabled test-synth-vol' && ts-mocha -p ./tsconfig.json -t 180000 \"tests/bankrun/**/*.test.ts\"",
     "lint:fix": "prettier */*.js \"*/**/*{.js,.ts}\" -w",
     "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check"
   },

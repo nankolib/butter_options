@@ -39,6 +39,7 @@ pub mod migrate_shared_vault_exercise_tracking;
 // Phase 2 Stage B -- realized-vol oracle
 pub mod initialize_vol_oracle;
 pub mod push_vol_sample;
+pub mod reset_vol_oracle;
 
 // Phase 2 Stage C Pass 3 -- AMER pricing view
 pub mod get_option_price;
@@ -98,6 +99,7 @@ pub use migrate_shared_vault_exercise_tracking::*;
 // Phase 2 Stage B -- realized-vol oracle
 pub use initialize_vol_oracle::*;
 pub use push_vol_sample::*;
+pub use reset_vol_oracle::*;
 
 // Phase 2 Stage C Pass 3 -- AMER pricing view
 pub use get_option_price::*;

@@ -3238,6 +3238,103 @@
       "args": []
     },
     {
+      "name": "reset_vol_oracle",
+      "docs": [
+        "Admin-only reset of a polluted/broken VolOracle. Zeroes the ring,",
+        "both accumulators, sample_count, head, and last_spot/last_ts so the",
+        "next push takes the seed branch (records spot, no return) and the",
+        "7-day warmup re-engages from 0. feed_id (the PDA seed + Pyth identity)",
+        "is preserved. One oracle per call."
+      ],
+      "discriminator": [
+        246,
+        214,
+        198,
+        160,
+        62,
+        246,
+        80,
+        116
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "docs": [
+            "Admin -- must match protocol_state.admin (same gate as migrate_*)."
+          ],
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "docs": [
+            "Used only to assert admin == protocol_state.admin."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "vol_oracle",
+          "docs": [
+            "The VolOracle PDA to reset, derived from `feed_id` (same seeds as",
+            "initialize_vol_oracle). Mutated."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  111,
+                  108,
+                  95,
+                  111,
+                  114,
+                  97,
+                  99,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "feed_id"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "feed_id",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
       "name": "settle_expiry",
       "docs": [
         "Record the canonical settlement price for an (asset, expiry) tuple",

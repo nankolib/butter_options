@@ -24,6 +24,35 @@ pub mod utils;
 use instructions::*;
 use state::*;
 
+// =============================================================================
+// LOW-5 — deployable-artifact guard (fail-closed on the `testing` marker)
+// =============================================================================
+// Test/dev-only cargo features must NEVER reach a deployed build. The bankrun
+// .so is a RELEASE build carrying test-fast-vol/test-synth-vol, so
+// `debug_assertions` can't distinguish it, and `test-fast-vol` is const-only
+// (invisible in the IDL) — the check must be feature-level. Fail-CLOSED on a
+// `testing` marker: any test/dev feature WITHOUT `testing` refuses to compile,
+// so forgetting the marker on a test build fails loudly while the only way test
+// code reaches a deploy is a deliberate `--features testing` on a production
+// build. The Stage-I American flip is the feature_flags.rs default edit + a
+// FEATURE-FREE deploy — never `--features american-enabled`.
+#[cfg(all(
+    any(feature = "test-fast-vol", feature = "test-synth-vol", feature = "cu-profile"),
+    not(feature = "testing")
+))]
+compile_error!(
+    "test-only cargo feature (test-fast-vol / test-synth-vol / cu-profile) enabled without the \
+     `testing` marker — refusing to build a DEPLOYABLE artifact carrying test code. Pass \
+     `--features testing` for test builds; production deploys must be FEATURE-FREE."
+);
+
+#[cfg(all(feature = "american-enabled", not(feature = "testing")))]
+compile_error!(
+    "`american-enabled` passed as --features on a non-`testing` build. The Stage-I flip is the \
+     feature_flags.rs default edit + a FEATURE-FREE deploy, never `--features american-enabled`. \
+     Pass `--features testing` only to run the American test suite."
+);
+
 declare_id!("CtzJ4MJYX6BFvF4g67i5C24tQuwRn6ddKkaE5L84z9Cq");
 
 #[program]
@@ -304,6 +333,18 @@ pub mod opta {
     /// enforce the rate limit (55 min production / 1 sec test-fast-vol).
     pub fn push_vol_sample(ctx: Context<PushVolSample>) -> Result<()> {
         instructions::push_vol_sample::handle_push_vol_sample(ctx)
+    }
+
+    /// Admin-only reset of a polluted/broken VolOracle. Zeroes the ring,
+    /// both accumulators, sample_count, head, and last_spot/last_ts so the
+    /// next push takes the seed branch (records spot, no return) and the
+    /// 7-day warmup re-engages from 0. feed_id (the PDA seed + Pyth identity)
+    /// is preserved. One oracle per call.
+    pub fn reset_vol_oracle(
+        ctx: Context<ResetVolOracle>,
+        feed_id: [u8; 32],
+    ) -> Result<()> {
+        instructions::reset_vol_oracle::handle_reset_vol_oracle(ctx, feed_id)
     }
 
     /// AMER-only BS-2002 pricing view. Read-only; CPI-callable.

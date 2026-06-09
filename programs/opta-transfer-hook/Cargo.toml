@@ -34,6 +34,10 @@ american-enabled = []
 # Workspace-wide cargo `--features test-synth-vol` would otherwise error here.
 # opta-transfer-hook has no vol oracle.
 test-synth-vol = []
+# No-op feature mirroring opta's `testing` marker (LOW-5 deployable-artifact
+# guard). Workspace-wide cargo `--features testing` (passed by the test
+# harnesses) would otherwise error here.
+testing = []
 
 [dependencies]
 anchor-lang = { version = "0.32.1" }

@@ -39,6 +39,10 @@ import {
   type AutoCancelOptions,
 } from "./autoCancelListings";
 import {
+  runSweepExpiredOrders,
+  type SweepOptions,
+} from "./sweepExpiredOrders";
+import {
   runVolOracleCrank,
   type VolOracleCrankContext,
   type VolOracleCrankOptions,
@@ -60,6 +64,10 @@ const DEFAULT_AUTO_FINALIZE_CU = 1_400_000;
 // ---- Auto-cancel defaults (Step 6 wiring) ---------------------------------
 const DEFAULT_LISTINGS_PER_BATCH = 8;
 const DEFAULT_AUTO_CANCEL_CU = 800_000;
+
+// ---- Sweep-expired-orders defaults (Phase 1 exchange book) ----------------
+const DEFAULT_SWEEP_ORDERS_PER_BATCH = 8;
+const DEFAULT_SWEEP_ORDERS_CU = 800_000;
 
 // ---- Wallet-balance defaults (Phase 1 hardening) --------------------------
 const DEFAULT_LOW_BALANCE_WARN_SOL = 0.1;
@@ -118,6 +126,8 @@ interface CrankContext {
   fullyFinalized: Set<string>;
   // Auto-cancel wiring (Step 6 — V2 secondary listing)
   autoCancelOptions: AutoCancelOptions;
+  // Sweep-expired-orders wiring (Phase 1 exchange book)
+  sweepOptions: SweepOptions;
   // Wallet-balance check (Phase 1 hardening)
   lowBalanceWarnSol: number;
   balanceCheckTicks: number;
@@ -160,6 +170,11 @@ interface TickResult {
   finalizeListingsCancelled: number;
   finalizeListingsAtaSkipped: number;
   finalizeListingsErrors: number;
+  // Sweep-expired-orders wiring (Phase 1 exchange book)
+  sweepOrdersConsidered: number;
+  sweepOrdersSwept: number;
+  sweepOrdersAtaSkipped: number;
+  sweepOrdersErrors: number;
 }
 
 /**
@@ -218,6 +233,8 @@ function readEnv(): {
   dryRun: boolean;
   // Auto-cancel wiring (Step 6)
   listingsBatchSize: number;
+  // Sweep-expired-orders wiring (Phase 1 exchange book)
+  sweepOrdersBatchSize: number;
   // Phase 1 hardening
   lowBalanceWarnSol: number;
   balanceCheckTicks: number;
@@ -278,6 +295,11 @@ function readEnv(): {
     DEFAULT_LISTINGS_PER_BATCH,
     "OPTA_AUTO_CANCEL_BATCH_SIZE",
   );
+  const sweepOrdersBatchSize = parsePositiveInt(
+    process.env.OPTA_SWEEP_ORDERS_BATCH_SIZE,
+    DEFAULT_SWEEP_ORDERS_PER_BATCH,
+    "OPTA_SWEEP_ORDERS_BATCH_SIZE",
+  );
   const maxAtasPerTick = parsePositiveInt(
     process.env.OPTA_AUTO_FINALIZE_MAX_ATAS_PER_TICK,
     DEFAULT_MAX_ATAS_PER_TICK,
@@ -321,6 +343,7 @@ function readEnv(): {
     holderBatchSize,
     writerBatchSize,
     listingsBatchSize,
+    sweepOrdersBatchSize,
     maxAtasPerTick,
     staleS,
     dryRun,
@@ -423,6 +446,12 @@ async function bootstrapContext(): Promise<CrankContext> {
     dryRun: env.dryRun, // shares the OPTA_AUTO_FINALIZE_DRY_RUN flag
   };
 
+  const sweepOptions: SweepOptions = {
+    ordersBatchSize: env.sweepOrdersBatchSize,
+    computeUnitLimit: DEFAULT_SWEEP_ORDERS_CU,
+    dryRun: env.dryRun, // shares the OPTA_AUTO_FINALIZE_DRY_RUN flag
+  };
+
   return {
     connection,
     wallet,
@@ -435,6 +464,7 @@ async function bootstrapContext(): Promise<CrankContext> {
     staleS: env.staleS,
     fullyFinalized: new Set<string>(),
     autoCancelOptions,
+    sweepOptions,
     lowBalanceWarnSol: env.lowBalanceWarnSol,
     balanceCheckTicks: env.balanceCheckTicks,
     hermesBackoff: { currentMs: env.hermesBackoffBaseMs, consecutiveOk: 0 },
@@ -490,6 +520,10 @@ async function tick(ctx: CrankContext): Promise<TickResult> {
     finalizeListingsCancelled: 0,
     finalizeListingsAtaSkipped: 0,
     finalizeListingsErrors: 0,
+    sweepOrdersConsidered: 0,
+    sweepOrdersSwept: 0,
+    sweepOrdersAtaSkipped: 0,
+    sweepOrdersErrors: 0,
   };
 
   // ---- Phase 1: settle expired non-settled vaults (existing behavior) ----
@@ -634,6 +668,8 @@ async function tick(ctx: CrankContext): Promise<TickResult> {
 
     let listingsProgressed = false;
     let listingsEmptyScan = false;
+    let sweepProgressed = false;
+    let sweepEmptyScan = false;
     let holderProgressed = false;
     let writerProgressed = false;
     let holderEmptyScan = false;
@@ -660,6 +696,32 @@ async function tick(ctx: CrankContext): Promise<TickResult> {
     } catch (err) {
       result.finalizeListingsErrors += 1;
       logError("auto-cancel pass crashed", {
+        vault: vaultKey,
+        err: String(err),
+      });
+      // Do NOT continue — let holder/writer attempt regardless.
+    }
+
+    // Sweep-expired-orders pass — also runs BEFORE finalize so an ask's
+    // freshly-returned tokens become holder-finalize candidates (sweep-before-
+    // finalize, exchange-spec §6.6). Same log-don't-continue isolation as
+    // auto-cancel: a sweep failure must not skip holder/writer.
+    try {
+      const sweepReport = await runSweepExpiredOrders(
+        ctx.finalizeCtx,
+        v.publicKey,
+        ctx.sweepOptions,
+      );
+      result.sweepOrdersConsidered += 1;
+      result.sweepOrdersSwept += sweepReport.ordersSweptFromEvents;
+      result.sweepOrdersAtaSkipped += sweepReport.ordersSkippedMissingAta;
+      result.sweepOrdersErrors += sweepReport.txFailed;
+      sweepProgressed = sweepReport.txSent > 0;
+      sweepEmptyScan = sweepReport.ordersTotal === 0;
+      logInfo("sweep-expired-orders pass", { ...sweepReport });
+    } catch (err) {
+      result.sweepOrdersErrors += 1;
+      logError("sweep-expired-orders pass crashed", {
         vault: vaultKey,
         err: String(err),
       });
@@ -725,9 +787,11 @@ async function tick(ctx: CrankContext): Promise<TickResult> {
     if (
       !ctx.finalizeOptions.dryRun &&
       listingsEmptyScan &&
+      sweepEmptyScan &&
       holderEmptyScan &&
       writerEmptyScan &&
       !listingsProgressed &&
+      !sweepProgressed &&
       !holderProgressed &&
       !writerProgressed
     ) {

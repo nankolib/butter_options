@@ -2,6 +2,8 @@
 
 > Updated 2026-06-09 after the **Stage-I remediation session**. Phase 2 Stages A–H are all shipped (A–G on devnet, H to Vercel, dark-launched behind `AMERICAN_ENABLED_UI = false`). This session: **revived the vol-push crank** (it was gated off for cost during Stage H, not down — §5); ran a **full American-surface audit** (3 phases — money-conservation, pricing/oracle, flag/secondary/griefing/FE) → **0 CRIT / 0 HIGH**, money-conservation invariant proven; and shipped **four remediations** to devnet + `master`/`main`: **MED-2** (vol gap-reseed guard on `push_vol_sample`), **LOW-5** (fail-closed `testing`-marker deploy guard — production builds MUST be feature-free), **`reset_vol_oracle`** (new admin instruction; production count +1), and **MED-1** (American settlement per-contract cap, mirroring early exercise). **11 gap-polluted vol-oracles were reset** → a clean 7-day warmup completing **~2026-06-16**. opta redeployed twice this session → slot **`468290108`** (hook unchanged `464160129`); `master`+`main` at **`5b2cbf8`**. European byte-identical throughout; **`AMERICAN_ENABLED` still `false`**. **The ONLY remaining Stage-I work is the `AMERICAN_ENABLED` flag flip, after the warmup (~Jun 16).**
 
+> **2026-06-10 — Exchange Phase 1 (limit order book) BUILT, NOT deployed.** Custom-minimal `RestingOrder` book — `post_order` / `fill_order` / `cancel_order` / `sweep_expired_orders` — generalizing the V2 resale flow and reusing the hook-token escrow pattern verbatim. Additive only (one new error 6054, 4 tape events, no existing-handler logic touched); European/American byte-identical. Gates: bankrun **53/0** (14 new), validator untouched **101/0/68**, FE build green, feature-free IDL byte-identical. **Production on-chain instruction count remains 29** — devnet deploy is a separate decision. Canonical spec: `.context/plans/opta-exchange-spec.md`. Commits `0d394a1` `54acb62` `68a556c` `c2a124f` on `master`+`main`.
+>
 > **Stage H CU gotcha (worth keeping):** `get_option_price` via Anchor's `.view()` hits the **200K CU simulation ceiling** on the American **PUT** branch (full McDonald-Schroder BS-2002, ~270–280K CU). The American **CALL at carry=0** slips under because it takes the q=0 fast path (~30K CU, returns European exactly — a zero-dividend American call is never optimally early-exercised); a carry≠0 CALL (equities) would also exceed 200K. Fix (the locked decision-4 fallback): `fetchOptionPriceQuote` uses a **manual `simulate` + `ComputeBudgetProgram.setComputeUnitLimit(400_000)` + return-data decode**, not `.view()`. 400K covers the ~278K PUT worst case and future carry≠0 CALLs. Caught at the Stage H live eyeball (the Gate-B `.view()` proof only exercised a CALL).
 
 > Note on Stage A framing correction (kept from prior version): the older HANDOFF text "On-chain Black-Scholes via solmath — pricing happens on-chain at ~50K CU" overstated reality. The math LIBRARY is on-chain (linked into the program binary) but no production instruction CURRENTLY calls it — premium pricing today is computed in the writer's browser via `app/src/utils/blackScholes.ts` (TypeScript) and submitted as an instruction argument. Phase 2 fixes this for American options first; European migration follows as a separate later arc. See §1 thesis and §11.5 Phase 2 plan for the honest framing.
@@ -76,6 +78,12 @@ For pitch / investor framing: the durable claim is *"Opta's math kernel is on-ch
 - **GitHub remote:** `https://github.com/nankolib/opta.git`
 - **Current branch:** `master` (also mirrored to `main` via explicit `git push origin master:main` refspec)
 - **Working tree:** clean (modulo local-only audit/plan markdowns kept by policy: `WRITER_PF_AUDIT.md`, `WRITER_PF_PLAN.md`, `COLLATERAL_2X_AUDIT.md`, `COLLATERAL_2X_PREMIUM_FOLLOWUP.md`, `SETTLEMENT_PRICING_AUDIT.md`, `WHITEPAPER_REWRITE_PLAN.md`)
+- **Latest commits (2026-06-10 — exchange Phase 1 book BUILT, undeployed):**
+  - *(this docs(handoff) refresh — see `git log` for its hash)*
+  - `c2a124f` test(bankrun): exchange-book suite — 14 tests; escrow invariants, bid fills, sweep zero-balance grace
+  - `68a556c` feat(crank): sweep_expired_orders pass — batch 8, pre-holder slot, cache-gate threading (local only; VPS untouched)
+  - `54acb62` feat(frontend): book IDL + seed mirrors + restingOrder discriminator
+  - `0d394a1` feat(book): Phase 1 limit book — RestingOrder + post/fill/cancel/sweep
 - **Latest commits (2026-06-09 Stage-I remediation session) — `master`+`main` both at `5b2cbf8`:**
   - `5b2cbf8` fix(settlement): cap American per-contract payout at collateral_per_token (AM-MED-1)
   - `2408222` feat(opta): fail-closed testing-marker deploy guard + reset_vol_oracle admin instruction (LOW-5 + new instruction)
@@ -258,6 +266,8 @@ The on-chain realized-volatility oracle for Phase 2's pricing path. **Pure addit
 
 Plus **3 cu-profile-gated test-only instructions** (NOT in production IDL): `cu_profile_american`, `shrink_shared_vault_for_test`, `create_test_shared_vault`. Plus `synth_warm_vol_oracle` (`test-synth-vol`-gated). None ship — enforced by the LOW-5 `testing`-marker compile guard (§3).
 
+**Exchange Phase 1 book (4 instructions, BUILT not deployed):** `post_order`, `fill_order`, `cancel_order`, `sweep_expired_orders` — the `RestingOrder` limit book (generalizes the V2 resale flow), built at commit `0d394a1`, **NOT YET DEPLOYED — production on-chain count remains 29.** Adds the `RestingOrder` account + `OrderKind` enum + 4 tape events + error 6054 (`WriterAsksDisabled`). When deployed, the count becomes 33 and the FE migrates resale → book per spec §6.7. Canonical spec: `.context/plans/opta-exchange-spec.md`.
+
 ### State accounts — `programs/opta/src/state/`
 
 `protocol.rs`, `market.rs`, `writer_position.rs`, `epoch_config.rs`, `shared_vault.rs` (now includes `carry_rate_bps: i32` at end of struct), `vault_mint.rs`, `settlement_record.rs`, `vault_resale_listing.rs`
@@ -291,6 +301,7 @@ Plus **3 cu-profile-gated test-only instructions** (NOT in production IDL): `cu_
 ## 6. Current State — What Works
 
 - **29 production instructions** (Stage F added `exercise_american` + `migrate_shared_vault_exercise_tracking`; 2026-06-09 added `reset_vol_oracle`). The `create_shared_vault` signature takes 7 args including `exercise_style: ExerciseStyle`.
+- **Exchange Phase 1 limit book — BUILT + TESTED, not deployed (2026-06-10).** `RestingOrder` book with `post_order`/`fill_order`/`cancel_order`/`sweep_expired_orders`, reusing the hook-token escrow pattern verbatim. bankrun **53/0** (14 new exchange-book tests cover escrow invariants, partial/full fills, bid fills, fee floor + zero-fee, cancel pre/post-expiry, sweep both kinds + zero-balance grace, event fields), validator suite **untouched-green** (101/0/68), FE build green. Additive only; European/American byte-identical. Spec: `.context/plans/opta-exchange-spec.md`. Devnet deploy pending a separate decision (see §7).
 - **American-surface audit COMPLETE (2026-06-09) — 0 CRIT / 0 HIGH.** Three phases (money-conservation, pricing/oracle, flag/secondary/griefing/FE). The cardinal money-conservation invariant (Σ payouts ≤ total_collateral, across spot paths / partial exercise / multi-writer pools) is **proven**. Tally: 3 MED (MED-1 resolved, MED-2 fixed, MED-3 accepted), 5 LOW (LOW-5 fixed, rest accepted), 6 INFO, 21 VERIFIED. Artifacts (gitignored): `.context/audits/american-surface-{audit-scope,findings}.md`.
 - **MED-2 vol gap-reseed guard** — `push_vol_sample` reseeds (spot+ts only, no sample) on a gap > 7200s, so a crank outage no longer injects a multi-day move recorded as one "hour" into the vol estimator. Deployed `468260768`.
 - **`reset_vol_oracle`** (new admin instruction) — zeroes a polluted/broken VolOracle so the next push re-seeds; used 2026-06-09 to clear the 11 gap-polluted oracles (clean 7-day warmup running to ~Jun 16).
@@ -323,6 +334,10 @@ Plus **3 cu-profile-gated test-only instructions** (NOT in production IDL): `cu_
 ---
 
 ## 7. Current State — In Progress / Known Gaps
+
+### Exchange Phase 1 book — built, deploy pending
+
+The `RestingOrder` limit book (post/fill/cancel/sweep) is **built, tested (bankrun 53/0), and committed to `master`+`main`** (commits `0d394a1`/`54acb62`/`68a556c`/`c2a124f`) but **NOT deployed to devnet** — production on-chain count remains 29. Deploy is a deliberate separate decision (it adds 4 callable instructions and gates the FE resale→book migration, spec §6.7). Crank wiring (`sweep_expired_orders` pass) is in local code only; the VPS service is untouched and the vol-loop stays env-gated OFF until Stage I. Canonical spec: `.context/plans/opta-exchange-spec.md`.
 
 ### Phase 2 American + on-chain pricing — active build
 

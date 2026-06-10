@@ -221,3 +221,62 @@ pub struct VaultListingsAutoCancelled {
     pub listings_cancelled: u32,
     pub tokens_returned: u64,
 }
+
+// =============================================================================
+// Exchange book events (Phase 1 — RestingOrder limit book)
+// =============================================================================
+//
+// `kind` encodes OrderKind as a u8 (Bid = 0, ResaleAsk = 1, WriterAsk = 2),
+// matching the house convention of emitting enum fields as u8 (see
+// VaultCreated.vault_type / option_type). `OrderFilled` is the trade tape —
+// the future indexer builds candles from it. `amount_returned` on Cancel /
+// Swept is in the escrowed asset's units: contracts for asks, micro-USDC for
+// bids.
+
+#[event]
+pub struct OrderPosted {
+    pub order: Pubkey,
+    pub owner: Pubkey,
+    pub option_mint: Pubkey,
+    pub vault: Pubkey,
+    pub kind: u8,
+    pub price_per_contract: u64,
+    pub quantity: u64,
+    pub nonce: u64,
+    pub ts: i64,
+}
+
+#[event]
+pub struct OrderFilled {
+    pub order: Pubkey,
+    pub option_mint: Pubkey,
+    pub vault: Pubkey,
+    pub kind: u8,
+    pub maker: Pubkey,
+    pub taker: Pubkey,
+    pub price_per_contract: u64,
+    pub fill_quantity: u64,
+    pub fee: u64,
+    pub quantity_remaining: u64,
+    pub ts: i64,
+}
+
+#[event]
+pub struct OrderCancelled {
+    pub order: Pubkey,
+    pub owner: Pubkey,
+    pub option_mint: Pubkey,
+    pub kind: u8,
+    pub amount_returned: u64,
+    pub ts: i64,
+}
+
+#[event]
+pub struct OrderSwept {
+    pub order: Pubkey,
+    pub owner: Pubkey,
+    pub option_mint: Pubkey,
+    pub kind: u8,
+    pub amount_returned: u64,
+    pub ts: i64,
+}

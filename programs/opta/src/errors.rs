@@ -223,4 +223,12 @@ pub enum OptaError {
     // European (early exercise is an American-only feature). Error code 6053.
     #[msg("Option is not American-style — early exercise is not available")]
     NotAmericanOption,
+
+    // =========================================================================
+    // Exchange book errors (Phase 1 — RestingOrder limit book)
+    // =========================================================================
+    // WriterAsk is reserved for Phase 3 (writer limit asks, mint-on-fill from
+    // personal collateral). post_order rejects it until then. Error code 6054.
+    #[msg("Writer asks are not enabled yet — reserved for Phase 3")]
+    WriterAsksDisabled,
 }

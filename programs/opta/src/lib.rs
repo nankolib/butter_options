@@ -275,6 +275,40 @@ pub mod opta {
         instructions::auto_cancel_listings::handle_auto_cancel_listings(ctx)
     }
 
+    /// Exchange book — post a resting bid or ask (collateral escrowed per-order).
+    /// Spec: exchange-spec §6.3 (Step 2).
+    pub fn post_order(
+        ctx: Context<PostOrder>,
+        kind: OrderKind,
+        price_per_contract: u64,
+        quantity: u64,
+        nonce: u64,
+    ) -> Result<()> {
+        instructions::post_order::handle_post_order(ctx, kind, price_per_contract, quantity, nonce)
+    }
+
+    /// Exchange book — taker fills a named resting order (partial fills first-class).
+    /// Spec: exchange-spec §6.3 (Step 3).
+    pub fn fill_order(ctx: Context<FillOrder>, fill_quantity: u64) -> Result<()> {
+        instructions::fill_order::handle_fill_order(ctx, fill_quantity)
+    }
+
+    /// Exchange book — owner cancels their own resting order; escrow + rent returned.
+    /// Spec: exchange-spec §6.3 (Step 4).
+    pub fn cancel_order(ctx: Context<CancelOrder>) -> Result<()> {
+        instructions::cancel_order::handle_cancel_order(ctx)
+    }
+
+    /// Exchange book — permissionless post-expiry sweep of resting orders.
+    /// Returns each order's escrow to its owner and closes the PDAs. Crank
+    /// runs this BEFORE auto_finalize_holders. Spec: exchange-spec §6.3 (Step 5).
+    /// remaining_accounts: 4-tuples (order, escrow, owner_asset_account, owner_wallet).
+    pub fn sweep_expired_orders<'info>(
+        ctx: Context<'_, '_, 'info, 'info, SweepExpiredOrders<'info>>,
+    ) -> Result<()> {
+        instructions::sweep_expired_orders::handle_sweep_expired_orders(ctx)
+    }
+
     /// One-time SharedVault schema migration that adds the trailing
     /// carry_rate_bps field to pre-Stage-A vaults. Admin-only. Caller passes
     /// vault accounts to migrate via remaining_accounts (recommended batch:

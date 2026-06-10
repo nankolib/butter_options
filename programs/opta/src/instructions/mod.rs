@@ -29,6 +29,12 @@ pub mod buy_v2_resale;
 pub mod cancel_v2_resale;
 pub mod auto_cancel_listings;
 
+// Exchange book (Phase 1 — RestingOrder limit book)
+pub mod post_order;
+pub mod fill_order;
+pub mod cancel_order;
+pub mod sweep_expired_orders;
+
 // SharedVault carry_rate_bps schema migration (Stage A)
 pub mod migrate_shared_vault_carry_rate;
 // SharedVault exercise_style schema migration (Stage C Pass 1)
@@ -90,6 +96,12 @@ pub use list_v2_for_resale::*;
 pub use buy_v2_resale::*;
 pub use cancel_v2_resale::*;
 pub use auto_cancel_listings::*;
+
+// Exchange book (Phase 1 — RestingOrder limit book)
+pub use post_order::*;
+pub use fill_order::*;
+pub use cancel_order::*;
+pub use sweep_expired_orders::*;
 
 // SharedVault carry_rate_bps schema migration
 pub use migrate_shared_vault_carry_rate::*;

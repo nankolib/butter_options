@@ -78,6 +78,14 @@ export const EPOCH_CONFIG_SEED = "epoch_config";
 export const VAULT_RESALE_LISTING_SEED = "vault_resale_listing";
 export const VAULT_RESALE_ESCROW_SEED = "vault_resale_escrow";
 
+// === Exchange Book Seeds (Phase 1 — RestingOrder limit book) ===
+// MUST match RESTING_ORDER_SEED / RESTING_ORDER_ESCROW_SEED in
+// programs/opta/src/state/resting_order.rs.
+// PDAs: [RESTING_ORDER_SEED, option_mint, owner, nonce_le] -> order;
+//       [RESTING_ORDER_ESCROW_SEED, order]                 -> per-order escrow.
+export const RESTING_ORDER_SEED = "resting_order";
+export const RESTING_ORDER_ESCROW_SEED = "resting_order_escrow";
+
 // === Phase 2 Stage B — VolOracle seed (per-feed ring buffer) ===
 // MUST match `VOL_ORACLE_SEED` in programs/opta/src/state/vol_oracle.rs.
 // PDA derivation: [VOL_ORACLE_SEED, feed_id] -> oracle PDA.

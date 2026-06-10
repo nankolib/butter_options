@@ -750,6 +750,194 @@
       ]
     },
     {
+      "name": "cancel_order",
+      "docs": [
+        "Exchange book — owner cancels their own resting order; escrow + rent returned.",
+        "Spec: exchange-spec §6.3 (Step 4)."
+      ],
+      "discriminator": [
+        95,
+        129,
+        237,
+        240,
+        8,
+        49,
+        223,
+        132
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "docs": [
+            "Order owner — only the owner can cancel (enforced by the seed below)."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "option_mint",
+          "docs": [
+            "Token-2022 option mint. Part of the order PDA seed."
+          ],
+          "writable": true
+        },
+        {
+          "name": "order",
+          "docs": [
+            "The resting order being cancelled. Seed embeds owner.key(), so only the",
+            "owner can derive it. Closed here; rent → owner."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  115,
+                  116,
+                  105,
+                  110,
+                  103,
+                  95,
+                  111,
+                  114,
+                  100,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "option_mint"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              },
+              {
+                "kind": "account",
+                "path": "order.nonce",
+                "account": "RestingOrder"
+              }
+            ]
+          }
+        },
+        {
+          "name": "escrow",
+          "docs": [
+            "Per-order escrow PDA (option tokens for asks, USDC for bids)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  115,
+                  116,
+                  105,
+                  110,
+                  103,
+                  95,
+                  111,
+                  114,
+                  100,
+                  101,
+                  114,
+                  95,
+                  101,
+                  115,
+                  99,
+                  114,
+                  111,
+                  119
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "order"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocol_state",
+          "docs": [
+            "Protocol state — signs the escrow-source transfer + close."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner_option_account",
+          "docs": [
+            "Owner's option ATA — destination on the ResaleAsk branch."
+          ],
+          "writable": true
+        },
+        {
+          "name": "owner_usdc_account",
+          "docs": [
+            "Owner's USDC account — destination on the Bid branch."
+          ],
+          "writable": true
+        },
+        {
+          "name": "transfer_hook_program",
+          "docs": [
+            "Transfer hook program."
+          ]
+        },
+        {
+          "name": "extra_account_meta_list",
+          "docs": [
+            "ExtraAccountMetaList for the transfer hook."
+          ]
+        },
+        {
+          "name": "hook_state",
+          "docs": [
+            "HookState for the transfer hook."
+          ]
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "cancel_v2_resale",
       "docs": [
         "V2 secondary listing — seller cancels their own listing.",
@@ -1683,6 +1871,257 @@
       "args": [
         {
           "name": "quantity",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "fill_order",
+      "docs": [
+        "Exchange book — taker fills a named resting order (partial fills first-class).",
+        "Spec: exchange-spec §6.3 (Step 3)."
+      ],
+      "discriminator": [
+        232,
+        122,
+        115,
+        25,
+        199,
+        143,
+        136,
+        162
+      ],
+      "accounts": [
+        {
+          "name": "taker",
+          "docs": [
+            "Taker — pays/receives USDC, delivers/receives option tokens."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "option_mint",
+          "docs": [
+            "Token-2022 option mint. Part of the order PDA seed (binds mint↔order)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "order",
+          "docs": [
+            "The resting order being filled. Seeds bind it to (option_mint, owner,",
+            "nonce); a wrong option_mint fails derivation. Closed on full fill via",
+            "the manual idiom (Anchor `close =` can't be conditional)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  115,
+                  116,
+                  105,
+                  110,
+                  103,
+                  95,
+                  111,
+                  114,
+                  100,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "option_mint"
+              },
+              {
+                "kind": "account",
+                "path": "order.owner",
+                "account": "RestingOrder"
+              },
+              {
+                "kind": "account",
+                "path": "order.nonce",
+                "account": "RestingOrder"
+              }
+            ]
+          }
+        },
+        {
+          "name": "maker",
+          "docs": [
+            "Maker wallet — order owner. Rent destination on close, USDC recipient on",
+            "a resale fill. Pinned to order.owner so no third party redirects rent."
+          ],
+          "writable": true
+        },
+        {
+          "name": "shared_vault",
+          "docs": [
+            "Vault — read for the expiry guard."
+          ]
+        },
+        {
+          "name": "escrow",
+          "docs": [
+            "Per-order escrow PDA (option tokens for asks, USDC for bids)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  115,
+                  116,
+                  105,
+                  110,
+                  103,
+                  95,
+                  111,
+                  114,
+                  100,
+                  101,
+                  114,
+                  95,
+                  101,
+                  115,
+                  99,
+                  114,
+                  111,
+                  119
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "order"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocol_state",
+          "docs": [
+            "Protocol state — fee_bps + escrow signer authority."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasury",
+          "docs": [
+            "Treasury — receives the protocol fee."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "taker_usdc_account",
+          "docs": [
+            "Taker's USDC ATA — source on resale fill, destination on bid fill."
+          ],
+          "writable": true
+        },
+        {
+          "name": "maker_usdc_account",
+          "docs": [
+            "Maker's USDC ATA — destination on resale fill (unused on bid fill, but",
+            "passed for uniform context). Pinned to order.owner + USDC mint."
+          ],
+          "writable": true
+        },
+        {
+          "name": "taker_option_account",
+          "docs": [
+            "Taker's option ATA — destination on resale fill, source on bid fill."
+          ],
+          "writable": true
+        },
+        {
+          "name": "maker_option_account",
+          "docs": [
+            "Maker's option ATA — destination on bid fill (unused on resale fill)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "transfer_hook_program",
+          "docs": [
+            "Transfer hook program."
+          ]
+        },
+        {
+          "name": "extra_account_meta_list",
+          "docs": [
+            "ExtraAccountMetaList for the transfer hook."
+          ]
+        },
+        {
+          "name": "hook_state",
+          "docs": [
+            "HookState for the transfer hook."
+          ]
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "fill_quantity",
           "type": "u64"
         }
       ]
@@ -2898,6 +3337,245 @@
       ]
     },
     {
+      "name": "post_order",
+      "docs": [
+        "Exchange book — post a resting bid or ask (collateral escrowed per-order).",
+        "Spec: exchange-spec §6.3 (Step 2)."
+      ],
+      "discriminator": [
+        241,
+        172,
+        254,
+        140,
+        77,
+        72,
+        246,
+        132
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "docs": [
+            "Order owner — pays for the order PDA + escrow rent, signs the inbound",
+            "collateral transfer."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "shared_vault",
+          "docs": [
+            "The vault the option mint belongs to. Read for expiry / settled guards."
+          ]
+        },
+        {
+          "name": "market",
+          "docs": [
+            "Market — pinned to the vault for sanity."
+          ]
+        },
+        {
+          "name": "vault_mint_record",
+          "docs": [
+            "VaultMint record — pins option_mint to this vault (mint↔vault proof,",
+            "same constraint set as buy_v2_resale.rs:208-215)."
+          ]
+        },
+        {
+          "name": "option_mint",
+          "docs": [
+            "Token-2022 option mint being traded."
+          ],
+          "writable": true
+        },
+        {
+          "name": "order",
+          "docs": [
+            "The RestingOrder PDA — created here. One per (option_mint, owner, nonce)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  115,
+                  116,
+                  105,
+                  110,
+                  103,
+                  95,
+                  111,
+                  114,
+                  100,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "option_mint"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              },
+              {
+                "kind": "arg",
+                "path": "nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "escrow",
+          "docs": [
+            "Per-order escrow PDA, owner = protocol_state. Token-2022 for asks, classic",
+            "USDC for bids — created in-handler via raw CPI."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  115,
+                  116,
+                  105,
+                  110,
+                  103,
+                  95,
+                  111,
+                  114,
+                  100,
+                  101,
+                  114,
+                  95,
+                  101,
+                  115,
+                  99,
+                  114,
+                  111,
+                  119
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "order"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocol_state",
+          "docs": [
+            "Protocol state — escrow's owner authority + canonical USDC mint pin."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner_option_account",
+          "docs": [
+            "Owner's option ATA — source on the ResaleAsk branch (unused for Bid)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "owner_usdc_account",
+          "docs": [
+            "Owner's USDC account — source on the Bid branch (unused for ResaleAsk).",
+            "the owner signature."
+          ],
+          "writable": true
+        },
+        {
+          "name": "usdc_mint",
+          "docs": [
+            "Canonical USDC mint — used to init the Bid escrow; pinned to protocol_state."
+          ]
+        },
+        {
+          "name": "transfer_hook_program",
+          "docs": [
+            "Transfer hook program — pinned to the known opta-transfer-hook ID."
+          ]
+        },
+        {
+          "name": "extra_account_meta_list",
+          "docs": [
+            "ExtraAccountMetaList for the transfer hook."
+          ]
+        },
+        {
+          "name": "hook_state",
+          "docs": [
+            "HookState for the transfer hook."
+          ]
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "kind",
+          "type": {
+            "defined": {
+              "name": "OrderKind"
+            }
+          }
+        },
+        {
+          "name": "price_per_contract",
+          "type": "u64"
+        },
+        {
+          "name": "quantity",
+          "type": "u64"
+        },
+        {
+          "name": "nonce",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "purchase_from_vault",
       "docs": [
         "Purchase option tokens minted from a shared vault."
@@ -3525,6 +4203,116 @@
       "args": []
     },
     {
+      "name": "sweep_expired_orders",
+      "docs": [
+        "Exchange book — permissionless post-expiry sweep of resting orders.",
+        "Returns each order's escrow to its owner and closes the PDAs. Crank",
+        "runs this BEFORE auto_finalize_holders. Spec: exchange-spec §6.3 (Step 5).",
+        "remaining_accounts: 4-tuples (order, escrow, owner_asset_account, owner_wallet)."
+      ],
+      "discriminator": [
+        78,
+        233,
+        74,
+        44,
+        38,
+        191,
+        78,
+        97
+      ],
+      "accounts": [
+        {
+          "name": "caller",
+          "docs": [
+            "Permissionless caller — pays the tx fee."
+          ],
+          "signer": true
+        },
+        {
+          "name": "shared_vault",
+          "docs": [
+            "Vault these orders belong to. Read for the expiry guard."
+          ]
+        },
+        {
+          "name": "market",
+          "docs": [
+            "Market — pinned to the vault."
+          ]
+        },
+        {
+          "name": "vault_mint_record",
+          "docs": [
+            "VaultMint record — pins option_mint to this vault."
+          ]
+        },
+        {
+          "name": "option_mint",
+          "docs": [
+            "The single Token-2022 mint shared by every order in this batch."
+          ],
+          "writable": true
+        },
+        {
+          "name": "protocol_state",
+          "docs": [
+            "Protocol state — signs the escrow-source transfers + closes."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "transfer_hook_program",
+          "docs": [
+            "Transfer hook program — used only by ResaleAsk tuples."
+          ]
+        },
+        {
+          "name": "extra_account_meta_list",
+          "docs": [
+            "ExtraAccountMetaList for the transfer hook."
+          ]
+        },
+        {
+          "name": "hook_state",
+          "docs": [
+            "HookState for the transfer hook."
+          ]
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "withdraw_from_vault",
       "docs": [
         "Withdraw uncommitted collateral from a shared vault."
@@ -3828,6 +4616,19 @@
       ]
     },
     {
+      "name": "RestingOrder",
+      "discriminator": [
+        125,
+        151,
+        65,
+        43,
+        90,
+        207,
+        190,
+        104
+      ]
+    },
+    {
       "name": "SettlementRecord",
       "discriminator": [
         172,
@@ -4022,6 +4823,58 @@
         212,
         10,
         147
+      ]
+    },
+    {
+      "name": "OrderCancelled",
+      "discriminator": [
+        108,
+        56,
+        128,
+        68,
+        168,
+        113,
+        168,
+        239
+      ]
+    },
+    {
+      "name": "OrderFilled",
+      "discriminator": [
+        120,
+        124,
+        109,
+        66,
+        249,
+        116,
+        174,
+        30
+      ]
+    },
+    {
+      "name": "OrderPosted",
+      "discriminator": [
+        238,
+        139,
+        177,
+        68,
+        152,
+        67,
+        157,
+        80
+      ]
+    },
+    {
+      "name": "OrderSwept",
+      "discriminator": [
+        69,
+        108,
+        22,
+        159,
+        29,
+        97,
+        255,
+        27
       ]
     },
     {
@@ -4503,6 +5356,11 @@
       "code": 6053,
       "name": "NotAmericanOption",
       "msg": "Option is not American-style — early exercise is not available"
+    },
+    {
+      "code": 6054,
+      "name": "WriterAsksDisabled",
+      "msg": "Writer asks are not enabled yet — reserved for Phase 3"
     }
   ],
   "types": [
@@ -4907,6 +5765,191 @@
       }
     },
     {
+      "name": "OrderCancelled",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "order",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "option_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "kind",
+            "type": "u8"
+          },
+          {
+            "name": "amount_returned",
+            "type": "u64"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "OrderFilled",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "order",
+            "type": "pubkey"
+          },
+          {
+            "name": "option_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "kind",
+            "type": "u8"
+          },
+          {
+            "name": "maker",
+            "type": "pubkey"
+          },
+          {
+            "name": "taker",
+            "type": "pubkey"
+          },
+          {
+            "name": "price_per_contract",
+            "type": "u64"
+          },
+          {
+            "name": "fill_quantity",
+            "type": "u64"
+          },
+          {
+            "name": "fee",
+            "type": "u64"
+          },
+          {
+            "name": "quantity_remaining",
+            "type": "u64"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "OrderKind",
+      "docs": [
+        "Which side of the book this order sits on, and (for asks) what backs it.",
+        "",
+        "**Variant order is load-bearing.** The Borsh discriminator is a single",
+        "byte encoding the variant index (Bid = 0, ResaleAsk = 1, WriterAsk = 2);",
+        "reordering after this ships would silently retag every existing order.",
+        "Do not reorder — append new variants only."
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Bid"
+          },
+          {
+            "name": "ResaleAsk"
+          },
+          {
+            "name": "WriterAsk"
+          }
+        ]
+      }
+    },
+    {
+      "name": "OrderPosted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "order",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "option_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "kind",
+            "type": "u8"
+          },
+          {
+            "name": "price_per_contract",
+            "type": "u64"
+          },
+          {
+            "name": "quantity",
+            "type": "u64"
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "OrderSwept",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "order",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "option_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "kind",
+            "type": "u8"
+          },
+          {
+            "name": "amount_returned",
+            "type": "u64"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
       "name": "PremiumClaimed",
       "type": {
         "kind": "struct",
@@ -5108,6 +6151,91 @@
           {
             "name": "seller",
             "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RestingOrder",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "docs": [
+              "Wallet that posted the order. Receives proceeds + rent on close, and",
+              "the returned escrow on cancel/sweep."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "option_mint",
+            "docs": [
+              "The Token-2022 option mint this order trades. Part of the PDA seed."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "vault",
+            "docs": [
+              "The SharedVault the option mint was minted from. Stored for market",
+              "context + crank enumeration (mirrors VaultResaleListing.vault)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "kind",
+            "docs": [
+              "Bid / ResaleAsk / WriterAsk. See `OrderKind`."
+            ],
+            "type": {
+              "defined": {
+                "name": "OrderKind"
+              }
+            }
+          },
+          {
+            "name": "price_per_contract",
+            "docs": [
+              "USDC per contract (6 decimals), set at post time, immutable."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "quantity_remaining",
+            "docs": [
+              "Contracts still resting (0 decimals). Decremented on each partial fill;",
+              "the order auto-closes when this hits zero."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "quantity_initial",
+            "docs": [
+              "Contracts at post time. Never mutated — kept for fill-ratio analytics."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "created_at",
+            "docs": [
+              "Unix timestamp when the order was posted."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "nonce",
+            "docs": [
+              "Client-supplied uniqueness nonce. Part of the PDA seed."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump seed."
+            ],
+            "type": "u8"
           }
         ]
       }

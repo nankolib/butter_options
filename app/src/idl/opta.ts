@@ -1363,6 +1363,173 @@ export type Opta = {
       ]
     },
     {
+      "name": "createSeries",
+      "docs": [
+        "Exchange Phase 2 Pass A — create the canonical per-spec series mint.",
+        "Permissionless, once-per-spec (series-record `init` enforces it). American",
+        "only (D12). Inert until Pass B mints against it. Spec: §7.3.1."
+      ],
+      "discriminator": [
+        181,
+        9,
+        52,
+        120,
+        197,
+        221,
+        42,
+        142
+      ],
+      "accounts": [
+        {
+          "name": "caller",
+          "docs": [
+            "Permissionless caller — pays the mint + record + hook-state rent."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "market",
+          "docs": [
+            "The OptionsMarket this series belongs to. Must exist; provides",
+            "asset_name / asset_class for spec-derived metadata."
+          ]
+        },
+        {
+          "name": "protocolState",
+          "docs": [
+            "Protocol state — mint authority + permanent delegate for Token-2022."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "optionMint",
+          "docs": [
+            "The canonical series mint — created via CPI. PDA seeds are SPEC-ONLY",
+            "(no writer, no timestamp). Idempotency comes from the series record",
+            "`init` below (a second create_series reverts \"already in use\")."
+          ],
+          "writable": true
+        },
+        {
+          "name": "vaultMintRecord",
+          "docs": [
+            "The series record — `init` enforces once-per-spec. Reuses the VaultMint",
+            "shape so the Phase 1 book's mint↔vault proof needs zero changes (D5);",
+            "per-writer fields are sentineled (see handler)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116,
+                  95,
+                  109,
+                  105,
+                  110,
+                  116,
+                  95,
+                  114,
+                  101,
+                  99,
+                  111,
+                  114,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "optionMint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "transferHookProgram",
+          "docs": [
+            "Transfer hook program — pinned to the known opta-transfer-hook ID."
+          ]
+        },
+        {
+          "name": "extraAccountMetaList",
+          "docs": [
+            "ExtraAccountMetaList PDA — created by the hook program during CPI."
+          ],
+          "writable": true
+        },
+        {
+          "name": "hookState",
+          "docs": [
+            "HookState PDA — created by the hook program during CPI."
+          ],
+          "writable": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "token2022Program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "strike",
+          "type": "u64"
+        },
+        {
+          "name": "expiry",
+          "type": "i64"
+        },
+        {
+          "name": "optionType",
+          "type": {
+            "defined": {
+              "name": "optionType"
+            }
+          }
+        },
+        {
+          "name": "exerciseStyle",
+          "type": {
+            "defined": {
+              "name": "exerciseStyle"
+            }
+          }
+        }
+      ]
+    },
+    {
       "name": "createSharedVault",
       "docs": [
         "Create a new shared collateral vault for a specific option specification."
@@ -2849,6 +3016,68 @@ export type Opta = {
         209,
         61,
         34
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "docs": [
+            "Admin -- must match protocol_state.admin (CRIT-3 deployer pubkey).",
+            "Pays the rent delta for any grown vaults."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocolState",
+          "docs": [
+            "Used only to assert admin == protocol_state.admin."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "migrateSharedVaultExchangeFields",
+      "docs": [
+        "Phase 2 Pass A — one-time SharedVault schema migration adding the trailing",
+        "`spread_bps` (u16) + `voided` (bool) fields. Admin-only, batched via",
+        "remaining_accounts (recommended batch: 20). Idempotent: vaults already at",
+        "the new 260-byte size are skipped. Zero-fill on the new 3 bytes",
+        "deserializes as spread_bps=0 / voided=false. Admin pays the rent delta."
+      ],
+      "discriminator": [
+        97,
+        21,
+        74,
+        35,
+        52,
+        228,
+        58,
+        9
       ],
       "accounts": [
         {
@@ -4910,6 +5139,19 @@ export type Opta = {
       ]
     },
     {
+      "name": "seriesCreated",
+      "discriminator": [
+        2,
+        164,
+        54,
+        38,
+        24,
+        181,
+        233,
+        180
+      ]
+    },
+    {
       "name": "vaultBurnUnsold",
       "discriminator": [
         157,
@@ -5367,6 +5609,11 @@ export type Opta = {
       "code": 6054,
       "name": "writerAsksDisabled",
       "msg": "Writer asks are not enabled yet — reserved for Phase 3"
+    },
+    {
+      "code": 6055,
+      "name": "seriesMustBeAmerican",
+      "msg": "Series mints are American-only in Phase 2 (D12)"
     }
   ],
   "types": [
@@ -6247,6 +6494,46 @@ export type Opta = {
       }
     },
     {
+      "name": "seriesCreated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "optionMint",
+            "type": "pubkey"
+          },
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "strike",
+            "type": "u64"
+          },
+          {
+            "name": "expiry",
+            "type": "i64"
+          },
+          {
+            "name": "optionType",
+            "type": "u8"
+          },
+          {
+            "name": "exerciseStyle",
+            "type": "u8"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
       "name": "settlementRecord",
       "type": {
         "kind": "struct",
@@ -6533,6 +6820,31 @@ export type Opta = {
           {
             "name": "earlyExercisePayout",
             "type": "u64"
+          },
+          {
+            "name": "spreadBps",
+            "docs": [
+              "Phase 2 Pass A (exchange) — peg spread + dead-feed void flag.",
+              "",
+              "`spread_bps`: flat spread applied over the BS-2002 model quote on",
+              "`fill_vault_peg` (Pass B), in basis points — extra LP yield. Default 0.",
+              "`voided`: set true ONCE by `reclaim_unsettled` (Pass D) when a vault is",
+              "reclaimed after the dead-feed grace window. A voided vault pays holders",
+              "NOTHING and writers exactly pro-rata; **no path may treat `voided` as",
+              "`is_settled`** (spec v1.1 global invariant #6).",
+              "",
+              "MUST be the last two fields. Pre-Pass-A vaults were serialized without",
+              "them (3 bytes shorter than the new INIT_SPACE). The admin-only",
+              "`migrate_shared_vault_exchange_fields` grows them and zero-fills the",
+              "trailing bytes — which deserialize as spread_bps = 0 / voided = false,",
+              "the correct defaults. Same append+migrate discipline as carry_rate_bps",
+              "(Stage A), exercise_style (Stage C Pass 1), and exercise tracking (Stage F)."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "voided",
+            "type": "bool"
           }
         ]
       }

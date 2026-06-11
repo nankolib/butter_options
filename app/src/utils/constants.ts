@@ -86,6 +86,28 @@ export const VAULT_RESALE_ESCROW_SEED = "vault_resale_escrow";
 export const RESTING_ORDER_SEED = "resting_order";
 export const RESTING_ORDER_ESCROW_SEED = "resting_order_escrow";
 
+// === Exchange Series mint PDA layout (Phase 2 Pass A — D5) ===
+// The canonical per-spec series mint reuses VAULT_OPTION_MINT_SEED but with a
+// SPEC-ONLY seed layout (no writer, no timestamp) — distinct from the legacy
+// per-event mint. MUST match `create_series.rs` (CreateSeries.option_mint seeds):
+//
+//   series mint PDA = [
+//     VAULT_OPTION_MINT_SEED,            // "vault_option_mint"
+//     market,                            // 32 bytes
+//     strike.toBuffer("le", 8),          // u64 LE
+//     expiry.toBuffer("le", 8),          // i64 LE
+//     [optionType as u8],                // Call=0, Put=1
+//     [exerciseStyle as u8],             // European=0, American=1 (Phase 2 = American only)
+//   ]
+//
+// Legacy per-event mint (mint_from_vault) is the SAME prefix but
+// [VAULT_OPTION_MINT_SEED, vault, writer, created_at_le] — do not conflate.
+// The series record stays at [VAULT_MINT_RECORD_SEED, option_mint] (unchanged).
+export const SERIES_OPTION_TYPE_CALL = 0;
+export const SERIES_OPTION_TYPE_PUT = 1;
+export const SERIES_EXERCISE_STYLE_EUROPEAN = 0;
+export const SERIES_EXERCISE_STYLE_AMERICAN = 1;
+
 // === Phase 2 Stage B — VolOracle seed (per-feed ring buffer) ===
 // MUST match `VOL_ORACLE_SEED` in programs/opta/src/state/vol_oracle.rs.
 // PDA derivation: [VOL_ORACLE_SEED, feed_id] -> oracle PDA.

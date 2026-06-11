@@ -309,6 +309,19 @@ pub mod opta {
         instructions::sweep_expired_orders::handle_sweep_expired_orders(ctx)
     }
 
+    /// Exchange Phase 2 Pass A — create the canonical per-spec series mint.
+    /// Permissionless, once-per-spec (series-record `init` enforces it). American
+    /// only (D12). Inert until Pass B mints against it. Spec: §7.3.1.
+    pub fn create_series(
+        ctx: Context<CreateSeries>,
+        strike: u64,
+        expiry: i64,
+        option_type: OptionType,
+        exercise_style: ExerciseStyle,
+    ) -> Result<()> {
+        instructions::create_series::handle_create_series(ctx, strike, expiry, option_type, exercise_style)
+    }
+
     /// One-time SharedVault schema migration that adds the trailing
     /// carry_rate_bps field to pre-Stage-A vaults. Admin-only. Caller passes
     /// vault accounts to migrate via remaining_accounts (recommended batch:
@@ -342,6 +355,17 @@ pub mod opta {
         ctx: Context<'_, '_, '_, 'info, MigrateSharedVaultExerciseTracking<'info>>,
     ) -> Result<()> {
         instructions::migrate_shared_vault_exercise_tracking::handle_migrate_shared_vault_exercise_tracking(ctx)
+    }
+
+    /// Phase 2 Pass A — one-time SharedVault schema migration adding the trailing
+    /// `spread_bps` (u16) + `voided` (bool) fields. Admin-only, batched via
+    /// remaining_accounts (recommended batch: 20). Idempotent: vaults already at
+    /// the new 260-byte size are skipped. Zero-fill on the new 3 bytes
+    /// deserializes as spread_bps=0 / voided=false. Admin pays the rent delta.
+    pub fn migrate_shared_vault_exchange_fields<'info>(
+        ctx: Context<'_, '_, '_, 'info, MigrateSharedVaultExchangeFields<'info>>,
+    ) -> Result<()> {
+        instructions::migrate_shared_vault_exchange_fields::handle_migrate_shared_vault_exchange_fields(ctx)
     }
 
     // =========================================================================

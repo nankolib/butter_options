@@ -280,3 +280,23 @@ pub struct OrderSwept {
     pub amount_returned: u64,
     pub ts: i64,
 }
+
+// =============================================================================
+// Exchange series events (Phase 2 Pass A — canonical per-spec series mint)
+// =============================================================================
+//
+// `option_type` / `exercise_style` are emitted as u8 (house convention for
+// enum fields). `vault` is the DERIVED American vault PDA the series belongs to
+// (the vault account need not exist at create_series time).
+
+#[event]
+pub struct SeriesCreated {
+    pub option_mint: Pubkey,
+    pub market: Pubkey,
+    pub vault: Pubkey,
+    pub strike: u64,
+    pub expiry: i64,
+    pub option_type: u8,
+    pub exercise_style: u8,
+    pub ts: i64,
+}

@@ -35,12 +35,17 @@ pub mod fill_order;
 pub mod cancel_order;
 pub mod sweep_expired_orders;
 
+// Exchange series (Phase 2 Pass A — canonical per-spec series mint)
+pub mod create_series;
+
 // SharedVault carry_rate_bps schema migration (Stage A)
 pub mod migrate_shared_vault_carry_rate;
 // SharedVault exercise_style schema migration (Stage C Pass 1)
 pub mod migrate_shared_vault_exercise_style;
 // SharedVault early-exercise tracking schema migration (Stage F)
 pub mod migrate_shared_vault_exercise_tracking;
+// SharedVault exchange-fields (spread_bps + voided) schema migration (Phase 2 Pass A)
+pub mod migrate_shared_vault_exchange_fields;
 
 // Phase 2 Stage B -- realized-vol oracle
 pub mod initialize_vol_oracle;
@@ -103,10 +108,14 @@ pub use fill_order::*;
 pub use cancel_order::*;
 pub use sweep_expired_orders::*;
 
+// Exchange series (Phase 2 Pass A — canonical per-spec series mint)
+pub use create_series::*;
+
 // SharedVault carry_rate_bps schema migration
 pub use migrate_shared_vault_carry_rate::*;
 pub use migrate_shared_vault_exercise_style::*;
 pub use migrate_shared_vault_exercise_tracking::*;
+pub use migrate_shared_vault_exchange_fields::*;
 
 // Phase 2 Stage B -- realized-vol oracle
 pub use initialize_vol_oracle::*;

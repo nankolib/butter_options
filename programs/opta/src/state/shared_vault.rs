@@ -195,6 +195,24 @@ pub struct SharedVault {
     /// carry_rate_bps (Stage A) and exercise_style (Stage C Pass 1).
     pub exercised_options: u64,
     pub early_exercise_payout: u64,
+
+    /// Phase 2 Pass A (exchange) — peg spread + dead-feed void flag.
+    ///
+    /// `spread_bps`: flat spread applied over the BS-2002 model quote on
+    /// `fill_vault_peg` (Pass B), in basis points — extra LP yield. Default 0.
+    /// `voided`: set true ONCE by `reclaim_unsettled` (Pass D) when a vault is
+    /// reclaimed after the dead-feed grace window. A voided vault pays holders
+    /// NOTHING and writers exactly pro-rata; **no path may treat `voided` as
+    /// `is_settled`** (spec v1.1 global invariant #6).
+    ///
+    /// MUST be the last two fields. Pre-Pass-A vaults were serialized without
+    /// them (3 bytes shorter than the new INIT_SPACE). The admin-only
+    /// `migrate_shared_vault_exchange_fields` grows them and zero-fills the
+    /// trailing bytes — which deserialize as spread_bps = 0 / voided = false,
+    /// the correct defaults. Same append+migrate discipline as carry_rate_bps
+    /// (Stage A), exercise_style (Stage C Pass 1), and exercise tracking (Stage F).
+    pub spread_bps: u16,
+    pub voided: bool,
 }
 
 /// PDA seed prefix for SharedVault accounts.
@@ -360,7 +378,7 @@ mod tests {
     }
 
     #[test]
-    fn shared_vault_init_space_is_249() {
+    fn shared_vault_init_space_is_252() {
         // Locks the byte total against silent drift. If a future field
         // change shifts this, the migration script's hardcoded constants
         // and the matching `tests/realloc-shared-vault-exercise-style.ts` /
@@ -368,8 +386,9 @@ mod tests {
         // lockstep.
         //
         // 233 (pre-Stage-F) + 16 (Stage F: exercised_options u64 +
-        // early_exercise_payout u64) = 249. On-disk account size is
-        // 8 (discriminator) + 249 = 257.
-        assert_eq!(SharedVault::INIT_SPACE, 249);
+        // early_exercise_payout u64) = 249; + 3 (Pass A: spread_bps u16 +
+        // voided bool) = 252. On-disk account size is 8 (discriminator)
+        // + 252 = 260.
+        assert_eq!(SharedVault::INIT_SPACE, 252);
     }
 }

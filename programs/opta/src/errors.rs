@@ -231,4 +231,12 @@ pub enum OptaError {
     // personal collateral). post_order rejects it until then. Error code 6054.
     #[msg("Writer asks are not enabled yet — reserved for Phase 3")]
     WriterAsksDisabled,
+
+    // =========================================================================
+    // Exchange series errors (Phase 2 Pass A — canonical series mint)
+    // =========================================================================
+    // D12 — Phase 2 series mints are American-only; create_series rejects
+    // European. European series ride the European arc. Error code 6055.
+    #[msg("Series mints are American-only in Phase 2 (D12)")]
+    SeriesMustBeAmerican,
 }

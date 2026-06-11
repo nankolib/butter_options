@@ -1329,6 +1329,15 @@ describe("shared-vaults", () => {
         "Total collateral should equal the deposited amount",
       );
 
+      // Confirmation-wait (flake fix): writer_position is a freshly-init'd
+      // account from the deposit tx; under full-suite validator load its
+      // indexing can lag, so the mint's preflight simulation races on it
+      // (AccountNotInitialized / 3012). Poll until it's visible before minting.
+      for (let i = 0; i < 40; i++) {
+        if ((await connection.getAccountInfo(putWriterPosPda, "confirmed")) !== null) break;
+        await new Promise((r) => setTimeout(r, 200));
+      }
+
       // Step 3: Mint exactly QTY contracts. Under the new 1× rule, this
       // requires QTY × strike = TIGHT_DEPOSIT, exactly what we deposited.
       // Under the old 2× rule, this would have required 2 × QTY × strike
@@ -1367,7 +1376,23 @@ describe("shared-vaults", () => {
         .signers([writerC])
         .instruction();
       tx.add(ix);
-      await provider.sendAndConfirm(tx, [writerC]);
+      // Retry the mint on the transient preflight "not initialized" race
+      // (belt-and-suspenders with the poll above). The failed attempt never
+      // lands (preflight reject), so re-sending carries no double-execution
+      // risk; sendAndConfirm refreshes the blockhash each call.
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await provider.sendAndConfirm(tx, [writerC]);
+          break;
+        } catch (err: any) {
+          const s = String(err);
+          if (attempt < 5 && (s.includes("AccountNotInitialized") || s.includes("3012"))) {
+            await new Promise((r) => setTimeout(r, 300));
+            continue;
+          }
+          throw err;
+        }
+      }
 
       // Verify: tight deposit + tight mint succeeded.
       const pos = await program.account.writerPosition.fetch(putWriterPosPda);

@@ -42,6 +42,11 @@ pub fn handle_post_order(
 
     // ---- 1. Common pre-flight checks --------------------------------------
     require!(kind != OrderKind::WriterAsk, OptaError::WriterAsksDisabled);
+    // Phase 2 Pass B: the vault peg is VIRTUAL (priced + minted on the fly by
+    // fill_vault_peg) — it is never a resting order. Refuse it at the only
+    // client-reachable entry point. Reuses WriterAsksDisabled (no new error
+    // code) since both kinds are simply non-postable through the book.
+    require!(kind != OrderKind::VaultPeg, OptaError::WriterAsksDisabled);
     require!(quantity > 0, OptaError::InvalidContractSize);
     require!(price_per_contract > 0, OptaError::InvalidContractSize);
     require!(!vault.is_settled, OptaError::VaultAlreadySettled);
@@ -174,6 +179,7 @@ pub fn handle_post_order(
             }
         }
         OrderKind::WriterAsk => unreachable!("rejected above"),
+        OrderKind::VaultPeg => unreachable!("rejected above"),
     }
 
     // ---- 3. Populate the RestingOrder PDA ---------------------------------

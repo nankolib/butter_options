@@ -28,9 +28,9 @@ use anchor_lang::prelude::*;
 /// Which side of the book this order sits on, and (for asks) what backs it.
 ///
 /// **Variant order is load-bearing.** The Borsh discriminator is a single
-/// byte encoding the variant index (Bid = 0, ResaleAsk = 1, WriterAsk = 2);
-/// reordering after this ships would silently retag every existing order.
-/// Do not reorder — append new variants only.
+/// byte encoding the variant index (Bid = 0, ResaleAsk = 1, WriterAsk = 2,
+/// VaultPeg = 3); reordering after this ships would silently retag every
+/// existing order. Do not reorder — append new variants only.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace, Debug)]
 pub enum OrderKind {
     /// A USDC-escrowed limit bid. Anyone can post; filled by a holder
@@ -42,17 +42,24 @@ pub enum OrderKind {
     /// A writer's primary ask backed by personal collateral (mint-on-fill).
     /// Reserved for Phase 3 — rejected with `WriterAsksDisabled` until then.
     WriterAsk,
+    /// The standing model-priced vault peg (Phase 2 Pass B). NOT a resting
+    /// order — `post_order` refuses it and no `RestingOrder` is ever created
+    /// with this kind. It exists ONLY as the `OrderFilled.kind` tape value so
+    /// `fill_vault_peg` emits to the same trade tape as book fills (spec §7.2).
+    /// Every book handler that matches on a stored `order.kind` rejects it.
+    VaultPeg,
 }
 
 impl OrderKind {
-    /// Stable u8 encoding for events (Bid = 0, ResaleAsk = 1, WriterAsk = 2),
-    /// matching the Borsh discriminator and the house convention of emitting
-    /// enum fields as u8 (see events.rs / VaultCreated.vault_type).
+    /// Stable u8 encoding for events (Bid = 0, ResaleAsk = 1, WriterAsk = 2,
+    /// VaultPeg = 3), matching the Borsh discriminator and the house convention
+    /// of emitting enum fields as u8 (see events.rs / VaultCreated.vault_type).
     pub fn as_u8(self) -> u8 {
         match self {
             OrderKind::Bid => 0,
             OrderKind::ResaleAsk => 1,
             OrderKind::WriterAsk => 2,
+            OrderKind::VaultPeg => 3,
         }
     }
 }
@@ -100,3 +107,38 @@ pub const RESTING_ORDER_SEED: &[u8] = b"resting_order";
 /// Seed prefix for the per-order escrow PDA (owned by protocol_state):
 /// ["resting_order_escrow", resting_order].
 pub const RESTING_ORDER_ESCROW_SEED: &[u8] = b"resting_order_escrow";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anchor_lang::AnchorSerialize;
+
+    // CRITICAL: variant order is load-bearing. The Phase 2 Pass B VaultPeg
+    // append MUST leave Bid/ResaleAsk/WriterAsk on their original
+    // discriminators — any reorder silently retags every resting order on
+    // devnet. This is the EUR-byte-identical proof for the enum append.
+    #[test]
+    fn order_kind_discriminators_are_stable() {
+        let cases = [
+            (OrderKind::Bid, 0u8),
+            (OrderKind::ResaleAsk, 1u8),
+            (OrderKind::WriterAsk, 2u8),
+            (OrderKind::VaultPeg, 3u8),
+        ];
+        for (kind, idx) in cases {
+            // as_u8() matches the index...
+            assert_eq!(kind.as_u8(), idx, "{:?} as_u8 must be {}", kind, idx);
+            // ...and the Borsh discriminator is the same single byte.
+            let mut buf = vec![];
+            kind.serialize(&mut buf).unwrap();
+            assert_eq!(buf, vec![idx], "{:?} must Borsh-encode to [{}]", kind, idx);
+        }
+    }
+
+    #[test]
+    fn vault_peg_is_the_appended_variant() {
+        // Pass B appended VaultPeg = 3; if a future edit inserts a variant
+        // before it, this fires.
+        assert_eq!(OrderKind::VaultPeg as u8, 3);
+    }
+}

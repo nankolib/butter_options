@@ -110,6 +110,9 @@ pub fn handle_cancel_order(ctx: Context<CancelOrder>) -> Result<()> {
             )?;
         }
         OrderKind::WriterAsk => return err!(OptaError::WriterAsksDisabled),
+        // VaultPeg is never a resting order (post_order rejects it) — no stored
+        // order can carry this kind, so this branch is structurally unreachable.
+        OrderKind::VaultPeg => unreachable!("VaultPeg is never a resting order"),
     }
 
     emit!(OrderCancelled {

@@ -322,6 +322,20 @@ pub mod opta {
         instructions::create_series::handle_create_series(ctx, strike, expiry, option_type, exercise_style)
     }
 
+    /// Exchange Phase 2 Pass B — fill the standing vault peg: price an American
+    /// series at fill time (BS-2002 + spread_bps via the shared price_american
+    /// helper), take USDC (pool premium + fee), and mint `quantity` contracts
+    /// to the taker from pooled vault collateral. `max_premium` is the taker's
+    /// fee-inclusive slippage ceiling. Dark behind AMERICAN_ENABLED until the
+    /// Stage-I flip. Spec: §7.3.2 (D3/D5/D6/D7).
+    pub fn fill_vault_peg(
+        ctx: Context<FillVaultPeg>,
+        quantity: u64,
+        max_premium: u64,
+    ) -> Result<()> {
+        instructions::fill_vault_peg::handle_fill_vault_peg(ctx, quantity, max_premium)
+    }
+
     /// One-time SharedVault schema migration that adds the trailing
     /// carry_rate_bps field to pre-Stage-A vaults. Admin-only. Caller passes
     /// vault accounts to migrate via remaining_accounts (recommended batch:

@@ -38,6 +38,9 @@ pub mod sweep_expired_orders;
 // Exchange series (Phase 2 Pass A — canonical per-spec series mint)
 pub mod create_series;
 
+// Exchange peg (Phase 2 Pass B — mint-on-fill vault peg)
+pub mod fill_vault_peg;
+
 // SharedVault carry_rate_bps schema migration (Stage A)
 pub mod migrate_shared_vault_carry_rate;
 // SharedVault exercise_style schema migration (Stage C Pass 1)
@@ -110,6 +113,9 @@ pub use sweep_expired_orders::*;
 
 // Exchange series (Phase 2 Pass A — canonical per-spec series mint)
 pub use create_series::*;
+
+// Exchange peg (Phase 2 Pass B — mint-on-fill vault peg)
+pub use fill_vault_peg::*;
 
 // SharedVault carry_rate_bps schema migration
 pub use migrate_shared_vault_carry_rate::*;

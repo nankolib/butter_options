@@ -189,6 +189,9 @@ pub fn handle_sweep_expired_orders<'info>(
             // WriterAsk can never be posted (post_order rejects it), so an order
             // of this kind cannot exist — a tuple carrying one is a bug.
             OrderKind::WriterAsk => return err!(OptaError::WriterAsksDisabled),
+            // VaultPeg is virtual (fill_vault_peg) and never a resting order —
+            // structurally unreachable for the same reason.
+            OrderKind::VaultPeg => unreachable!("VaultPeg is never a resting order"),
         }
 
         // 7. Manual close of the order PDA; rent → owner_wallet. Same idiom as

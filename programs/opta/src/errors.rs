@@ -239,4 +239,13 @@ pub enum OptaError {
     // European. European series ride the European arc. Error code 6055.
     #[msg("Series mints are American-only in Phase 2 (D12)")]
     SeriesMustBeAmerican,
+
+    // Phase 2 Pass B — vault peg fill (fill_vault_peg).
+    // A vault reclaimed via the dead-feed hatch (reclaim_unsettled, Pass D)
+    // sets `voided = true`; it pays holders nothing and writers pro-rata. No
+    // fill path may treat `voided` as tradeable (spec v1.1 invariant #6).
+    // fill_vault_peg gates on it forward-safely (nothing sets voided until
+    // Pass D, but the block ships now). Error code 6056.
+    #[msg("Vault has been voided via the dead-feed hatch — no peg fills")]
+    VaultVoided,
 }

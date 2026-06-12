@@ -173,6 +173,9 @@ pub fn handle_fill_order(ctx: Context<FillOrder>, fill_quantity: u64) -> Result<
             }
         }
         OrderKind::WriterAsk => return err!(OptaError::WriterAsksDisabled),
+        // VaultPeg is never a resting order (post_order rejects it) — no stored
+        // order can carry this kind, so this branch is structurally unreachable.
+        OrderKind::VaultPeg => unreachable!("VaultPeg is never a resting order"),
     }
 
     // ---- 4. Decrement + conditional close ---------------------------------
@@ -224,6 +227,7 @@ pub fn handle_fill_order(ctx: Context<FillOrder>, fill_quantity: u64) -> Result<
                 )?;
             }
             OrderKind::WriterAsk => unreachable!("rejected above"),
+            OrderKind::VaultPeg => unreachable!("VaultPeg is never a resting order"),
         }
 
         // b) Close the order PDA manually; rent → maker. Same idiom as

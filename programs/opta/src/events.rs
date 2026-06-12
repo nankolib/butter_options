@@ -226,12 +226,21 @@ pub struct VaultListingsAutoCancelled {
 // Exchange book events (Phase 1 — RestingOrder limit book)
 // =============================================================================
 //
-// `kind` encodes OrderKind as a u8 (Bid = 0, ResaleAsk = 1, WriterAsk = 2),
-// matching the house convention of emitting enum fields as u8 (see
-// VaultCreated.vault_type / option_type). `OrderFilled` is the trade tape —
+// `kind` encodes OrderKind as a u8 (Bid = 0, ResaleAsk = 1, WriterAsk = 2,
+// VaultPeg = 3), matching the house convention of emitting enum fields as u8
+// (see VaultCreated.vault_type / option_type). `OrderFilled` is the trade tape —
 // the future indexer builds candles from it. `amount_returned` on Cancel /
 // Swept is in the escrowed asset's units: contracts for asks, micro-USDC for
 // bids.
+//
+// VaultPeg fills (kind = 3, emitted by fill_vault_peg — Phase 2 Pass B) reuse
+// this tape with a pegless convention (no RestingOrder exists):
+//   - `order`  = the series VaultMint record PDA (the standing ask itself).
+//   - `maker`  = the SharedVault PDA. NOTE: a PDA, not a wallet — indexers must
+//                not assume `maker` is an owner key on VaultPeg rows.
+//   - `quantity_remaining` = post-fill peg DEPTH = floor(free_collateral / cpt),
+//                the live capacity in contracts (not a per-order remainder).
+//   - `price_per_contract` = the spread-applied model premium charged.
 
 #[event]
 pub struct OrderPosted {

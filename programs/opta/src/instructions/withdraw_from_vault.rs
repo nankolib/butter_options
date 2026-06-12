@@ -18,6 +18,10 @@ use crate::errors::OptaError;
 use crate::events::VaultWithdrawn;
 use crate::state::*;
 use crate::utils::collateral::required_collateral_per_contract;
+// Phase 2 Pass C (a): single-source-of-truth vault-level free-collateral helper
+// (defined in fill_vault_peg). Dual gate so an LP can't withdraw peg-committed
+// collateral.
+use crate::instructions::fill_vault_peg::vault_free_collateral;
 
 pub fn handle_withdraw_from_vault(
     ctx: Context<WithdrawFromVault>,
@@ -78,6 +82,39 @@ pub fn handle_withdraw_from_vault(
         .ok_or(OptaError::MathOverflow)?;
 
     require!(withdrawal_amount <= writer_free, OptaError::CollateralCommitted);
+
+    // =========================================================================
+    // Phase 2 Pass C (a fix) — vault-level free-collateral gate, DUAL with the
+    // per-writer gate above.
+    //
+    // The per-writer gate only stops an LP from withdrawing ANOTHER LP's stake;
+    // it is BLIND to peg commitment (fill_vault_peg bumps
+    // vault.total_options_minted, not any writer's options_minted). Without this,
+    // a passive LP in a peg-backed vault could withdraw collateral the peg has
+    // already sold contracts against, stranding holders at settlement. Both
+    // gates must hold.
+    //
+    // American-only — EUR vaults can't have peg fills, so this is a no-op there
+    // and the EUR arm stays byte-identical (no computation added). Reuses Pass
+    // B's vault_free_collateral (single source of truth).
+    //
+    // First-exit asymmetry among LPs (an early withdrawer exits cleanly; a late
+    // LP ends up backing the peg's live contracts until settlement) is inherent
+    // to the pooled D6/D7 model already locked — accepted, not engineered around.
+    // =========================================================================
+    if vault.exercise_style == ExerciseStyle::American {
+        let vault_free = vault_free_collateral(
+            vault.total_collateral,
+            vault.early_exercise_payout,
+            vault.total_options_minted,
+            vault.exercised_options,
+            collateral_per_contract,
+        )?;
+        require!(
+            (withdrawal_amount as u128) <= vault_free,
+            OptaError::CollateralCommitted
+        );
+    }
 
     // Transfer USDC from vault to writer (signed by shared_vault PDA)
     let vault_key = ctx.accounts.shared_vault.key();

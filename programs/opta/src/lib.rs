@@ -336,6 +336,32 @@ pub mod opta {
         instructions::fill_vault_peg::handle_fill_vault_peg(ctx, quantity, max_premium)
     }
 
+    /// Exchange Phase 2 Pass C — atomic write merge (D9). Fuses create_shared_vault
+    /// + deposit_to_vault into ONE tx via init_if_needed: the first caller for a
+    /// spec creates + deposits, a subsequent caller just deposits. The heavy mint
+    /// left the write path (D8/D9), so this carries no Token-2022 mint + no
+    /// BS-2002. Kills the partial-flow stranded-collateral hazard structurally.
+    /// Additive — create_shared_vault + deposit_to_vault stay live. EUR
+    /// byte-identical; American keeps create_shared_vault's AMERICAN_ENABLED gate.
+    /// Spec: §7.3.3 / §7.6.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_and_deposit(
+        ctx: Context<CreateAndDeposit>,
+        strike_price: u64,
+        expiry: i64,
+        option_type: OptionType,
+        vault_type: VaultType,
+        collateral_mint: Pubkey,
+        carry_rate_bps: i32,
+        exercise_style: ExerciseStyle,
+        amount: u64,
+    ) -> Result<()> {
+        instructions::create_and_deposit::handle_create_and_deposit(
+            ctx, strike_price, expiry, option_type, vault_type, collateral_mint,
+            carry_rate_bps, exercise_style, amount,
+        )
+    }
+
     /// One-time SharedVault schema migration that adds the trailing
     /// carry_rate_bps field to pre-Stage-A vaults. Admin-only. Caller passes
     /// vault accounts to migrate via remaining_accounts (recommended batch:

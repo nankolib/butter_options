@@ -35,6 +35,9 @@ const MONTHS: [&str; 12] = [
 use crate::utils::time::timestamp_to_month_day;
 use crate::utils::collateral::required_collateral_per_contract;
 use crate::utils::american_pricing::quote::{price_american, AmericanQuoteInputs};
+// Phase 2 Pass C (a2): single-source-of-truth vault-level free-collateral helper
+// (defined in fill_vault_peg). Used to close the peg↔direct-mint over-commit race.
+use crate::instructions::fill_vault_peg::vault_free_collateral;
 
 pub fn handle_mint_from_vault(
     ctx: Context<MintFromVault>,
@@ -94,6 +97,35 @@ pub fn handle_mint_from_vault(
         total_collateral_needed <= available,
         OptaError::InsufficientVaultCollateral
     );
+
+    // =========================================================================
+    // Phase 2 Pass C (a2 fix) — vault-level free-collateral gate.
+    //
+    // The per-writer check above is BLIND to peg commitment: fill_vault_peg
+    // (Pass B) bumps vault.total_options_minted at the VAULT level without
+    // touching any writer's options_minted. So the reverse-order race — peg
+    // fills, THEN a writer direct-mints against their full per-writer share —
+    // would over-commit the pool. This vault-level gate (free ≥ qty × cpt,
+    // counting the new mint) closes it.
+    //
+    // American-only. EUR vaults can't have peg fills (total_options_minted ==
+    // Σ writer.options_minted there), so this is provably a no-op for European
+    // — and we don't even compute it on that arm, keeping EUR byte-identical.
+    // Reuses Pass B's vault_free_collateral (single source of truth).
+    // =========================================================================
+    if vault.exercise_style == ExerciseStyle::American {
+        let vault_free = vault_free_collateral(
+            vault.total_collateral,
+            vault.early_exercise_payout,
+            vault.total_options_minted,
+            vault.exercised_options,
+            collateral_per_contract,
+        )?;
+        let needed = (quantity as u128)
+            .checked_mul(collateral_per_contract as u128)
+            .ok_or(OptaError::MathOverflow)?;
+        require!(vault_free >= needed, OptaError::InsufficientVaultCollateral);
+    }
 
     // =========================================================================
     // Build the human-readable token name (IDENTICAL to write_option.rs)

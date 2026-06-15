@@ -270,6 +270,17 @@ pub const VAULT_USDC_SEED: &[u8] = b"vault_usdc";
 /// at settle time).
 pub const EXERCISE_WINDOW: i64 = 86_400;
 
+/// Dead-feed grace window in seconds (7 days), applied post-expiry before the
+/// `reclaim_unsettled` hatch (Phase 2 Pass D) may wind a vault down. If a
+/// settleable price never lands within this window the price feed is treated
+/// as dead and writers may reclaim their pooled collateral pro-rata while
+/// holders are paid nothing (spec v1.1 §7.3.4 / invariant #6). 7 days gives
+/// the settle crank ample time to recover from Hermes archive gaps before the
+/// hatch becomes callable — well beyond the multi-hour gaps observed in
+/// practice. Distinct from EXERCISE_WINDOW (the 24h holder-exercise window
+/// that gates ordinary post-settlement writer withdrawals).
+pub const GRACE_WINDOW: i64 = 604_800;
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -26,6 +26,11 @@ pub fn handle_settle_vault(ctx: Context<SettleVault>) -> Result<()> {
     let record = &ctx.accounts.settlement_record;
 
     require!(!vault.is_settled, OptaError::VaultAlreadySettled);
+    // Pass D (invariant #6, CRITICAL): a voided vault must never be settled. If
+    // a late SettlementRecord lands after the dead-feed hatch ran, this blocks
+    // settle_vault from writing a settlement_price onto a voided vault — the
+    // drain vector. No-op on European vaults (voided is always false there).
+    require!(!vault.voided, OptaError::VaultVoided);
 
     let clock = Clock::get()?;
     require!(

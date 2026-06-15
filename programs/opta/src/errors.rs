@@ -248,4 +248,20 @@ pub enum OptaError {
     // Pass D, but the block ships now). Error code 6056.
     #[msg("Vault has been voided via the dead-feed hatch — no peg fills")]
     VaultVoided,
+
+    // =========================================================================
+    // Dead-feed hatch errors (Phase 2 Pass D — reclaim_unsettled)
+    // =========================================================================
+    // The hatch is callable ONLY when settlement provably never happened: the
+    // per-(asset, expiry) SettlementRecord PDA must NOT exist. If it does, the
+    // feed produced a price and the normal settle/withdraw path applies — the
+    // hatch reverts forever. Error code 6057.
+    #[msg("Settlement record exists — vault is settleable, the dead-feed hatch is forbidden")]
+    SettlementRecordExists,
+
+    // The hatch only opens once the 7-day GRACE_WINDOW has elapsed past expiry,
+    // giving the settle crank time to recover from transient feed-archive gaps
+    // before collateral can be reclaimed. Error code 6058.
+    #[msg("Dead-feed grace window has not elapsed yet")]
+    GracePeriodNotElapsed,
 }

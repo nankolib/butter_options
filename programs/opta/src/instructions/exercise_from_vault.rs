@@ -30,6 +30,13 @@ pub fn handle_exercise_from_vault(
     let vault = &ctx.accounts.shared_vault;
 
     // Validation
+    // Pass D (invariant #6): a voided vault pays holders NOTHING. Checked FIRST
+    // (before is_settled) so a voided — and therefore never-settled — vault
+    // rejects with the precise VaultVoided rather than the generic
+    // VaultNotSettled. This is the hatch's holder-side audit centerpiece. No-op
+    // on European vaults (voided is always false there) → European behavior
+    // byte-identical.
+    require!(!vault.voided, OptaError::VaultVoided);
     require!(vault.is_settled, OptaError::VaultNotSettled);
     require!(quantity > 0, OptaError::InvalidContractSize);
 

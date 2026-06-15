@@ -362,6 +362,18 @@ pub mod opta {
         )
     }
 
+    /// Phase 2 Pass D — dead-feed safety hatch. Permissionless. Lets writers
+    /// reclaim pooled collateral pro-rata from a vault whose settlement price
+    /// NEVER landed (no SettlementRecord for its (asset, expiry)) once the 7-day
+    /// GRACE_WINDOW past expiry has elapsed. Per-writer claim (one WriterPosition
+    /// per call; cranker may call on a writer's behalf). Sets `voided = true` on
+    /// the first call; NEVER sets `is_settled` and NEVER writes a SettlementRecord
+    /// (invariant #6 — a voided vault pays holders nothing). NOT gated by
+    /// AMERICAN_ENABLED: the exit path stays open regardless of the flag.
+    pub fn reclaim_unsettled(ctx: Context<ReclaimUnsettled>) -> Result<()> {
+        instructions::reclaim_unsettled::handle_reclaim_unsettled(ctx)
+    }
+
     /// One-time SharedVault schema migration that adds the trailing
     /// carry_rate_bps field to pre-Stage-A vaults. Admin-only. Caller passes
     /// vault accounts to migrate via remaining_accounts (recommended batch:

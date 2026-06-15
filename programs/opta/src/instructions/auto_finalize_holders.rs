@@ -38,6 +38,16 @@ use crate::utils::exercise_intrinsic::exercise_capped_intrinsic;
 pub fn handle_auto_finalize_holders<'info>(
     ctx: Context<'_, '_, '_, 'info, AutoFinalizeHolders<'info>>,
 ) -> Result<()> {
+    // Pass D (invariant #6): a voided vault pays holders NOTHING. Checked FIRST
+    // (before is_settled) so a voided — and therefore never-settled — vault
+    // rejects with the precise VaultVoided rather than the generic
+    // VaultNotSettled. This is the hatch's holder-side audit centerpiece. No-op
+    // on European vaults (voided is always false there) → European behavior
+    // byte-identical.
+    require!(
+        !ctx.accounts.shared_vault.voided,
+        OptaError::VaultVoided
+    );
     require!(
         ctx.accounts.shared_vault.is_settled,
         OptaError::VaultNotSettled

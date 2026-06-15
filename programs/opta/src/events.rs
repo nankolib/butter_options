@@ -160,6 +160,18 @@ pub struct VaultPostSettlementWithdraw {
     pub amount: u64,
 }
 
+/// Phase 2 Pass D — emitted once per writer reclaim through the dead-feed hatch
+/// (`reclaim_unsettled`). Distinct from VaultPostSettlementWithdraw (which has
+/// the same field shape) so off-chain indexers can tell a hatch wind-down apart
+/// from an ordinary post-settlement withdrawal: a VaultReclaimed stream means
+/// the vault was voided (holders paid nothing), never settled.
+#[event]
+pub struct VaultReclaimed {
+    pub vault: Pubkey,
+    pub writer: Pubkey,
+    pub amount: u64,
+}
+
 #[event]
 pub struct HoldersFinalized {
     pub vault: Pubkey,

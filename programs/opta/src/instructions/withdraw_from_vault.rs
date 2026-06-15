@@ -35,6 +35,12 @@ pub fn handle_withdraw_from_vault(
     require!(shares_to_withdraw > 0, OptaError::InvalidContractSize);
     require!(shares_to_withdraw <= writer_pos.shares, OptaError::InsufficientCollateral);
     require!(!vault.is_settled, OptaError::VaultAlreadySettled);
+    // Pass D (invariant #6): a voided vault's collateral is reclaimed only via
+    // reclaim_unsettled (the pro-rata hatch). Block this pre-settle share
+    // withdrawal — it survives the is_settled gate (voided vaults stay
+    // is_settled=false) and would double-pay against the hatch. No-op on
+    // European vaults (voided is always false there).
+    require!(!vault.voided, OptaError::VaultVoided);
 
     // FIX MEDIUM-01: Require all premium claimed before share withdrawal
     // This prevents premium loss from debt/share mismatch

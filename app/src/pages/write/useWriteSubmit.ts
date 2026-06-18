@@ -200,6 +200,7 @@ export function useWriteSubmit(): UseWriteSubmit {
           strikeBN,
           expiryBN,
           optTypeIndex,
+          input.exerciseStyle,
         );
         const [vaultUsdcPda] = deriveVaultUsdc(sharedVaultPda);
 

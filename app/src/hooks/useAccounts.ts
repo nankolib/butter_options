@@ -5,6 +5,7 @@ import { useConnection } from "@solana/wallet-adapter-react";
 import { useProgram } from "./useProgram";
 import {
   SHARED_VAULT_SEED,
+  SHARED_VAULT_AMERICAN_SEED,
   VAULT_USDC_SEED,
   WRITER_POSITION_SEED,
   VAULT_OPTION_MINT_SEED,
@@ -92,17 +93,27 @@ export function useSafeFetchAll<T>(
 
 // === V2 Vault PDA Derivation Helpers ===
 
-/** Seeds: ["shared_vault", market, strike_price(8 LE), expiry(8 LE), option_type(1)] */
+export type ExerciseStyleName = "european" | "american";
+
+/**
+ * European seeds: ["shared_vault", market, strike_price(8 LE), expiry(8 LE), option_type(1)]
+ * American seeds: ["shared_vault_american", market, strike_price(8 LE), expiry(8 LE), option_type(1)]
+ */
 export function deriveSharedVault(
   market: PublicKey,
   strikePrice: BN,
   expiry: BN,
   optionType: number, // 0 = Call, 1 = Put
+  exerciseStyle: ExerciseStyleName = "european",
   programId: PublicKey = PROGRAM_ID,
 ): [PublicKey, number] {
+  const seed = exerciseStyle === "american"
+    ? SHARED_VAULT_AMERICAN_SEED
+    : SHARED_VAULT_SEED;
+
   return PublicKey.findProgramAddressSync(
     [
-      Buffer.from(SHARED_VAULT_SEED),
+      Buffer.from(seed),
       market.toBuffer(),
       strikePrice.toArrayLike(Buffer, "le", 8),
       expiry.toArrayLike(Buffer, "le", 8),

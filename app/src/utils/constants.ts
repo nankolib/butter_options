@@ -131,7 +131,7 @@ export const USE_V2_VAULTS = true;
 // FEATURE-FREE) TOGETHER. Never ship `true` here before Stage I: a true UI
 // flag against a false on-chain flag sends American creates that revert 6052
 // (AmericanVaultsDisabled). The two flags are a matched set.
-export const AMERICAN_ENABLED_UI = false;
+export const AMERICAN_ENABLED_UI = true;
 
 // ============================================================================
 // Phase 2 demo cutoff

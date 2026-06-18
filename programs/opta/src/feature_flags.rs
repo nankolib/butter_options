@@ -25,4 +25,4 @@
 pub const AMERICAN_ENABLED: bool = true;
 
 #[cfg(not(feature = "american-enabled"))]
-pub const AMERICAN_ENABLED: bool = false;
+pub const AMERICAN_ENABLED: bool = true;

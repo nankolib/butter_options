@@ -37,13 +37,11 @@
 // =============================================================================
 
 use anchor_lang::prelude::*;
-use pyth_solana_receiver_sdk::error::GetPriceError;
 use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
-use pyth_solana_receiver_sdk::price_update::VerificationLevel;
 
 use crate::errors::OptaError;
 use crate::state::{OptionsMarket, SettlementRecord, MARKET_SEED, SETTLEMENT_SEED};
-use crate::utils::solmath_bridge::pyth_price_to_usdc;
+use crate::utils::price_oracle::pyth_settlement_price_usdc;
 
 /// Maximum gap between the Pyth update's `publish_time` and the on-chain clock
 /// at settlement time. Set to 30 days (2_592_000 s) as a wide backstop SLO,
@@ -88,60 +86,24 @@ pub fn handle_settle_expiry(
         OptaError::MarketNotExpired
     );
 
-    // 2. Manually replicate the SDK's get_price_no_older_than verification.
-    //    pyth-solana-receiver-sdk v1.1.0 has no EMA equivalent; we read
-    //    the EMA fields directly from price_message after performing the
-    //    same verification_level + feed_id checks the SDK does.
-    let market = &ctx.accounts.market;
-    let pu = &ctx.accounts.price_update;
-    require!(
-        pu.verification_level.gte(VerificationLevel::Full),
-        GetPriceError::InsufficientVerificationLevel
-    );
-    require!(
-        pu.price_message.feed_id == market.pyth_feed_id,
-        GetPriceError::MismatchedFeedId
-    );
-
-    let ema_price = pu.price_message.ema_price;
-    let exponent = pu.price_message.exponent;
-    let publish_time = pu.price_message.publish_time;
-
-    // 3. Confidence-interval gate (CRIT-2). Reject prints whose EMA
-    //    confidence width exceeds MAX_CONF_BPS of the EMA price. Pyth
-    //    publishes wide-conf updates during stress events; settling
-    //    against one would lock in a price hundreds of bps off true.
-    let conf = pu.price_message.ema_conf as u128;
-    let abs_price = ema_price.unsigned_abs() as u128;
-    require!(
-        conf.checked_mul(10_000).ok_or(OptaError::MathOverflow)?
-            <= abs_price.checked_mul(MAX_CONF_BPS as u128).ok_or(OptaError::MathOverflow)?,
-        OptaError::PriceConfidenceTooWide
-    );
-
-    // 4. Expiry-window gate (replaces the old "freshness vs clock" check).
-    //    publish_time MUST sit in [expiry, expiry + EXPIRY_WINDOW_SECS].
-    require!(
-        publish_time >= expiry,
-        OptaError::PriceUpdateBeforeExpiry
-    );
-    require!(
-        publish_time.saturating_sub(expiry) <= EXPIRY_WINDOW_SECS,
-        OptaError::PriceUpdateTooFarFromExpiry
-    );
-
-    // 5. Backstop staleness floor: don't settle vaults so late that we
-    //    can't even reach the historical update's publish_time within
-    //    1 day of the on-chain clock. Operational SLO, not a security
-    //    gate (the gates are steps 3 and 4).
-    require!(
-        publish_time.saturating_add(PYTH_MAX_AGE_SECS as i64) >= clock.unix_timestamp,
-        GetPriceError::PriceTooOld
-    );
-
-    // 6. Normalize Pyth's (i64 price, i32 exponent) to u64 USDC 6-decimal.
-    //    Rejects price <= 0 (InvalidSettlementPrice) and overflow (MathOverflow).
-    let settlement_price = pyth_price_to_usdc(ema_price, exponent)?;
+    // 2-6. Validate the Pyth update (Full verification + feed_id match +
+    //      EMA-confidence gate + expiry-window gate + staleness floor) and
+    //      normalize the EMA to USDC 6-dec. The full read+validate+normalize
+    //      logic lives in the source-routed price-oracle abstraction (Stage 1);
+    //      Pyth is the sole implementer until the Switchboard arm slots in at
+    //      Stage 3. Error codes, gate order, and the EMA read are identical to
+    //      the prior inline block.
+    let read = pyth_settlement_price_usdc(
+        &ctx.accounts.price_update,
+        ctx.accounts.market.pyth_feed_id,
+        expiry,
+        clock.unix_timestamp,
+        EXPIRY_WINDOW_SECS,
+        PYTH_MAX_AGE_SECS as i64,
+        MAX_CONF_BPS,
+    )?;
+    let settlement_price = read.price_usdc;
+    let publish_time = read.publish_time;
 
     // 7. Populate the record
     let record = &mut ctx.accounts.settlement_record;
@@ -152,13 +114,15 @@ pub fn handle_settle_expiry(
     record.pyth_publish_time = publish_time;
     record.bump = ctx.bumps.settlement_record;
 
+    // Log the consensus-relevant outputs. The raw Pyth EMA/exponent are no
+    // longer surfaced here — they live inside the source-routed price-oracle
+    // helper (and would be source-specific once Switchboard is wired at Stage
+    // 3); settlement_price + publish_time fully describe the recorded result.
     msg!(
-        "Settlement recorded: {} expiry={} price={} (pyth_ema={}, expo={}, publish_time={})",
+        "Settlement recorded: {} expiry={} price={} (publish_time={})",
         asset_name,
         expiry,
         settlement_price,
-        ema_price,
-        exponent,
         publish_time,
     );
 

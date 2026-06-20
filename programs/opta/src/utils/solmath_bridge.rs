@@ -106,6 +106,67 @@ pub fn pyth_price_to_usdc(price: i64, exponent: i32) -> Result<u64> {
     Ok(result as u64)
 }
 
+/// Converts a Switchboard On-Demand value (i128 mantissa + decimal scale) to
+/// USDC smallest units (6 decimals).
+///
+/// DEAD CODE until Stage 3 wires the Switchboard read arm; added now so the
+/// bridge is ready and the conversion is unit-tested. Mirrors
+/// `pyth_price_to_usdc`: Switchboard reports a value as `mantissa × 10^(−scale)`
+/// (e.g. mantissa = 180_500_000_000_000_000_000, scale = 18 → $180.50), where
+/// `scale` is the count of decimal places (Pyth's `exponent` is the negated
+/// equivalent, so `exponent = −scale`).
+///
+/// HOW IT WORKS:
+/// USDC wants 6 decimals: result = mantissa × 10^(6 − scale).
+/// shift ≥ 0 → multiply; shift < 0 → divide.
+#[allow(dead_code)]
+pub fn sb_value_to_usdc(mantissa: i128, scale: u32) -> Result<u64> {
+    require!(mantissa > 0, OptaError::InvalidSettlementPrice);
+    let mantissa_u128 = mantissa as u128;
+    let target_decimals: i32 = 6;
+    let shift = target_decimals - scale as i32;
+
+    let result = if shift >= 0 {
+        mantissa_u128
+            .checked_mul(10u128.pow(shift as u32))
+            .ok_or_else(|| error!(OptaError::MathOverflow))?
+    } else {
+        mantissa_u128 / 10u128.pow((-shift) as u32)
+    };
+    // HIGH-4 parity — reject silent-zero from integer truncation (a value
+    // below 1e-6 would round to 0 and, as a settlement price, drain a vault).
+    require!(result > 0, OptaError::InvalidSettlementPrice);
+    require!(result <= u64::MAX as u128, OptaError::MathOverflow);
+    Ok(result as u64)
+}
+
+/// Converts a Switchboard On-Demand value (i128 mantissa + decimal scale) to
+/// solmath SCALE (1e12, 12 decimals).
+///
+/// DEAD CODE until Stage 3. Mirrors `pyth_price_to_scale`. See
+/// `sb_value_to_usdc` for the mantissa/scale convention.
+///
+/// HOW IT WORKS:
+/// solmath wants 12 decimals: result = mantissa × 10^(12 − scale).
+#[allow(dead_code)]
+pub fn sb_value_to_scale(mantissa: i128, scale: u32) -> Result<u128> {
+    require!(mantissa > 0, OptaError::InvalidSettlementPrice);
+    let mantissa_u128 = mantissa as u128;
+    let target_decimals: i32 = 12; // SCALE = 1e12
+    let shift = target_decimals - scale as i32;
+
+    let result = if shift >= 0 {
+        mantissa_u128
+            .checked_mul(10u128.pow(shift as u32))
+            .ok_or_else(|| error!(OptaError::MathOverflow))?
+    } else {
+        mantissa_u128 / 10u128.pow((-shift) as u32)
+    };
+    // HIGH-4 parity — reject silent-zero from integer truncation.
+    require!(result > 0, OptaError::InvalidSettlementPrice);
+    Ok(result)
+}
+
 /// Converts time-to-expiry in seconds to solmath SCALE (fraction of a year).
 ///
 /// HOW IT WORKS:
@@ -178,6 +239,50 @@ mod tests {
         // SOL at $180.50: price=18050000000, exponent=-8
         let result = pyth_price_to_usdc(18050000000, -8).unwrap();
         assert_eq!(result, 180_500_000u64); // $180.50 in USDC 6-dec
+    }
+
+    #[test]
+    fn test_sb_value_to_usdc_18dec() {
+        // Switchboard commonly reports 18-decimal values. $180.50 at scale=18:
+        // 180.50 × 1e18 = 180_500_000_000_000_000_000 → 180_500_000 USDC 6-dec.
+        let result = sb_value_to_usdc(180_500_000_000_000_000_000i128, 18).unwrap();
+        assert_eq!(result, 180_500_000u64);
+    }
+
+    #[test]
+    fn test_sb_value_to_usdc_low_scale() {
+        // scale below 6 → multiply path. $180.50 at scale=2 (18050) → 180_500_000.
+        let result = sb_value_to_usdc(18_050i128, 2).unwrap();
+        assert_eq!(result, 180_500_000u64);
+    }
+
+    #[test]
+    fn test_sb_value_to_usdc_rejects_truncation_zero() {
+        // Sub-microUSDC value (1e-7 at scale=7) truncates to 0 → must reject.
+        let err = sb_value_to_usdc(1i128, 7);
+        assert!(err.is_err(), "sub-micro value must reject, not round to 0");
+    }
+
+    #[test]
+    fn test_sb_value_to_usdc_rejects_nonpositive() {
+        assert!(sb_value_to_usdc(0, 18).is_err());
+        assert!(sb_value_to_usdc(-1, 18).is_err());
+    }
+
+    #[test]
+    fn test_sb_value_to_scale_18dec() {
+        // $180.50 at scale=18 → 180.50 × 1e12 = 180_500_000_000_000 at SCALE.
+        let result = sb_value_to_scale(180_500_000_000_000_000_000i128, 18).unwrap();
+        assert_eq!(result, 180_500_000_000_000u128);
+    }
+
+    #[test]
+    fn test_sb_value_to_scale_matches_pyth_equivalent() {
+        // SB (mantissa, scale) and Pyth (price, exponent=-scale) must agree.
+        let sb = sb_value_to_scale(18_050_000_000i128, 8).unwrap();
+        let pyth = pyth_price_to_scale(18_050_000_000i64, -8).unwrap();
+        assert_eq!(sb, pyth);
+        assert_eq!(sb, 180_500_000_000_000u128);
     }
 
     #[test]

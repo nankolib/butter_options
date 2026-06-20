@@ -28,9 +28,7 @@
 // =============================================================================
 
 use anchor_lang::prelude::*;
-use pyth_solana_receiver_sdk::error::GetPriceError;
 use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
-use pyth_solana_receiver_sdk::price_update::VerificationLevel;
 use solmath::transcendental::ln_fixed_i;
 use solmath::arithmetic::fp_div;
 
@@ -39,7 +37,7 @@ use crate::state::{
     VolOracle, VOL_ORACLE_MAX_SAMPLE_GAP_SECS, VOL_ORACLE_MIN_PUSH_INTERVAL_SECS,
     VOL_ORACLE_PYTH_MAX_AGE_SECS, VOL_ORACLE_RING_SIZE, VOL_ORACLE_SEED,
 };
-use crate::utils::solmath_bridge::pyth_price_to_scale;
+use crate::utils::price_oracle::pyth_current_spot_scale;
 
 /// EMA confidence-interval gate, in basis points of the EMA price. Same
 /// 200bps threshold settle_expiry uses (audit Run-6 CRIT-2). Pyth wide-
@@ -51,71 +49,25 @@ pub fn handle_push_vol_sample(ctx: Context<PushVolSample>) -> Result<()> {
     let clock = Clock::get()?;
     let now = clock.unix_timestamp;
 
-    // --- 1. Pyth validation (proof, verification, confidence, freshness) ---
-    let pu = &ctx.accounts.price_update;
-
-    // Defer the load_mut until after all validation so the oracle isn't
-    // write-locked unnecessarily on the reject paths.
-    {
-        let oracle_ro = ctx.accounts.vol_oracle.load()?;
-        require!(
-            pu.verification_level.gte(VerificationLevel::Full),
-            GetPriceError::InsufficientVerificationLevel
-        );
-        require!(
-            pu.price_message.feed_id == oracle_ro.feed_id,
-            GetPriceError::MismatchedFeedId
-        );
-    }
-
-    let price = pu.price_message.price;
-    let exponent = pu.price_message.exponent;
-    let publish_time = pu.price_message.publish_time;
-    let ema_price = pu.price_message.ema_price;
-    let ema_conf = pu.price_message.ema_conf;
-
-    // 1a. Spot positivity gate. Runs BEFORE the EMA-confidence and
-    //     freshness gates so a fundamentally garbage price (zero or
-    //     negative) surfaces VolOracleInvalidSpot rather than getting
-    //     misattributed to VolOraclePriceStale (which would happen for
-    //     a zero-price fixture: ema_price tracks price, abs_ema = 0,
-    //     conf-check rhs = 0 < lhs).
-    require!(price > 0, OptaError::VolOracleInvalidSpot);
-
-    // 1b. Convert (i64 price, i32 exponent) -> u128 at SCALE = 1e12.
-    //     Returns InvalidSettlementPrice on price <= 0 OR sub-microUSDC
-    //     truncation (HIGH-4 catch-all from settle_expiry). For our
-    //     positive-spot gate above, the only realistic re-raise is the
-    //     sub-micro truncation, which would propagate the existing
-    //     variant -- semantically the same "spot too small to handle"
-    //     rejection.
-    let new_spot_u128 = pyth_price_to_scale(price, exponent)?;
-
-    // 1c. EMA confidence-interval gate (mirrors settle_expiry CRIT-2).
-    //     Even though we sample SPOT, we use the EMA confidence interval
-    //     because Pyth's per-tick spot confidence can be noisy; EMA conf
-    //     tracks the publisher's aggregate uncertainty more stably.
-    let conf_u128 = ema_conf as u128;
-    let abs_ema = ema_price.unsigned_abs() as u128;
-    require!(
-        conf_u128
-            .checked_mul(10_000)
-            .ok_or(OptaError::MathOverflow)?
-            <= abs_ema
-                .checked_mul(VOL_ORACLE_MAX_CONF_BPS as u128)
-                .ok_or(OptaError::MathOverflow)?,
-        OptaError::VolOraclePriceStale  // re-using the catch-all: bad print
-    );
-
-    // 1d. One-sided freshness check (same shape as settle_expiry's
-    //     PYTH_MAX_AGE_SECS bound). publish_time may sit in the future
-    //     without triggering rejection -- Pyth-signed messages with a
-    //     future timestamp would have to be aggregator-anomalies and the
-    //     proof-gate already rejects unsigned attestations.
-    require!(
-        publish_time.saturating_add(VOL_ORACLE_PYTH_MAX_AGE_SECS) >= now,
-        OptaError::VolOraclePriceStale
-    );
+    // --- 1. Pyth validate (verification + feed_id + spot>0 + confidence +
+    //        freshness) + spot→SCALE normalization. The full read+validate
+    //        logic lives in the source-routed price-oracle abstraction
+    //        (Stage 1); Pyth is the sole implementer until the Switchboard arm
+    //        slots in at Stage 3. Behavior, error codes (incl. the spot>0
+    //        BEFORE conf/freshness ordering), and the SPOT read match the prior
+    //        inline block.
+    //
+    //        The oracle's feed_id is read first into a Copy local so the
+    //        read-only borrow drops immediately — the load_mut below stays the
+    //        only write lock, preserving the original "defer write-lock" intent.
+    let expected_feed_id = ctx.accounts.vol_oracle.load()?.feed_id;
+    let new_spot_u128 = pyth_current_spot_scale(
+        &ctx.accounts.price_update,
+        expected_feed_id,
+        now,
+        VOL_ORACLE_PYTH_MAX_AGE_SECS,
+        VOL_ORACLE_MAX_CONF_BPS,
+    )?;
 
     // Cap conversion to i64 storage. Max i64 (9.2e18) accommodates spot
     // up to ~$9.2M at SCALE; BTC at $90k = 9e16 well under.

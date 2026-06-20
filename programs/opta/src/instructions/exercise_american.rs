@@ -31,8 +31,7 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program::invoke;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer};
 use anchor_spl::token_2022::Token2022;
-use pyth_solana_receiver_sdk::error::GetPriceError;
-use pyth_solana_receiver_sdk::price_update::{PriceUpdateV2, VerificationLevel};
+use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
 
 use crate::errors::OptaError;
 use crate::events::VaultExercised;
@@ -40,7 +39,7 @@ use crate::feature_flags::AMERICAN_ENABLED;
 use crate::state::*;
 use crate::utils::collateral::required_collateral_per_contract;
 use crate::utils::exercise_intrinsic::exercise_capped_intrinsic;
-use crate::utils::solmath_bridge::pyth_price_to_usdc;
+use crate::utils::price_oracle::pyth_current_spot_usdc;
 
 /// Max age of the supplied price update at exercise time, in seconds: the
 /// price's `publish_time` must be within 60s of the on-chain clock (now). Early
@@ -102,46 +101,18 @@ pub fn handle_exercise_american(
     require!(quantity <= holder_balance, OptaError::InsufficientOptionTokens);
 
     // ----- Read + normalize spot from the fresh PriceUpdateV2 ---------------
-    // Same manual validation settle_expiry performs (the SDK exposes no EMA
-    // getter): Full verification, feed_id match, confidence gate, freshness.
-    let pu = &ctx.accounts.price_update;
-    require!(
-        pu.verification_level.gte(VerificationLevel::Full),
-        GetPriceError::InsufficientVerificationLevel
-    );
-    require!(
-        pu.price_message.feed_id == ctx.accounts.market.pyth_feed_id,
-        GetPriceError::MismatchedFeedId
-    );
-
-    let ema_price = pu.price_message.ema_price;
-    let exponent = pu.price_message.exponent;
-    let publish_time = pu.price_message.publish_time;
-
-    // Confidence-interval gate (mirror settle CRIT-2).
-    let conf = pu.price_message.ema_conf as u128;
-    let abs_price = ema_price.unsigned_abs() as u128;
-    require!(
-        conf.checked_mul(10_000).ok_or(OptaError::MathOverflow)?
-            <= abs_price
-                .checked_mul(MAX_CONF_BPS as u128)
-                .ok_or(OptaError::MathOverflow)?,
-        OptaError::PriceConfidenceTooWide
-    );
-
-    // Tight freshness gate (Stage G Pass 2): the price must be CURRENT — its
-    // publish_time no more than PRICE_MAX_AGE_SECS (60s) BEFORE now. Reuses the
-    // same PriceTooOld error the loose backstop threw (zero IDL delta). Single-
-    // sided per spec: a future-dated publish_time yields a negative diff and
-    // passes (Pyth/receiver verification already bounds forward skew); only a
-    // price older than 60s reverts.
-    require!(
-        clock.unix_timestamp.saturating_sub(publish_time) <= PRICE_MAX_AGE_SECS,
-        GetPriceError::PriceTooOld
-    );
-
-    // Normalize Pyth (ema_price, exponent) → u64 USDC 6-dec (rejects <= 0).
-    let spot_6dec = pyth_price_to_usdc(ema_price, exponent)?;
+    // Full validate (verification + feed_id + confidence + tight single-sided
+    // 60s freshness) + EMA→USDC normalization now lives in the source-routed
+    // price-oracle abstraction (Stage 1). Pyth is the sole implementer until
+    // the Switchboard arm slots in at Stage 3; behavior, error codes, and the
+    // EMA read are identical to the prior inline block.
+    let spot_6dec = pyth_current_spot_usdc(
+        &ctx.accounts.price_update,
+        ctx.accounts.market.pyth_feed_id,
+        clock.unix_timestamp,
+        PRICE_MAX_AGE_SECS,
+        MAX_CONF_BPS,
+    )?;
 
     // ----- Capped intrinsic (the (f) lock) ----------------------------------
     let collateral_per_token = required_collateral_per_contract(strike_price, option_type);

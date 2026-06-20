@@ -385,6 +385,18 @@ pub mod opta {
         instructions::migrate_shared_vault_carry_rate::handle_migrate_shared_vault_carry_rate(ctx)
     }
 
+    /// One-time OptionsMarket schema migration that adds the trailing
+    /// oracle_source byte (Switchboard Stage 2) to pre-Stage-2 markets.
+    /// Admin-only. Caller passes market accounts via remaining_accounts
+    /// (BATCH_SIZE 20; the full current set of 16 fits one call). Idempotent:
+    /// markets already at the new size (incl. the larger pre-reshape orphans)
+    /// are skipped. Admin pays the rent delta. Sets oracle_source = 0 (Pyth).
+    pub fn migrate_market_oracle_source<'info>(
+        ctx: Context<'_, '_, '_, 'info, MigrateMarketOracleSource<'info>>,
+    ) -> Result<()> {
+        instructions::migrate_market_oracle_source::handle_migrate_market_oracle_source(ctx)
+    }
+
     /// One-time SharedVault schema migration that adds the trailing
     /// exercise_style field to pre-Pass-1 vaults. Admin-only.
     /// Caller passes vault accounts via remaining_accounts (recommended

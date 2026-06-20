@@ -60,6 +60,25 @@ pub struct OptionsMarket {
 
     /// PDA bump seed.
     pub bump: u8,
+
+    /// Oracle backing this asset's spot price.
+    /// `0` = Pyth (pull), `1` = Switchboard (On-Demand). See
+    /// `ORACLE_SOURCE_*` consts below.
+    ///
+    /// Trailing-appended (Stage 2 of the Switchboard arc) AFTER `bump`,
+    /// following the `carry_rate_bps` / `exercise_style` precedent on
+    /// `SharedVault`: legacy 62-byte markets grow to 63 bytes via the
+    /// admin-only `migrate_market_oracle_source` instruction, which
+    /// zero-fills this trailing byte (→ Pyth, the no-op default). New
+    /// markets are born with this set to `ORACLE_SOURCE_PYTH` in
+    /// `create_market`.
+    ///
+    /// The 32-byte `pyth_feed_id` field above is reused as the oracle id for
+    /// BOTH sources (a Switchboard feedHash is also 32 bytes); only its
+    /// MEANING routes by this field. INERT until Stage 3 wires the read-arm
+    /// match in `utils/price_oracle.rs` — every handler stays unconditionally
+    /// Pyth today, so this field is read by nothing.
+    pub oracle_source: u8,
 }
 
 /// Prefix for the OptionsMarket PDA seed.
@@ -73,3 +92,12 @@ pub const ASSET_CLASS_FOREX: u8 = 3;
 pub const ASSET_CLASS_ETF: u8 = 4;
 /// Maximum valid asset class value.
 pub const MAX_ASSET_CLASS: u8 = 4;
+
+/// Oracle-source values for the `OptionsMarket.oracle_source` field.
+/// Pyth pull oracle — the only source wired today (Stage 1/2). Default for
+/// every existing market (migration zero-fill) and every new market
+/// (`create_market`).
+pub const ORACLE_SOURCE_PYTH: u8 = 0;
+/// Switchboard On-Demand — reserved for Stage 3; no read path routes to it
+/// yet, and `create_market` cannot mint a market with this value until then.
+pub const ORACLE_SOURCE_SWITCHBOARD: u8 = 1;

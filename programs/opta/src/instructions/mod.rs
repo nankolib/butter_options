@@ -47,6 +47,8 @@ pub mod create_and_deposit;
 // Exchange dead-feed hatch (Phase 2 Pass D — reclaim_unsettled)
 pub mod reclaim_unsettled;
 
+// OptionsMarket oracle_source schema migration (Switchboard Stage 2)
+pub mod migrate_market_oracle_source;
 // SharedVault carry_rate_bps schema migration (Stage A)
 pub mod migrate_shared_vault_carry_rate;
 // SharedVault exercise_style schema migration (Stage C Pass 1)
@@ -129,6 +131,8 @@ pub use create_and_deposit::*;
 // Exchange dead-feed hatch (Phase 2 Pass D — reclaim_unsettled)
 pub use reclaim_unsettled::*;
 
+// OptionsMarket oracle_source schema migration (Switchboard Stage 2)
+pub use migrate_market_oracle_source::*;
 // SharedVault carry_rate_bps schema migration
 pub use migrate_shared_vault_carry_rate::*;
 pub use migrate_shared_vault_exercise_style::*;

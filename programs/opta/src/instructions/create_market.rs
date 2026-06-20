@@ -35,7 +35,7 @@ use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
 use pyth_solana_receiver_sdk::price_update::VerificationLevel;
 
 use crate::errors::OptaError;
-use crate::state::{OptionsMarket, ProtocolState, MARKET_SEED, MAX_ASSET_CLASS, MAX_ASSET_NAME_LEN, PROTOCOL_SEED};
+use crate::state::{OptionsMarket, ProtocolState, MARKET_SEED, MAX_ASSET_CLASS, MAX_ASSET_NAME_LEN, ORACLE_SOURCE_PYTH, PROTOCOL_SEED};
 
 /// Verify the asset name conforms to the normalization contract:
 /// 1..=16 ASCII uppercase letters or digits. Caller must pre-normalize.
@@ -104,6 +104,11 @@ pub fn handle_create_market(
     market.pyth_feed_id = pyth_feed_id;
     market.asset_class = asset_class;
     market.bump = ctx.bumps.market;
+    // Stage 2 (Switchboard arc): new markets are born Pyth-sourced
+    // unconditionally. Creating a Switchboard-sourced market is a Stage 3
+    // capability; this is a pure default-set and does NOT touch the HIGH-5
+    // proof gate above.
+    market.oracle_source = ORACLE_SOURCE_PYTH;
 
     let protocol = &mut ctx.accounts.protocol_state;
     protocol.total_markets = protocol

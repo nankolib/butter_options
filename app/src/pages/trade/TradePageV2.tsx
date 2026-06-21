@@ -9,6 +9,7 @@ import { TradeFooter } from "./TradeFooter";
 import { TradeChainV2, type FocusedContract } from "./TradeChainV2";
 import { OrderTicket } from "./OrderTicket";
 import { PriceChart } from "./PriceChart";
+import { SimpleTradePanel } from "./SimpleTradePanel";
 import { BuyModal } from "./BuyModal";
 import { useTradeData, type Offering } from "./useTradeData";
 import { useUnifiedChain } from "../../hooks/useUnifiedChain";
@@ -26,12 +27,19 @@ import { useUnifiedChain } from "../../hooks/useUnifiedChain";
  * useUnifiedChain aggregate.
  */
 const VIEW_KEY = "opta.trade.view.v2";
+const PERSONA_KEY = "opta.trade.persona";
 type View = "grid" | "chart";
+type Persona = "pro" | "simple";
 
 export const TradePageV2: FC = () => {
   usePaperPalette();
   const td = useTradeData();
   const chain = useUnifiedChain();
+
+  const [persona, setPersona] = useState<Persona>(() =>
+    (typeof localStorage !== "undefined" && localStorage.getItem(PERSONA_KEY) === "simple") ? "simple" : "pro",
+  );
+  useEffect(() => { try { localStorage.setItem(PERSONA_KEY, persona); } catch { /* ignore */ } }, [persona]);
 
   const [view, setView] = useState<View>(() => {
     const saved = typeof localStorage !== "undefined" ? localStorage.getItem(VIEW_KEY) : null;
@@ -102,20 +110,40 @@ export const TradePageV2: FC = () => {
           onAssetChange={td.setSelectedAsset}
         />
 
-        {/* View toggle — GRID | CHART (persona-sticky, T1) */}
-        <div className="flex items-center gap-px bg-rule border border-rule rounded-md w-fit my-6 overflow-hidden">
-          {(["grid", "chart"] as View[]).map((v) => (
-            <button
-              key={v}
-              type="button"
-              onClick={() => setView(v)}
-              className={`font-mono text-[11px] uppercase tracking-[0.2em] px-5 py-2 transition-colors ${
-                view === v ? "bg-ink text-paper" : "bg-paper text-ink-muted hover:text-ink"
-              }`}
-            >
-              {v}
-            </button>
-          ))}
+        {/* Persona toggle — Pro | Simple (sticky, T1) */}
+        <div className="flex items-center justify-between gap-4 my-6 flex-wrap">
+          <div className="flex items-center gap-px bg-rule border border-rule rounded-md w-fit overflow-hidden">
+            {(["pro", "simple"] as Persona[]).map((p) => (
+              <button
+                key={p}
+                type="button"
+                onClick={() => setPersona(p)}
+                className={`font-mono text-[11px] uppercase tracking-[0.2em] px-6 py-2 transition-colors ${
+                  persona === p ? "bg-ink text-paper" : "bg-paper text-ink-muted hover:text-ink"
+                }`}
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+
+          {/* GRID | CHART sub-toggle lives inside Pro only */}
+          {persona === "pro" && (
+            <div className="flex items-center gap-px bg-rule border border-rule rounded-md w-fit overflow-hidden">
+              {(["grid", "chart"] as View[]).map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  onClick={() => setView(v)}
+                  className={`font-mono text-[11px] uppercase tracking-[0.2em] px-5 py-2 transition-colors ${
+                    view === v ? "bg-ink text-paper" : "bg-paper text-ink-muted hover:text-ink"
+                  }`}
+                >
+                  {v}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {loading ? (
@@ -130,6 +158,16 @@ export const TradePageV2: FC = () => {
               No active markets — visit Markets to create one.
             </p>
           </div>
+        ) : persona === "simple" ? (
+          <SimpleTradePanel
+            asset={td.selectedAsset}
+            spot={td.spot}
+            rows={chain.rows.filter((r) => r.asset === td.selectedAsset)}
+            expiries={td.availableExpiries}
+            selectedExpiry={td.selectedExpiry}
+            setSelectedExpiry={td.setSelectedExpiry}
+            onDone={() => { chain.refetch(); td.refetch(); }}
+          />
         ) : (
           <>
             <ExpiryTabs

@@ -61,6 +61,8 @@
   --color-ink-muted: #504B41;
   --color-ink-soft: #1A1A16;
   --color-crimson: #D7263D;
+  /* Simple-persona "Up/Call" positive accent (paired with crimson for Down/Put). */
+  --color-teal: #0F766E;
   --color-rule: rgba(10, 10, 8, 0.14);
   --color-rule-soft: rgba(10, 10, 8, 0.08);
   --color-dot-teal: #1AC6A5;

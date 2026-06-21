@@ -209,6 +209,12 @@ html[data-paper="true"] ::selection {
   color: var(--color-paper);
 }
 
+/* Force the injected TradingView embed iframe to fill its sized container
+   (Simple persona chart, Pass 7) — autosize honours a definite container height. */
+.tradingview-widget-container,
+.tradingview-widget-container__widget { height: 100%; width: 100%; }
+.tradingview-widget-container iframe { height: 100% !important; width: 100% !important; }
+
 body {
   margin: 0;
   font-family: var(--font-sans);

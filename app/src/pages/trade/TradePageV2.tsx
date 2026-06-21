@@ -1,17 +1,26 @@
 import type { FC } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { usePaperPalette } from "../../hooks";
 import { PaperGrain } from "../../components/layout";
 import { AppNav } from "../../components/AppNav";
 import { TradeStatementHeader } from "./TradeStatementHeader";
 import { ExpiryTabs } from "./ExpiryTabs";
 import { TradeFooter } from "./TradeFooter";
-import { TradeChainV2, type FocusedContract } from "./TradeChainV2";
+import { TradeChainV2, type FocusedContract, type DetailTarget } from "./TradeChainV2";
 import { OrderTicket } from "./OrderTicket";
-import { PriceChart } from "./PriceChart";
-import { SimpleTradePanel } from "./SimpleTradePanel";
-import { ContractDetailModal } from "./ContractDetailModal";
 import { BuyModal } from "./BuyModal";
+
+// Lazy-load the chart-heavy surfaces (lightweight-charts / TradingView embed)
+// so they leave the initial chunk and load only when their surface mounts (T-perf).
+const PriceChart = lazy(() => import("./PriceChart").then((m) => ({ default: m.PriceChart })));
+const SimpleTradePanel = lazy(() => import("./SimpleTradePanel").then((m) => ({ default: m.SimpleTradePanel })));
+const ContractDetailModal = lazy(() => import("./ContractDetailModal").then((m) => ({ default: m.ContractDetailModal })));
+
+const ChartFallback: FC = () => (
+  <div className="border border-rule rounded-md p-12 text-center my-2">
+    <p className="font-mono text-[10.5px] uppercase tracking-[0.2em] text-ink-muted m-0">Loading…</p>
+  </div>
+);
 import { useTradeData, type Offering } from "./useTradeData";
 import { useUnifiedChain } from "../../hooks/useUnifiedChain";
 
@@ -51,7 +60,7 @@ export const TradePageV2: FC = () => {
   }, [view]);
 
   const [focused, setFocused] = useState<FocusedContract | null>(null);
-  const [detailRow, setDetailRow] = useState<FocusedContract | null>(null);
+  const [detailTarget, setDetailTarget] = useState<DetailTarget | null>(null);
 
   // Legacy Buy bridges to the existing classic BuyModal (purchase_from_vault /
   // buy_v2_resale) — reuse, not reimplementation.
@@ -168,15 +177,17 @@ export const TradePageV2: FC = () => {
             </p>
           </div>
         ) : persona === "simple" ? (
-          <SimpleTradePanel
-            asset={td.selectedAsset}
-            spot={td.spot}
-            rows={chain.rows.filter((r) => r.asset === td.selectedAsset)}
-            expiries={td.availableExpiries}
-            selectedExpiry={td.selectedExpiry}
-            setSelectedExpiry={td.setSelectedExpiry}
-            onDone={() => { chain.refetch(); td.refetch(); }}
-          />
+          <Suspense fallback={<ChartFallback />}>
+            <SimpleTradePanel
+              asset={td.selectedAsset}
+              spot={td.spot}
+              rows={chain.rows.filter((r) => r.asset === td.selectedAsset)}
+              expiries={td.availableExpiries}
+              selectedExpiry={td.selectedExpiry}
+              setSelectedExpiry={td.setSelectedExpiry}
+              onDone={() => { chain.refetch(); td.refetch(); }}
+            />
+          </Suspense>
         ) : (
           <>
             <ExpiryTabs
@@ -193,7 +204,7 @@ export const TradePageV2: FC = () => {
                   atmStrike={td.atmStrike}
                   focused={focused}
                   onSelect={setFocused}
-                  onShowDetails={setDetailRow}
+                  onShowDetails={setDetailTarget}
                 />
                 {focused && (
                   <div className="lg:sticky lg:top-[120px]">
@@ -207,7 +218,9 @@ export const TradePageV2: FC = () => {
                 )}
               </div>
             ) : (
-              <PriceChart row={focused} spot={td.spot} />
+              <Suspense fallback={<ChartFallback />}>
+                <PriceChart row={focused} spot={td.spot} />
+              </Suspense>
             )}
 
             {/* Minimal summary band (reused hairline rhythm). */}
@@ -230,13 +243,17 @@ export const TradePageV2: FC = () => {
         <TradeFooter />
       </main>
 
-      {detailRow && (
-        <ContractDetailModal
-          row={detailRow}
-          spot={td.spot}
-          onClose={() => setDetailRow(null)}
-          onDone={() => { chain.refetch(); td.refetch(); }}
-        />
+      {detailTarget && (
+        <Suspense fallback={null}>
+          <ContractDetailModal
+            call={detailTarget.call}
+            put={detailTarget.put}
+            initialSide={detailTarget.side}
+            spot={td.spot}
+            onClose={() => setDetailTarget(null)}
+            onDone={() => { chain.refetch(); td.refetch(); }}
+          />
+        </Suspense>
       )}
 
       {buyTarget && (

@@ -19,18 +19,26 @@ import type { UnifiedChainRow } from "../../hooks/useUnifiedChain";
  * Simple persona never opens this (stays jargon-free).
  */
 export const ContractDetailModal: FC<{
-  row: UnifiedChainRow;
+  call: UnifiedChainRow | null;
+  put: UnifiedChainRow | null;
+  initialSide: "call" | "put";
   spot: number | null;
   onClose: () => void;
   onDone: () => void;
-}> = ({ row, spot, onClose, onDone }) => {
+}> = ({ call, put, initialSide, spot, onClose, onDone }) => {
   const { publicKey } = useWallet();
   const { program } = useProgram();
   const { orders } = useBook();
   const peg = usePegFill();
   const fill = useFillOrder();
 
-  const isSeries = row.provenance === "series";
+  // The modal represents the STRIKE; the Call/Put toggle picks the active side.
+  // base = invariant fields (asset/strike/expiry, identical across sides).
+  const base = (call ?? put)!;
+  const [side, setSide] = useState<"call" | "put">(initialSide);
+  const row = side === "call" ? call : put; // active side; null = no market yet
+  const isSeries = row?.provenance === "series";
+
   const [rfq, setRfq] = useState<OptionPriceQuote | null>(null);
   const [rfqStatus, setRfqStatus] = useState("");
   const [held, setHeld] = useState<number | null>(null);
@@ -38,71 +46,75 @@ export const ContractDetailModal: FC<{
   const [status, setStatus] = useState<{ kind: "ok" | "err"; msg: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const days = Math.max(0, (row.expiry - Date.now() / 1000) / 86_400);
+  const days = Math.max(0, (base.expiry - Date.now() / 1000) / 86_400);
   const dte = Math.max(0, Math.ceil(days));
   const vol = useMemo(
-    () => (spot && spot > 0 ? applyVolSmile(getDefaultVolatility(row.asset), spot, row.strike, row.asset) : getDefaultVolatility(row.asset)),
-    [spot, row.asset, row.strike],
+    () => (spot && spot > 0 ? applyVolSmile(getDefaultVolatility(base.asset), spot, base.strike, base.asset) : getDefaultVolatility(base.asset)),
+    [spot, base.asset, base.strike],
   );
+  // Greeks/payoff are theoretical → computed for the active SIDE even if that
+  // side has no live market (mirrored for puts: delta + rho go negative).
   const greeks = useMemo(
-    () => (spot && spot > 0 ? calculateFullGreeks(row.optionType, spot, row.strike, days, vol, 0) : null),
-    [spot, row.optionType, row.strike, days, vol],
+    () => (spot && spot > 0 ? calculateFullGreeks(side, spot, base.strike, days, vol, 0) : null),
+    [spot, side, base.strike, days, vol],
   );
 
   // Premium for payoff/BE = the protocol RFQ when available, else the cheap mark.
   const premium = rfq?.premiumPerContract ?? greeks?.premium ?? null;
-  const breakeven = premium != null ? (row.optionType === "call" ? row.strike + premium : row.strike - premium) : null;
+  const breakeven = premium != null ? (side === "call" ? base.strike + premium : base.strike - premium) : null;
 
-  // One RFQ on open (series American only).
+  // One RFQ per active side (series American only). Re-fires on Call⇄Put toggle.
   useEffect(() => {
     let live = true;
-    if (!program || !isSeries) { setRfqStatus(isSeries ? "" : "EUR — model price only"); return; }
+    setRfq(null);
+    if (!program || !isSeries || !row) { setRfqStatus(row ? "EUR — model price only" : "no market yet"); return; }
     setRfqStatus("Pricing on-chain…");
     (async () => {
       try {
-        const marketPda = PublicKey.findProgramAddressSync([Buffer.from(MARKET_SEED), Buffer.from(row.asset)], PROGRAM_ID)[0];
+        const marketPda = PublicKey.findProgramAddressSync([Buffer.from(MARKET_SEED), Buffer.from(base.asset)], PROGRAM_ID)[0];
         const mkt: any = await (program.account as any).optionsMarket.fetch(marketPda);
         const q = await fetchOptionPriceQuote(program as any, { publicKey: marketPda, account: { pythFeedId: mkt.pythFeedId } }, {
-          strike: row.strike, expiryTs: row.expiry, side: row.optionType, exerciseStyle: "american", carryRateBps: 0,
+          strike: base.strike, expiryTs: base.expiry, side, exerciseStyle: "american", carryRateBps: 0,
         });
         if (live) { setRfq(q); setRfqStatus(`Protocol quote · oracle spot $${q.spotUsed.toFixed(2)}`); }
       } catch { if (live) setRfqStatus("On-chain quote unavailable"); }
     })();
     return () => { live = false; };
-  }, [program, row.optionMint]);
+  }, [program, row?.optionMint, side]);
 
-  // Held balance (series).
+  // Held balance (active side, series).
   useEffect(() => {
     let live = true;
     setHeld(null);
-    if (!isSeries || !row.optionMint || !publicKey || !program) return;
+    const mint = row?.optionMint;
+    if (!isSeries || !mint || !publicKey || !program) return;
     (async () => {
       try {
-        const ata = getAssociatedTokenAddressSync(new PublicKey(row.optionMint!), publicKey, false, TOKEN_2022_PROGRAM_ID);
+        const ata = getAssociatedTokenAddressSync(new PublicKey(mint), publicKey, false, TOKEN_2022_PROGRAM_ID);
         const bal = await program.provider.connection.getTokenAccountBalance(ata);
         if (live) setHeld(Number(bal.value.amount));
       } catch { if (live) setHeld(0); }
     })();
     return () => { live = false; };
-  }, [isSeries, row.optionMint, publicKey, program]);
+  }, [isSeries, row?.optionMint, publicKey, program]);
 
-  // Order book for this series: real asks + bids, plus the labeled vault peg level.
+  // Order book for the active side: real asks + bids, plus the labeled vault peg.
   const ladder = useMemo(() => {
-    const mine = orders.filter((o) => o.optionMint === row.optionMint);
+    const mine = row ? orders.filter((o) => o.optionMint === row.optionMint) : [];
     const asks = mine.filter((o) => o.kind !== "bid").sort((a, b) => b.price - a.price); // high→low (best at bottom)
     const bids = mine.filter((o) => o.kind === "bid").sort((a, b) => b.price - a.price); // high→low (best at top)
     const pegLevel = rfq ? { price: rfq.premiumPerContract, qty: null as number | null, peg: true } : null;
     const maxQty = Math.max(1, ...mine.map((o) => o.qty));
     return { asks, bids, pegLevel, maxQty };
-  }, [orders, row.optionMint, rfq]);
+  }, [orders, row?.optionMint, rfq]);
 
-  const itm = spot != null && (row.optionType === "call" ? spot > row.strike : spot < row.strike);
+  const itm = spot != null && (side === "call" ? spot > base.strike : spot < base.strike);
   const fmt = (n: number) => `$${n.toFixed(n < 100 ? 4 : 2)}`;
 
   async function buy() {
     setStatus(null);
     if (!publicKey) { setStatus({ kind: "err", msg: "Connect a wallet" }); return; }
-    if (!isSeries || !row.optionMint || premium == null) return;
+    if (!isSeries || !row || !row.optionMint || premium == null) return;
     setBusy(true);
     try {
       const sig = await peg.submit({ asset: row.asset, vault: row.vault, optionMint: row.optionMint }, qty, premium * 1.15);
@@ -132,14 +144,28 @@ export const ContractDetailModal: FC<{
         <div className="flex items-start justify-between p-6 border-b border-rule">
           <div>
             <div className="font-fraunces-text italic font-light text-ink text-[26px] leading-tight">
-              {row.asset} ${row.strike} {row.optionType === "call" ? "Call" : "Put"}
+              {base.asset} ${base.strike} {side === "call" ? "Call" : "Put"}
             </div>
             <div className="flex items-center gap-2 mt-2">
-              <Badge tone={isSeries ? "crimson" : "muted"}>{row.provenance}</Badge>
-              {row.exerciseStyle === "american" && <Badge tone="muted">american</Badge>}
+              <Badge tone={isSeries ? "crimson" : "muted"}>{row?.provenance ?? "no market"}</Badge>
+              {base.exerciseStyle === "american" && <Badge tone="muted">american</Badge>}
               <span className="font-mono text-[10.5px] uppercase tracking-[0.18em] text-ink-muted">
-                {new Date(row.expiry * 1000).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })} · {dte}d
+                {new Date(base.expiry * 1000).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })} · {dte}d
               </span>
+            </div>
+            {/* Call / Put toggle — the modal represents the strike (F). */}
+            <div className="flex gap-px bg-rule border border-rule rounded-md w-fit overflow-hidden mt-3">
+              {(["call", "put"] as const).map((s) => {
+                const has = s === "call" ? !!call : !!put;
+                return (
+                  <button key={s} type="button" onClick={() => setSide(s)}
+                    className={`font-mono text-[10.5px] uppercase tracking-[0.18em] px-4 py-1.5 transition-colors ${
+                      side === s ? "bg-ink text-paper" : has ? "bg-paper text-ink-muted hover:text-ink" : "bg-paper text-ink-muted/40"
+                    }`}>
+                    {s}{!has && " · no market"}
+                  </button>
+                );
+              })}
             </div>
           </div>
           <button type="button" onClick={onClose} className="font-mono text-ink-muted hover:text-ink text-[20px] leading-none px-2">×</button>
@@ -160,13 +186,13 @@ export const ContractDetailModal: FC<{
           <div className="bg-paper p-6">
             <SectionLabel>Payoff at expiry</SectionLabel>
             {spot != null && premium != null
-              ? <PayoffDiagram spot={spot} strike={row.strike} premium={premium} side={row.optionType} />
+              ? <PayoffDiagram spot={spot} strike={base.strike} premium={premium} side={side} />
               : <Empty>Spot unavailable</Empty>}
             {breakeven != null && premium != null && (
               <p className="font-sans text-[13px] text-ink-body leading-snug mt-3">
-                Pay {fmt(premium)} now. Profit if {row.asset} is{" "}
-                {row.optionType === "call" ? "above" : "below"} {fmt(breakeven)} by{" "}
-                {new Date(row.expiry * 1000).toLocaleDateString("en-GB", { day: "2-digit", month: "short" })}.
+                Pay {fmt(premium)} now. Profit if {base.asset} is{" "}
+                {side === "call" ? "above" : "below"} {fmt(breakeven)} by{" "}
+                {new Date(base.expiry * 1000).toLocaleDateString("en-GB", { day: "2-digit", month: "short" })}.
                 The most you can lose is {fmt(premium)}.
               </p>
             )}
@@ -188,16 +214,20 @@ export const ContractDetailModal: FC<{
           {/* Order book + trade */}
           <div className="bg-paper p-6">
             <SectionLabel>Order book</SectionLabel>
-            <div className="font-mono text-[12px]">
-              {ladder.asks.map((o) => <Level key={o.pubkey} price={o.price} qty={o.qty} max={ladder.maxQty} side="ask" />)}
-              {ladder.pegLevel && <Level price={ladder.pegLevel.price} qty={null} max={ladder.maxQty} side="ask" label="vault peg" />}
-              <div className="flex items-center justify-between py-1.5 my-1 border-y border-rule-soft text-ink-muted text-[10.5px] uppercase tracking-[0.18em]">
-                <span>spread</span>
-                <span>{ladder.asks.length && ladder.bids.length ? fmt((ladder.asks[ladder.asks.length - 1].price) - ladder.bids[0].price) : "—"}</span>
+            {row ? (
+              <div className="font-mono text-[12px]">
+                {ladder.asks.map((o) => <Level key={o.pubkey} price={o.price} qty={o.qty} max={ladder.maxQty} side="ask" />)}
+                {ladder.pegLevel && <Level price={ladder.pegLevel.price} qty={null} max={ladder.maxQty} side="ask" label="vault peg" />}
+                <div className="flex items-center justify-between py-1.5 my-1 border-y border-rule-soft text-ink-muted text-[10.5px] uppercase tracking-[0.18em]">
+                  <span>spread</span>
+                  <span>{ladder.asks.length && ladder.bids.length ? fmt((ladder.asks[ladder.asks.length - 1].price) - ladder.bids[0].price) : "—"}</span>
+                </div>
+                {ladder.bids.map((o) => <Level key={o.pubkey} price={o.price} qty={o.qty} max={ladder.maxQty} side="bid" />)}
+                {!ladder.asks.length && !ladder.bids.length && !ladder.pegLevel && <Empty>No resting orders</Empty>}
               </div>
-              {ladder.bids.map((o) => <Level key={o.pubkey} price={o.price} qty={o.qty} max={ladder.maxQty} side="bid" />)}
-              {!ladder.asks.length && !ladder.bids.length && !ladder.pegLevel && <Empty>No resting orders</Empty>}
-            </div>
+            ) : (
+              <Empty>No {side} market yet at this strike / expiry.</Empty>
+            )}
             <p className="font-mono text-[9.5px] text-ink-muted/70 mt-1">{rfqStatus}</p>
 
             {/* Position row */}
@@ -210,8 +240,8 @@ export const ContractDetailModal: FC<{
                 <div className="flex gap-2">
                   <button type="button" onClick={closePosition} disabled={submitting || !ladder.bids.length}
                     className="flex-1 font-mono text-[11px] uppercase tracking-[0.16em] border border-rule rounded py-2 text-ink hover:bg-paper-2 disabled:opacity-40 disabled:cursor-not-allowed">Close</button>
-                  <button type="button" disabled={!(row.exerciseStyle === "american" && itm)}
-                    title={row.exerciseStyle === "american" ? (itm ? "Exercise runs via Portfolio (Pyth-pull flow)" : "Out of the money") : "European — exercise at settlement"}
+                  <button type="button" disabled={!(base.exerciseStyle === "american" && itm)}
+                    title={base.exerciseStyle === "american" ? (itm ? "Exercise runs via Portfolio (Pyth-pull flow)" : "Out of the money") : "European — exercise at settlement"}
                     className="flex-1 font-mono text-[11px] uppercase tracking-[0.16em] border border-rule rounded py-2 text-ink-muted hover:text-ink disabled:opacity-40 disabled:cursor-not-allowed">Exercise</button>
                 </div>
               </div>

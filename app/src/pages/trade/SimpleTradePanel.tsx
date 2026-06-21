@@ -104,9 +104,9 @@ export const SimpleTradePanel: FC<{
   const expiryLabel = (e: number) => new Date(e * 1000).toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
 
   return (
-    <div className="grid lg:grid-cols-[1fr_340px] gap-8 items-start mt-4">
-      {/* Chart-dominant: the widget is the centerpiece (perps-style) */}
-      <div>
+    <div className="grid lg:grid-cols-[1fr_340px] gap-6 items-stretch mt-4">
+      {/* Chart-dominant: the widget fills the viewport height (perps-style) */}
+      <div className="flex flex-col">
         <div className="flex items-baseline gap-4 mb-3">
           <div className="font-fraunces-text italic font-light text-ink text-[32px]">{asset}</div>
           <div className="font-mono text-[20px] text-ink">{spot != null ? `$${spot.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : "—"}</div>
@@ -116,7 +116,9 @@ export const SimpleTradePanel: FC<{
             </div>
           )}
         </div>
-        <TradingViewWidget symbol={tvSymbol(asset)} height={560} />
+        <div className="flex-1">
+          <TradingViewWidget symbol={tvSymbol(asset)} height="calc(100dvh - 230px)" minHeight={560} />
+        </div>
       </div>
 
       {/* Ticket */}

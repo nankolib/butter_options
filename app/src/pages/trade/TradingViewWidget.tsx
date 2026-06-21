@@ -3,14 +3,19 @@ import { useEffect, useRef } from "react";
 
 /**
  * TradingViewWidget — free Advanced Real-Time Chart embed (Simple persona, T3).
- * No account/login. Injects the official embed script with a JSON config into a
- * container; rebuilds on symbol change. Client-only (uses document in an effect).
+ * No account/login. Injects the official embed script with a JSON config.
  *
- * CSP allow-listing for s3.tradingview.com / *.tradingview.com is deferred to
- * Pass 6 (flip day); behind TRADE_V2_UI the widget only loads in the dark build /
- * local dev, which isn't CSP-gated.
+ * Sizing (Pass 7): the embed honours `autosize:true` ONLY when its container has
+ * a DEFINITE height. We give the outer container an explicit height/minHeight and
+ * force the injected iframe to fill it (index.css `.tradingview-widget-container
+ * iframe { height:100%!important }`). Pass a large height so the chart dominates.
+ *
+ * CSP: s3.tradingview.com (script) + *.tradingview.com (frame/connect) are
+ * allow-listed in vercel.json. Client-only (uses document in an effect).
  */
-export const TradingViewWidget: FC<{ symbol: string; height?: number }> = ({ symbol, height = 440 }) => {
+export const TradingViewWidget: FC<{ symbol: string; height?: number | string; minHeight?: number }> = ({
+  symbol, height = 600, minHeight = 560,
+}) => {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -50,7 +55,7 @@ export const TradingViewWidget: FC<{ symbol: string; height?: number }> = ({ sym
     <div
       ref={ref}
       className="tradingview-widget-container border border-rule rounded-md overflow-hidden"
-      style={{ height, width: "100%" }}
+      style={{ height: typeof height === "number" ? `${height}px` : height, minHeight, width: "100%" }}
     />
   );
 };

@@ -2,13 +2,14 @@ import type { FC } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   createChart, CandlestickSeries, createSeriesMarkers, ColorType,
-  type IChartApi, type ISeriesApi, type UTCTimestamp,
+  type IChartApi, type ISeriesApi, type IPriceLine, type UTCTimestamp,
 } from "lightweight-charts";
 import { useProgram } from "../../hooks/useProgram";
 import {
   fetchUnderlyingCandles, fetchContractFills, synthesizeContractCandles,
   coingeckoId, CONTRACT_FILL_THRESHOLD, type Candle, type ContractFill,
 } from "../../utils/chartData";
+import { calculateCallPremium, calculatePutPremium, getDefaultVolatility, applyVolSmile } from "../../utils/blackScholes";
 import type { UnifiedChainRow } from "../../hooks/useUnifiedChain";
 
 /**
@@ -23,11 +24,12 @@ import type { UnifiedChainRow } from "../../hooks/useUnifiedChain";
 const MODE_KEY = "opta.trade.chart.mode";
 type Mode = "underlying" | "contract";
 
-export const PriceChart: FC<{ row: UnifiedChainRow | null; spot: number | null }> = ({ row }) => {
+export const PriceChart: FC<{ row: UnifiedChainRow | null; spot: number | null }> = ({ row, spot }) => {
   const { program } = useProgram();
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const priceLinesRef = useRef<IPriceLine[]>([]);
 
   const [mode, setMode] = useState<Mode>(() =>
     (typeof localStorage !== "undefined" && localStorage.getItem(MODE_KEY) === "contract") ? "contract" : "underlying",
@@ -100,6 +102,21 @@ export const PriceChart: FC<{ row: UnifiedChainRow | null; spot: number | null }
     return () => { chart.remove(); chartRef.current = null; seriesRef.current = null; };
   }, []);
 
+  // Strike + breakeven are SPOT levels → they belong on the UNDERLYING chart
+  // (spot Y-axis), not the CONTRACT chart (premium Y-axis, ~$6 — strike $75 would
+  // be off-scale). BE = strike ± the cheap-BS premium.
+  const overlay = useMemo(() => {
+    if (!row || !spot || spot <= 0) return null;
+    const d = Math.max(0, (row.expiry - Date.now() / 1000) / 86_400);
+    if (d <= 0) return { strike: row.strike, breakeven: null as number | null };
+    const vol = applyVolSmile(getDefaultVolatility(row.asset), spot, row.strike, row.asset);
+    const prem = row.optionType === "call"
+      ? calculateCallPremium(spot, row.strike, d, vol, 0, undefined, row.asset)
+      : calculatePutPremium(spot, row.strike, d, vol, 0, undefined, row.asset);
+    const breakeven = row.optionType === "call" ? row.strike + prem : row.strike - prem;
+    return { strike: row.strike, breakeven };
+  }, [row?.strike, row?.optionType, row?.expiry, row?.asset, spot]);
+
   // ---- Push data + overlays ----
   useEffect(() => {
     const series = seriesRef.current;
@@ -107,18 +124,26 @@ export const PriceChart: FC<{ row: UnifiedChainRow | null; spot: number | null }
     series.setData(candles.map((c) => ({ ...c, time: c.time as UTCTimestamp })));
     chartRef.current?.timeScale().fitContent();
 
-    // Strike line (CONTRACT mode only).
-    if (mode === "contract" && row) {
-      // setData replaces the series; re-create the strike line each push.
-      series.createPriceLine({ price: row.strike, color: "#D7263D", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: "K" });
+    // Clear prior price lines (setData keeps them; we recreate each push).
+    for (const pl of priceLinesRef.current) series.removePriceLine(pl);
+    priceLinesRef.current = [];
+
+    // Strike + breakeven lines on the UNDERLYING (spot-axis) chart only.
+    if (mode === "underlying" && overlay) {
+      priceLinesRef.current.push(series.createPriceLine({
+        price: overlay.strike, color: "#504B41", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: "strike",
+      }));
+      if (overlay.breakeven != null) {
+        priceLinesRef.current.push(series.createPriceLine({
+          price: overlay.breakeven, color: "#0F766E", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: "BE",
+        }));
+      }
     }
     // Real-fill markers (CONTRACT mode, when we have any).
-    if (mode === "contract" && fills.length) {
-      createSeriesMarkers(series, fills.map((f) => ({
-        time: f.time as UTCTimestamp, position: "belowBar" as const, color: "#D7263D", shape: "circle" as const, text: `${f.qty}`,
-      })));
-    }
-  }, [candles, fills, mode, row?.strike]);
+    createSeriesMarkers(series, mode === "contract" && fills.length
+      ? fills.map((f) => ({ time: f.time as UTCTimestamp, position: "belowBar" as const, color: "#D7263D", shape: "circle" as const, text: `${f.qty}` }))
+      : []);
+  }, [candles, fills, mode, overlay]);
 
   if (!row) {
     return (

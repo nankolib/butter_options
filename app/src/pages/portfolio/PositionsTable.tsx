@@ -204,7 +204,7 @@ function actionLabel(action: PositionAction): string {
     case "exercise-american":
       return "Exercise Early";
     case "list-resale":
-      return "List for Resale";
+      return "List for Resale (legacy)";
     case "cancel-resale":
       return "Cancel Listing";
     case "burn":
@@ -220,7 +220,10 @@ function actionStyle(action: PositionAction): string {
     case "exercise-american":
       return "border-ink bg-ink text-paper hover:bg-transparent hover:text-ink";
     case "list-resale":
-      return "border-ink text-ink hover:bg-ink hover:text-paper";
+      // Legacy-resale sunset (Pass 7): de-emphasised to a quiet secondary
+      // affordance now that the series book is the path. Still functional —
+      // legacy positions can list until expiry; routing unchanged.
+      return "border-rule text-ink-muted hover:border-ink hover:text-ink";
     case "cancel-resale":
       return "border-rule text-ink-body hover:border-ink hover:text-ink";
     case "burn":

@@ -22,6 +22,13 @@ import type { UnifiedChainRow } from "../../hooks/useUnifiedChain";
 /** The focused contract is the full unified row (carries bid/ask/oi/mark). */
 export type FocusedContract = UnifiedChainRow;
 
+/** A strike's both sides + which to open the detail modal on (F). */
+export interface DetailTarget {
+  call: UnifiedChainRow | null;
+  put: UnifiedChainRow | null;
+  side: "call" | "put";
+}
+
 interface GridRow {
   strike: number;
   call: UnifiedChainRow | null;
@@ -49,7 +56,7 @@ export const TradeChainV2: FC<{
   atmStrike: number | null;
   focused: FocusedContract | null;
   onSelect: (c: FocusedContract) => void;
-  onShowDetails: (c: FocusedContract) => void;
+  onShowDetails: (t: DetailTarget) => void;
 }> = ({ rows, spot, atmStrike, focused, onSelect, onShowDetails }) => {
   const gridRows = useMemo<GridRow[]>(() => {
     const byStrike = new Map<number, GridRow>();
@@ -112,14 +119,14 @@ const GridRowEl: FC<{
   isAtm: boolean;
   focused: FocusedContract | null;
   onSelect: (c: FocusedContract) => void;
-  onShowDetails: (c: FocusedContract) => void;
+  onShowDetails: (t: DetailTarget) => void;
 }> = ({ g, spot, isAtm, focused, onSelect, onShowDetails }) => {
   const provs = [g.call?.provenance, g.put?.provenance].filter(Boolean) as ("series" | "legacy")[];
   const badge = provs.includes("series")
     ? provs.includes("legacy") ? "SER·LEG" : "SERIES"
     : provs.length ? "LEGACY" : "";
-  // Details target: prefer the series side, else whichever exists.
-  const detail = [g.call, g.put].find((r) => r?.provenance === "series") ?? g.call ?? g.put;
+  // Strike-cell ⤢ opens the detail modal (both sides; Call default if both exist).
+  const hasAny = !!(g.call || g.put);
 
   return (
     <tr className={`border-t border-b ${isAtm ? "border-rule" : "border-rule-soft"} align-middle`}>
@@ -128,7 +135,7 @@ const GridRowEl: FC<{
       <td className="px-2 py-2 sm:px-3 sm:py-4 text-center align-middle">
         <button
           type="button"
-          onClick={() => detail && onShowDetails(detail)}
+          onClick={() => hasAny && onShowDetails({ call: g.call, put: g.put, side: g.call ? "call" : "put" })}
           title="Contract details"
           className="group inline-flex items-center gap-1 hover:text-crimson transition-colors"
         >

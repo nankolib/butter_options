@@ -10,6 +10,7 @@ import { TradeChainV2, type FocusedContract } from "./TradeChainV2";
 import { OrderTicket } from "./OrderTicket";
 import { PriceChart } from "./PriceChart";
 import { SimpleTradePanel } from "./SimpleTradePanel";
+import { ContractDetailModal } from "./ContractDetailModal";
 import { BuyModal } from "./BuyModal";
 import { useTradeData, type Offering } from "./useTradeData";
 import { useUnifiedChain } from "../../hooks/useUnifiedChain";
@@ -50,6 +51,7 @@ export const TradePageV2: FC = () => {
   }, [view]);
 
   const [focused, setFocused] = useState<FocusedContract | null>(null);
+  const [detailRow, setDetailRow] = useState<FocusedContract | null>(null);
 
   // Legacy Buy bridges to the existing classic BuyModal (purchase_from_vault /
   // buy_v2_resale) — reuse, not reimplementation.
@@ -91,6 +93,13 @@ export const TradePageV2: FC = () => {
       ),
     [chain.rows, td.selectedAsset, td.selectedExpiry],
   );
+
+  // Pro default focus → the SERIES row (the seeded $75) on load, not the legacy.
+  useEffect(() => {
+    if (focused || persona !== "pro" || !visibleRows.length) return;
+    const series = visibleRows.find((r) => r.provenance === "series");
+    if (series) setFocused(series);
+  }, [visibleRows, persona, focused]);
 
   const seriesCount = visibleRows.filter((r) => r.provenance === "series").length;
   const totalOi = visibleRows.reduce((n, r) => n + r.oi, 0);
@@ -184,6 +193,7 @@ export const TradePageV2: FC = () => {
                   atmStrike={td.atmStrike}
                   focused={focused}
                   onSelect={setFocused}
+                  onShowDetails={setDetailRow}
                 />
                 {focused && (
                   <div className="lg:sticky lg:top-[120px]">
@@ -219,6 +229,15 @@ export const TradePageV2: FC = () => {
 
         <TradeFooter />
       </main>
+
+      {detailRow && (
+        <ContractDetailModal
+          row={detailRow}
+          spot={td.spot}
+          onClose={() => setDetailRow(null)}
+          onDone={() => { chain.refetch(); td.refetch(); }}
+        />
+      )}
 
       {buyTarget && (
         <BuyModal

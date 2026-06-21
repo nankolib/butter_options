@@ -49,7 +49,8 @@ export const TradeChainV2: FC<{
   atmStrike: number | null;
   focused: FocusedContract | null;
   onSelect: (c: FocusedContract) => void;
-}> = ({ rows, spot, atmStrike, focused, onSelect }) => {
+  onShowDetails: (c: FocusedContract) => void;
+}> = ({ rows, spot, atmStrike, focused, onSelect, onShowDetails }) => {
   const gridRows = useMemo<GridRow[]>(() => {
     const byStrike = new Map<number, GridRow>();
     for (const r of rows) {
@@ -96,6 +97,7 @@ export const TradeChainV2: FC<{
               isAtm={atmStrike != null && g.strike === atmStrike}
               focused={focused}
               onSelect={onSelect}
+              onShowDetails={onShowDetails}
             />
           ))}
         </tbody>
@@ -110,20 +112,31 @@ const GridRowEl: FC<{
   isAtm: boolean;
   focused: FocusedContract | null;
   onSelect: (c: FocusedContract) => void;
-}> = ({ g, spot, isAtm, focused, onSelect }) => {
+  onShowDetails: (c: FocusedContract) => void;
+}> = ({ g, spot, isAtm, focused, onSelect, onShowDetails }) => {
   const provs = [g.call?.provenance, g.put?.provenance].filter(Boolean) as ("series" | "legacy")[];
   const badge = provs.includes("series")
     ? provs.includes("legacy") ? "SER·LEG" : "SERIES"
     : provs.length ? "LEGACY" : "";
+  // Details target: prefer the series side, else whichever exists.
+  const detail = [g.call, g.put].find((r) => r?.provenance === "series") ?? g.call ?? g.put;
 
   return (
     <tr className={`border-t border-b ${isAtm ? "border-rule" : "border-rule-soft"} align-middle`}>
       <SideCells row={g.call} side="call" spot={spot} focused={focused} onSelect={onSelect} />
 
       <td className="px-2 py-2 sm:px-3 sm:py-4 text-center align-middle">
-        <div className="font-fraunces-text italic font-light text-ink text-[18px] leading-tight">
-          ${fmtStrike(g.strike)}
-        </div>
+        <button
+          type="button"
+          onClick={() => detail && onShowDetails(detail)}
+          title="Contract details"
+          className="group inline-flex items-center gap-1 hover:text-crimson transition-colors"
+        >
+          <span className="font-fraunces-text italic font-light text-ink group-hover:text-crimson text-[18px] leading-tight">
+            ${fmtStrike(g.strike)}
+          </span>
+          <span className="font-mono text-[10px] text-ink-muted group-hover:text-crimson">⤢</span>
+        </button>
         {badge && (
           <div className={`font-mono text-[8.5px] uppercase tracking-[0.18em] mt-1 ${
             badge === "LEGACY" ? "text-ink-muted" : "text-crimson"

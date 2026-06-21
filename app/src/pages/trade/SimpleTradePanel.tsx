@@ -37,6 +37,16 @@ export const SimpleTradePanel: FC<{
 
   const day = (ts: number) => Math.floor(ts / 86_400);
 
+  // Default the expiry to the first one that actually has a market for this
+  // asset+direction (skip empty expiries, e.g. SOL·Up → Jul 31 not Jun 25).
+  useEffect(() => {
+    const want = direction === "up" ? "call" : "put";
+    const has = (e: number) => rows.some((r) => r.provenance === "series" && r.optionType === want && day(r.expiry) === day(e));
+    if (has(selectedExpiry)) return;
+    const first = expiries.find(has);
+    if (first != null) setSelectedExpiry(first);
+  }, [rows, direction, expiries, selectedExpiry]);
+
   // 24h change from a 1-day CoinGecko OHLC (best-effort).
   useEffect(() => {
     let live = true;
@@ -94,19 +104,19 @@ export const SimpleTradePanel: FC<{
   const expiryLabel = (e: number) => new Date(e * 1000).toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
 
   return (
-    <div className="grid lg:grid-cols-[1fr_380px] gap-8 items-start mt-4">
-      {/* Chart + asset header */}
+    <div className="grid lg:grid-cols-[1fr_340px] gap-8 items-start mt-4">
+      {/* Chart-dominant: the widget is the centerpiece (perps-style) */}
       <div>
         <div className="flex items-baseline gap-4 mb-3">
-          <div className="font-fraunces-text italic font-light text-ink text-[28px]">{asset}</div>
-          <div className="font-mono text-[18px] text-ink">{spot != null ? `$${spot.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : "—"}</div>
+          <div className="font-fraunces-text italic font-light text-ink text-[32px]">{asset}</div>
+          <div className="font-mono text-[20px] text-ink">{spot != null ? `$${spot.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : "—"}</div>
           {pct24h != null && (
-            <div className={`font-mono text-[13px] ${pct24h >= 0 ? "text-teal" : "text-crimson"}`}>
+            <div className={`font-mono text-[14px] ${pct24h >= 0 ? "text-teal" : "text-crimson"}`}>
               {pct24h >= 0 ? "+" : ""}{pct24h.toFixed(2)}% 24h
             </div>
           )}
         </div>
-        <TradingViewWidget symbol={tvSymbol(asset)} />
+        <TradingViewWidget symbol={tvSymbol(asset)} height={560} />
       </div>
 
       {/* Ticket */}

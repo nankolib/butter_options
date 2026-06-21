@@ -366,3 +366,33 @@ export function calculatePutGreeks(
 
   return { delta, gamma, theta, vega, premium };
 }
+
+/** Full greeks for the contract-detail modal: Δ Γ Θ(/day) V(/1% IV) ρ(/1% r) λ. */
+export interface FullGreeks extends Greeks {
+  /** Per 1% change in the risk-free rate (USD). */
+  rho: number;
+  /** Elasticity / leverage: delta · spot / premium. */
+  lambda: number;
+}
+
+export function calculateFullGreeks(
+  side: "call" | "put",
+  spotPrice: number,
+  strikePrice: number,
+  daysToExpiry: number,
+  volatility: number,
+  riskFreeRate = 0,
+): FullGreeks {
+  const base = side === "call"
+    ? calculateCallGreeks(spotPrice, strikePrice, daysToExpiry, volatility, riskFreeRate)
+    : calculatePutGreeks(spotPrice, strikePrice, daysToExpiry, volatility, riskFreeRate);
+  if (daysToExpiry <= 0 || spotPrice <= 0 || strikePrice <= 0) {
+    return { ...base, rho: 0, lambda: 0 };
+  }
+  const T = daysToExpiry / 365;
+  const { d2 } = calcD1D2(spotPrice, strikePrice, T, volatility, riskFreeRate);
+  const disc = strikePrice * T * Math.exp(-riskFreeRate * T);
+  const rho = (side === "call" ? disc * normalCDF(d2) : -disc * normalCDF(-d2)) / 100;
+  const lambda = base.premium > 0 ? (base.delta * spotPrice) / base.premium : 0;
+  return { ...base, rho, lambda };
+}

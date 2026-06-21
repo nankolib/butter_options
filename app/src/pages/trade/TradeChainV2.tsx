@@ -19,15 +19,8 @@ import type { UnifiedChainRow } from "../../hooks/useUnifiedChain";
  * (Pass 3) will read that focused state.
  */
 
-export interface FocusedContract {
-  asset: string;
-  strike: number;
-  expiry: number;
-  optionType: "call" | "put";
-  provenance: "series" | "legacy";
-  optionMint: string | null;
-  vault: string;
-}
+/** The focused contract is the full unified row (carries bid/ask/oi/mark). */
+export type FocusedContract = UnifiedChainRow;
 
 interface GridRow {
   strike: number;
@@ -169,7 +162,7 @@ const SideCells: FC<{
   }
   const m = mark(row, spot);
   const isFocused =
-    focused != null && focused.vault === row.vault && focused.optionType === row.optionType;
+    focused != null && focused.vault === row.vault && focused.optionType === row.optionType && focused.strike === row.strike;
   const bid = <Td align={align}>{row.bestBid != null ? <span className="text-ink">{fmtPrice(row.bestBid)}</span> : "—"}</Td>;
   const ask = <Td align={align}>{row.bestAsk != null ? <span className="text-ink">{fmtPrice(row.bestAsk)}</span> : "—"}</Td>;
   const oi = <Td align={align}>{row.oi > 0 ? row.oi.toLocaleString() : "—"}</Td>;
@@ -177,13 +170,7 @@ const SideCells: FC<{
     <td className={`px-2 py-2 sm:px-3 sm:py-3 align-middle ${align === "right" ? "text-right" : "text-left"}`}>
       <button
         type="button"
-        onClick={() =>
-          onSelect({
-            asset: row.asset, strike: row.strike, expiry: row.expiry,
-            optionType: row.optionType, provenance: row.provenance,
-            optionMint: row.optionMint, vault: row.vault,
-          })
-        }
+        onClick={() => onSelect(row)}
         className={`font-mono text-[13px] leading-tight px-2 py-1 rounded transition-colors ${
           isFocused ? "bg-crimson/10 text-crimson" : "text-ink-body hover:bg-paper-2"
         }`}

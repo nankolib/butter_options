@@ -7,7 +7,9 @@ import { TradeStatementHeader } from "./TradeStatementHeader";
 import { ExpiryTabs } from "./ExpiryTabs";
 import { TradeFooter } from "./TradeFooter";
 import { TradeChainV2, type FocusedContract } from "./TradeChainV2";
-import { useTradeData } from "./useTradeData";
+import { OrderTicket } from "./OrderTicket";
+import { BuyModal } from "./BuyModal";
+import { useTradeData, type Offering } from "./useTradeData";
 import { useUnifiedChain } from "../../hooks/useUnifiedChain";
 
 /**
@@ -39,6 +41,26 @@ export const TradePageV2: FC = () => {
   }, [view]);
 
   const [focused, setFocused] = useState<FocusedContract | null>(null);
+
+  // Legacy Buy bridges to the existing classic BuyModal (purchase_from_vault /
+  // buy_v2_resale) — reuse, not reimplementation.
+  const [buyTarget, setBuyTarget] = useState<{
+    offerings: Offering[]; side: "call" | "put"; asset: string; strike: number;
+    expiry: number; fairPremium: number; ivSmiled: number; spot: number | null;
+    stale: boolean; initialSelected: Offering | null;
+  } | null>(null);
+
+  const onLegacyBuy = (r: FocusedContract) => {
+    const cr = td.rows.find((x) => x.strike === r.strike);
+    if (!cr) return;
+    const offerings = r.optionType === "call" ? cr.callOfferings : cr.putOfferings;
+    setBuyTarget({
+      offerings, side: r.optionType, asset: td.selectedAsset, strike: r.strike,
+      expiry: td.selectedExpiry, fairPremium: r.optionType === "call" ? cr.callPremium : cr.putPremium,
+      ivSmiled: cr.ivSmiled, spot: td.spot, stale: td.stale,
+      initialSelected: offerings.find((o) => !(o.kind === "resale" && o.isSelfListing)) ?? null,
+    });
+  };
 
   const monthLabel = useMemo(
     () => new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" }),
@@ -116,13 +138,25 @@ export const TradePageV2: FC = () => {
             />
 
             {view === "grid" ? (
-              <TradeChainV2
-                rows={visibleRows}
-                spot={td.spot}
-                atmStrike={td.atmStrike}
-                focused={focused}
-                onSelect={setFocused}
-              />
+              <div className={focused ? "grid lg:grid-cols-[1fr_360px] gap-8 items-start" : ""}>
+                <TradeChainV2
+                  rows={visibleRows}
+                  spot={td.spot}
+                  atmStrike={td.atmStrike}
+                  focused={focused}
+                  onSelect={setFocused}
+                />
+                {focused && (
+                  <div className="lg:sticky lg:top-[120px]">
+                    <OrderTicket
+                      row={focused}
+                      spot={td.spot}
+                      onDone={() => { chain.refetch(); td.refetch(); }}
+                      onLegacyBuy={onLegacyBuy}
+                    />
+                  </div>
+                )}
+              </div>
             ) : (
               <div className="border border-rule rounded-md p-16 text-center my-2">
                 <p className="font-fraunces-text italic font-light text-ink text-[22px] m-0">chart</p>
@@ -151,6 +185,23 @@ export const TradePageV2: FC = () => {
 
         <TradeFooter />
       </main>
+
+      {buyTarget && (
+        <BuyModal
+          asset={buyTarget.asset}
+          side={buyTarget.side}
+          strike={buyTarget.strike}
+          expiry={buyTarget.expiry}
+          spot={buyTarget.spot}
+          stale={buyTarget.stale}
+          fairPremium={buyTarget.fairPremium}
+          ivSmiled={buyTarget.ivSmiled}
+          offerings={buyTarget.offerings}
+          initialSelected={buyTarget.initialSelected}
+          onClose={() => setBuyTarget(null)}
+          onSuccess={() => { chain.refetch(); td.refetch(); }}
+        />
+      )}
     </div>
   );
 };

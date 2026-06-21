@@ -8,6 +8,7 @@ import { ExpiryTabs } from "./ExpiryTabs";
 import { TradeFooter } from "./TradeFooter";
 import { TradeChainV2, type FocusedContract } from "./TradeChainV2";
 import { OrderTicket } from "./OrderTicket";
+import { PriceChart } from "./PriceChart";
 import { BuyModal } from "./BuyModal";
 import { useTradeData, type Offering } from "./useTradeData";
 import { useUnifiedChain } from "../../hooks/useUnifiedChain";
@@ -158,12 +159,7 @@ export const TradePageV2: FC = () => {
                 )}
               </div>
             ) : (
-              <div className="border border-rule rounded-md p-16 text-center my-2">
-                <p className="font-fraunces-text italic font-light text-ink text-[22px] m-0">chart</p>
-                <p className="font-mono text-[10.5px] uppercase tracking-[0.2em] text-ink-muted mt-2 m-0">
-                  Pass 3
-                </p>
-              </div>
+              <PriceChart row={focused} spot={td.spot} />
             )}
 
             {/* Minimal summary band (reused hairline rhythm). */}

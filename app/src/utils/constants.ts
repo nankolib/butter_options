@@ -134,6 +134,17 @@ export const USE_V2_VAULTS = true;
 export const AMERICAN_ENABLED_UI = true;
 
 // ============================================================================
+// Exchange Trade-page arc — v2 GRID/CHART UI gate (Trade-page spec T1)
+// ============================================================================
+// Gates the whole new exchange Trade page (unified series+legacy chain, order
+// ticket, chart). The entire arc (Passes 1–5) develops behind this flag:
+// when false, TradePage renders the current production page byte-identically;
+// when true, it renders the new TradePageV2. Flip to true at Pass 5, once the
+// page is complete — prevents Vercel (auto-deploys main) shipping a half-built
+// page mid-arc. Mirrors the AMERICAN_ENABLED_UI dark-launch pattern.
+export const TRADE_V2_UI = false;
+
+// ============================================================================
 // Phase 2 demo cutoff
 // ============================================================================
 // Hide vaults created before the Phase 2 redeploy (2026-04-26 ~18:00 UTC).

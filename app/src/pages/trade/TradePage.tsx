@@ -12,9 +12,18 @@ import { OptionsChain } from "./OptionsChain";
 import { BuyModal } from "./BuyModal";
 import { TradeFooter } from "./TradeFooter";
 import { useTradeData, type Offering } from "./useTradeData";
+import { TRADE_V2_UI } from "../../utils/constants";
+import { TradePageV2 } from "./TradePageV2";
 
 /**
- * TradePage — the trader's options chain surface.
+ * TradePage — flag switch between the current production page (TradePageV1,
+ * unchanged) and the new exchange Trade page (TradePageV2). Gated by
+ * TRADE_V2_UI (default false) so the v2 arc develops dark until Pass 5.
+ */
+export const TradePage: FC = () => (TRADE_V2_UI ? <TradePageV2 /> : <TradePageV1 />);
+
+/**
+ * TradePageV1 — the trader's options chain surface (current production page).
  *
  * Composition: AppNav → statement header (title + asset chips) →
  * market context strip → expiry tabs → options chain → summary band →
@@ -24,7 +33,7 @@ import { useTradeData, type Offering } from "./useTradeData";
  * V1 codepath was dropped tonight (USE_V2_VAULTS has been true in
  * production for some time and the legacy chain build was dead).
  */
-export const TradePage: FC = () => {
+const TradePageV1: FC = () => {
   usePaperPalette();
   const data = useTradeData();
   const [buyTarget, setBuyTarget] = useState<{

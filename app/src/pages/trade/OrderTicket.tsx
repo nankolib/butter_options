@@ -7,8 +7,17 @@ import { useProgram } from "../../hooks/useProgram";
 import { useBook } from "../../hooks/useBook";
 import { usePegFill, usePostOrder, useFillOrder } from "../../hooks/useOrderFlows";
 import { calculateCallGreeks, calculatePutGreeks, getDefaultVolatility, applyVolSmile } from "../../utils/blackScholes";
-import { TOKEN_2022_PROGRAM_ID } from "../../utils/constants";
+import { TOKEN_2022_PROGRAM_ID, MARKET_SEED, PROGRAM_ID } from "../../utils/constants";
+import {
+  fetchOptionPriceQuote, describeOptionPriceQuoteStatus,
+  OptionPriceQuoteFailure, type OptionPriceQuote,
+} from "../../utils/optionPriceQuote";
 import type { UnifiedChainRow } from "../../hooks/useUnifiedChain";
+
+// Quote-on-demand short-TTL cache, keyed by series mint (premium is per-contract,
+// size-independent). Browsing the chain never touches this — only the RFQ button.
+const RFQ_TTL_MS = 15_000;
+const rfqCache = new Map<string, { q: OptionPriceQuote; at: number }>();
 
 /**
  * OrderTicket — the write path for the v2 Trade page (Pass 2).
@@ -53,7 +62,39 @@ export const OrderTicket: FC<{
   const [status, setStatus] = useState<{ kind: "ok" | "err"; msg: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // RFQ (quote-on-demand) state.
+  const [rfq, setRfq] = useState<OptionPriceQuote | null>(null);
+  const [rfqLoading, setRfqLoading] = useState(false);
+  const [rfqError, setRfqError] = useState<OptionPriceQuoteFailure | null>(null);
+
   const isSeries = row.provenance === "series";
+
+  // Reset the RFQ when the focused contract changes.
+  useEffect(() => { setRfq(null); setRfqError(null); }, [row.vault, row.optionType, row.strike]);
+
+  // On-chain quote-on-demand: fire get_option_price for this series (American
+  // only). Short-TTL cached by mint; never auto-fires — button-triggered.
+  async function requestQuote() {
+    if (!program || !isSeries) return;
+    const key = row.optionMint ?? `${row.vault}:${row.optionType}`;
+    const hit = rfqCache.get(key);
+    if (hit && Date.now() - hit.at < RFQ_TTL_MS) { setRfq(hit.q); setRfqError(null); return; }
+    setRfqLoading(true); setRfqError(null);
+    try {
+      const marketPda = PublicKey.findProgramAddressSync([Buffer.from(MARKET_SEED), Buffer.from(row.asset)], PROGRAM_ID)[0];
+      const mkt: any = await (program.account as any).optionsMarket.fetch(marketPda);
+      const q = await fetchOptionPriceQuote(program as any, { publicKey: marketPda, account: { pythFeedId: mkt.pythFeedId } }, {
+        strike: row.strike, expiryTs: row.expiry, side: row.optionType, exerciseStyle: "american", carryRateBps: 0,
+      });
+      rfqCache.set(key, { q, at: Date.now() });
+      setRfq(q);
+    } catch (e: any) {
+      setRfqError(e instanceof OptionPriceQuoteFailure ? e : new OptionPriceQuoteFailure("unknown", null));
+      setRfq(null);
+    } finally {
+      setRfqLoading(false);
+    }
+  }
 
   // Held balance of the focused series mint (for Sell·Limit gate + Sell·Market).
   useEffect(() => {
@@ -84,7 +125,10 @@ export const OrderTicket: FC<{
     return g;
   }, [spot, days, row.asset, row.optionType, row.strike]);
 
-  const estPrice = (type === "limit" ? limitPrice : refPrice) ?? mark?.premium ?? null;
+  // For Buy, a live RFQ (protocol ask) takes precedence over the cheap aggregate.
+  const estPrice = type === "limit"
+    ? limitPrice
+    : ((side === "buy" ? rfq?.premiumPerContract : undefined) ?? refPrice ?? mark?.premium ?? null);
   const estTotal = estPrice != null ? estPrice * qty : null;
 
   // Readouts (T-spec): λ elasticity, decay (θ/day), no-liquidation reminder.
@@ -217,11 +261,32 @@ export const OrderTicket: FC<{
         <Stat label="Liquidation" value="None" sub="max loss = premium" />
       </div>
 
-      {/* RFQ — Pass 4 (not wired) */}
-      <button type="button" disabled title="Quote-on-demand ships in Pass 4"
-        className="w-full font-mono text-[10.5px] uppercase tracking-[0.18em] border border-rule rounded-md py-2 mb-3 text-ink-muted/50 cursor-not-allowed">
-        Request quote · Pass 4
-      </button>
+      {/* RFQ — on-chain quote-on-demand (T5) */}
+      {isSeries ? (
+        <div className="mb-3">
+          <button type="button" onClick={requestQuote} disabled={rfqLoading}
+            className="w-full font-mono text-[10.5px] uppercase tracking-[0.18em] border border-rule rounded-md py-2 text-ink hover:bg-paper-2 transition-colors disabled:opacity-50 disabled:cursor-wait">
+            {rfqLoading ? "Pricing on-chain…" : rfq ? "Re-quote" : "Request quote"}
+          </button>
+          {(rfq || rfqError) && (
+            <div className="mt-2">
+              {rfq && (
+                <div className="font-mono text-[13px] text-ink">
+                  Protocol quote · {fmt(rfq.premiumPerContract)}/contract · total {fmt(rfq.premiumPerContract * qty)}
+                </div>
+              )}
+              <div className="font-mono text-[9.5px] text-ink-muted/70 mt-0.5">
+                {describeOptionPriceQuoteStatus(rfqLoading, rfqError, rfq)}
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
+        <button type="button" disabled title="On-chain quote is American-only; EUR uses the model price"
+          className="w-full font-mono text-[10.5px] uppercase tracking-[0.18em] border border-rule rounded-md py-2 mb-3 text-ink-muted/50 cursor-not-allowed">
+          Request quote · model price (EUR)
+        </button>
+      )}
 
       {/* Submit */}
       <button type="button" disabled={submitting || sellNoBalance || !publicKey}

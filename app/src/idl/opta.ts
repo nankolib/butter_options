@@ -1247,6 +1247,229 @@ export type Opta = {
       "args": []
     },
     {
+      "name": "createAndDeposit",
+      "docs": [
+        "Exchange Phase 2 Pass C — atomic write merge (D9). Fuses create_shared_vault",
+        "+ deposit_to_vault into ONE tx via init_if_needed: the first caller for a",
+        "spec creates + deposits, a subsequent caller just deposits. The heavy mint",
+        "left the write path (D8/D9), so this carries no Token-2022 mint + no",
+        "BS-2002. Kills the partial-flow stranded-collateral hazard structurally.",
+        "Additive — create_shared_vault + deposit_to_vault stay live. EUR",
+        "byte-identical; American keeps create_shared_vault's AMERICAN_ENABLED gate.",
+        "Spec: §7.3.3 / §7.6."
+      ],
+      "discriminator": [
+        149,
+        232,
+        62,
+        162,
+        238,
+        69,
+        34,
+        47
+      ],
+      "accounts": [
+        {
+          "name": "writer",
+          "docs": [
+            "The depositor — also the creator on a fresh vault. Pays all rent."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "market",
+          "docs": [
+            "The OptionsMarket this vault is for."
+          ]
+        },
+        {
+          "name": "sharedVault",
+          "docs": [
+            "The SharedVault PDA — unique per (namespace/exercise_style, market,",
+            "strike, expiry, option_type). `init_if_needed`: created on the first",
+            "caller, reused on subsequent deposits into the same spec."
+          ],
+          "writable": true
+        },
+        {
+          "name": "vaultUsdcAccount",
+          "docs": [
+            "The vault's USDC token account (authority = shared_vault PDA). Pinned by",
+            "its own PDA seeds — NOT by shared_vault.vault_usdc_account, which is zero",
+            "at constraint-eval time on a fresh init."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116,
+                  95,
+                  117,
+                  115,
+                  100,
+                  99
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "sharedVault"
+              }
+            ]
+          }
+        },
+        {
+          "name": "usdcMint",
+          "docs": [
+            "USDC mint — pinned to the protocol's stored USDC mint."
+          ]
+        },
+        {
+          "name": "writerPosition",
+          "docs": [
+            "Writer's position — created on first deposit, accumulated thereafter."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  119,
+                  114,
+                  105,
+                  116,
+                  101,
+                  114,
+                  95,
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "sharedVault"
+              },
+              {
+                "kind": "account",
+                "path": "writer"
+              }
+            ]
+          }
+        },
+        {
+          "name": "writerUsdcAccount",
+          "docs": [
+            "Writer's USDC account — source of collateral. Pinned to `usdc_mint`",
+            "(not the vault's stored collateral_mint, which is zero on a fresh init)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "protocolState",
+          "docs": [
+            "Protocol state — USDC mint validation."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "epochConfig",
+          "docs": [
+            "Epoch config — required for Epoch vaults on fresh create, else optional."
+          ],
+          "optional": true
+        },
+        {
+          "name": "tokenProgram",
+          "docs": [
+            "Standard SPL Token program."
+          ],
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "strikePrice",
+          "type": "u64"
+        },
+        {
+          "name": "expiry",
+          "type": "i64"
+        },
+        {
+          "name": "optionType",
+          "type": {
+            "defined": {
+              "name": "optionType"
+            }
+          }
+        },
+        {
+          "name": "vaultType",
+          "type": {
+            "defined": {
+              "name": "vaultType"
+            }
+          }
+        },
+        {
+          "name": "collateralMint",
+          "type": "pubkey"
+        },
+        {
+          "name": "carryRateBps",
+          "type": "i32"
+        },
+        {
+          "name": "exerciseStyle",
+          "type": {
+            "defined": {
+              "name": "exerciseStyle"
+            }
+          }
+        },
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "createMarket",
       "docs": [
         "Register a supported asset (permissionless, idempotent).",
@@ -2300,6 +2523,228 @@ export type Opta = {
       ]
     },
     {
+      "name": "fillVaultPeg",
+      "docs": [
+        "Exchange Phase 2 Pass B — fill the standing vault peg: price an American",
+        "series at fill time (BS-2002 + spread_bps via the shared price_american",
+        "helper), take USDC (pool premium + fee), and mint `quantity` contracts",
+        "to the taker from pooled vault collateral. `max_premium` is the taker's",
+        "fee-inclusive slippage ceiling. Dark behind AMERICAN_ENABLED until the",
+        "Stage-I flip. Spec: §7.3.2 (D3/D5/D6/D7)."
+      ],
+      "discriminator": [
+        165,
+        46,
+        230,
+        80,
+        184,
+        248,
+        162,
+        92
+      ],
+      "accounts": [
+        {
+          "name": "taker",
+          "docs": [
+            "The taker — pays USDC, receives freshly-minted series contracts."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "sharedVault",
+          "docs": [
+            "The series' shared vault — collateral pot + commitment counters + the",
+            "spread_bps / voided / exercise_style fields. Mutated."
+          ],
+          "writable": true
+        },
+        {
+          "name": "vaultMintRecord",
+          "docs": [
+            "The series record (Pass A) — the standing ask. Pins option_mint↔vault",
+            "(mint↔vault proof) and carries the series supply counters."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116,
+                  95,
+                  109,
+                  105,
+                  110,
+                  116,
+                  95,
+                  114,
+                  101,
+                  99,
+                  111,
+                  114,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "optionMint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "market",
+          "docs": [
+            "Market — provides pyth_feed_id for the VolOracle seed; pinned to the vault."
+          ]
+        },
+        {
+          "name": "volOracle",
+          "docs": [
+            "VolOracle PDA for the market's Pyth feed — the pricing input. Read-only."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  111,
+                  108,
+                  95,
+                  111,
+                  114,
+                  97,
+                  99,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.pyth_feed_id",
+                "account": "optionsMarket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocolState",
+          "docs": [
+            "Protocol state — fee_bps, volume, and the option mint's authority",
+            "(signs mint_to with PROTOCOL_SEED). Mutated (total_volume)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "optionMint",
+          "docs": [
+            "The canonical series mint (Token-2022) — mint_to target. Authority =",
+            "protocol_state (create_series.rs:185). Pinned to the series record."
+          ],
+          "writable": true
+        },
+        {
+          "name": "takerOptionAccount",
+          "docs": [
+            "Taker's option ATA on the series mint — mint_to destination. The client",
+            "pre-creates it idempotently (no hook runs on a mint)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "takerUsdcAccount",
+          "docs": [
+            "Taker's USDC account — premium source."
+          ],
+          "writable": true
+        },
+        {
+          "name": "vaultUsdcAccount",
+          "docs": [
+            "Vault's USDC account — receives the vault's share of premium (pool — D7)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "treasury",
+          "docs": [
+            "Treasury — receives the protocol fee."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "tokenProgram",
+          "docs": [
+            "Standard SPL Token program — for USDC transfers."
+          ],
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "token2022Program",
+          "docs": [
+            "Token-2022 program — for the option mint_to."
+          ],
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": [
+        {
+          "name": "quantity",
+          "type": "u64"
+        },
+        {
+          "name": "maxPremium",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "getOptionPrice",
       "docs": [
         "AMER-only BS-2002 pricing view. Read-only; CPI-callable.",
@@ -2892,6 +3337,69 @@ export type Opta = {
           "type": "u64"
         }
       ]
+    },
+    {
+      "name": "migrateMarketOracleSource",
+      "docs": [
+        "One-time OptionsMarket schema migration that adds the trailing",
+        "oracle_source byte (Switchboard Stage 2) to pre-Stage-2 markets.",
+        "Admin-only. Caller passes market accounts via remaining_accounts",
+        "(BATCH_SIZE 20; the full current set of 16 fits one call). Idempotent:",
+        "markets already at the new size (incl. the larger pre-reshape orphans)",
+        "are skipped. Admin pays the rent delta. Sets oracle_source = 0 (Pyth)."
+      ],
+      "discriminator": [
+        216,
+        115,
+        46,
+        64,
+        31,
+        127,
+        103,
+        246
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "docs": [
+            "Admin -- must match protocol_state.admin (CRIT-3 deployer pubkey).",
+            "Pays the rent delta for any grown markets."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocolState",
+          "docs": [
+            "Used only to assert admin == protocol_state.admin."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
     },
     {
       "name": "migratePythFeed",
@@ -4151,6 +4659,161 @@ export type Opta = {
       "args": []
     },
     {
+      "name": "reclaimUnsettled",
+      "docs": [
+        "Phase 2 Pass D — dead-feed safety hatch. Permissionless. Lets writers",
+        "reclaim pooled collateral pro-rata from a vault whose settlement price",
+        "NEVER landed (no SettlementRecord for its (asset, expiry)) once the 7-day",
+        "GRACE_WINDOW past expiry has elapsed. Per-writer claim (one WriterPosition",
+        "per call; cranker may call on a writer's behalf). Sets `voided = true` on",
+        "the first call; NEVER sets `is_settled` and NEVER writes a SettlementRecord",
+        "(invariant #6 — a voided vault pays holders nothing). NOT gated by",
+        "AMERICAN_ENABLED: the exit path stays open regardless of the flag."
+      ],
+      "discriminator": [
+        197,
+        151,
+        116,
+        203,
+        177,
+        170,
+        107,
+        63
+      ],
+      "accounts": [
+        {
+          "name": "cranker",
+          "docs": [
+            "Permissionless cranker — pays the transaction. May reclaim on any",
+            "writer's behalf; the payout always lands in the writer's USDC ATA."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "writer",
+          "docs": [
+            "The writer whose collateral is being reclaimed. NOT a signer — bound by",
+            "the writer_position seed + the writer_usdc owner constraint.",
+            "written, never required to sign."
+          ]
+        },
+        {
+          "name": "sharedVault",
+          "docs": [
+            "The vault being wound down via the hatch."
+          ],
+          "writable": true
+        },
+        {
+          "name": "writerPosition",
+          "docs": [
+            "The writer's position in the vault. Zeroed (not closed) after payout."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  119,
+                  114,
+                  105,
+                  116,
+                  101,
+                  114,
+                  95,
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "sharedVault"
+              },
+              {
+                "kind": "account",
+                "path": "writer"
+              }
+            ]
+          }
+        },
+        {
+          "name": "market",
+          "docs": [
+            "The vault's market — needed to derive the SettlementRecord PDA from",
+            "`market.asset_name`. Pinned to the vault's recorded market."
+          ]
+        },
+        {
+          "name": "settlementRecord",
+          "docs": [
+            "The per-(asset, expiry) SettlementRecord — which MUST NOT exist for the",
+            "hatch to open. Seeds-constrained so the caller cannot substitute an",
+            "arbitrary empty account; the handler asserts it is empty.",
+            "derived PDA; the handler requires `data_is_empty()`."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  116,
+                  116,
+                  108,
+                  101,
+                  109,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.asset_name",
+                "account": "optionsMarket"
+              },
+              {
+                "kind": "account",
+                "path": "shared_vault.expiry",
+                "account": "sharedVault"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vaultUsdcAccount",
+          "docs": [
+            "Vault's USDC token account — source of the pro-rata payout."
+          ],
+          "writable": true
+        },
+        {
+          "name": "writerUsdcAccount",
+          "docs": [
+            "Writer's USDC token account — destination. Must be owned by the writer."
+          ],
+          "writable": true
+        },
+        {
+          "name": "tokenProgram",
+          "docs": [
+            "Standard SPL Token program."
+          ],
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "resetVolOracle",
       "docs": [
         "Admin-only reset of a polluted/broken VolOracle. Zeroes the ring,",
@@ -5295,6 +5958,19 @@ export type Opta = {
       ]
     },
     {
+      "name": "vaultReclaimed",
+      "discriminator": [
+        23,
+        178,
+        119,
+        136,
+        48,
+        93,
+        111,
+        133
+      ]
+    },
+    {
       "name": "vaultSettled",
       "discriminator": [
         203,
@@ -5614,6 +6290,21 @@ export type Opta = {
       "code": 6055,
       "name": "seriesMustBeAmerican",
       "msg": "Series mints are American-only in Phase 2 (D12)"
+    },
+    {
+      "code": 6056,
+      "name": "vaultVoided",
+      "msg": "Vault has been voided via the dead-feed hatch — no peg fills"
+    },
+    {
+      "code": 6057,
+      "name": "settlementRecordExists",
+      "msg": "Settlement record exists — vault is settleable, the dead-feed hatch is forbidden"
+    },
+    {
+      "code": 6058,
+      "name": "gracePeriodNotElapsed",
+      "msg": "Dead-feed grace window has not elapsed yet"
     }
   ],
   "types": [
@@ -6013,6 +6704,29 @@ export type Opta = {
               "PDA bump seed."
             ],
             "type": "u8"
+          },
+          {
+            "name": "oracleSource",
+            "docs": [
+              "Oracle backing this asset's spot price.",
+              "`0` = Pyth (pull), `1` = Switchboard (On-Demand). See",
+              "`ORACLE_SOURCE_*` consts below.",
+              "",
+              "Trailing-appended (Stage 2 of the Switchboard arc) AFTER `bump`,",
+              "following the `carry_rate_bps` / `exercise_style` precedent on",
+              "`SharedVault`: legacy 62-byte markets grow to 63 bytes via the",
+              "admin-only `migrate_market_oracle_source` instruction, which",
+              "zero-fills this trailing byte (→ Pyth, the no-op default). New",
+              "markets are born with this set to `ORACLE_SOURCE_PYTH` in",
+              "`create_market`.",
+              "",
+              "The 32-byte `pyth_feed_id` field above is reused as the oracle id for",
+              "BOTH sources (a Switchboard feedHash is also 32 bytes); only its",
+              "MEANING routes by this field. INERT until Stage 3 wires the read-arm",
+              "match in `utils/price_oracle.rs` — every handler stays unconditionally",
+              "Pyth today, so this field is read by nothing."
+            ],
+            "type": "u8"
           }
         ]
       }
@@ -6107,9 +6821,9 @@ export type Opta = {
         "Which side of the book this order sits on, and (for asks) what backs it.",
         "",
         "**Variant order is load-bearing.** The Borsh discriminator is a single",
-        "byte encoding the variant index (Bid = 0, ResaleAsk = 1, WriterAsk = 2);",
-        "reordering after this ships would silently retag every existing order.",
-        "Do not reorder — append new variants only."
+        "byte encoding the variant index (Bid = 0, ResaleAsk = 1, WriterAsk = 2,",
+        "VaultPeg = 3); reordering after this ships would silently retag every",
+        "existing order. Do not reorder — append new variants only."
       ],
       "type": {
         "kind": "enum",
@@ -6122,6 +6836,9 @@ export type Opta = {
           },
           {
             "name": "writerAsk"
+          },
+          {
+            "name": "vaultPeg"
           }
         ]
       }
@@ -7225,6 +7942,33 @@ export type Opta = {
           },
           {
             "name": "totalPremium",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "vaultReclaimed",
+      "docs": [
+        "Phase 2 Pass D — emitted once per writer reclaim through the dead-feed hatch",
+        "(`reclaim_unsettled`). Distinct from VaultPostSettlementWithdraw (which has",
+        "the same field shape) so off-chain indexers can tell a hatch wind-down apart",
+        "from an ordinary post-settlement withdrawal: a VaultReclaimed stream means",
+        "the vault was voided (holders paid nothing), never settled."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "writer",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
             "type": "u64"
           }
         ]

@@ -40,6 +40,9 @@ export const ContractDetailModal: FC<{
   const [side, setSide] = useState<"call" | "put">(initialSide);
   const row = side === "call" ? call : put; // active side; null = no market yet
   const isSeries = row?.provenance === "series";
+  // Pricing axis (axis 1) — independent of provenance (axis 2). The on-chain
+  // American view (get_option_price) is NOT flag-gated, so this is safe pre-flip.
+  const useOnChainQuote = base.exerciseStyle === "american";
 
   const [rfq, setRfq] = useState<OptionPriceQuote | null>(null);
   const [rfqStatus, setRfqStatus] = useState("");
@@ -61,14 +64,14 @@ export const ContractDetailModal: FC<{
   );
 
   // Premium for payoff/BE = the protocol RFQ when available, else the cheap mark.
-  const premium = rfq?.premiumPerContract ?? greeks?.premium ?? null;
+  const premium = useOnChainQuote ? (rfq?.premiumPerContract ?? null) : (greeks?.premium ?? null);
   const breakeven = premium != null ? (side === "call" ? base.strike + premium : base.strike - premium) : null;
 
   // One RFQ per active side (series American only). Re-fires on Call⇄Put toggle.
   useEffect(() => {
     let live = true;
     setRfq(null);
-    if (!program || !isSeries || !row) { setRfqStatus(row ? "EUR — model price only" : "no market yet"); return; }
+    if (!program || !useOnChainQuote || !row) { setRfqStatus(row ? "EUR — model price only" : "no market yet"); return; }
     setRfqStatus("Pricing on-chain…");
     (async () => {
       try {
@@ -155,7 +158,7 @@ export const ContractDetailModal: FC<{
 
         {/* Stat strip */}
         <div className="grid grid-cols-3 md:grid-cols-6 gap-px bg-rule border-b border-rule">
-          <Stat label="Mark · model" value={greeks ? fmt(greeks.premium) : "—"} />
+          <Stat label="Mark · model" value={useOnChainQuote ? (rfq ? fmt(rfq.premiumPerContract) : "—") : (greeks ? fmt(greeks.premium) : "—")} />
           <Stat label="Protocol · RFQ" value={rfq ? fmt(rfq.premiumPerContract) : "—"} />
           <Stat label="Spot" value={spot != null ? fmt(spot) : "—"} />
           <Stat label="IV" value={`${((rfq?.volAnnualized ?? vol) * 100).toFixed(1)}%`} />

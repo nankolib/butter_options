@@ -71,6 +71,9 @@ export const OrderTicket: FC<{
   const [rfqError, setRfqError] = useState<OptionPriceQuoteFailure | null>(null);
 
   const isSeries = row.provenance === "series";
+  // Pricing axis — American contracts (legacy OR series) price via the on-chain
+  // get_option_price view. Routing (below) stays on `isSeries` (provenance).
+  const useOnChainQuote = row.exerciseStyle === "american";
 
   // Reset the RFQ when the focused contract changes; seed from the caller's
   // one-shot quote when provided (modal on-open RFQ).
@@ -79,7 +82,7 @@ export const OrderTicket: FC<{
   // On-chain quote-on-demand: fire get_option_price for this series (American
   // only). Short-TTL cached by mint; never auto-fires — button-triggered.
   async function requestQuote() {
-    if (!program || !isSeries) return;
+    if (!program || !useOnChainQuote) return;
     const key = row.optionMint ?? `${row.vault}:${row.optionType}`;
     const hit = rfqCache.get(key);
     if (hit && Date.now() - hit.at < RFQ_TTL_MS) { setRfq(hit.q); setRfqError(null); return; }
@@ -129,10 +132,14 @@ export const OrderTicket: FC<{
     return g;
   }, [spot, days, row.asset, row.optionType, row.strike]);
 
+  // Model-price fallback. European → EUR model (correct). American → ONLY the
+  // on-chain quote; never the EUR model (structurally too low). `mark` itself is
+  // untouched below — Greeks keep the European approximation (accepted).
+  const modelPremium = useOnChainQuote ? (rfq?.premiumPerContract ?? null) : (mark?.premium ?? null);
   // For Buy, a live RFQ (protocol ask) takes precedence over the cheap aggregate.
   const estPrice = type === "limit"
     ? limitPrice
-    : ((side === "buy" ? rfq?.premiumPerContract : undefined) ?? refPrice ?? mark?.premium ?? null);
+    : ((side === "buy" ? rfq?.premiumPerContract : undefined) ?? refPrice ?? modelPremium ?? null);
   const estTotal = estPrice != null ? estPrice * qty : null;
 
   // Readouts (T-spec): λ elasticity, decay (θ/day), no-liquidation reminder.
@@ -266,7 +273,7 @@ export const OrderTicket: FC<{
       </div>
 
       {/* RFQ — on-chain quote-on-demand (T5) */}
-      {isSeries ? (
+      {useOnChainQuote ? (
         <div className="mb-3">
           <button type="button" onClick={requestQuote} disabled={rfqLoading}
             className="w-full font-mono text-[10.5px] uppercase tracking-[0.18em] border border-rule rounded-md py-2 text-ink hover:bg-paper-2 transition-colors disabled:opacity-50 disabled:cursor-wait">

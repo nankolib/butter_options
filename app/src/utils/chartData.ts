@@ -31,21 +31,64 @@ export function coingeckoId(asset: string): string | null {
   return COINGECKO_IDS[asset.toUpperCase()] ?? null;
 }
 
+const OHLC_TTL_MS = 5 * 60_000; // 5 min — CoinGecko OHLC is coarse; reloads reuse.
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Only candles with finite numeric fields survive — nothing undefined/NaN ever
+ *  reaches lightweight-charts (Pass-10 A). */
+function sanitize(candles: Candle[]): Candle[] {
+  return candles.filter(
+    (c) => Number.isFinite(c.time) && Number.isFinite(c.open) && Number.isFinite(c.high) && Number.isFinite(c.low) && Number.isFinite(c.close),
+  );
+}
+
 /**
- * UNDERLYING spot OHLC from CoinGecko. Returns [] for non-crypto (deferred) or
- * on fetch failure (caller renders an empty-state, never throws).
+ * UNDERLYING spot OHLC from CoinGecko. Crypto-only (v1). Bulletproofed (Pass 10):
+ *   - sessionStorage cache keyed (id, days), 5-min TTL → reloads don't re-hit the
+ *     endpoint (kills the 429-on-reload loop that produced empty candles).
+ *   - retry with backoff on 429 / transient failure.
+ *   - returns sanitized candles; [] only when genuinely unavailable (caller shows
+ *     a loading/unavailable state, never a blank box).
  */
 export async function fetchUnderlyingCandles(asset: string, days = 30): Promise<Candle[]> {
   const id = coingeckoId(asset);
   if (!id) return [];
+  const key = `opta.ohlc.${id}.${days}`;
+
+  // Fresh cache hit → reuse (no network).
   try {
-    const res = await fetch(`https://api.coingecko.com/api/v3/coins/${id}/ohlc?vs_currency=usd&days=${days}`);
-    if (!res.ok) return [];
-    const raw = (await res.json()) as [number, number, number, number, number][];
-    return raw.map(([ms, o, h, l, c]) => ({ time: Math.floor(ms / 1000), open: o, high: h, low: l, close: c }));
-  } catch {
-    return [];
+    const cached = sessionStorage.getItem(key);
+    if (cached) {
+      const { at, candles } = JSON.parse(cached) as { at: number; candles: Candle[] };
+      if (Date.now() - at < OHLC_TTL_MS && Array.isArray(candles) && candles.length) return candles;
+    }
+  } catch { /* sessionStorage unavailable — fall through to fetch */ }
+
+  const url = `https://api.coingecko.com/api/v3/coins/${id}/ohlc?vs_currency=usd&days=${days}`;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch(url);
+      if (res.status === 429) { await sleep(600 * (attempt + 1)); continue; }
+      if (!res.ok) break;
+      const raw = (await res.json()) as [number, number, number, number, number][];
+      const candles = sanitize(raw.map(([ms, o, h, l, c]) => ({ time: Math.floor(ms / 1000), open: o, high: h, low: l, close: c })));
+      if (candles.length) {
+        try { sessionStorage.setItem(key, JSON.stringify({ at: Date.now(), candles })); } catch { /* quota */ }
+        return candles;
+      }
+      break;
+    } catch { await sleep(600 * (attempt + 1)); }
   }
+
+  // All attempts failed → fall back to STALE cache (better than blank) if present.
+  try {
+    const cached = sessionStorage.getItem(key);
+    if (cached) {
+      const { candles } = JSON.parse(cached) as { candles: Candle[] };
+      if (Array.isArray(candles) && candles.length) return candles;
+    }
+  } catch { /* ignore */ }
+  return [];
 }
 
 /**

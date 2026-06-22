@@ -239,30 +239,31 @@ export const TradePageV2: FC = () => {
                   </div>
                 )}
               </div>
-            ) : (
-              <div className={focused ? "grid lg:grid-cols-[1fr_360px] gap-8 items-start" : ""}>
-                <div className="space-y-6">
+            ) : focused ? (
+              <>
+                {/* Aligned band: chart (left, fills) + ticket (right, drives height).
+                    items-stretch makes both columns equal-height → tops & bottoms flush. */}
+                <div className="grid lg:grid-cols-[1fr_360px] gap-8 items-stretch">
                   <Suspense fallback={<ChartFallback />}>
                     <PriceChart row={focused} spot={td.spot} />
                   </Suspense>
-                  {focused && (
-                    <div className="border border-rule rounded-md p-5">
-                      <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-ink-muted mb-3">Order book</div>
-                      <OrderBookLadder optionMint={focused.optionMint} pegPrice={focusedMark} />
-                    </div>
-                  )}
+                  <OrderTicket
+                    row={focused}
+                    spot={td.spot}
+                    onDone={() => { chain.refetch(); td.refetch(); }}
+                    onLegacyBuy={onLegacyBuy}
+                  />
                 </div>
-                {focused && (
-                  <div className="lg:sticky lg:top-[120px]">
-                    <OrderTicket
-                      row={focused}
-                      spot={td.spot}
-                      onDone={() => { chain.refetch(); td.refetch(); }}
-                      onLegacyBuy={onLegacyBuy}
-                    />
-                  </div>
-                )}
-              </div>
+                {/* Order book sits BELOW the band, under the left column. */}
+                <div className="border border-rule rounded-md p-5 mt-6 lg:mr-[392px]">
+                  <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-ink-muted mb-3">Order book</div>
+                  <OrderBookLadder optionMint={focused.optionMint} pegPrice={focusedMark} />
+                </div>
+              </>
+            ) : (
+              <Suspense fallback={<ChartFallback />}>
+                <PriceChart row={null} spot={td.spot} />
+              </Suspense>
             )}
 
             {/* Minimal summary band (reused hairline rhythm). */}

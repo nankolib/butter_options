@@ -1,6 +1,10 @@
 import type { FC } from "react";
 import { useEffect, useRef } from "react";
 
+/** Map an Opta asset to a TradingView symbol (crypto via Binance pairs). */
+const TV_SYMBOL: Record<string, string> = { BTC: "BINANCE:BTCUSDT", ETH: "BINANCE:ETHUSDT", SOL: "BINANCE:SOLUSDT" };
+export const tvSymbol = (asset: string) => TV_SYMBOL[asset.toUpperCase()] ?? `BINANCE:${asset.toUpperCase()}USDT`;
+
 /**
  * TradingViewWidget — free Advanced Real-Time Chart embed (Simple persona, T3).
  * No account/login. Injects the official embed script with a JSON config.

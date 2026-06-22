@@ -4,7 +4,7 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import { usePegFill } from "../../hooks/useOrderFlows";
 import { calculateCallGreeks, calculatePutGreeks, getDefaultVolatility, applyVolSmile } from "../../utils/blackScholes";
 import { fetchUnderlyingCandles } from "../../utils/chartData";
-import { TradingViewWidget } from "./TradingViewWidget";
+import { TradingViewWidget, tvSymbol } from "./TradingViewWidget";
 import type { UnifiedChainRow } from "../../hooks/useUnifiedChain";
 
 /**
@@ -15,8 +15,6 @@ import type { UnifiedChainRow } from "../../hooks/useUnifiedChain";
  * Buys route through the SAME peg write path (usePegFill) — Simple always takes
  * the protocol peg (the natural one-tap counterparty), leaving the P2P book to Pro.
  */
-const TV_SYMBOL: Record<string, string> = { BTC: "BINANCE:BTCUSDT", ETH: "BINANCE:ETHUSDT", SOL: "BINANCE:SOLUSDT" };
-const tvSymbol = (asset: string) => TV_SYMBOL[asset.toUpperCase()] ?? `BINANCE:${asset.toUpperCase()}USDT`;
 const PRESETS = [10, 50, 100];
 
 export const SimpleTradePanel: FC<{
@@ -117,8 +115,9 @@ export const SimpleTradePanel: FC<{
         )}
       </div>
 
-      <div className="grid lg:grid-cols-[1fr_340px] gap-6 items-start">
-        {/* Chart-dominant: the widget fills the viewport height (perps-style) */}
+      <div className="grid lg:grid-cols-[1fr_340px] gap-6 items-stretch">
+        {/* Chart-dominant: the widget fills the viewport height (perps-style); the
+            ticket stretches to match so tops + bottoms are flush. */}
         <TradingViewWidget symbol={tvSymbol(asset)} height="calc(100dvh - 280px)" minHeight={560} />
 
         {/* Ticket — top-aligned with the chart's top edge */}

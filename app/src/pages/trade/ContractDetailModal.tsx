@@ -191,18 +191,18 @@ export const ContractDetailModal: FC<{
                 </>
               ) : <Empty>—</Empty>}
             </div>
+
+            {/* Order book lives in the LEFT column (below greeks) to balance the
+                layout and fill the empty bottom-left (Pass-9 B). */}
+            <SectionLabel className="mt-6">Order book</SectionLabel>
+            {row
+              ? <OrderBookLadder optionMint={row.optionMint} pegPrice={rfq?.premiumPerContract ?? null} />
+              : <Empty>No {side} market yet at this strike / expiry.</Empty>}
+            <p className="font-mono text-[9.5px] text-ink-muted/70 mt-1">{rfqStatus}</p>
           </div>
 
-          {/* Order book → Your position → the unified ticket */}
+          {/* RIGHT: Your position → the unified ticket */}
           <div className="bg-paper p-6 space-y-5">
-            <div>
-              <SectionLabel>Order book</SectionLabel>
-              {row
-                ? <OrderBookLadder optionMint={row.optionMint} pegPrice={rfq?.premiumPerContract ?? null} />
-                : <Empty>No {side} market yet at this strike / expiry.</Empty>}
-              <p className="font-mono text-[9.5px] text-ink-muted/70 mt-1">{rfqStatus}</p>
-            </div>
-
             {/* Your position — only when held; clearly separated from the ticket */}
             {isSeries && (held ?? 0) > 0 && (
               <div className="border border-rule rounded-md p-3">

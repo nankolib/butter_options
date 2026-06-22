@@ -152,10 +152,27 @@ export const PriceChart: FC<{ row: UnifiedChainRow | null; spot: number | null }
         }));
       }
     }
-    // Real-fill markers (CONTRACT mode, when we have any).
-    createSeriesMarkers(series, mode === "contract" && fills.length
-      ? fills.map((f) => ({ time: f.time as UTCTimestamp, position: "belowBar" as const, color: "#D7263D", shape: "circle" as const, text: `${f.qty}` }))
-      : []);
+    // Real-fill dots (CONTRACT mode). ROOT CAUSE of the "Value is undefined"
+    // crash: lightweight-charts maps each marker's `time` to a series coordinate;
+    // when that mapping fails it throws "Value is undefined" via ensureDefined.
+    // It fails when (a) the series has NO data — synthetic candles are empty
+    // whenever the CoinGecko fetch is rate-limited (429) — or (b) a marker's time
+    // sits OUTSIDE the series' [first,last] range, which is the normal case here:
+    // fills happen "now", after the last completed CoinGecko candle. We therefore
+    // only add markers on a non-empty series, clamp each fill into the candle time
+    // range, and dedupe times (markers must be unique + ascending).
+    if (mode === "contract" && candles.length && fills.length) {
+      const lo = candles[0].time, hi = candles[candles.length - 1].time;
+      const seen = new Set<number>();
+      const markers = fills
+        .map((f) => ({ qty: f.qty, t: Math.min(Math.max(f.time, lo), hi) }))
+        .sort((a, b) => a.t - b.t)
+        .filter((f) => (seen.has(f.t) ? false : (seen.add(f.t), true)))
+        .map((f) => ({ time: f.t as UTCTimestamp, position: "belowBar" as const, color: "#D7263D", shape: "circle" as const, text: `${f.qty}` }));
+      createSeriesMarkers(series, markers);
+    } else {
+      createSeriesMarkers(series, []);
+    }
   }, [candles, fills, mode, overlay]);
 
   if (!row) {

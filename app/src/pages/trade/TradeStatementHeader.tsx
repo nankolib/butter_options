@@ -1,4 +1,4 @@
-import type { FC } from "react";
+import type { FC, ReactNode } from "react";
 import { useMemo } from "react";
 import { useConnection } from "@solana/wallet-adapter-react";
 import { inferClusterFromUrl, getClusterDisplayLabel } from "../../utils/env";
@@ -9,6 +9,9 @@ type TradeStatementHeaderProps = {
   assets: string[];
   selectedAsset: string;
   onAssetChange: (asset: string) => void;
+  /** When provided, replaces the flat asset chips (e.g. the v2 AssetDropdown).
+   *  Omitted by V1 → chips render unchanged (byte-identical flag-off). */
+  assetSelector?: ReactNode;
 };
 
 /**
@@ -25,6 +28,7 @@ export const TradeStatementHeader: FC<TradeStatementHeaderProps> = ({
   assets,
   selectedAsset,
   onAssetChange,
+  assetSelector,
 }) => {
   const { connection } = useConnection();
   const clusterLabel = useMemo(
@@ -55,7 +59,7 @@ export const TradeStatementHeader: FC<TradeStatementHeaderProps> = ({
             As of {timestampLabel}
           </span>
 
-          {assets.length > 0 && (
+          {assetSelector ?? (assets.length > 0 && (
             <div className="flex flex-wrap gap-2">
               {assets.map((a) => (
                 <button
@@ -73,7 +77,7 @@ export const TradeStatementHeader: FC<TradeStatementHeaderProps> = ({
                 </button>
               ))}
             </div>
-          )}
+          ))}
         </div>
       </div>
     </header>

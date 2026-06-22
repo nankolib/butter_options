@@ -4,11 +4,14 @@ import { usePaperPalette } from "../../hooks";
 import { PaperGrain } from "../../components/layout";
 import { AppNav } from "../../components/AppNav";
 import { TradeStatementHeader } from "./TradeStatementHeader";
+import { AssetDropdown } from "./AssetDropdown";
 import { ExpiryTabs } from "./ExpiryTabs";
 import { TradeFooter } from "./TradeFooter";
 import { TradeChainV2, type FocusedContract, type DetailTarget } from "./TradeChainV2";
 import { OrderTicket } from "./OrderTicket";
+import { OrderBookLadder } from "./OrderBookLadder";
 import { BuyModal } from "./BuyModal";
+import { calculateCallPremium, calculatePutPremium, getDefaultVolatility, applyVolSmile } from "../../utils/blackScholes";
 
 // Lazy-load the chart-heavy surfaces (lightweight-charts / TradingView embed)
 // so they leave the initial chunk and load only when their surface mounts (T-perf).
@@ -93,6 +96,18 @@ export const TradePageV2: FC = () => {
     return `${datePart} · ${timePart} UTC`;
   }, []);
 
+  // Cheap FE mark for the focused contract — used as the chart-page ladder's
+  // "vault peg" level (display only; no eager on-chain view, T6).
+  const focusedMark = useMemo(() => {
+    if (!focused || !td.spot || td.spot <= 0) return null;
+    const d = Math.max(0, (focused.expiry - Date.now() / 1000) / 86_400);
+    if (d <= 0) return null;
+    const vol = applyVolSmile(getDefaultVolatility(focused.asset), td.spot, focused.strike, focused.asset);
+    return focused.optionType === "call"
+      ? calculateCallPremium(td.spot, focused.strike, d, vol, 0, undefined, focused.asset)
+      : calculatePutPremium(td.spot, focused.strike, d, vol, 0, undefined, focused.asset);
+  }, [focused, td.spot]);
+
   // Filter the unified chain to the selected asset + expiry (match by UTC day).
   const day = (ts: number) => Math.floor(ts / 86_400);
   const visibleRows = useMemo(
@@ -126,6 +141,13 @@ export const TradePageV2: FC = () => {
           assets={td.availableAssets}
           selectedAsset={td.selectedAsset}
           onAssetChange={td.setSelectedAsset}
+          assetSelector={
+            <AssetDropdown
+              assets={td.availableAssets}
+              selected={td.selectedAsset}
+              onChange={td.setSelectedAsset}
+            />
+          }
         />
 
         {/* Persona toggle — Pro | Simple (sticky, T1) */}
@@ -218,9 +240,29 @@ export const TradePageV2: FC = () => {
                 )}
               </div>
             ) : (
-              <Suspense fallback={<ChartFallback />}>
-                <PriceChart row={focused} spot={td.spot} />
-              </Suspense>
+              <div className={focused ? "grid lg:grid-cols-[1fr_360px] gap-8 items-start" : ""}>
+                <div className="space-y-6">
+                  <Suspense fallback={<ChartFallback />}>
+                    <PriceChart row={focused} spot={td.spot} />
+                  </Suspense>
+                  {focused && (
+                    <div className="border border-rule rounded-md p-5">
+                      <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-ink-muted mb-3">Order book</div>
+                      <OrderBookLadder optionMint={focused.optionMint} pegPrice={focusedMark} />
+                    </div>
+                  )}
+                </div>
+                {focused && (
+                  <div className="lg:sticky lg:top-[120px]">
+                    <OrderTicket
+                      row={focused}
+                      spot={td.spot}
+                      onDone={() => { chain.refetch(); td.refetch(); }}
+                      onLegacyBuy={onLegacyBuy}
+                    />
+                  </div>
+                )}
+              </div>
             )}
 
             {/* Minimal summary band (reused hairline rhythm). */}
@@ -252,6 +294,7 @@ export const TradePageV2: FC = () => {
             spot={td.spot}
             onClose={() => setDetailTarget(null)}
             onDone={() => { chain.refetch(); td.refetch(); }}
+            onLegacyBuy={onLegacyBuy}
           />
         </Suspense>
       )}

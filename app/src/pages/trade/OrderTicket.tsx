@@ -45,7 +45,10 @@ export const OrderTicket: FC<{
   spot: number | null;
   onDone: () => void;
   onLegacyBuy: (row: UnifiedChainRow) => void;
-}> = ({ row, spot, onDone, onLegacyBuy }) => {
+  /** Pre-seed the RFQ (e.g. the modal's one-shot on-open quote) so the ticket
+   *  shows the protocol price immediately without a second click. */
+  seedQuote?: OptionPriceQuote | null;
+}> = ({ row, spot, onDone, onLegacyBuy, seedQuote = null }) => {
   const { publicKey } = useWallet();
   const { program } = useProgram();
   const { orders } = useBook();
@@ -69,8 +72,9 @@ export const OrderTicket: FC<{
 
   const isSeries = row.provenance === "series";
 
-  // Reset the RFQ when the focused contract changes.
-  useEffect(() => { setRfq(null); setRfqError(null); }, [row.vault, row.optionType, row.strike]);
+  // Reset the RFQ when the focused contract changes; seed from the caller's
+  // one-shot quote when provided (modal on-open RFQ).
+  useEffect(() => { setRfq(seedQuote); setRfqError(null); }, [row.vault, row.optionType, row.strike, seedQuote]);
 
   // On-chain quote-on-demand: fire get_option_price for this series (American
   // only). Short-TTL cached by mint; never auto-fires — button-triggered.

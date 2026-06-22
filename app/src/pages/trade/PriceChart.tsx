@@ -1,7 +1,7 @@
 import type { FC } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  createChart, CandlestickSeries, createSeriesMarkers, ColorType,
+  createChart, CandlestickSeries, LineSeries, createSeriesMarkers, ColorType,
   type IChartApi, type ISeriesApi, type IPriceLine, type UTCTimestamp,
 } from "lightweight-charts";
 import { useProgram } from "../../hooks/useProgram";
@@ -28,7 +28,7 @@ export const PriceChart: FC<{ row: UnifiedChainRow | null; spot: number | null }
   const { program } = useProgram();
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
-  const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const seriesRef = useRef<ISeriesApi<"Candlestick" | "Line"> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
 
   const [mode, setMode] = useState<Mode>(() =>
@@ -84,7 +84,7 @@ export const PriceChart: FC<{ row: UnifiedChainRow | null; spot: number | null }
     return () => { live = false; };
   }, [row?.vault, row?.optionType, row?.optionMint, mode, program]);
 
-  // ---- Draw ----
+  // ---- Chart (created once) ----
   useEffect(() => {
     if (!containerRef.current) return;
     const chart = createChart(containerRef.current, {
@@ -94,13 +94,22 @@ export const PriceChart: FC<{ row: UnifiedChainRow | null; spot: number | null }
       timeScale: { borderColor: "#D8CFBE" },
       rightPriceScale: { borderColor: "#D8CFBE" },
     });
-    const series = chart.addSeries(CandlestickSeries, {
-      upColor: "#37332D", downColor: "#D7263D", borderVisible: false, wickUpColor: "#37332D", wickDownColor: "#D7263D",
-    });
     chartRef.current = chart;
-    seriesRef.current = series;
-    return () => { chart.remove(); chartRef.current = null; seriesRef.current = null; };
+    return () => { chart.remove(); chartRef.current = null; };
   }, []);
+
+  // ---- Series per mode: candlesticks for UNDERLYING, a continuous LINE for the
+  // CONTRACT mark (Pass-8 D: one mark line + fill dots, not scattered bars). ----
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    const series = mode === "contract"
+      ? chart.addSeries(LineSeries, { color: "#37332D", lineWidth: 2, priceLineVisible: false, lastValueVisible: true })
+      : chart.addSeries(CandlestickSeries, { upColor: "#37332D", downColor: "#D7263D", borderVisible: false, wickUpColor: "#37332D", wickDownColor: "#D7263D" });
+    seriesRef.current = series;
+    priceLinesRef.current = [];
+    return () => { chart.removeSeries(series); seriesRef.current = null; };
+  }, [mode]);
 
   // Strike + breakeven are SPOT levels → they belong on the UNDERLYING chart
   // (spot Y-axis), not the CONTRACT chart (premium Y-axis, ~$6 — strike $75 would
@@ -121,7 +130,11 @@ export const PriceChart: FC<{ row: UnifiedChainRow | null; spot: number | null }
   useEffect(() => {
     const series = seriesRef.current;
     if (!series) return;
-    series.setData(candles.map((c) => ({ ...c, time: c.time as UTCTimestamp })));
+    // Line series takes {time,value}; candlesticks take {time,o,h,l,c}.
+    const data = mode === "contract"
+      ? candles.map((c) => ({ time: c.time as UTCTimestamp, value: c.close }))
+      : candles.map((c) => ({ ...c, time: c.time as UTCTimestamp }));
+    (series as any).setData(data);
     chartRef.current?.timeScale().fitContent();
 
     // Clear prior price lines (setData keeps them; we recreate each push).

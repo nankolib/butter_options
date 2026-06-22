@@ -104,25 +104,25 @@ export const SimpleTradePanel: FC<{
   const expiryLabel = (e: number) => new Date(e * 1000).toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
 
   return (
-    <div className="grid lg:grid-cols-[1fr_340px] gap-6 items-stretch mt-4">
-      {/* Chart-dominant: the widget fills the viewport height (perps-style) */}
-      <div className="flex flex-col">
-        <div className="flex items-baseline gap-4 mb-3">
-          <div className="font-fraunces-text italic font-light text-ink text-[32px]">{asset}</div>
-          <div className="font-mono text-[20px] text-ink">{spot != null ? `$${spot.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : "—"}</div>
-          {pct24h != null && (
-            <div className={`font-mono text-[14px] ${pct24h >= 0 ? "text-teal" : "text-crimson"}`}>
-              {pct24h >= 0 ? "+" : ""}{pct24h.toFixed(2)}% 24h
-            </div>
-          )}
-        </div>
-        <div className="flex-1">
-          <TradingViewWidget symbol={tvSymbol(asset)} height="calc(100dvh - 230px)" minHeight={560} />
-        </div>
+    <div className="mt-4">
+      {/* Asset header sits ABOVE the grid so the chart's top edge and the ticket's
+          top edge align exactly (Pass-8 E). */}
+      <div className="flex items-baseline gap-4 mb-3">
+        <div className="font-fraunces-text italic font-light text-ink text-[32px]">{asset}</div>
+        <div className="font-mono text-[20px] text-ink">{spot != null ? `$${spot.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : "—"}</div>
+        {pct24h != null && (
+          <div className={`font-mono text-[14px] ${pct24h >= 0 ? "text-teal" : "text-crimson"}`}>
+            {pct24h >= 0 ? "+" : ""}{pct24h.toFixed(2)}% 24h
+          </div>
+        )}
       </div>
 
-      {/* Ticket */}
-      <div className="border border-rule rounded-md p-5 bg-paper">
+      <div className="grid lg:grid-cols-[1fr_340px] gap-6 items-start">
+        {/* Chart-dominant: the widget fills the viewport height (perps-style) */}
+        <TradingViewWidget symbol={tvSymbol(asset)} height="calc(100dvh - 280px)" minHeight={560} />
+
+        {/* Ticket — top-aligned with the chart's top edge */}
+        <div className="border border-rule rounded-md p-5 bg-paper">
         {/* Direction */}
         <div className="grid grid-cols-2 gap-3 mb-4">
           <button type="button" onClick={() => setDirection("up")}
@@ -196,6 +196,7 @@ export const SimpleTradePanel: FC<{
 
         {status && <p className={`font-mono text-[10.5px] mt-3 ${status.kind === "ok" ? "text-ink" : "text-crimson"}`}>{status.msg}</p>}
       </div>
+    </div>
     </div>
   );
 };

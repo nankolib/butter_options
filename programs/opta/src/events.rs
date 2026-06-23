@@ -347,3 +347,32 @@ pub struct TriggerCancelled {
     pub trigger_order: Pubkey,
     pub owner: Pubkey,
 }
+
+/// Emitted on a successful execute_trigger fire. `kind` is the TriggerKind u8
+/// (StopEntryBuy=0, TakeProfitSell=1). `fire_quantity` is the contracts bought
+/// (BUY, always == quantity) or burned (SELL, = min(quantity, balance)).
+/// `premium_or_payout` is the gross USDC paid in (BUY) / capped intrinsic paid
+/// out (SELL). `remaining_quantity` is 0 for a BUY (closed) or the SELL order's
+/// leftover after a partial fire (0 ⇒ the order was closed).
+#[event]
+pub struct TriggerExecuted {
+    pub trigger_order: Pubkey,
+    pub owner: Pubkey,
+    pub kind: u8,
+    pub fire_quantity: u64,
+    pub ema_used: u64,
+    pub premium_or_payout: u64,
+    pub remaining_quantity: u64,
+    pub ts: i64,
+}
+
+/// Emitted when a SELL trigger's condition + EMA passed but the source ATA holds
+/// zero (the holder moved everything out). A benign no-op: the order STAYS OPEN,
+/// nothing reverts. `reason` 0 = zero source balance.
+#[event]
+pub struct TriggerSkipped {
+    pub trigger_order: Pubkey,
+    pub owner: Pubkey,
+    pub reason: u8,
+    pub ts: i64,
+}

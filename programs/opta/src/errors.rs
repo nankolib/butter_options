@@ -274,4 +274,12 @@ pub enum OptaError {
     // the trigger's stored comparator against threshold_usdc. Error code 6059.
     #[msg("Trigger condition not met — live price does not satisfy the stored comparator")]
     TriggerConditionNotMet,
+
+    // execute_trigger fire-time re-verification (Pass 1). The SELL burn source is
+    // a STORED address; before the delegate-burn, execute_trigger re-asserts the
+    // declared holder_option_ata's owner == trigger.owner and mint ==
+    // trigger.option_mint. A mismatch (re-init'd account, hostile/stale address)
+    // reverts this. The theft-vector guard. Error code 6060.
+    #[msg("Trigger source ATA failed fire-time re-verification (owner or mint mismatch)")]
+    TriggerSourceAtaInvalid,
 }

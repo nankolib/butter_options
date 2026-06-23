@@ -28,7 +28,7 @@
 // =============================================================================
 
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::program::invoke;
+use anchor_lang::solana_program::program::{invoke, invoke_signed};
 use anchor_spl::token::{self, Token, TokenAccount, Transfer};
 use anchor_spl::token_2022::Token2022;
 use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
@@ -51,25 +51,27 @@ use crate::utils::price_oracle::pyth_current_spot_usdc;
 /// Stage F shipped (decision (a) flip-blocker for the Stage I AMERICAN_ENABLED
 /// flip). Deterministically testable only under bankrun setClock (a static
 /// fixture's publish_time can't be aligned to a moving validator wall-clock).
-const PRICE_MAX_AGE_SECS: i64 = 60;
+///
+/// `pub` so execute_trigger (Phase 4) reads the live EMA with the IDENTICAL
+/// freshness constant — the trigger re-check mirrors this byte-for-byte.
+pub const PRICE_MAX_AGE_SECS: i64 = 60;
 
 /// Max Pyth EMA confidence width tolerated, in bps of the EMA price. Same
 /// value + check as settle_expiry::MAX_CONF_BPS (CRIT-2): reject wide-conf
-/// prints that surface during oracle stress.
-const MAX_CONF_BPS: u16 = 200;
+/// prints that surface during oracle stress. `pub` for execute_trigger reuse.
+pub const MAX_CONF_BPS: u16 = 200;
 
 pub fn handle_exercise_american(
     ctx: Context<ExerciseAmerican>,
     quantity: u64,
 ) -> Result<()> {
-    // ----- Snapshot vault fields (immutable read) ---------------------------
+    // ----- Snapshot vault fields used by the wrapper gates ------------------
+    // (option_type/strike/market/bump moved into american_exercise_core, which
+    // re-reads them from shared_vault; the wrapper keeps only what its own gates
+    // need so the gate ORDER vs. the pyth read stays byte-identical.)
     let vault = &ctx.accounts.shared_vault;
     let exercise_style = vault.exercise_style;
-    let option_type = vault.option_type;
-    let strike_price = vault.strike_price;
     let expiry = vault.expiry;
-    let market_key = vault.market;
-    let vault_bump = vault.bump;
 
     // ----- Gates (in spec order) --------------------------------------------
     // 1. American feature gate (default-off until Stage I). The European arm
@@ -114,6 +116,103 @@ pub fn handle_exercise_american(
         MAX_CONF_BPS,
     )?;
 
+    // ----- Delegate intrinsic + burn + payout + counters to the shared core --
+    // Phase 4 extraction: american_exercise_core does the capped-intrinsic calc,
+    // the burn, the vault→holder USDC payout, the two counter bumps, and the
+    // VaultExercised emit — byte-identical to the prior inline block. Here the
+    // burn authority is the HOLDER (a real tx signer → `invoke`; pda_bump=None)
+    // and the payout goes to the holder. execute_trigger calls the SAME core
+    // with the protocol-delegate burn (pda_bump=Some) + owner payout. The gates
+    // above are kept verbatim (the core re-checks them harmlessly) so the revert
+    // order vs. the pyth read is unchanged from the pre-extraction handler.
+    american_exercise_core(
+        &mut ctx.accounts.shared_vault,
+        &ctx.accounts.option_mint.to_account_info(),
+        &ctx.accounts.holder_option_account.to_account_info(),
+        &ctx.accounts.holder.to_account_info(),
+        None, // holder is a real signer → plain invoke
+        &ctx.accounts.vault_usdc_account.to_account_info(),
+        &ctx.accounts.holder_usdc_account.to_account_info(),
+        &ctx.accounts.token_program.to_account_info(),
+        &ctx.accounts.token_2022_program.to_account_info(),
+        ctx.accounts.holder.key(),
+        quantity,
+        spot_6dec,
+    )?;
+
+    Ok(())
+}
+
+// =============================================================================
+// american_exercise_core — shared early-American-exercise economics (Phase 4)
+// =============================================================================
+//
+// Single source of truth for the capped-intrinsic exercise: gates → intrinsic →
+// burn → vault→destination USDC payout → counter bumps → VaultExercised emit.
+// Two callers with different authority wiring (the burn + the paid party):
+//
+//   exercise_american : burn_authority = holder (real signer),
+//                       burn_authority_pda_bump = None  → plain `invoke`;
+//                       payout_destination = holder's USDC; paid_to = holder.
+//   execute_trigger   : burn_authority = protocol_state (the PermanentDelegate),
+//                       burn_authority_pda_bump = Some(protocol_state.bump)
+//                       → `invoke_signed` with [PROTOCOL_SEED, bump]
+//                       (the auto_finalize_holders pattern — NO holder sig);
+//                       payout_destination = owner's USDC; paid_to = owner.
+//
+// The vault→destination USDC payout ALWAYS signs as the vault PDA via
+// vault_namespace_seed (American prefix). The EMA spot is supplied by the caller
+// (`spot_6dec`) — the core never reads Pyth, so execute_trigger uses the SAME
+// EMA it re-checked the comparator against.
+//
+// CRITICAL (Phase A note 3): the core TRUSTS `burn_source`. The 6060
+// owner-match / mint-match / fresh-balance re-checks are execute_trigger's
+// HANDLER responsibility (its source is a stored, possibly-stale/hostile
+// address); exercise_american's source is constraint-pinned to the signer so it
+// needs none. The core only enforces balance >= quantity (revert-on-short).
+#[allow(clippy::too_many_arguments)]
+pub fn american_exercise_core<'info>(
+    shared_vault: &mut Account<'info, SharedVault>,
+    option_mint: &AccountInfo<'info>,
+    burn_source: &AccountInfo<'info>,
+    burn_authority: &AccountInfo<'info>,
+    burn_authority_pda_bump: Option<u8>,
+    vault_usdc_account: &AccountInfo<'info>,
+    payout_destination: &AccountInfo<'info>,
+    token_program: &AccountInfo<'info>,
+    token_2022_program: &AccountInfo<'info>,
+    paid_to: Pubkey,
+    quantity: u64,
+    spot_6dec: u64,
+) -> Result<u64> {
+    // Snapshot vault fields (read through the &mut).
+    let exercise_style = shared_vault.exercise_style;
+    let option_type = shared_vault.option_type;
+    let strike_price = shared_vault.strike_price;
+    let expiry = shared_vault.expiry;
+    let market_key = shared_vault.market;
+    let vault_bump = shared_vault.bump;
+
+    // ----- Gates (mirror exercise_american; redundant for that caller) ------
+    require!(AMERICAN_ENABLED, OptaError::AmericanVaultsDisabled);
+    require!(
+        exercise_style == ExerciseStyle::American,
+        OptaError::NotAmericanOption
+    );
+    let clock = Clock::get()?;
+    require!(clock.unix_timestamp < expiry, OptaError::OptionExpired);
+    require!(quantity > 0, OptaError::InvalidContractSize);
+    let balance = {
+        let data = burn_source.try_borrow_data()?;
+        require!(data.len() >= 72, OptaError::InsufficientOptionTokens);
+        u64::from_le_bytes(
+            data[64..72]
+                .try_into()
+                .map_err(|_| OptaError::MathOverflow)?,
+        )
+    };
+    require!(quantity <= balance, OptaError::InsufficientOptionTokens);
+
     // ----- Capped intrinsic (the (f) lock) ----------------------------------
     let collateral_per_token = required_collateral_per_contract(strike_price, option_type);
     let intrinsic_per_contract =
@@ -124,27 +223,29 @@ pub fn handle_exercise_american(
         .checked_mul(intrinsic_per_contract)
         .ok_or(OptaError::MathOverflow)?;
 
-    // ----- Burn N tokens — HOLDER signs (same as exercise_from_vault) -------
-    invoke(
-        &spl_token_2022::instruction::burn(
-            &ctx.accounts.token_2022_program.key(),
-            ctx.accounts.holder_option_account.key,
-            ctx.accounts.option_mint.key,
-            ctx.accounts.holder.key,
-            &[],
-            quantity,
-        )?,
-        &[
-            ctx.accounts.holder_option_account.to_account_info(),
-            ctx.accounts.option_mint.to_account_info(),
-            ctx.accounts.holder.to_account_info(),
-        ],
+    // ----- Burn N tokens: holder `invoke` OR delegate `invoke_signed` -------
+    let burn_ix = spl_token_2022::instruction::burn(
+        &token_2022_program.key(),
+        burn_source.key,
+        option_mint.key,
+        burn_authority.key,
+        &[],
+        quantity,
     )?;
+    let burn_accounts = [
+        burn_source.clone(),
+        option_mint.clone(),
+        burn_authority.clone(),
+    ];
+    match burn_authority_pda_bump {
+        None => invoke(&burn_ix, &burn_accounts)?,
+        Some(bump) => {
+            let protocol_seeds: &[&[u8]] = &[PROTOCOL_SEED, &[bump]];
+            invoke_signed(&burn_ix, &burn_accounts, &[protocol_seeds])?;
+        }
+    }
 
-    // ----- Transfer USDC vault → holder — vault PDA signs via the namespace
-    //       helper. FIRST payout handler to route through vault_namespace_seed
-    //       (Stage D); MUST NOT hardcode SHARED_VAULT_SEED — the American
-    //       vault PDA is derived from the American prefix.
+    // ----- Transfer USDC vault → destination — vault PDA signs via namespace -
     let ns = vault_namespace_seed(exercise_style);
     let strike_bytes = strike_price.to_le_bytes();
     let expiry_bytes = expiry.to_le_bytes();
@@ -161,38 +262,35 @@ pub fn handle_exercise_american(
     let signer_seeds = &[vault_seeds];
 
     let transfer_ctx = CpiContext::new_with_signer(
-        ctx.accounts.token_program.to_account_info(),
+        token_program.clone(),
         Transfer {
-            from: ctx.accounts.vault_usdc_account.to_account_info(),
-            to: ctx.accounts.holder_usdc_account.to_account_info(),
-            authority: ctx.accounts.shared_vault.to_account_info(),
+            from: vault_usdc_account.clone(),
+            to: payout_destination.clone(),
+            authority: shared_vault.to_account_info(),
         },
         signer_seeds,
     );
     token::transfer(transfer_ctx, total_payout)?;
 
     // ----- Accounting: increment the two Stage F counters ONLY --------------
-    let vault_key = ctx.accounts.shared_vault.key();
-    let holder_key = ctx.accounts.holder.key();
-
-    let vault = &mut ctx.accounts.shared_vault;
-    vault.exercised_options = vault
+    let vault_key = shared_vault.key();
+    shared_vault.exercised_options = shared_vault
         .exercised_options
         .checked_add(quantity)
         .ok_or(OptaError::MathOverflow)?;
-    vault.early_exercise_payout = vault
+    shared_vault.early_exercise_payout = shared_vault
         .early_exercise_payout
         .checked_add(total_payout)
         .ok_or(OptaError::MathOverflow)?;
 
     emit!(VaultExercised {
         vault: vault_key,
-        holder: holder_key,
+        holder: paid_to,
         quantity,
         payout: total_payout,
     });
 
-    Ok(())
+    Ok(total_payout)
 }
 
 #[derive(Accounts)]

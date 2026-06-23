@@ -403,6 +403,18 @@ pub mod opta {
         instructions::cancel_trigger::handle_cancel_trigger(ctx)
     }
 
+    /// Keeper fires a trigger. Flag-gated (6052 while AMERICAN_ENABLED=false).
+    /// Re-reads a FRESH Pyth EMA in-tx (60s/200bps, mirrors exercise_american),
+    /// re-checks the stored comparator (6059), then routes to the shared cores:
+    /// StopEntryBuy → vault_peg_fill_core (escrow pays, mints to owner);
+    /// TakeProfitSell → american_exercise_core (delegate burns, vault pays owner)
+    /// with a fire-time owner/mint re-verification (6060) + partial-fire support.
+    /// CALLERS MUST prepend ComputeBudgetProgram.setComputeUnitLimit(~400_000)
+    /// (the BUY path runs BS-2002). Spec v1 §execute.
+    pub fn execute_trigger(ctx: Context<ExecuteTrigger>) -> Result<()> {
+        instructions::execute_trigger::handle_execute_trigger(ctx)
+    }
+
     /// One-time SharedVault schema migration that adds the trailing
     /// carry_rate_bps field to pre-Stage-A vaults. Admin-only. Caller passes
     /// vault accounts to migrate via remaining_accounts (recommended batch:

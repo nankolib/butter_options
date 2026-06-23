@@ -29,8 +29,12 @@ import BN from "bn.js";
 import { assert } from "chai";
 import {
   setupEnv, createVault, deposit, usdcAta, bal, exists, actor, pda, getClockUnix, Env,
-  HOOK_PROGRAM_ID,
+  HOOK_PROGRAM_ID, exerciseAmerican, bumpTokenAmount,
 } from "./helpers";
+import { injectPythFixture } from "./bootstrap";
+import { serializePriceUpdateV2 } from "../_pyth_fixtures";
+import * as fs from "fs";
+import * as path from "path";
 
 const CU = (u: number) => ComputeBudgetProgram.setComputeUnitLimit({ units: u });
 const usdc = (n: number) => new BN(Math.round(n * 1_000_000));
@@ -61,6 +65,17 @@ function deriveTrigger(owner: PublicKey, mint: PublicKey, nonce: BN) {
     nonce.toArrayLike(Buffer, "le", 8)]);
   const escrow = pda([Buffer.from("trigger_escrow"), order.toBuffer()]);
   return { order, escrow };
+}
+
+// PriceUpdateV2 body: EMA == spot (expo -8, tight conf). Mirrors helpers.pythBody
+// so the on-chain EMA read returns `priceUsd` in 6-dec USDC.
+function pythBody(feedHex: string, priceUsd: number, publishTime: number): Buffer {
+  const price = BigInt(priceUsd) * 100_000_000n;
+  return serializePriceUpdateV2({
+    feedIdHex: feedHex, price, conf: 1_000_000n, exponent: -8,
+    publishTime: BigInt(Math.floor(publishTime)), prevPublishTime: BigInt(Math.floor(publishTime) - 1),
+    emaPrice: price, emaConf: 1_000_000n,
+  });
 }
 
 describe("trigger orders — Pass 0 (place + cancel)", function () {
@@ -121,11 +136,11 @@ describe("trigger orders — Pass 0 (place + cancel)", function () {
   }
 
   async function placeSell(
-    owner: Keypair, s: any, vault: PublicKey, ownerOpt: PublicKey, thresholdUsd: BN, qty: number, nonce: BN,
+    owner: Keypair, s: any, vault: PublicKey, comparator: any, ownerOpt: PublicKey, thresholdUsd: BN, qty: number, nonce: BN,
   ) {
     const { order, escrow } = deriveTrigger(owner.publicKey, s.mint, nonce);
     const ownerUsdc = await usdcAta(e, owner.publicKey);
-    await e.opta.methods.placeTrigger(SELL, LE, thresholdUsd, new BN(qty), new BN(0), nonce).accountsStrict({
+    await e.opta.methods.placeTrigger(SELL, comparator, thresholdUsd, new BN(qty), new BN(0), nonce).accountsStrict({
       owner: owner.publicKey, market: e.market, sharedVault: vault, vaultMintRecord: s.record,
       optionMint: s.mint, triggerOrder: order, triggerEscrow: escrow, protocolState: e.protocolState,
       usdcMint: e.usdcMint, ownerUsdcAccount: ownerUsdc, ownerOptionAta: ownerOpt,
@@ -194,7 +209,7 @@ describe("trigger orders — Pass 0 (place + cancel)", function () {
 
     // Happy sell placement (qty 5 <= balance 5).
     const nonce = new BN(7);
-    const { order, escrow } = await placeSell(owner, s, vault, ownerOpt, usdc(80), 5, nonce);
+    const { order, escrow } = await placeSell(owner, s, vault, LE, ownerOpt, usdc(80), 5, nonce);
     const t: any = await e.opta.account.triggerOrder.fetch(order);
     assert.isTrue("takeProfitSell" in t.kind, "kind == TakeProfitSell");
     assert.isFalse(t.escrowFunded, "escrow_funded == false");
@@ -204,7 +219,7 @@ describe("trigger orders — Pass 0 (place + cancel)", function () {
 
     // Over-balance placement reverts (balance 5 < qty 6).
     let msg = "";
-    try { await placeSell(owner, s, vault, ownerOpt, usdc(80), 6, new BN(8)); }
+    try { await placeSell(owner, s, vault, LE, ownerOpt, usdc(80), 6, new BN(8)); }
     catch (err: any) { msg = String(err); }
     assert.isTrue(
       msg.includes("InsufficientOptionTokens") || msg.length > 0,
@@ -250,7 +265,7 @@ describe("trigger orders — Pass 0 (place + cancel)", function () {
     const optBefore = await bal(e, ownerOpt);
 
     const nonce = new BN(3);
-    const { order, escrow } = await placeSell(owner, s, vault, ownerOpt, usdc(80), 2, nonce);
+    const { order, escrow } = await placeSell(owner, s, vault, LE, ownerOpt, usdc(80), 2, nonce);
     assert.isTrue(await exists(e, order), "sell trigger placed");
     assert.isFalse(await exists(e, escrow), "no escrow for a sell");
 
@@ -304,5 +319,209 @@ describe("trigger orders — Pass 0 (place + cancel)", function () {
       (await bal(e, escrow)).toString(), P.mul(new BN(Q)).toString(),
       `escrow == P*Q (${P.toString()} × ${Q})`,
     );
+  });
+
+  // ========================================================================
+  // execute_trigger (Pass 1) — keeper fires; fresh-EMA re-check + cores
+  // ========================================================================
+
+  // Inject a fresh PriceUpdateV2 at the current clock, then fire the trigger.
+  // The injected spot is the comparator EMA (BUY+SELL) AND the SELL intrinsic
+  // spot; the BUY peg prices off the warm vol_oracle, not this fixture.
+  async function execTrigger(owner: Keypair, s: any, vault: PublicKey, vaultUsdc: PublicKey, nonce: BN, spotUsd: number) {
+    const { order, escrow } = deriveTrigger(owner.publicKey, s.mint, nonce);
+    const now = await getClockUnix(e.h.context);
+    const fix = Keypair.generate().publicKey;
+    injectPythFixture(e.h.context, fix, pythBody(e.feedHex, spotUsd, now));
+    const ownerOpt = getAssociatedTokenAddressSync(s.mint, owner.publicKey, false, TOKEN_2022_PROGRAM_ID);
+    const ownerUsdc = await usdcAta(e, owner.publicKey);
+    await e.opta.methods.executeTrigger().accountsStrict({
+      caller: e.admin.publicKey, triggerOrder: order, market: e.market, sharedVault: vault,
+      vaultMintRecord: s.record, optionMint: s.mint, priceUpdate: fix, volOracle: e.volOracle,
+      protocolState: e.protocolState, treasury: e.treasury, triggerEscrow: escrow,
+      holderOptionAta: ownerOpt, ownerUsdcAccount: ownerUsdc, ownerWallet: owner.publicKey,
+      vaultUsdcAccount: vaultUsdc, tokenProgram: TOKEN_PROGRAM_ID, token2022Program: TOKEN_2022_PROGRAM_ID,
+      systemProgram: SystemProgram.programId,
+    }).preInstructions([CU(400_000)]).rpc();
+  }
+
+  it("h — BUY: condition met + premium ≤ budget → mint qty, escrow conserved (spent+refund), closes", async () => {
+    const strike = usdc(100);
+    const expiry = new BN((await getClockUnix(e.h.context)) + 7 * DAY + 11000);
+    const { vault, vaultUsdc, s } = await setupVaultSeries(strike, expiry, 5000);
+    const owner = actor(e);
+    const P = usdc(50); const Q = 3; const nonce = new BN(11);
+    const { order, escrow, ownerOpt } = await placeBuy(owner, s, vault, usdc(100), Q, P, nonce);
+    const ownerUsdc = await usdcAta(e, owner.publicKey);
+
+    const escrowBefore = await bal(e, escrow);
+    const uBefore = await bal(e, ownerUsdc);
+    const vBefore = await bal(e, vaultUsdc);
+    const tBefore = await bal(e, e.treasury);
+    const optBefore = await bal(e, ownerOpt);
+
+    await execTrigger(owner, s, vault, vaultUsdc, nonce, 100); // ema 100 >= threshold 100 (GE)
+
+    const vaultShare = (await bal(e, vaultUsdc)) - vBefore;
+    const feeGot = (await bal(e, e.treasury)) - tBefore;
+    const refund = (await bal(e, ownerUsdc)) - uBefore;
+    const total = vaultShare + feeGot;
+    const pq = BigInt(P.toString()) * BigInt(Q);
+
+    assert.equal((await bal(e, ownerOpt)) - optBefore, BigInt(Q), "owner minted Q contracts");
+    assert.isTrue(total > 0n, "premium charged");
+    assert.equal(escrowBefore, pq, "escrow funded exactly P*Q");
+    assert.equal(total + refund, pq, "escrow conserved: total spent + refund == P*Q");
+    assert.isFalse(await exists(e, escrow), "escrow closed");
+    assert.isFalse(await exists(e, order), "trigger_order closed (buy fires once)");
+  });
+
+  it("i — BUY: condition NOT met → reverts 6059, nothing moves, order + escrow intact", async () => {
+    const strike = usdc(100);
+    const expiry = new BN((await getClockUnix(e.h.context)) + 7 * DAY + 12000);
+    const { vault, vaultUsdc, s } = await setupVaultSeries(strike, expiry, 2000);
+    const owner = actor(e);
+    const P = usdc(50); const Q = 2; const nonce = new BN(12);
+    const { order, escrow } = await placeBuy(owner, s, vault, usdc(120), Q, P, nonce); // GE threshold 120
+    const escrowBefore = await bal(e, escrow);
+
+    let msg = "";
+    try { await execTrigger(owner, s, vault, vaultUsdc, nonce, 100); } // ema 100 < 120 → GE fails
+    catch (err: any) { msg = String(err); }
+    assert.isTrue(msg.includes("TriggerConditionNotMet") || msg.includes("6059"), `6059 (${msg.slice(0, 140)})`);
+    assert.isTrue(await exists(e, order), "order intact");
+    assert.equal(await bal(e, escrow), escrowBefore, "escrow untouched");
+  });
+
+  it("j — SELL: condition met + ITM + bal ≥ qty → delegate-burn, payout, counters, order closed", async () => {
+    const strike = usdc(100);
+    const expiry = new BN((await getClockUnix(e.h.context)) + 7 * DAY + 13000);
+    const { vault, vaultUsdc, s } = await setupVaultSeries(strike, expiry, 5000);
+    const owner = actor(e);
+    const Q = 4;
+    const ownerOpt = await fillPeg(vault, vaultUsdc, s, owner, Q);
+    const ownerUsdc = await usdcAta(e, owner.publicKey);
+    const nonce = new BN(13);
+    const { order } = await placeSell(owner, s, vault, GE, ownerOpt, usdc(110), Q, nonce);
+
+    const vBefore: any = await e.opta.account.sharedVault.fetch(vault);
+    const uBefore = await bal(e, ownerUsdc);
+
+    await execTrigger(owner, s, vault, vaultUsdc, nonce, 120); // 120 >= 110 (GE), ITM (120 > 100)
+
+    const expectedPayout = usdc(20).mul(new BN(Q)); // intrinsic = min(120-100, cpt) = 20
+    assert.equal(await bal(e, ownerOpt), 0n, "all Q contracts burned (delegate, no holder sig)");
+    assert.equal((await bal(e, ownerUsdc)) - uBefore, BigInt(expectedPayout.toString()), "owner paid capped intrinsic");
+    const vAfter: any = await e.opta.account.sharedVault.fetch(vault);
+    assert.equal(Number(vAfter.exercisedOptions) - Number(vBefore.exercisedOptions), Q, "exercised_options += Q");
+    assert.equal(
+      (vAfter.earlyExercisePayout as BN).sub(vBefore.earlyExercisePayout as BN).toString(),
+      expectedPayout.toString(), "early_exercise_payout += payout");
+    assert.isFalse(await exists(e, order), "order closed (remaining 0)");
+  });
+
+  it("k — SELL: condition met + OTM → OptionNotInTheMoney (why StopLoss is not a kind)", async () => {
+    const strike = usdc(100);
+    const expiry = new BN((await getClockUnix(e.h.context)) + 7 * DAY + 14000);
+    const { vault, vaultUsdc, s } = await setupVaultSeries(strike, expiry, 2000);
+    const owner = actor(e);
+    const ownerOpt = await fillPeg(vault, vaultUsdc, s, owner, 2);
+    const nonce = new BN(14);
+    await placeSell(owner, s, vault, GE, ownerOpt, usdc(90), 2, nonce); // fire when spot >= 90
+
+    let msg = "";
+    try { await execTrigger(owner, s, vault, vaultUsdc, nonce, 95); } // 95 >= 90 met, but 95 < 100 → OTM
+    catch (err: any) { msg = String(err); }
+    assert.isTrue(msg.includes("OptionNotInTheMoney"), `OTM revert (${msg.slice(0, 140)})`);
+  });
+
+  it("l — SELL partial: bal < qty → fires min(qty,bal), decrements order, STAYS OPEN", async () => {
+    const strike = usdc(100);
+    const expiry = new BN((await getClockUnix(e.h.context)) + 7 * DAY + 15000);
+    const { vault, vaultUsdc, s } = await setupVaultSeries(strike, expiry, 5000);
+    const owner = actor(e);
+    const ownerOpt = await fillPeg(vault, vaultUsdc, s, owner, 5);
+    const nonce = new BN(15);
+    const { order } = await placeSell(owner, s, vault, GE, ownerOpt, usdc(110), 5, nonce);
+    await bumpTokenAmount(e, ownerOpt, -2); // holder moved 2 out: 5 → 3
+
+    await execTrigger(owner, s, vault, vaultUsdc, nonce, 120); // ITM; fire_qty = min(5,3) = 3
+
+    assert.equal(await bal(e, ownerOpt), 0n, "burned the 3 available");
+    assert.isTrue(await exists(e, order), "order STILL OPEN for the remainder");
+    const t: any = await e.opta.account.triggerOrder.fetch(order);
+    assert.equal(t.quantity.toString(), "2", "remaining quantity == 5 − 3");
+  });
+
+  it("m — SELL: bal == 0 → clean no-op (no revert, no close, order intact)", async () => {
+    const strike = usdc(100);
+    const expiry = new BN((await getClockUnix(e.h.context)) + 7 * DAY + 16000);
+    const { vault, vaultUsdc, s } = await setupVaultSeries(strike, expiry, 2000);
+    const owner = actor(e);
+    const ownerOpt = await fillPeg(vault, vaultUsdc, s, owner, 2);
+    const nonce = new BN(16);
+    const { order } = await placeSell(owner, s, vault, GE, ownerOpt, usdc(110), 2, nonce);
+    await bumpTokenAmount(e, ownerOpt, -2); // 2 → 0
+
+    await execTrigger(owner, s, vault, vaultUsdc, nonce, 120); // must NOT revert (fire_qty 0)
+
+    assert.isTrue(await exists(e, order), "order intact");
+    const t: any = await e.opta.account.triggerOrder.fetch(order);
+    assert.equal(t.quantity.toString(), "2", "quantity unchanged (no fire)");
+    assert.equal(await bal(e, ownerOpt), 0n, "balance still 0");
+  });
+
+  it("n — SELL fire-time theft guard: source ATA owner != trigger.owner → 6060", async () => {
+    const strike = usdc(100);
+    const expiry = new BN((await getClockUnix(e.h.context)) + 7 * DAY + 17000);
+    const { vault, vaultUsdc, s } = await setupVaultSeries(strike, expiry, 2000);
+    const owner = actor(e);
+    const ownerOpt = await fillPeg(vault, vaultUsdc, s, owner, 2);
+    const nonce = new BN(17);
+    await placeSell(owner, s, vault, GE, ownerOpt, usdc(110), 2, nonce);
+
+    // Corrupt the STORED ATA's owner field (bytes 32..64) to a stranger.
+    const acc = await e.h.context.banksClient.getAccount(ownerOpt);
+    const data = Buffer.from(acc!.data);
+    Keypair.generate().publicKey.toBuffer().copy(data, 32);
+    e.h.context.setAccount(ownerOpt, {
+      lamports: acc!.lamports, data, owner: acc!.owner, executable: acc!.executable, rentEpoch: Number(acc!.rentEpoch),
+    });
+
+    let msg = "";
+    try { await execTrigger(owner, s, vault, vaultUsdc, nonce, 120); }
+    catch (err: any) { msg = String(err); }
+    assert.isTrue(msg.includes("TriggerSourceAtaInvalid") || msg.includes("6060"), `6060 (${msg.slice(0, 140)})`);
+  });
+
+  it("o — flag gate: require!(AMERICAN_ENABLED) is the FIRST gate in handle_execute_trigger", () => {
+    // The bankrun build compiles with `american-enabled` (AMERICAN_ENABLED=true),
+    // so it can't be flipped false at runtime. Prove instead that the 6052 flag
+    // gate is the FIRST require! in the handler — it short-circuits before the
+    // EMA read + dispatch when dark.
+    const src = fs.readFileSync(
+      path.resolve(__dirname, "../../programs/opta/src/instructions/execute_trigger.rs"), "utf-8");
+    const body = src.slice(src.indexOf("pub fn handle_execute_trigger"));
+    const firstRequire = body.indexOf("require!(");
+    const flagGate = body.indexOf("require!(AMERICAN_ENABLED, OptaError::AmericanVaultsDisabled)");
+    assert.isTrue(flagGate >= 0, "flag gate present");
+    assert.equal(firstRequire, flagGate, "AMERICAN_ENABLED is the FIRST require! in the handler");
+  });
+
+  it("p — refactor regression: BOTH core wirings — taker-signed peg fill + holder-signed exercise", async () => {
+    const strike = usdc(100);
+    const expiry = new BN((await getClockUnix(e.h.context)) + 7 * DAY + 18000);
+    const { vault, vaultUsdc, s } = await setupVaultSeries(strike, expiry, 5000);
+    const taker = actor(e);
+    // (1) Peg fill via the taker-signed wiring (vault_peg_fill_core, Some-signer).
+    const takerOpt = await fillPeg(vault, vaultUsdc, s, taker, 3);
+    assert.equal(await bal(e, takerOpt), 3n, "peg fill (taker-signed core) minted 3");
+    // (2) Holder-signed exercise via american_exercise_core (None pda_bump → invoke).
+    const takerUsdc = await usdcAta(e, taker.publicKey);
+    const uBefore = await bal(e, takerUsdc);
+    const now = await getClockUnix(e.h.context);
+    await exerciseAmerican(e, vault, { optionMint: s.mint, vaultMintRecord: s.record }, taker, takerOpt, takerUsdc, 3, 120, now);
+    assert.equal(await bal(e, takerOpt), 0n, "holder-signed exercise burned 3");
+    assert.equal((await bal(e, takerUsdc)) - uBefore, BigInt(usdc(20).mul(new BN(3)).toString()), "holder paid capped intrinsic");
   });
 });

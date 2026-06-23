@@ -94,52 +94,123 @@ pub fn handle_fill_vault_peg(
     quantity: u64,
     max_premium: u64,
 ) -> Result<()> {
-    let clock = Clock::get()?;
-    let vault = &ctx.accounts.shared_vault;
+    let now_ts = Clock::get()?.unix_timestamp;
+    // Phase 4 extraction: ALL peg economics live in vault_peg_fill_core. Here the
+    // USDC payer is the TAKER (a real tx signer → usdc_external_signer = Some)
+    // and the mint lands in the taker's ATA. execute_trigger calls the SAME core
+    // with usdc_external_signer = None (the protocol PDA signs the escrow debit)
+    // and the mint lands in the trigger owner's pre-created ATA. Behavior is
+    // byte-identical to the pre-extraction handler — gates, pricing, fee split,
+    // free-collateral cap, counter bumps, and the OrderFilled tape all moved
+    // verbatim into the core.
+    vault_peg_fill_core(
+        &mut ctx.accounts.shared_vault,
+        &mut ctx.accounts.vault_mint_record,
+        &mut ctx.accounts.protocol_state,
+        &ctx.accounts.vol_oracle,
+        &ctx.accounts.option_mint.to_account_info(),
+        &ctx.accounts.taker_option_account.to_account_info(),
+        &ctx.accounts.taker_usdc_account.to_account_info(),
+        Some(&ctx.accounts.taker.to_account_info()),
+        &ctx.accounts.vault_usdc_account.to_account_info(),
+        &ctx.accounts.treasury.to_account_info(),
+        &ctx.accounts.token_program.to_account_info(),
+        &ctx.accounts.token_2022_program.to_account_info(),
+        ctx.accounts.taker.key(),
+        quantity,
+        max_premium,
+        now_ts,
+    )?;
+    Ok(())
+}
 
+/// Outcome of a peg fill — returned to the caller for refund math + analytics.
+/// `total` is the gross USDC the buyer paid (vault_share + fee); execute_trigger
+/// refunds `escrow_balance − total`.
+pub struct PegFillResult {
+    pub total: u64,
+    pub premium_per_contract: u64,
+    pub fee: u64,
+    pub vault_share: u64,
+}
+
+// =============================================================================
+// vault_peg_fill_core — shared mint-on-fill peg economics (Phase 4)
+// =============================================================================
+//
+// Single source of truth for a vault-peg fill: gates → BS-2002 price + spread →
+// fee split → free-collateral cap → USDC in → mint_to → counter bumps →
+// OrderFilled tape. Two callers with different USDC-payer + mint-destination
+// wiring:
+//
+//   fill_vault_peg : usdc_source = taker's USDC, usdc_external_signer = Some(taker)
+//                    → CpiContext::new (taker signs); mint_destination = taker ATA;
+//                    buyer = taker.
+//   execute_trigger: usdc_source = trigger_escrow, usdc_external_signer = None
+//                    → CpiContext::new_with_signer ([PROTOCOL_SEED, bump]) so the
+//                    protocol PDA (the escrow's owner — P0) signs the debit;
+//                    mint_destination = owner's pre-created ATA; buyer = owner.
+//
+// The mint_to authority is ALWAYS protocol_state (the series mint authority),
+// signed with [PROTOCOL_SEED, bump], in both paths. All gates live here so the
+// existing instruction stays byte-identical and triggers inherit identical
+// vault-state safety.
+#[allow(clippy::too_many_arguments)]
+pub fn vault_peg_fill_core<'info>(
+    shared_vault: &mut Account<'info, SharedVault>,
+    vault_mint_record: &mut Account<'info, VaultMint>,
+    protocol_state: &mut Account<'info, ProtocolState>,
+    vol_oracle: &AccountLoader<'info, VolOracle>,
+    option_mint: &AccountInfo<'info>,
+    mint_destination: &AccountInfo<'info>,
+    usdc_source: &AccountInfo<'info>,
+    usdc_external_signer: Option<&AccountInfo<'info>>,
+    vault_usdc_account: &AccountInfo<'info>,
+    treasury: &AccountInfo<'info>,
+    token_program: &AccountInfo<'info>,
+    token_2022_program: &AccountInfo<'info>,
+    buyer: Pubkey,
+    quantity: u64,
+    max_premium: u64,
+    now_ts: i64,
+) -> Result<PegFillResult> {
     // ---- 1. Gates ---------------------------------------------------------
     require!(quantity > 0, OptaError::InvalidContractSize);
-    // Dark until the Stage-I flip. First real gate so the peg is provably inert
-    // feature-free (and structurally — create_shared_vault blocks American too).
     require!(AMERICAN_ENABLED, OptaError::AmericanVaultsDisabled);
-    // Invariant #6: a voided vault is NOT tradeable. Forward-safe — nothing sets
-    // `voided` until reclaim_unsettled (Pass D), but the block ships now.
-    require!(!vault.voided, OptaError::VaultVoided);
-    require!(!vault.is_settled, OptaError::VaultAlreadySettled);
-    require!(vault.expiry > clock.unix_timestamp, OptaError::VaultExpired);
-    // Series mints are American-only (D12); the vault is American by construction
-    // (AMER-namespace PDA), but belt-and-braces before we price via BS-2002.
+    require!(!shared_vault.voided, OptaError::VaultVoided);
+    require!(!shared_vault.is_settled, OptaError::VaultAlreadySettled);
+    require!(shared_vault.expiry > now_ts, OptaError::VaultExpired);
     require!(
-        vault.exercise_style == ExerciseStyle::American,
+        shared_vault.exercise_style == ExerciseStyle::American,
         OptaError::NotAmericanOption
     );
 
     // ---- 2. Price at fill time: BS-2002 via the shared helper + spread ----
     let premium_per_contract = {
-        let oracle = ctx.accounts.vol_oracle.load()?;
+        let oracle = vol_oracle.load()?;
         let quote = price_american(
             &*oracle,
-            clock.unix_timestamp,
+            now_ts,
             AmericanQuoteInputs {
-                strike: vault.strike_price,
-                expiry_ts: vault.expiry,
-                option_type: vault.option_type,
-                carry_rate_bps: vault.carry_rate_bps,
+                strike: shared_vault.strike_price,
+                expiry_ts: shared_vault.expiry,
+                option_type: shared_vault.option_type,
+                carry_rate_bps: shared_vault.carry_rate_bps,
             },
         )?;
-        apply_spread(quote.premium_per_contract, vault.spread_bps)?
+        apply_spread(quote.premium_per_contract, shared_vault.spread_bps)?
     };
 
-    // ---- 3. Totals + fee split (verbatim purchase_from_vault / fill_order) -
+    // ---- 3. Totals + fee split --------------------------------------------
     let total: u64 = (quantity as u128)
         .checked_mul(premium_per_contract as u128)
         .ok_or(OptaError::MathOverflow)?
         .try_into()
         .map_err(|_| OptaError::MathOverflow)?;
-    // Slippage: fee-inclusive total must not exceed the taker's ceiling.
+    // Slippage: fee-inclusive total must not exceed the buyer's ceiling.
     require!(total <= max_premium, OptaError::SlippageExceeded);
 
-    let fee_bps = ctx.accounts.protocol_state.fee_bps as u128;
+    let fee_bps = protocol_state.fee_bps as u128;
     let fee: u64 = ((total as u128)
         .checked_mul(fee_bps)
         .ok_or(OptaError::MathOverflow)?
@@ -149,14 +220,14 @@ pub fn handle_fill_vault_peg(
     .map_err(|_| OptaError::MathOverflow)?;
     let vault_share = total.checked_sub(fee).ok_or(OptaError::MathOverflow)?;
 
-    // ---- 4. Free-collateral commitment cap (resolution c) -----------------
+    // ---- 4. Free-collateral commitment cap --------------------------------
     let collateral_per_token =
-        required_collateral_per_contract(vault.strike_price, vault.option_type);
+        required_collateral_per_contract(shared_vault.strike_price, shared_vault.option_type);
     let free = vault_free_collateral(
-        vault.total_collateral,
-        vault.early_exercise_payout,
-        vault.total_options_minted,
-        vault.exercised_options,
+        shared_vault.total_collateral,
+        shared_vault.early_exercise_payout,
+        shared_vault.total_options_minted,
+        shared_vault.exercised_options,
         collateral_per_token,
     )?;
     let needed = (quantity as u128)
@@ -164,78 +235,106 @@ pub fn handle_fill_vault_peg(
         .ok_or(OptaError::MathOverflow)?;
     require!(free >= needed, OptaError::InsufficientVaultCollateral);
 
-    // ---- 5. USDC in: taker → vault (vault_share) + taker → treasury (fee) --
+    // ---- 5. USDC in: buyer → vault (vault_share) + buyer → treasury (fee) --
+    // The protocol signer is built once; used for the None-branch escrow debit
+    // AND the always-protocol mint_to below.
+    let protocol_bump = protocol_state.bump;
+    let protocol_seeds: &[&[u8]] = &[PROTOCOL_SEED, &[protocol_bump]];
+    let protocol_signer: &[&[&[u8]]] = &[protocol_seeds];
+
     if vault_share > 0 {
-        token::transfer(
-            CpiContext::new(
-                ctx.accounts.token_program.to_account_info(),
-                Transfer {
-                    from: ctx.accounts.taker_usdc_account.to_account_info(),
-                    to: ctx.accounts.vault_usdc_account.to_account_info(),
-                    authority: ctx.accounts.taker.to_account_info(),
-                },
-            ),
-            vault_share,
-        )?;
+        match usdc_external_signer {
+            Some(signer) => token::transfer(
+                CpiContext::new(
+                    token_program.clone(),
+                    Transfer {
+                        from: usdc_source.clone(),
+                        to: vault_usdc_account.clone(),
+                        authority: signer.clone(),
+                    },
+                ),
+                vault_share,
+            )?,
+            None => token::transfer(
+                CpiContext::new_with_signer(
+                    token_program.clone(),
+                    Transfer {
+                        from: usdc_source.clone(),
+                        to: vault_usdc_account.clone(),
+                        authority: protocol_state.to_account_info(),
+                    },
+                    protocol_signer,
+                ),
+                vault_share,
+            )?,
+        }
     }
     if fee > 0 {
-        token::transfer(
-            CpiContext::new(
-                ctx.accounts.token_program.to_account_info(),
-                Transfer {
-                    from: ctx.accounts.taker_usdc_account.to_account_info(),
-                    to: ctx.accounts.treasury.to_account_info(),
-                    authority: ctx.accounts.taker.to_account_info(),
-                },
-            ),
-            fee,
-        )?;
+        match usdc_external_signer {
+            Some(signer) => token::transfer(
+                CpiContext::new(
+                    token_program.clone(),
+                    Transfer {
+                        from: usdc_source.clone(),
+                        to: treasury.clone(),
+                        authority: signer.clone(),
+                    },
+                ),
+                fee,
+            )?,
+            None => token::transfer(
+                CpiContext::new_with_signer(
+                    token_program.clone(),
+                    Transfer {
+                        from: usdc_source.clone(),
+                        to: treasury.clone(),
+                        authority: protocol_state.to_account_info(),
+                    },
+                    protocol_signer,
+                ),
+                fee,
+            )?,
+        }
     }
 
-    // ---- 6. Mint contracts → taker ATA (protocol_state is the mint authority)
-    let protocol_seeds: &[&[u8]] = &[PROTOCOL_SEED, &[ctx.accounts.protocol_state.bump]];
-    let signer_seeds: &[&[&[u8]]] = &[protocol_seeds];
-    let token_2022_key = ctx.accounts.token_2022_program.key();
-    let mint_info = ctx.accounts.option_mint.to_account_info();
-    let dest_info = ctx.accounts.taker_option_account.to_account_info();
-    let protocol_info = ctx.accounts.protocol_state.to_account_info();
+    // ---- 6. Mint contracts → destination (protocol_state is the authority) -
     invoke_signed(
         &spl_token_2022::instruction::mint_to(
-            &token_2022_key,
-            mint_info.key,
-            dest_info.key,
-            &ctx.accounts.protocol_state.key(),
+            &token_2022_program.key(),
+            option_mint.key,
+            mint_destination.key,
+            &protocol_state.key(),
             &[],
             quantity,
         )?,
-        &[mint_info.clone(), dest_info.clone(), protocol_info.clone()],
-        signer_seeds,
+        &[
+            option_mint.clone(),
+            mint_destination.clone(),
+            protocol_state.to_account_info(),
+        ],
+        protocol_signer,
     )?;
 
     // ---- 7. Commitment bookkeeping ----------------------------------------
-    // Series record: minted == sold (mint-on-fill, no inventory).
-    let record = &mut ctx.accounts.vault_mint_record;
-    record.quantity_minted = record
+    vault_mint_record.quantity_minted = vault_mint_record
         .quantity_minted
         .checked_add(quantity)
         .ok_or(OptaError::MathOverflow)?;
-    record.quantity_sold = record
+    vault_mint_record.quantity_sold = vault_mint_record
         .quantity_sold
         .checked_add(quantity)
         .ok_or(OptaError::MathOverflow)?;
 
-    // Vault counters + premium accumulator (H-01, identical to purchase).
-    let total_shares = ctx.accounts.shared_vault.total_shares;
-    let vault = &mut ctx.accounts.shared_vault;
-    vault.total_options_minted = vault
+    let total_shares = shared_vault.total_shares;
+    shared_vault.total_options_minted = shared_vault
         .total_options_minted
         .checked_add(quantity)
         .ok_or(OptaError::MathOverflow)?;
-    vault.total_options_sold = vault
+    shared_vault.total_options_sold = shared_vault
         .total_options_sold
         .checked_add(quantity)
         .ok_or(OptaError::MathOverflow)?;
-    vault.net_premium_collected = vault
+    shared_vault.net_premium_collected = shared_vault
         .net_premium_collected
         .checked_add(vault_share)
         .ok_or(OptaError::MathOverflow)?;
@@ -245,41 +344,41 @@ pub fn handle_fill_vault_peg(
             .ok_or(OptaError::MathOverflow)?
             .checked_div(total_shares as u128)
             .ok_or(OptaError::MathOverflow)?;
-        vault.premium_per_share_cumulative = vault
+        shared_vault.premium_per_share_cumulative = shared_vault
             .premium_per_share_cumulative
             .checked_add(premium_increment)
             .ok_or(OptaError::MathOverflow)?;
     }
 
-    let protocol = &mut ctx.accounts.protocol_state;
-    protocol.total_volume = protocol
+    protocol_state.total_volume = protocol_state
         .total_volume
         .checked_add(total)
         .ok_or(OptaError::MathOverflow)?;
 
-    // ---- 8. Tape: OrderFilled with the VaultPeg convention (resolution d) --
-    // The series record IS the standing ask (order); the vault PDA is the maker;
-    // quantity_remaining = post-fill peg depth = floor(free_after / cpt), giving
-    // the indexer live peg capacity per fill. maker is a PDA, not a wallet
-    // (doc-comment note for the future indexer — resolution f).
+    // ---- 8. Tape: OrderFilled with the VaultPeg convention ----------------
     let capacity_after: u64 = ((free - needed) / (collateral_per_token as u128))
         .try_into()
         .unwrap_or(u64::MAX);
     emit!(OrderFilled {
-        order: ctx.accounts.vault_mint_record.key(),
-        option_mint: ctx.accounts.option_mint.key(),
-        vault: ctx.accounts.shared_vault.key(),
+        order: vault_mint_record.key(),
+        option_mint: *option_mint.key,
+        vault: shared_vault.key(),
         kind: OrderKind::VaultPeg.as_u8(),
-        maker: ctx.accounts.shared_vault.key(),
-        taker: ctx.accounts.taker.key(),
+        maker: shared_vault.key(),
+        taker: buyer,
         price_per_contract: premium_per_contract,
         fill_quantity: quantity,
         fee,
         quantity_remaining: capacity_after,
-        ts: clock.unix_timestamp,
+        ts: now_ts,
     });
 
-    Ok(())
+    Ok(PegFillResult {
+        total,
+        premium_per_contract,
+        fee,
+        vault_share,
+    })
 }
 
 // =============================================================================

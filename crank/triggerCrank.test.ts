@@ -15,6 +15,7 @@ import {
   applySpreadFloor,
   uniqueFeedHexes,
   buildHermesMultiUrl,
+  DEFAULT_FIRE_MARGIN_BPS,
   type TriggerView,
 } from "./triggerCrank";
 
@@ -40,10 +41,11 @@ function mkView(over: Partial<TriggerView> = {}): TriggerView {
     ...over,
   };
 }
-const baseOpts = { nowSec: NOW, maxStaleSecs: 120, fireMarginBps: 20 };
+const baseOpts = { nowSec: NOW, maxStaleSecs: 120, fireMarginBps: DEFAULT_FIRE_MARGIN_BPS };
 const spot = (price: number, publishTime = FRESH) => ({ priceFloat: price, publishTime });
 
-// margin at 20bps on $100 threshold = $0.20 → GE fires ≥ $100.20, LE fires ≤ $99.80
+// DEFAULT_FIRE_MARGIN_BPS = 50 → margin on $100 threshold = $0.50 →
+// GE fires ≥ $100.50, LE fires ≤ $99.50 (boundary cases below track the default)
 
 // ---- conversions -----------------------------------------------------------
 test("spotToUsdc6: float USD → USDC 6-dec, rounded", () => {
@@ -74,12 +76,13 @@ test("GE: spot below threshold → condition_not_met", () => {
   assert.deepEqual(d, { eligible: false, reason: "condition_not_met" });
 });
 test("GE: spot past threshold but INSIDE margin → within_margin", () => {
-  // $100.10 ≥ $100 but < $100.20
-  const d = evaluateTrigger(mkView({ comparator: "ge" }), { ...baseOpts, spot: spot(100.1), pegPremiumTotalUsdc: usd(1) });
+  // $100.40 ≥ $100 but < $100.50 (50bps band)
+  const d = evaluateTrigger(mkView({ comparator: "ge" }), { ...baseOpts, spot: spot(100.4), pegPremiumTotalUsdc: usd(1) });
   assert.deepEqual(d, { eligible: false, reason: "within_margin" });
 });
 test("GE: spot beyond margin + within budget → Eligible", () => {
-  const d = evaluateTrigger(mkView({ comparator: "ge" }), { ...baseOpts, spot: spot(100.3), pegPremiumTotalUsdc: usd(12) });
+  // $100.60 ≥ $100.50 (clears the 50bps margin)
+  const d = evaluateTrigger(mkView({ comparator: "ge" }), { ...baseOpts, spot: spot(100.6), pegPremiumTotalUsdc: usd(12) });
   assert.deepEqual(d, { eligible: true });
 });
 
@@ -89,27 +92,28 @@ test("LE: spot above threshold → condition_not_met", () => {
   assert.deepEqual(d, { eligible: false, reason: "condition_not_met" });
 });
 test("LE: spot past threshold but INSIDE margin → within_margin", () => {
-  // $99.90 ≤ $100 but > $99.80
-  const d = evaluateTrigger(mkView({ kind: "sell", comparator: "le", maxPremiumPerContract: 0n }), { ...baseOpts, spot: spot(99.9) });
+  // $99.60 ≤ $100 but > $99.50 (50bps band)
+  const d = evaluateTrigger(mkView({ kind: "sell", comparator: "le", maxPremiumPerContract: 0n }), { ...baseOpts, spot: spot(99.6) });
   assert.deepEqual(d, { eligible: false, reason: "within_margin" });
 });
 test("LE: spot beyond margin (sell, no budget) → Eligible", () => {
-  const d = evaluateTrigger(mkView({ kind: "sell", comparator: "le", maxPremiumPerContract: 0n }), { ...baseOpts, spot: spot(99.7) });
+  // $99.40 ≤ $99.50 (clears the 50bps margin)
+  const d = evaluateTrigger(mkView({ kind: "sell", comparator: "le", maxPremiumPerContract: 0n }), { ...baseOpts, spot: spot(99.4) });
   assert.deepEqual(d, { eligible: true });
 });
 
 // ---- BUY budget ------------------------------------------------------------
 test("BUY: condition met but quote missing → quote_unavailable (still-live signal)", () => {
-  const d = evaluateTrigger(mkView({ kind: "buy" }), { ...baseOpts, spot: spot(100.3), pegPremiumTotalUsdc: undefined });
+  const d = evaluateTrigger(mkView({ kind: "buy" }), { ...baseOpts, spot: spot(100.6), pegPremiumTotalUsdc: undefined });
   assert.deepEqual(d, { eligible: false, reason: "quote_unavailable" });
 });
 test("BUY: premium over budget → over_budget (order stays live, no send)", () => {
   // budget = $5 × 3 = $15; premium $20 > budget
-  const d = evaluateTrigger(mkView({ kind: "buy" }), { ...baseOpts, spot: spot(100.3), pegPremiumTotalUsdc: usd(20) });
+  const d = evaluateTrigger(mkView({ kind: "buy" }), { ...baseOpts, spot: spot(100.6), pegPremiumTotalUsdc: usd(20) });
   assert.deepEqual(d, { eligible: false, reason: "over_budget" });
 });
 test("BUY: premium within budget → Eligible", () => {
-  const d = evaluateTrigger(mkView({ kind: "buy" }), { ...baseOpts, spot: spot(100.3), pegPremiumTotalUsdc: usd(15) });
+  const d = evaluateTrigger(mkView({ kind: "buy" }), { ...baseOpts, spot: spot(100.6), pegPremiumTotalUsdc: usd(15) });
   assert.deepEqual(d, { eligible: true }); // exactly at budget passes (<=)
 });
 

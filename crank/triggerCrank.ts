@@ -62,7 +62,7 @@ const TRIGGER_ESCROW_SEED = "trigger_escrow";
 
 // ---- Tunables --------------------------------------------------------------
 export const DEFAULT_TRIGGER_TICK_MS = 15_000; // 15s — stops can't fire 5 min late
-export const DEFAULT_FIRE_MARGIN_BPS = 20; // 0.20% — covers typical spot↔EMA lag
+export const DEFAULT_FIRE_MARGIN_BPS = 50; // 0.50% — headroom over measured SOL spot↔EMA gap (calm p90 ~16bps, move-peak ~33bps; P3.4 characterization)
 export const DEFAULT_FEED_STALE_SECS = 120; // a Hermes price older than this = stale
 export const EXECUTE_CU_LIMIT = 400_000; // BUY+BS-2002 path; the keeper IS the caller
 const SHUTDOWN_CHECK_MS = 5000; // interruptible-sleep granularity

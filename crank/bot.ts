@@ -47,6 +47,11 @@ import {
   type VolOracleCrankContext,
   type VolOracleCrankOptions,
 } from "./volOracleCrank";
+import {
+  runTriggerCrank,
+  type TriggerCrankContext,
+  type TriggerCrankOptions,
+} from "./triggerCrank";
 
 // ---- Constants -------------------------------------------------------------
 
@@ -1000,6 +1005,45 @@ async function main(): Promise<void> {
     loops.push(
       runVolOracleCrank(volCrankCtx, volCrankOptions).catch((err) => {
         logFatal("vol-oracle loop crashed", {
+          err: String(err),
+          stack: (err as any)?.stack,
+        });
+        throw err;
+      }),
+    );
+  }
+
+  // ---- Spawn the Phase 4 trigger keeper as a side-loop --------------------
+  // Same fail-loud + shutdown wiring as the vol loop: it reads shutdownRequested
+  // via shouldShutdown, and a crash → logFatal + re-throw → Promise.all rejects
+  // → process.exit(1) → supervisor restarts. Env-gated: set
+  // OPTA_TRIGGER_CRANK_DISABLED=1 to skip it entirely.
+  //
+  // DEPLOY: keep this DISABLED on the VPS (OPTA_TRIGGER_CRANK_DISABLED=1) until
+  // the P3 greenlight — execute_trigger isn't deployed/seeded yet. Dry-run is
+  // ALSO on by default (OPTA_TRIGGER_DRY_RUN defaults ON), so even if spawned it
+  // won't send until P3 explicitly sets OPTA_TRIGGER_DRY_RUN=0.
+  const triggerCrankCtx: TriggerCrankContext = {
+    connection: ctx.connection,
+    wallet: ctx.wallet,
+    hermesBase: ctx.hermesBase,
+    log: (level, msg, fields) => log(level, msg, { subsystem: "trigger", ...(fields ?? {}) }),
+    shouldShutdown: () => shutdownRequested,
+  };
+  const triggerCrankOptions: TriggerCrankOptions = {
+    tickOnce:
+      (process.env.TICK_ONCE ?? "").toLowerCase() === "1" ||
+      (process.env.TICK_ONCE ?? "").toLowerCase() === "true",
+  };
+
+  if ((process.env.OPTA_TRIGGER_CRANK_DISABLED ?? "") === "1") {
+    logInfo("trigger side-loop DISABLED via OPTA_TRIGGER_CRANK_DISABLED=1", {
+      note: "enable at P3 greenlight (and set OPTA_TRIGGER_DRY_RUN=0 to actually send)",
+    });
+  } else {
+    loops.push(
+      runTriggerCrank(triggerCrankCtx, triggerCrankOptions).catch((err) => {
+        logFatal("trigger loop crashed", {
           err: String(err),
           stack: (err as any)?.stack,
         });

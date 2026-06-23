@@ -47,6 +47,10 @@ pub mod create_and_deposit;
 // Exchange dead-feed hatch (Phase 2 Pass D — reclaim_unsettled)
 pub mod reclaim_unsettled;
 
+// Trigger orders (Phase 4 Pass 0 — placement + cancel; execute is Pass 1)
+pub mod place_trigger;
+pub mod cancel_trigger;
+
 // OptionsMarket oracle_source schema migration (Switchboard Stage 2)
 pub mod migrate_market_oracle_source;
 // SharedVault carry_rate_bps schema migration (Stage A)
@@ -130,6 +134,10 @@ pub use create_and_deposit::*;
 
 // Exchange dead-feed hatch (Phase 2 Pass D — reclaim_unsettled)
 pub use reclaim_unsettled::*;
+
+// Trigger orders (Phase 4 Pass 0 — placement + cancel)
+pub use place_trigger::*;
+pub use cancel_trigger::*;
 
 // OptionsMarket oracle_source schema migration (Switchboard Stage 2)
 pub use migrate_market_oracle_source::*;

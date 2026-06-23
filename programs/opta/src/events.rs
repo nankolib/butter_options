@@ -321,3 +321,29 @@ pub struct SeriesCreated {
     pub exercise_style: u8,
     pub ts: i64,
 }
+
+// =============================================================================
+// Trigger order events (Phase 4 — TP/SL + stop-entry)
+// =============================================================================
+//
+// `kind` / `comparator` are emitted as u8 (house convention for enum fields):
+// kind   → StopEntryBuy = 0, TakeProfitSell = 1
+// cmp    → LessOrEqual = 0, GreaterOrEqual = 1
+
+#[event]
+pub struct TriggerPlaced {
+    pub trigger_order: Pubkey,
+    pub owner: Pubkey,
+    pub option_mint: Pubkey,
+    pub vault: Pubkey,
+    pub kind: u8,
+    pub comparator: u8,
+    pub threshold_usdc: u64,
+    pub quantity: u64,
+}
+
+#[event]
+pub struct TriggerCancelled {
+    pub trigger_order: Pubkey,
+    pub owner: Pubkey,
+}

@@ -264,4 +264,14 @@ pub enum OptaError {
     // before collateral can be reclaimed. Error code 6058.
     #[msg("Dead-feed grace window has not elapsed yet")]
     GracePeriodNotElapsed,
+
+    // =========================================================================
+    // Trigger orders (Phase 4 — TP/SL + stop-entry)
+    // =========================================================================
+    // DECLARED in Pass 0; first USED by execute_trigger (Pass 1). The keeper's
+    // off-chain price assertion is never trusted: execute_trigger re-reads a
+    // fresh Pyth EMA in-tx and reverts this when the live EMA does not satisfy
+    // the trigger's stored comparator against threshold_usdc. Error code 6059.
+    #[msg("Trigger condition not met — live price does not satisfy the stored comparator")]
+    TriggerConditionNotMet,
 }

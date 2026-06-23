@@ -374,6 +374,35 @@ pub mod opta {
         instructions::reclaim_unsettled::handle_reclaim_unsettled(ctx)
     }
 
+    // =========================================================================
+    // Phase 4 — Trigger orders (Pass 0: placement + cancel; execute is Pass 1)
+    // =========================================================================
+
+    /// Stage a durable trigger order. NOT flag-gated (a user can stage/cancel
+    /// anytime; only the Pass-1 execute path checks AMERICAN_ENABLED).
+    /// StopEntryBuy escrows `max_premium × quantity` USDC + pre-creates the
+    /// owner's destination option ATA; TakeProfitSell escrows nothing and
+    /// sanity-checks the declared source ATA holds ≥ quantity. Spec v1 §placement.
+    pub fn place_trigger(
+        ctx: Context<PlaceTrigger>,
+        kind: TriggerKind,
+        comparator: Comparator,
+        threshold_usdc: u64,
+        quantity: u64,
+        max_premium: u64,
+        nonce: u64,
+    ) -> Result<()> {
+        instructions::place_trigger::handle_place_trigger(
+            ctx, kind, comparator, threshold_usdc, quantity, max_premium, nonce,
+        )
+    }
+
+    /// Owner cancels their own trigger; refunds the full escrow (BUY) and closes
+    /// both PDAs, rent → owner. NOT flag-gated. Spec v1 §cancel.
+    pub fn cancel_trigger(ctx: Context<CancelTrigger>) -> Result<()> {
+        instructions::cancel_trigger::handle_cancel_trigger(ctx)
+    }
+
     /// One-time SharedVault schema migration that adds the trailing
     /// carry_rate_bps field to pre-Stage-A vaults. Admin-only. Caller passes
     /// vault accounts to migrate via remaining_accounts (recommended batch:

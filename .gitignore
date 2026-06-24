@@ -42,3 +42,4 @@ TODO.md
 
 # Python bytecode (e.g. from running scripts/gen_bs2002_refs.py)
 __pycache__/
+.opta-build/

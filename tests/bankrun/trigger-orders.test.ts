@@ -20,6 +20,8 @@
 
 import {
   PublicKey, Keypair, SystemProgram, SYSVAR_RENT_PUBKEY, ComputeBudgetProgram,
+  Transaction, TransactionInstruction, Ed25519Program,
+  SYSVAR_INSTRUCTIONS_PUBKEY, SYSVAR_SLOT_HASHES_PUBKEY,
 } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -342,6 +344,8 @@ describe("trigger orders — Pass 0 (place + cancel)", function () {
       holderOptionAta: ownerOpt, ownerUsdcAccount: ownerUsdc, ownerWallet: owner.publicKey,
       vaultUsdcAccount: vaultUsdc, tokenProgram: TOKEN_PROGRAM_ID, token2022Program: TOKEN_2022_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
+      // Stage 3 1a-ii: trailing Switchboard read-arm optionals — null on Pyth path.
+      sbQueue: null, sbSlothashes: null, sbInstructions: null,
     }).preInstructions([CU(400_000)]).rpc();
   }
 
@@ -523,5 +527,152 @@ describe("trigger orders — Pass 0 (place + cancel)", function () {
     await exerciseAmerican(e, vault, { optionMint: s.mint, vaultMintRecord: s.record }, taker, takerOpt, takerUsdc, 3, 120, now);
     assert.equal(await bal(e, takerOpt), 0n, "holder-signed exercise burned 3");
     assert.equal((await bal(e, takerUsdc)) - uBefore, BigInt(usdc(20).mul(new BN(3)).toString()), "holder paid capped intrinsic");
+  });
+
+  // =========================================================================
+  // Stage 3 wiring 1a-ii — execute_trigger oracle_source routing
+  // =========================================================================
+
+  // Flip the market to oracle_source = Switchboard in place. The byte offset is
+  // NOT fixed (asset_name is Borsh-serialized at actual length): it sits after
+  // disc(8) + [4-byte len + name] + pyth_feed_id(32) + asset_class(1) + bump(1).
+  async function flipMarketToSwitchboard() {
+    const acc = await e.h.context.banksClient.getAccount(e.market);
+    const data = Buffer.from(acc.data);
+    const nameLen = data.readUInt32LE(8);
+    const off = 8 + 4 + nameLen + 32 + 1 + 1;
+    // Idempotent: e.market is shared across tests, so it may already be flipped.
+    data[off] = 1;
+    e.h.context.setAccount(e.market, {
+      lamports: acc.lamports, data, owner: acc.owner,
+      executable: acc.executable, rentEpoch: Number(acc.rentEpoch),
+    });
+  }
+
+  // Build the executeTrigger accountsStrict object. priceUpdate present + sb=null
+  // → Pyth path; priceUpdate=null + sb present → Switchboard path.
+  function execArgs(owner: Keypair, s: any, vault: PublicKey, vaultUsdc: PublicKey,
+                    order: PublicKey, escrow: PublicKey, priceUpdate: PublicKey | null,
+                    ownerUsdc: PublicKey, sb: { queue: PublicKey; slothashes: PublicKey; instructions: PublicKey } | null) {
+    const ownerOpt = getAssociatedTokenAddressSync(s.mint, owner.publicKey, false, TOKEN_2022_PROGRAM_ID);
+    return {
+      caller: e.admin.publicKey, triggerOrder: order, market: e.market, sharedVault: vault,
+      vaultMintRecord: s.record, optionMint: s.mint, priceUpdate, volOracle: e.volOracle,
+      protocolState: e.protocolState, treasury: e.treasury, triggerEscrow: escrow,
+      holderOptionAta: ownerOpt, ownerUsdcAccount: ownerUsdc, ownerWallet: owner.publicKey,
+      vaultUsdcAccount: vaultUsdc, tokenProgram: TOKEN_PROGRAM_ID, token2022Program: TOKEN_2022_PROGRAM_ID,
+      systemProgram: SystemProgram.programId,
+      sbQueue: sb?.queue ?? null, sbSlothashes: sb?.slothashes ?? null, sbInstructions: sb?.instructions ?? null,
+    };
+  }
+
+  // A placed SELL on a Switchboard-flipped market (the EMA match site fires
+  // first, before the comparator/dispatch, so a SELL reaches the SB arm).
+  async function setupSbSell(nonce: BN) {
+    // Unique expiry offset per call (the suite's no-collision convention: fixed
+    // strike, distinct expiry → distinct vault/series/trigger PDAs).
+    const strike = usdc(100), expiry = new BN((await getClockUnix(e.h.context)) + 7 * DAY + 30000 + nonce.toNumber() * 1000);
+    const { vault, vaultUsdc, s } = await setupVaultSeries(strike, expiry, 2000);
+    const owner = actor(e);
+    const ownerOpt = await fillPeg(vault, vaultUsdc, s, owner, 3);
+    const { order, escrow } = await placeSell(owner, s, vault, GE, ownerOpt, usdc(150), 2, nonce);
+    const ownerUsdc = await usdcAta(e, owner.publicKey);
+    await flipMarketToSwitchboard();
+    return { owner, s, vault, vaultUsdc, order, escrow, ownerUsdc };
+  }
+
+  it("1a-ii SIZE GATE: Pyth / SB-BUY / SB-SELL serialized tx bytes vs 1232", async () => {
+    const strike = usdc(100), expiry = new BN((await getClockUnix(e.h.context)) + 7 * DAY + 20000);
+    const { vault, vaultUsdc, s } = await setupVaultSeries(strike, expiry, 2000);
+    const owner = actor(e);
+    const { order, escrow, ownerUsdc } = await placeBuy(owner, s, vault, usdc(150), 1, usdc(50), new BN(21));
+    const fix = Keypair.generate().publicKey;
+    injectPythFixture(e.h.context, fix, pythBody(e.feedHex, 150, await getClockUnix(e.h.context)));
+    const bh = (await e.h.context.banksClient.getLatestBlockhash())[0];
+
+    // (a) Pyth LEGACY wire — exactly 18 named accounts (price_update present, NO SB).
+    const fullPyth = await e.opta.methods.executeTrigger()
+      .accountsStrict(execArgs(owner, s, vault, vaultUsdc, order, escrow, fix, ownerUsdc, null)).instruction();
+    const legacyPyth = new TransactionInstruction({ programId: fullPyth.programId, keys: fullPyth.keys.slice(0, 18), data: fullPyth.data });
+    const pythTx = new Transaction({ feePayer: e.admin.publicKey, recentBlockhash: bh }).add(CU(400_000), legacyPyth);
+    const pythSize = pythTx.serialize({ requireAllSignatures: false, verifySignatures: false }).length;
+
+    // (b)/(c) SB wire — price_update None (sentinel) + 3 SB accounts + ed25519 ix
+    //   (a 2-signature self-packed SB quote is 318 B of ix data) + ComputeBudget.
+    //   The BUY and SELL paths share ONE Accounts struct → identical account set
+    //   → identical serialized size.
+    const ed25519 = new TransactionInstruction({ programId: Ed25519Program.programId, keys: [], data: Buffer.alloc(318) });
+    const sbIx = await e.opta.methods.executeTrigger()
+      .accountsStrict(execArgs(owner, s, vault, vaultUsdc, order, escrow, null, ownerUsdc,
+        { queue: Keypair.generate().publicKey, slothashes: SYSVAR_SLOT_HASHES_PUBKEY, instructions: SYSVAR_INSTRUCTIONS_PUBKEY })).instruction();
+    const sbTx = new Transaction({ feePayer: e.admin.publicKey, recentBlockhash: bh }).add(CU(400_000), ed25519, sbIx);
+    const sbSize = sbTx.serialize({ requireAllSignatures: false, verifySignatures: false }).length;
+
+    console.log(`    SIZE (a) Pyth legacy = ${pythSize} B  | remaining ${1232 - pythSize}`);
+    console.log(`    SIZE (b) SB-BUY      = ${sbSize} B  | remaining ${1232 - sbSize}  (incl 318B ed25519, worst-case 2-sig)`);
+    console.log(`    SIZE (c) SB-SELL     = ${sbSize} B  (identical account set to SB-BUY)`);
+    assert.isAtMost(pythSize, 1232, "Pyth legacy wire MUST fit 1232 (unchanged)");
+    // SB size is reported for the gate decision; not asserted (SB triggers don't
+    // exist until 1c — overflow there is a separate ALT decision, not a failure).
+  });
+
+  it("1a-ii byte-identical: legacy 18-account Pyth BUY tx fires + closes order", async () => {
+    const strike = usdc(100), expiry = new BN((await getClockUnix(e.h.context)) + 7 * DAY + 21000);
+    const { vault, vaultUsdc, s } = await setupVaultSeries(strike, expiry, 2000);
+    const owner = actor(e);
+    const { order, escrow, ownerUsdc } = await placeBuy(owner, s, vault, usdc(150), 1, usdc(50), new BN(22));
+    const fix = Keypair.generate().publicKey;
+    injectPythFixture(e.h.context, fix, pythBody(e.feedHex, 160, await getClockUnix(e.h.context))); // GE 150 met
+    const full = await e.opta.methods.executeTrigger()
+      .accountsStrict(execArgs(owner, s, vault, vaultUsdc, order, escrow, fix, ownerUsdc, null)).instruction();
+    console.log(`    [byte-identical] new-IDL ix.keys = ${full.keys.length}; submitting legacy 18`);
+    const legacy = new TransactionInstruction({ programId: full.programId, keys: full.keys.slice(0, 18), data: full.data });
+    assert.equal(legacy.keys.length, 18, "legacy wire is exactly 18 accounts");
+    const bh = (await e.h.context.banksClient.getLatestBlockhash())[0];
+    const tx = new Transaction({ feePayer: e.admin.publicKey, recentBlockhash: bh }).add(CU(400_000), legacy);
+    await (e.opta.provider as any).sendAndConfirm(tx, []); // provider wallet == caller (admin)
+    assert.isFalse(await exists(e, order), "BUY fired via legacy wire → trigger_order closed");
+  });
+
+  it("1a-ii SB market: missing SB accounts → SwitchboardAccountsMissing (6065)", async () => {
+    const x = await setupSbSell(new BN(23));
+    let err = "";
+    try {
+      await e.opta.methods.executeTrigger()
+        .accountsStrict(execArgs(x.owner, x.s, x.vault, x.vaultUsdc, x.order, x.escrow, null, x.ownerUsdc, null))
+        .preInstructions([CU(400_000)]).rpc();
+    } catch (ex: any) { err = String(ex); }
+    console.log(`    (sb-miss) ${err.slice(0, 120)}`);
+    assert.match(err, /SwitchboardAccountsMissing|6065/, "SB market must require the SB accounts");
+  });
+
+  it("1a-ii SB market: SB accounts but no ed25519 ix → NoEd25519Instruction (6067)", async () => {
+    const x = await setupSbSell(new BN(24));
+    let err = "";
+    try {
+      await e.opta.methods.executeTrigger()
+        .accountsStrict(execArgs(x.owner, x.s, x.vault, x.vaultUsdc, x.order, x.escrow, null, x.ownerUsdc,
+          { queue: Keypair.generate().publicKey, slothashes: SYSVAR_SLOT_HASHES_PUBKEY, instructions: SYSVAR_INSTRUCTIONS_PUBKEY }))
+        .preInstructions([CU(400_000)]).rpc(); // no ed25519 preIx
+    } catch (ex: any) { err = String(ex); }
+    console.log(`    (sb-noed) ${err.slice(0, 120)}`);
+    assert.match(err, /NoEd25519Instruction|6067/, "ed25519-index derivation must error with no ed25519 ix");
+  });
+
+  it("1a-ii SB market: valid ed25519 ix → reaches QuoteVerifier (reverts past all guards)", async () => {
+    const x = await setupSbSell(new BN(25));
+    const edKp = Keypair.generate();
+    const edIx = Ed25519Program.createInstructionWithPrivateKey({ privateKey: edKp.secretKey, message: Buffer.from("opta-1a-ii-probe") });
+    let err = "";
+    try {
+      await e.opta.methods.executeTrigger()
+        .accountsStrict(execArgs(x.owner, x.s, x.vault, x.vaultUsdc, x.order, x.escrow, null, x.ownerUsdc,
+          { queue: Keypair.generate().publicKey, slothashes: SYSVAR_SLOT_HASHES_PUBKEY, instructions: SYSVAR_INSTRUCTIONS_PUBKEY }))
+        .preInstructions([CU(400_000), edIx]).rpc();
+    } catch (ex: any) { err = String(ex); }
+    console.log(`    (sb-verify) ${err.slice(0, 160)}`);
+    assert.notEqual(err, "", "must revert — a non-SB quote cannot verify");
+    assert.notMatch(err, /PriceUpdateMissing|SwitchboardAccountsMissing|InvalidSwitchboardSysvar|NoEd25519Instruction/,
+      "must reach the QuoteVerifier (past every earlier guard)");
   });
 });

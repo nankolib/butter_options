@@ -43,7 +43,10 @@ use crate::instructions::exercise_american::{
 };
 use crate::instructions::fill_vault_peg::vault_peg_fill_core;
 use crate::state::*;
-use crate::utils::price_oracle::pyth_current_spot_usdc;
+use crate::utils::price_oracle::{
+    find_ed25519_ix_index, pyth_current_spot_usdc, sb_current_spot_usdc, secs_to_slots,
+    SB_MIN_ORACLE_SAMPLES_FLOOR,
+};
 use super::initialize_protocol::TREASURY_SEED;
 
 /// Manual conditional close: drain rent → `dest`, zero the account, hand it back
@@ -70,14 +73,72 @@ pub fn handle_execute_trigger(ctx: Context<ExecuteTrigger>) -> Result<()> {
     // 1. Flag gate FIRST (spec strict order). 6052 while AMERICAN_ENABLED=false.
     require!(AMERICAN_ENABLED, OptaError::AmericanVaultsDisabled);
 
-    // 2. Fresh EMA — mirrors exercise_american byte-for-byte (60s / 200bps).
-    let ema = pyth_current_spot_usdc(
-        &ctx.accounts.price_update,
-        ctx.accounts.market.pyth_feed_id,
-        clock.unix_timestamp,
-        PRICE_MAX_AGE_SECS,
-        MAX_CONF_BPS,
-    )?;
+    // 2. Fresh spot, ROUTED by market.oracle_source (Stage 3 wiring 1a-ii).
+    //    This is the SINGLE match site in execute_trigger: the direct EMA feeds
+    //    BOTH the comparator re-check (below) AND the SELL intrinsic (passed to
+    //    american_exercise_core). The BUY peg reads the CACHED
+    //    VolOracle.last_spot_price via price_american and needs NO routing here —
+    //    it becomes SB-sourced automatically once 1a-iii routes push_vol_sample.
+    //    Pyth arm is byte-for-byte the pre-Stage-3 read (60s / 200bps); the SB
+    //    arm mirrors exercise_american's (60s → secs_to_slots → 150 slots).
+    let oracle_source = ctx.accounts.market.oracle_source;
+    let feed_id = ctx.accounts.market.pyth_feed_id;
+    let ema = match oracle_source {
+        ORACLE_SOURCE_PYTH => {
+            let price_update = ctx
+                .accounts
+                .price_update
+                .as_ref()
+                .ok_or(error!(OptaError::PriceUpdateMissing))?;
+            pyth_current_spot_usdc(
+                price_update,
+                feed_id,
+                clock.unix_timestamp,
+                PRICE_MAX_AGE_SECS,
+                MAX_CONF_BPS,
+            )?
+        }
+        ORACLE_SOURCE_SWITCHBOARD => {
+            let queue = ctx
+                .accounts
+                .sb_queue
+                .as_ref()
+                .ok_or(error!(OptaError::SwitchboardAccountsMissing))?;
+            let slothashes = ctx
+                .accounts
+                .sb_slothashes
+                .as_ref()
+                .ok_or(error!(OptaError::SwitchboardAccountsMissing))?;
+            let instructions = ctx
+                .accounts
+                .sb_instructions
+                .as_ref()
+                .ok_or(error!(OptaError::SwitchboardAccountsMissing))?;
+            require_keys_eq!(
+                slothashes.key(),
+                anchor_lang::solana_program::sysvar::slot_hashes::ID,
+                OptaError::InvalidSwitchboardSysvar
+            );
+            require_keys_eq!(
+                instructions.key(),
+                anchor_lang::solana_program::sysvar::instructions::ID,
+                OptaError::InvalidSwitchboardSysvar
+            );
+            let instructions_ai = instructions.to_account_info();
+            let ed25519_ix_index = find_ed25519_ix_index(&instructions_ai)?;
+            sb_current_spot_usdc(
+                &queue.to_account_info(),
+                &slothashes.to_account_info(),
+                &instructions_ai,
+                ed25519_ix_index,
+                clock.slot,
+                secs_to_slots(PRICE_MAX_AGE_SECS),
+                feed_id,
+                SB_MIN_ORACLE_SAMPLES_FLOOR,
+            )?
+        }
+        _ => return Err(error!(OptaError::InvalidOracleSource)),
+    };
 
     // 3. Re-check the stored comparator against the live EMA.
     let threshold = ctx.accounts.trigger_order.threshold_usdc;
@@ -348,7 +409,12 @@ pub struct ExecuteTrigger<'info> {
 
     /// Fresh PriceUpdateV2 the keeper posts in-tx. The live-EMA source for the
     /// comparator re-check (BUY+SELL) AND the intrinsic spot (SELL).
-    pub price_update: Account<'info, PriceUpdateV2>,
+    ///
+    /// Stage 3 (1a-ii): now `Option`, position unchanged. REQUIRED (present) for
+    /// a Pyth market — a present price_update is wire-identical to before. A
+    /// Switchboard market passes None (sentinel) and uses the trailing SB
+    /// accounts. The Pyth arm errors `PriceUpdateMissing` if absent on a Pyth market.
+    pub price_update: Option<Account<'info, PriceUpdateV2>>,
 
     /// VolOracle for the market's feed — the BUY peg's BS-2002 input. Validated
     /// on SELL but unused.
@@ -424,4 +490,21 @@ pub struct ExecuteTrigger<'info> {
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,
     pub system_program: Program<'info, System>,
+
+    // --- Switchboard read-arm accounts (Stage 3 1a-ii). TRAILING optionals: a
+    // Pyth trigger omits all three (allow-missing-optionals → None), keeping its
+    // tx byte-identical. Required only when market.oracle_source == Switchboard;
+    // the handler unwraps + runtime-address-checks the two sysvars in the SB arm.
+    // Appended AFTER system_program; no existing account moved. ---
+    /// CHECK: Switchboard oracle queue; validated by QuoteVerifier (oracle-key
+    /// set) in the SB arm. Not address-pinned (per-network queue).
+    pub sb_queue: Option<UncheckedAccount<'info>>,
+
+    /// CHECK: SlotHashes sysvar; address-checked == sysvar::slot_hashes::ID at
+    /// runtime in the SB arm.
+    pub sb_slothashes: Option<UncheckedAccount<'info>>,
+
+    /// CHECK: Instructions sysvar; address-checked == sysvar::instructions::ID at
+    /// runtime in the SB arm, then scanned for the ed25519 ix index.
+    pub sb_instructions: Option<UncheckedAccount<'info>>,
 }

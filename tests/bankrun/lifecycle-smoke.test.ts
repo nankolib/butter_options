@@ -112,7 +112,7 @@ describe("bankrun lifecycle smoke (Stage G Pass 1)", function () {
       systemProgram: SystemProgram.programId,
     }).rpc();
 
-    await opta.methods.initializeVolOracle(FEED_ID).accountsStrict({
+    await opta.methods.initializeVolOracle(FEED_ID, 0).accountsStrict({
       initializer: admin().publicKey, priceUpdate: feedFixture, volOracle,
       systemProgram: SystemProgram.programId,
     }).rpc();

@@ -275,7 +275,7 @@ describe("zzz-exercise-american (Stage F)", function () {
     );
     if (!(await provider.connection.getAccountInfo(volOraclePda))) {
       await (program.methods as any)
-        .initializeVolOracle(FEED_ID)
+        .initializeVolOracle(FEED_ID, 0)
         .accountsStrict({
           initializer: payer.publicKey, priceUpdate: FEED_FRESH,
           volOracle: volOraclePda, systemProgram: SystemProgram.programId,

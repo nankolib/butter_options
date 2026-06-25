@@ -84,7 +84,7 @@ export async function setupEnv(asset: string, feedLabel: string, warmSpotUsd = 1
     creator: admin.publicKey, protocolState, market, priceUpdate: feedFixture,
     systemProgram: SystemProgram.programId,
   }).rpc();
-  await opta.methods.initializeVolOracle(feedId).accountsStrict({
+  await opta.methods.initializeVolOracle(feedId, 0).accountsStrict({
     initializer: admin.publicKey, priceUpdate: feedFixture, volOracle,
     systemProgram: SystemProgram.programId,
   }).rpc();

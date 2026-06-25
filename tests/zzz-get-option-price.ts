@@ -109,7 +109,7 @@ describe("get_option_price view (Phase 2 Stage C Pass 3)", () => {
 
     try {
       await (program as any).methods
-        .initializeVolOracle(GOP_FEED)
+        .initializeVolOracle(GOP_FEED, 0)
         .accountsStrict({
           initializer: provider.wallet.publicKey,
           priceUpdate: GOP_FIXTURE,

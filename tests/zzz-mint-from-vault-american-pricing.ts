@@ -224,7 +224,7 @@ describe("zzz-mint-from-vault-american-pricing (Stage C Pass 2 Step 2)", functio
     );
     if (!(await provider.connection.getAccountInfo(volOraclePda))) {
       await (program.methods as any)
-        .initializeVolOracle(FEED_ID)
+        .initializeVolOracle(FEED_ID, 0)
         .accountsStrict({
           initializer: payer.publicKey,
           priceUpdate: FEED_FIXTURE,

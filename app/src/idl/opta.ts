@@ -3077,8 +3077,10 @@ export type Opta = {
             "Fresh PriceUpdateV2 from the Pyth Receiver program. The handler",
             "verifies `verification_level == Full` and",
             "`price_message.feed_id == feed_id` to prove the caller-supplied",
-            "feed_id corresponds to a real Pyth feed. Read-only -- never mutated."
-          ]
+            "feed_id corresponds to a real Pyth feed. Read-only -- never mutated.",
+            "Stage 3 1c-i-A: Option — required for Pyth (source=0), None for SB (source=1)."
+          ],
+          "optional": true
         },
         {
           "name": "volOracle",
@@ -3126,6 +3128,10 @@ export type Opta = {
               32
             ]
           }
+        },
+        {
+          "name": "oracleSource",
+          "type": "u8"
         }
       ]
     },

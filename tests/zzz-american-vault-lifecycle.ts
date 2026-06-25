@@ -249,7 +249,7 @@ describe("zzz-american-vault-lifecycle (Stage D seed-fix proof)", function () {
     );
     if (!(await provider.connection.getAccountInfo(volOraclePda))) {
       await (program.methods as any)
-        .initializeVolOracle(SOL_FEED_ID)
+        .initializeVolOracle(SOL_FEED_ID, 0)
         .accountsStrict({
           initializer: payer.publicKey,
           priceUpdate: SOL_180_FRESH,

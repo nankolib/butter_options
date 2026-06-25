@@ -484,8 +484,13 @@ pub mod opta {
     pub fn initialize_vol_oracle(
         ctx: Context<InitializeVolOracle>,
         feed_id: [u8; 32],
+        oracle_source: u8,
     ) -> Result<()> {
-        instructions::initialize_vol_oracle::handle_initialize_vol_oracle(ctx, feed_id)
+        instructions::initialize_vol_oracle::handle_initialize_vol_oracle(
+            ctx,
+            feed_id,
+            oracle_source,
+        )
     }
 
     /// Push a fresh Pyth spot sample to a VolOracle. Permissionless. The

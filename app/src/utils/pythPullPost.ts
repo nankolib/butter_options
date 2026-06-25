@@ -682,7 +682,11 @@ export async function buildPostUpdateAndInitializeVolOracleTx(
     );
 
     const ix = await program.methods
-      .initializeVolOracle(feedIdBytes)
+      // Stage 3 1c-i-A: initialize_vol_oracle gained a trailing oracle_source
+      // arg. The FE/crank vol-oracle path is always Pyth-sourced → pass 0
+      // (ORACLE_SOURCE_PYTH). Switchboard oracles are born off-chain via the
+      // standalone SB smoke/crank path, not this builder.
+      .initializeVolOracle(feedIdBytes, 0)
       .accountsStrict({
         initializer: wallet.publicKey,
         priceUpdate: priceUpdatePda,

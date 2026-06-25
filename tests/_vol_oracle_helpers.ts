@@ -42,7 +42,7 @@ export async function ensureVolOracle(
   const info = await program.provider.connection.getAccountInfo(oracle);
   if (!info) {
     await program.methods
-      .initializeVolOracle(feedId)
+      .initializeVolOracle(feedId, 0)
       .accountsStrict({
         initializer: payer,
         priceUpdate,

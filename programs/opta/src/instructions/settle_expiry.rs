@@ -40,8 +40,14 @@ use anchor_lang::prelude::*;
 use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
 
 use crate::errors::OptaError;
-use crate::state::{OptionsMarket, SettlementRecord, MARKET_SEED, SETTLEMENT_SEED};
-use crate::utils::price_oracle::pyth_settlement_price_usdc;
+use crate::state::{
+    OptionsMarket, SettlementRecord, ORACLE_SOURCE_PYTH, ORACLE_SOURCE_SWITCHBOARD, MARKET_SEED,
+    SETTLEMENT_SEED,
+};
+use crate::utils::price_oracle::{
+    find_ed25519_ix_index, pyth_settlement_price_usdc, sb_settlement_price_usdc, secs_to_slots,
+    SB_MIN_ORACLE_SAMPLES_FLOOR,
+};
 
 /// Maximum gap between the Pyth update's `publish_time` and the on-chain clock
 /// at settlement time. Set to 30 days (2_592_000 s) as a wide backstop SLO,
@@ -74,6 +80,20 @@ pub const EXPIRY_WINDOW_SECS: i64 = 60;
 /// See audit Run-6 finding CRIT-2.
 pub const MAX_CONF_BPS: u16 = 200;
 
+/// Switchboard settlement window (Stage 3 1b). The Pyth/Switchboard ASYMMETRY:
+///   - Pyth settles on a HISTORICAL at-expiry price (Hermes archive lets the
+///     crank fetch the print at `publish_time ∈ [expiry, expiry+60]` and settle
+///     any time within ~30 days). The price is always the as-of-expiry print.
+///   - Switchboard has NO historical lookback: a signed quote is only verifiable
+///     on-chain while its `signed_slothash` is still in the SlotHashes sysvar
+///     (~512 slots ≈ 3.5 min). So an SB market settles on a FRESH quote captured
+///     near expiry, and MUST be settled within this window of expiry. Past it,
+///     no quote is verifiable → no SettlementRecord lands → the existing
+///     `reclaim_unsettled` 7-day hatch winds the vault down (writers reclaim
+///     pro-rata, holders forfeit). 300 s (5 min) gives the crank a comfortable
+///     margin over the ~3.5-min SlotHashes wall.
+pub const SB_SETTLE_WINDOW_SECS: i64 = 300;
+
 pub fn handle_settle_expiry(
     ctx: Context<SettleExpiry>,
     asset_name: String,
@@ -86,32 +106,103 @@ pub fn handle_settle_expiry(
         OptaError::MarketNotExpired
     );
 
-    // 2-6. Validate the Pyth update (Full verification + feed_id match +
-    //      EMA-confidence gate + expiry-window gate + staleness floor) and
-    //      normalize the EMA to USDC 6-dec. The full read+validate+normalize
-    //      logic lives in the source-routed price-oracle abstraction (Stage 1);
-    //      Pyth is the sole implementer until the Switchboard arm slots in at
-    //      Stage 3. Error codes, gate order, and the EMA read are identical to
-    //      the prior inline block.
-    let read = pyth_settlement_price_usdc(
-        &ctx.accounts.price_update,
-        ctx.accounts.market.pyth_feed_id,
-        expiry,
-        clock.unix_timestamp,
-        EXPIRY_WINDOW_SECS,
-        PYTH_MAX_AGE_SECS as i64,
-        MAX_CONF_BPS,
-    )?;
-    let settlement_price = read.price_usdc;
-    let publish_time = read.publish_time;
+    // 2-6. Read + validate + normalize the settlement price, ROUTED by
+    //      market.oracle_source (Stage 3 1b — the last of the 4 read sites).
+    //      Both arms produce a `settlement_price` (USDC 6-dec) and a value for
+    //      the record's `pyth_publish_time` slot. They differ fundamentally in
+    //      WHAT that second value is and how freshness is enforced (see
+    //      SB_SETTLE_WINDOW_SECS docs): Pyth → a historical at-expiry print +
+    //      publish_time; Switchboard → a fresh-at-settle quote + recent_slot.
+    let oracle_source = ctx.accounts.market.oracle_source;
+    let feed_id = ctx.accounts.market.pyth_feed_id;
+    let (settlement_price, publish_time_or_slot) = match oracle_source {
+        ORACLE_SOURCE_PYTH => {
+            // Byte-for-byte the pre-Stage-3 read: Full verification + feed_id +
+            // EMA-confidence + the [expiry, expiry+60] window + 30d backstop.
+            let price_update = ctx
+                .accounts
+                .price_update
+                .as_ref()
+                .ok_or(error!(OptaError::PriceUpdateMissing))?;
+            let read = pyth_settlement_price_usdc(
+                price_update,
+                feed_id,
+                expiry,
+                clock.unix_timestamp,
+                EXPIRY_WINDOW_SECS,
+                PYTH_MAX_AGE_SECS as i64,
+                MAX_CONF_BPS,
+            )?;
+            (read.price_usdc, read.publish_time)
+        }
+        ORACLE_SOURCE_SWITCHBOARD => {
+            // Persist-at-expiry: NO historical lookback. The Pyth
+            // [expiry, expiry+60] publish_time gate has no SB analog and is NOT
+            // faked — replaced by a SETTLE-TIME window: must settle within
+            // SB_SETTLE_WINDOW_SECS of expiry, while a fresh quote is verifiable.
+            // (Pre-expiry is already rejected by gate 1 above, MarketNotExpired.)
+            require!(
+                clock.unix_timestamp.saturating_sub(expiry) <= SB_SETTLE_WINDOW_SECS,
+                OptaError::SwitchboardSettleWindowElapsed
+            );
+            let queue = ctx
+                .accounts
+                .sb_queue
+                .as_ref()
+                .ok_or(error!(OptaError::SwitchboardAccountsMissing))?;
+            let slothashes = ctx
+                .accounts
+                .sb_slothashes
+                .as_ref()
+                .ok_or(error!(OptaError::SwitchboardAccountsMissing))?;
+            let instructions = ctx
+                .accounts
+                .sb_instructions
+                .as_ref()
+                .ok_or(error!(OptaError::SwitchboardAccountsMissing))?;
+            require_keys_eq!(
+                slothashes.key(),
+                anchor_lang::solana_program::sysvar::slot_hashes::ID,
+                OptaError::InvalidSwitchboardSysvar
+            );
+            require_keys_eq!(
+                instructions.key(),
+                anchor_lang::solana_program::sysvar::instructions::ID,
+                OptaError::InvalidSwitchboardSysvar
+            );
+            let instructions_ai = instructions.to_account_info();
+            let ed25519_ix_index = find_ed25519_ix_index(&instructions_ai)?;
+            // Freshness is the verifier's slot-based max_age (NOT a timestamp
+            // gate): the quote's signed_slothash must resolve within
+            // secs_to_slots(SB_SETTLE_WINDOW_SECS) of clock.slot.
+            let read = sb_settlement_price_usdc(
+                &queue.to_account_info(),
+                &slothashes.to_account_info(),
+                &instructions_ai,
+                ed25519_ix_index,
+                clock.slot,
+                secs_to_slots(SB_SETTLE_WINDOW_SECS),
+                feed_id,
+                SB_MIN_ORACLE_SAMPLES_FLOOR,
+            )?;
+            // REPURPOSED FIELD: for a Switchboard market, the record's
+            // `pyth_publish_time` holds the verifier-resolved `recent_slot` — a
+            // SLOT, not a unix timestamp. Downstream (settle_vault → claims)
+            // reads only `settlement_price`, so the field's meaning is free to
+            // differ by source. Slots fit in i64.
+            (read.price_usdc, read.recent_slot as i64)
+        }
+        _ => return Err(error!(OptaError::InvalidOracleSource)),
+    };
 
-    // 7. Populate the record
+    // 7. Populate the record. `pyth_publish_time` = Pyth publish_time OR (SB) the
+    //    quote's recent_slot — see the repurposed-field note above.
     let record = &mut ctx.accounts.settlement_record;
     record.asset_name = asset_name.clone();
     record.expiry = expiry;
     record.settlement_price = settlement_price;
     record.settled_at = clock.unix_timestamp;
-    record.pyth_publish_time = publish_time;
+    record.pyth_publish_time = publish_time_or_slot;
     record.bump = ctx.bumps.settlement_record;
 
     // Log the consensus-relevant outputs. The raw Pyth EMA/exponent are no
@@ -119,11 +210,12 @@ pub fn handle_settle_expiry(
     // helper (and would be source-specific once Switchboard is wired at Stage
     // 3); settlement_price + publish_time fully describe the recorded result.
     msg!(
-        "Settlement recorded: {} expiry={} price={} (publish_time={})",
+        "Settlement recorded: {} expiry={} price={} (publish_time_or_slot={} source={})",
         asset_name,
         expiry,
         settlement_price,
-        publish_time,
+        publish_time_or_slot,
+        oracle_source,
     );
 
     Ok(())
@@ -146,7 +238,12 @@ pub struct SettleExpiry<'info> {
     /// Fresh PriceUpdateV2 from the Pyth Receiver program. Validated by
     /// `get_price_no_older_than(.., &market.pyth_feed_id)` for both feed_id
     /// match and staleness.
-    pub price_update: Account<'info, PriceUpdateV2>,
+    ///
+    /// Stage 3 (1b): now `Option`, position unchanged. REQUIRED (present) for a
+    /// Pyth market — a present price_update is wire-identical to before. A
+    /// Switchboard market passes None (sentinel) and uses the trailing SB
+    /// accounts. The Pyth arm errors `PriceUpdateMissing` if absent on a Pyth market.
+    pub price_update: Option<Account<'info, PriceUpdateV2>>,
 
     /// The SettlementRecord PDA. Plain `init` — second call for the same
     /// (asset, expiry) reverts.
@@ -164,4 +261,21 @@ pub struct SettleExpiry<'info> {
     pub settlement_record: Account<'info, SettlementRecord>,
 
     pub system_program: Program<'info, System>,
+
+    // --- Switchboard read-arm accounts (Stage 3 1b). TRAILING optionals: a Pyth
+    // market omits all three (allow-missing-optionals → None), keeping its tx
+    // byte-identical. Required only when market.oracle_source == Switchboard; the
+    // handler unwraps + runtime-address-checks the two sysvars. Appended AFTER
+    // system_program; no existing account moved. ---
+    /// CHECK: Switchboard oracle queue; validated by QuoteVerifier (oracle-key
+    /// set) in the SB arm. Not address-pinned (per-network queue).
+    pub sb_queue: Option<UncheckedAccount<'info>>,
+
+    /// CHECK: SlotHashes sysvar; address-checked == sysvar::slot_hashes::ID at
+    /// runtime in the SB arm.
+    pub sb_slothashes: Option<UncheckedAccount<'info>>,
+
+    /// CHECK: Instructions sysvar; address-checked == sysvar::instructions::ID at
+    /// runtime in the SB arm, then scanned for the ed25519 ix index.
+    pub sb_instructions: Option<UncheckedAccount<'info>>,
 }

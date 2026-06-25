@@ -341,4 +341,14 @@ pub enum OptaError {
     // Error code 6068.
     #[msg("Switchboard sysvar account address mismatch (SlotHashes or Instructions)")]
     InvalidSwitchboardSysvar,
+
+    // settle_expiry SB arm: the settlement window elapsed. Unlike Pyth (which
+    // settles on a HISTORICAL at-expiry price and has a 30-day window to run),
+    // Switchboard has no historical lookback (the ~512-slot SlotHashes wall), so
+    // an SB market must be settled within SB_SETTLE_WINDOW_SECS (5 min) of expiry
+    // while a fresh quote is still verifiable. Missing the window leaves no
+    // SettlementRecord → the reclaim_unsettled 7-day hatch winds the vault down.
+    // Error code 6069.
+    #[msg("Switchboard settlement window elapsed — settle within 5 min of expiry or reclaim after grace")]
+    SwitchboardSettleWindowElapsed,
 }

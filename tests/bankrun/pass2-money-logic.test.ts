@@ -175,6 +175,7 @@ describe("bankrun Pass-2 money-logic (Stage G)", function () {
     await opta.methods.settleExpiry(ASSET, new BN(expiry)).accountsStrict({
       caller: admin().publicKey, market, priceUpdate: settleFixture, settlementRecord,
       systemProgram: SystemProgram.programId,
+      sbQueue: null, sbSlothashes: null, sbInstructions: null,
     }).preInstructions([CU_400]).rpc();
     await opta.methods.settleVault().accountsStrict({
       authority: admin().publicKey, sharedVault: vault, market, settlementRecord,

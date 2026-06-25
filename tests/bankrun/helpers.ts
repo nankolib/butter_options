@@ -194,6 +194,8 @@ export async function settleExpiry(e: Env, expiry: BN, priceUsd: number, publish
   await e.opta.methods.settleExpiry(e.asset, expiry).accountsStrict({
     caller: e.admin.publicKey, market: e.market, priceUpdate: fix,
     settlementRecord: settlementRecordPda(e, expiry), systemProgram: SystemProgram.programId,
+    // Stage 3 1b: trailing Switchboard read-arm optionals — null on Pyth path.
+    sbQueue: null, sbSlothashes: null, sbInstructions: null,
   }).preInstructions([CU(400_000)]).rpc();
 }
 

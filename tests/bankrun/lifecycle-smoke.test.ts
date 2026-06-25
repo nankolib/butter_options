@@ -222,6 +222,7 @@ describe("bankrun lifecycle smoke (Stage G Pass 1)", function () {
     await opta.methods.settleExpiry(ASSET, new BN(expiry)).accountsStrict({
       caller: admin().publicKey, market, priceUpdate: settleFixture,
       settlementRecord, systemProgram: SystemProgram.programId,
+      sbQueue: null, sbSlothashes: null, sbInstructions: null,
     }).rpc();
     console.log("    E: settle_expiry OK");
 

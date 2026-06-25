@@ -74,6 +74,11 @@ solana-program = "2"
 # other ring-buffer-sized array) implements `Pod`; without it bytemuck
 # only impls Pod for arrays of a small whitelisted size set.
 bytemuck = { version = "1", features = ["min_const_generics"] }
+# Switchboard On-Demand on-chain verify SDK (Stage 3 read seam). default-features
+# = false drops the `client` tree (tokio/reqwest/prost); `anchor` = anchor-lang +
+# solana-v2 for AccountInfo type alignment with Anchor 0.32.1. NEVER enable
+# client/client-v3 — those pull std networking and do not belong on-chain.
+switchboard-on-demand = { version = "=0.13.0", default-features = false, features = ["anchor"] }
 
 
 [lints.rust]

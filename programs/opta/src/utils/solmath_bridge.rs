@@ -167,6 +167,31 @@ pub fn sb_value_to_scale(mantissa: i128, scale: u32) -> Result<u128> {
     Ok(result)
 }
 
+/// Decimal places carried by a Switchboard On-Demand `PackedFeedInfo.feed_value`
+/// (`i128` fixed-point, scaled by 1e18). This is the crate-wide `PRECISION` the
+/// SDK uses when formatting a feed value as a `Decimal`. The Stage-3 read arm
+/// reads `feed_value(): i128` at this fixed scale (unlike Pyth's per-update
+/// exponent), so the SB normalizers below hardcode it via these wrappers.
+pub const SB_FEED_VALUE_DECIMALS: u32 = 18;
+
+/// Switchboard `feed_value` (i128 @ 1e18) → USDC smallest units (6 decimals).
+///
+/// Thin wrapper over [`sb_value_to_usdc`] that fixes the scale to
+/// [`SB_FEED_VALUE_DECIMALS`] (18). Negative/zero and silent-truncation-to-zero
+/// are rejected by the underlying helper (HIGH-4 parity).
+pub fn sb_i128_to_usdc(feed_value: i128) -> Result<u64> {
+    sb_value_to_usdc(feed_value, SB_FEED_VALUE_DECIMALS)
+}
+
+/// Switchboard `feed_value` (i128 @ 1e18) → solmath SCALE (1e12, 12 decimals).
+///
+/// Thin wrapper over [`sb_value_to_scale`] fixing the scale to
+/// [`SB_FEED_VALUE_DECIMALS`] (18). Negative/zero rejected by the underlying
+/// helper.
+pub fn sb_i128_to_scale(feed_value: i128) -> Result<u128> {
+    sb_value_to_scale(feed_value, SB_FEED_VALUE_DECIMALS)
+}
+
 /// Converts time-to-expiry in seconds to solmath SCALE (fraction of a year).
 ///
 /// HOW IT WORKS:
@@ -283,6 +308,36 @@ mod tests {
         let pyth = pyth_price_to_scale(18_050_000_000i64, -8).unwrap();
         assert_eq!(sb, pyth);
         assert_eq!(sb, 180_500_000_000_000u128);
+    }
+
+    #[test]
+    fn test_sb_i128_to_usdc_pinned_gold() {
+        // Fixture gold value: 4053.9 × 1e18 → $4053.90 = 4_053_900_000 USDC 6-dec.
+        let result = sb_i128_to_usdc(4_053_900_000_000_000_000_000i128).unwrap();
+        assert_eq!(result, 4_053_900_000u64);
+    }
+
+    #[test]
+    fn test_sb_i128_to_scale_pinned_gold() {
+        // Same gold value at SCALE 1e12: 4053.9 × 1e12 = 4_053_900_000_000_000.
+        let result = sb_i128_to_scale(4_053_900_000_000_000_000_000i128).unwrap();
+        assert_eq!(result, 4_053_900_000_000_000u128);
+    }
+
+    #[test]
+    fn test_sb_i128_to_usdc_matches_pyth_equivalent() {
+        // Cross-oracle equivalence: an SB feed_value @ 1e18 and the Pyth price
+        // for the same $180.50 must normalize to the identical USDC 6-dec output.
+        let sb = sb_i128_to_usdc(180_500_000_000_000_000_000i128).unwrap();
+        let pyth = pyth_price_to_usdc(18_050_000_000i64, -8).unwrap();
+        assert_eq!(sb, pyth);
+        assert_eq!(sb, 180_500_000u64);
+    }
+
+    #[test]
+    fn test_sb_i128_to_usdc_rejects_nonpositive() {
+        assert!(sb_i128_to_usdc(0).is_err());
+        assert!(sb_i128_to_usdc(-1).is_err());
     }
 
     #[test]

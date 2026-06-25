@@ -1,0 +1,38 @@
+{
+  "name": "switchboard-on-demand quote sample (Stage 3 read-seam fixture)",
+  "purpose": "Pin the authoritative Switchboard quote MESSAGE layout (PackedQuoteHeader || PackedFeedInfo) so the on-chain decode/normalize seam fails loudly if the crate layout ever shifts. Consumed by programs/opta/src/utils/price_oracle.rs#sb_tests (Test 1, offline geometry).",
+  "provenance": {
+    "source": "Sourced from the committed capture .opta-build/sb-ed25519-rootcause.md (PASS run #2, numSignatures=1) — NOT a fresh live probe run. Re-running .opta-build/probe4-read.mjs live is gateway non-deterministic (~3/15 clean per the root-cause doc), so the deterministic committed capture is used instead. Same on-chain provenance.",
+    "sdk": "@switchboard-xyz/on-demand@3.10.3",
+    "rust_crate": "switchboard-on-demand@0.13.0",
+    "quote_program": "orac1eFjzWL5R3RbbdMV68K9H6TaCVVcL6LjvQQWAbz",
+    "devnet_queue": "EYiAmGSdsQTuCw413V5BzaruWuCCSDgTPtBGvLkXHbe7",
+    "feed": "XAU/USD via PAXG (Binance PAXGUSDT + Coinbase PAXG-USD)"
+  },
+  "file": "sb_quote_message.bin",
+  "layout": {
+    "total_bytes": 81,
+    "PackedQuoteHeader": { "offset": 0, "len": 32, "field": "signed_slothash" },
+    "PackedFeedInfo": {
+      "offset": 32,
+      "len": 49,
+      "stride": 49,
+      "fields": {
+        "feed_id": { "rel_offset": 0, "len": 32 },
+        "feed_value": { "rel_offset": 32, "len": 16, "type": "i128_le", "scale": "1e18" },
+        "min_oracle_samples": { "rel_offset": 48, "len": 1, "type": "u8" }
+      }
+    },
+    "note": "Offsets are crate-relative. The decoder MUST derive them from size_of::<PackedQuoteHeader>() + offset_of!(PackedFeedInfo, _) and MUST NOT hard-code the absolute persisted-account offset 186 (that was a program-header artifact, not a struct boundary)."
+  },
+  "pinned_expectations": {
+    "feed_id_hex": "6c3c5cc720d1ffd8108aca22bf7834d659612b7e1a4e5f623b76846d1167355e",
+    "feed_value_i128_1e18": "4053900000000000000000",
+    "min_oracle_samples": 2,
+    "version": 1,
+    "tail_discriminator": "SBOD",
+    "normalized_usdc_6dec": 4053900000,
+    "normalized_scale_1e12": 4053900000000000,
+    "human": "$4053.90"
+  }
+}

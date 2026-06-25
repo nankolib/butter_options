@@ -282,4 +282,28 @@ pub enum OptaError {
     // reverts this. The theft-vector guard. Error code 6060.
     #[msg("Trigger source ATA failed fire-time re-verification (owner or mint mismatch)")]
     TriggerSourceAtaInvalid,
+
+    // =========================================================================
+    // Switchboard On-Demand read arm (Stage 3 — oracle_source routing)
+    // =========================================================================
+    // The QuoteVerifier (queue + SlotHashes + Instructions sysvar + clock_slot +
+    // max_age) failed to verify the ed25519-signed oracle quote: signature/
+    // slothash mismatch, quote older than max_age slots, or no ED25519 ix at the
+    // given index. Maps the crate's anyhow error to a stable Opta code (the crate
+    // error carries no discriminant we can surface on-chain). Error code 6061.
+    #[msg("Switchboard quote verification failed (signature, slothash, freshness, or missing ED25519 ix)")]
+    SwitchboardVerifyFailed,
+
+    // The verified quote contained no feed whose feed_id matches the market's
+    // expected oracle id. INERT until Stage 3 routes a market to Switchboard.
+    // Error code 6062.
+    #[msg("Switchboard quote does not contain the expected feed_id")]
+    SwitchboardFeedNotFound,
+
+    // The matched feed reported fewer aggregating oracle samples than the
+    // SB_MIN_ORACLE_SAMPLES_FLOOR floor — the Switchboard analog of Pyth's
+    // confidence-width gate (a thin multi-oracle quote is rejected). Error code
+    // 6063.
+    #[msg("Switchboard feed has fewer oracle samples than the required floor")]
+    SwitchboardInsufficientSamples,
 }

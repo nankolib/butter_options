@@ -34,7 +34,7 @@ use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
 use pyth_solana_receiver_sdk::price_update::VerificationLevel;
 
 use crate::errors::OptaError;
-use crate::state::{VolOracle, VOL_ORACLE_SEED};
+use crate::state::{VolOracle, ORACLE_SOURCE_PYTH, VOL_ORACLE_SEED};
 
 pub fn handle_initialize_vol_oracle(
     ctx: Context<InitializeVolOracle>,
@@ -66,6 +66,9 @@ pub fn handle_initialize_vol_oracle(
     let mut oracle = ctx.accounts.vol_oracle.load_init()?;
     oracle.feed_id = feed_id;
     oracle.bump = ctx.bumps.vol_oracle;
+    // Stage 3: born Pyth-sourced. Explicit/defensive — load_init's zero-fill
+    // already yields 0 = Pyth; mirrors create_market.rs:111.
+    oracle.oracle_source = ORACLE_SOURCE_PYTH;
 
     msg!(
         "VolOracle initialized: feed_id={:?} pda={}",

@@ -34,10 +34,14 @@ use solmath::arithmetic::fp_div;
 
 use crate::errors::OptaError;
 use crate::state::{
-    VolOracle, VOL_ORACLE_MAX_SAMPLE_GAP_SECS, VOL_ORACLE_MIN_PUSH_INTERVAL_SECS,
-    VOL_ORACLE_PYTH_MAX_AGE_SECS, VOL_ORACLE_RING_SIZE, VOL_ORACLE_SEED,
+    VolOracle, ORACLE_SOURCE_PYTH, ORACLE_SOURCE_SWITCHBOARD, VOL_ORACLE_MAX_SAMPLE_GAP_SECS,
+    VOL_ORACLE_MIN_PUSH_INTERVAL_SECS, VOL_ORACLE_PYTH_MAX_AGE_SECS, VOL_ORACLE_RING_SIZE,
+    VOL_ORACLE_SEED,
 };
-use crate::utils::price_oracle::pyth_current_spot_scale;
+use crate::utils::price_oracle::{
+    find_ed25519_ix_index, pyth_current_spot_scale, sb_current_spot_scale, secs_to_slots,
+    SB_MIN_ORACLE_SAMPLES_FLOOR,
+};
 
 /// EMA confidence-interval gate, in basis points of the EMA price. Same
 /// 200bps threshold settle_expiry uses (audit Run-6 CRIT-2). Pyth wide-
@@ -60,14 +64,72 @@ pub fn handle_push_vol_sample(ctx: Context<PushVolSample>) -> Result<()> {
     //        The oracle's feed_id is read first into a Copy local so the
     //        read-only borrow drops immediately — the load_mut below stays the
     //        only write lock, preserving the original "defer write-lock" intent.
-    let expected_feed_id = ctx.accounts.vol_oracle.load()?.feed_id;
-    let new_spot_u128 = pyth_current_spot_scale(
-        &ctx.accounts.price_update,
-        expected_feed_id,
-        now,
-        VOL_ORACLE_PYTH_MAX_AGE_SECS,
-        VOL_ORACLE_MAX_CONF_BPS,
-    )?;
+    //        ROUTED by oracle_source (Stage 3 wiring 1a-iii) — the keystone:
+    //        once an oracle is SB-sourced, last_spot_price (and the whole
+    //        American pricing tree that reads it) becomes Switchboard-sourced.
+    //        oracle_source rides on the VolOracle itself, read from the SAME
+    //        read-only borrow that reads feed_id (no extra load, no market
+    //        account). Both are Copy, so the borrow drops before load_mut below.
+    let (expected_feed_id, oracle_source) = {
+        let oracle = ctx.accounts.vol_oracle.load()?;
+        (oracle.feed_id, oracle.oracle_source)
+    };
+    let new_spot_u128 = match oracle_source {
+        ORACLE_SOURCE_PYTH => {
+            let price_update = ctx
+                .accounts
+                .price_update
+                .as_ref()
+                .ok_or(error!(OptaError::PriceUpdateMissing))?;
+            pyth_current_spot_scale(
+                price_update,
+                expected_feed_id,
+                now,
+                VOL_ORACLE_PYTH_MAX_AGE_SECS,
+                VOL_ORACLE_MAX_CONF_BPS,
+            )?
+        }
+        ORACLE_SOURCE_SWITCHBOARD => {
+            let queue = ctx
+                .accounts
+                .sb_queue
+                .as_ref()
+                .ok_or(error!(OptaError::SwitchboardAccountsMissing))?;
+            let slothashes = ctx
+                .accounts
+                .sb_slothashes
+                .as_ref()
+                .ok_or(error!(OptaError::SwitchboardAccountsMissing))?;
+            let instructions = ctx
+                .accounts
+                .sb_instructions
+                .as_ref()
+                .ok_or(error!(OptaError::SwitchboardAccountsMissing))?;
+            require_keys_eq!(
+                slothashes.key(),
+                anchor_lang::solana_program::sysvar::slot_hashes::ID,
+                OptaError::InvalidSwitchboardSysvar
+            );
+            require_keys_eq!(
+                instructions.key(),
+                anchor_lang::solana_program::sysvar::instructions::ID,
+                OptaError::InvalidSwitchboardSysvar
+            );
+            let instructions_ai = instructions.to_account_info();
+            let ed25519_ix_index = find_ed25519_ix_index(&instructions_ai)?;
+            sb_current_spot_scale(
+                &queue.to_account_info(),
+                &slothashes.to_account_info(),
+                &instructions_ai,
+                ed25519_ix_index,
+                clock.slot,
+                secs_to_slots(VOL_ORACLE_PYTH_MAX_AGE_SECS),
+                expected_feed_id,
+                SB_MIN_ORACLE_SAMPLES_FLOOR,
+            )?
+        }
+        _ => return Err(error!(OptaError::InvalidOracleSource)),
+    };
 
     // Cap conversion to i64 storage. Max i64 (9.2e18) accommodates spot
     // up to ~$9.2M at SCALE; BTC at $90k = 9e16 well under.
@@ -204,7 +266,12 @@ pub struct PushVolSample<'info> {
 
     /// Fresh PriceUpdateV2 from the Pyth Receiver program. Validated
     /// against the oracle's feed_id and the 60s freshness window.
-    pub price_update: Account<'info, PriceUpdateV2>,
+    ///
+    /// Stage 3 (1a-iii): now `Option`, position unchanged. REQUIRED (present)
+    /// for a Pyth-sourced oracle. A Switchboard-sourced oracle passes None
+    /// (sentinel) and uses the trailing SB accounts. The Pyth arm errors
+    /// `PriceUpdateMissing` if absent on a Pyth oracle.
+    pub price_update: Option<Account<'info, PriceUpdateV2>>,
 
     /// The VolOracle PDA. Mutated. PDA-validated against the price
     /// update's feed_id via the `seeds` constraint here; the handler
@@ -219,4 +286,21 @@ pub struct PushVolSample<'info> {
     pub vol_oracle: AccountLoader<'info, VolOracle>,
 
     pub system_program: Program<'info, System>,
+
+    // --- Switchboard read-arm accounts (Stage 3 1a-iii). TRAILING optionals: a
+    // Pyth oracle omits all three (allow-missing-optionals → None), keeping its
+    // tx byte-identical. Required only when vol_oracle.oracle_source ==
+    // Switchboard; the handler unwraps + runtime-address-checks the two sysvars.
+    // Appended AFTER system_program; no existing account moved. ---
+    /// CHECK: Switchboard oracle queue; validated by QuoteVerifier (oracle-key
+    /// set) in the SB arm. Not address-pinned (per-network queue).
+    pub sb_queue: Option<UncheckedAccount<'info>>,
+
+    /// CHECK: SlotHashes sysvar; address-checked == sysvar::slot_hashes::ID at
+    /// runtime in the SB arm.
+    pub sb_slothashes: Option<UncheckedAccount<'info>>,
+
+    /// CHECK: Instructions sysvar; address-checked == sysvar::instructions::ID at
+    /// runtime in the SB arm, then scanned for the ed25519 ix index.
+    pub sb_instructions: Option<UncheckedAccount<'info>>,
 }

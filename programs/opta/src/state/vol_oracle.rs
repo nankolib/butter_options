@@ -105,14 +105,27 @@ pub struct VolOracle {
     /// PDA bump seed.
     pub bump: u8,
 
+    /// Oracle backing this feed's spot price (Stage 3, wiring 1a-iii).
+    /// `0` = Pyth (pull), `1` = Switchboard (On-Demand). See `ORACLE_SOURCE_*`
+    /// in `state/market.rs`. push_vol_sample reads this from the already-loaded
+    /// oracle to route the spot read; mint/fill/get_option_price inherit via the
+    /// cached `last_spot_price`.
+    ///
+    /// CLAIMED IN PLACE from `_padding` (offset 5845) — a SIZE-PRESERVING change:
+    /// `_padding` shrank 11→10 so `size_of` stays exactly 5856, the leading byte
+    /// of the old padding was always zero (Pod zero-init / `load_init` zero-fill),
+    /// so every legacy on-chain oracle reads this as `0 = Pyth` with NO migration
+    /// and NO realloc. A size-GROWING change would instead panic
+    /// `AccountLoader::load` (bytemuck length mismatch) on every legacy oracle.
+    pub oracle_source: u8,
+
     /// MANDATORY Pod alignment padding -- NOT reserved future-field space.
     /// `bytemuck::Pod` requires zero uninitialized bytes; this pads the
-    /// struct to a 16-byte boundary (i128 alignment). Future fields must
-    /// be appended AFTER `bump` and BEFORE this padding, reducing
-    /// `_padding` correspondingly. Any schema change still requires an
-    /// explicit admin migration instruction (same pattern as Stage A
-    /// `migrate_shared_vault_carry_rate`).
-    _padding: [u8; 11],
+    /// struct to a 16-byte boundary (i128 alignment). Shrunk 11→10 when
+    /// `oracle_source` was claimed above (Stage 3). Future fields must
+    /// be appended AFTER the last real field and BEFORE this padding,
+    /// reducing `_padding` correspondingly, preserving the 5856-byte total.
+    _padding: [u8; 10],
 }
 
 /// PDA seed prefix for VolOracle accounts.

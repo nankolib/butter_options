@@ -206,6 +206,7 @@ describe("bankrun Pass-2 money-logic (Stage G)", function () {
       holder: buyer.publicKey, sharedVault: vault, market, priceUpdate: exFixture, vaultMintRecord: m.vaultMintRecord,
       optionMint: m.optionMint, holderOptionAccount: buyerOptionAta, vaultUsdcAccount: vaultUsdc,
       holderUsdcAccount: buyerUsdc, token2022Program: TOKEN_2022_PROGRAM_ID, tokenProgram: TOKEN_PROGRAM_ID,
+      sbQueue: null, sbSlothashes: null, sbInstructions: null,
     }).preInstructions([CU_400]).signers([buyer]).rpc();
 
     let v: any = await opta.account.sharedVault.fetch(vault);
@@ -321,6 +322,7 @@ describe("bankrun Pass-2 money-logic (Stage G)", function () {
       holder: buyer.publicKey, sharedVault: vault, market, priceUpdate: fixture, vaultMintRecord: m.vaultMintRecord,
       optionMint: m.optionMint, holderOptionAccount: buyerOptionAta, vaultUsdcAccount: vaultUsdc,
       holderUsdcAccount: buyerUsdc, token2022Program: TOKEN_2022_PROGRAM_ID, tokenProgram: TOKEN_PROGRAM_ID,
+      sbQueue: null, sbSlothashes: null, sbInstructions: null,
     });
 
     // Stale: publish_time = now − 120s (> 60) → PriceTooOld.

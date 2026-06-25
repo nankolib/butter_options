@@ -39,7 +39,10 @@ use crate::feature_flags::AMERICAN_ENABLED;
 use crate::state::*;
 use crate::utils::collateral::required_collateral_per_contract;
 use crate::utils::exercise_intrinsic::exercise_capped_intrinsic;
-use crate::utils::price_oracle::pyth_current_spot_usdc;
+use crate::utils::price_oracle::{
+    find_ed25519_ix_index, pyth_current_spot_usdc, sb_current_spot_usdc, secs_to_slots,
+    SB_MIN_ORACLE_SAMPLES_FLOOR,
+};
 
 /// Max age of the supplied price update at exercise time, in seconds: the
 /// price's `publish_time` must be within 60s of the on-chain clock (now). Early
@@ -102,19 +105,76 @@ pub fn handle_exercise_american(
     };
     require!(quantity <= holder_balance, OptaError::InsufficientOptionTokens);
 
-    // ----- Read + normalize spot from the fresh PriceUpdateV2 ---------------
-    // Full validate (verification + feed_id + confidence + tight single-sided
-    // 60s freshness) + EMA→USDC normalization now lives in the source-routed
-    // price-oracle abstraction (Stage 1). Pyth is the sole implementer until
-    // the Switchboard arm slots in at Stage 3; behavior, error codes, and the
-    // EMA read are identical to the prior inline block.
-    let spot_6dec = pyth_current_spot_usdc(
-        &ctx.accounts.price_update,
-        ctx.accounts.market.pyth_feed_id,
-        clock.unix_timestamp,
-        PRICE_MAX_AGE_SECS,
-        MAX_CONF_BPS,
-    )?;
+    // ----- Read + normalize spot, ROUTED by market.oracle_source (Stage 3) ---
+    // The match lives here (not american_exercise_core, which takes spot_6dec as
+    // a param and reads no oracle). Both arms return the SAME u64 USDC-6dec; the
+    // downstream core path is untouched.
+    //
+    //   Pyth (0): byte-for-byte the pre-Stage-3 read — just unwraps the now-
+    //             optional price_update. Behavior/errors/EMA read unchanged.
+    //   Switchboard (1): unwrap the 3 trailing SB accounts, runtime-address-check
+    //             the two sysvars, derive the ed25519 ix index on-chain, then run
+    //             the unit-1 sb_current_spot_usdc seam (60s → secs_to_slots).
+    let oracle_source = ctx.accounts.market.oracle_source;
+    let feed_id = ctx.accounts.market.pyth_feed_id;
+    let spot_6dec = match oracle_source {
+        ORACLE_SOURCE_PYTH => {
+            let price_update = ctx
+                .accounts
+                .price_update
+                .as_ref()
+                .ok_or(error!(OptaError::PriceUpdateMissing))?;
+            pyth_current_spot_usdc(
+                price_update,
+                feed_id,
+                clock.unix_timestamp,
+                PRICE_MAX_AGE_SECS,
+                MAX_CONF_BPS,
+            )?
+        }
+        ORACLE_SOURCE_SWITCHBOARD => {
+            let queue = ctx
+                .accounts
+                .sb_queue
+                .as_ref()
+                .ok_or(error!(OptaError::SwitchboardAccountsMissing))?;
+            let slothashes = ctx
+                .accounts
+                .sb_slothashes
+                .as_ref()
+                .ok_or(error!(OptaError::SwitchboardAccountsMissing))?;
+            let instructions = ctx
+                .accounts
+                .sb_instructions
+                .as_ref()
+                .ok_or(error!(OptaError::SwitchboardAccountsMissing))?;
+            // Runtime sysvar address checks — a struct-level `address =` constraint
+            // would fire on the Pyth path where these are absent, so check here.
+            require_keys_eq!(
+                slothashes.key(),
+                anchor_lang::solana_program::sysvar::slot_hashes::ID,
+                OptaError::InvalidSwitchboardSysvar
+            );
+            require_keys_eq!(
+                instructions.key(),
+                anchor_lang::solana_program::sysvar::instructions::ID,
+                OptaError::InvalidSwitchboardSysvar
+            );
+            let instructions_ai = instructions.to_account_info();
+            let ed25519_ix_index = find_ed25519_ix_index(&instructions_ai)?;
+            sb_current_spot_usdc(
+                &queue.to_account_info(),
+                &slothashes.to_account_info(),
+                &instructions_ai,
+                ed25519_ix_index,
+                clock.slot,
+                secs_to_slots(PRICE_MAX_AGE_SECS),
+                feed_id,
+                SB_MIN_ORACLE_SAMPLES_FLOOR,
+            )?
+        }
+        _ => return Err(error!(OptaError::InvalidOracleSource)),
+    };
 
     // ----- Delegate intrinsic + burn + payout + counters to the shared core --
     // Phase 4 extraction: american_exercise_core does the capped-intrinsic calc,
@@ -311,7 +371,13 @@ pub struct ExerciseAmerican<'info> {
     /// Fresh PriceUpdateV2 from the Pyth Receiver (exerciser posts it in the
     /// same tx). Validated for Full verification + feed_id + confidence +
     /// freshness in the handler.
-    pub price_update: Account<'info, PriceUpdateV2>,
+    ///
+    /// Stage 3: now `Option`. REQUIRED (present) for a Pyth market — its position
+    /// is unchanged (4), so a present price_update is wire-identical to before.
+    /// A Switchboard market passes None (program-id sentinel) and uses the
+    /// trailing SB accounts instead. The Pyth arm errors `PriceUpdateMissing` if
+    /// it is absent on a Pyth market.
+    pub price_update: Option<Account<'info, PriceUpdateV2>>,
 
     /// Validates option_mint belongs to this vault (same guard as
     /// exercise_from_vault).
@@ -351,4 +417,22 @@ pub struct ExerciseAmerican<'info> {
 
     /// Standard SPL Token program — for the USDC transfer.
     pub token_program: Program<'info, Token>,
+
+    // --- Switchboard read-arm accounts (Stage 3). TRAILING optionals: a Pyth
+    // market omits all three (allow-missing-optionals → None), keeping its tx
+    // byte-identical to pre-Stage-3. Required only when
+    // market.oracle_source == Switchboard; the handler unwraps them and runtime-
+    // address-checks the two sysvars. Appended AFTER token_program; no existing
+    // account moved. ---
+    /// CHECK: Switchboard oracle queue. Not address-pinned (per-network queue);
+    /// QuoteVerifier validates it against the quote's oracle-key set in the SB arm.
+    pub sb_queue: Option<UncheckedAccount<'info>>,
+
+    /// CHECK: SlotHashes sysvar. Address-checked == sysvar::slot_hashes::ID at
+    /// runtime in the SB arm (used by QuoteVerifier for slothash freshness).
+    pub sb_slothashes: Option<UncheckedAccount<'info>>,
+
+    /// CHECK: Instructions sysvar. Address-checked == sysvar::instructions::ID at
+    /// runtime in the SB arm, then scanned for the ed25519 ix index.
+    pub sb_instructions: Option<UncheckedAccount<'info>>,
 }

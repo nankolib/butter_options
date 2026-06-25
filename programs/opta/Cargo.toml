@@ -54,7 +54,12 @@ testing = []
 
 
 [dependencies]
-anchor-lang = { version = "0.32.1", features = ["init-if-needed"] }
+# `allow-missing-optionals` (Stage 3): lets a TRAILING absent optional account
+# deserialize to None instead of erroring AccountNotEnoughKeys. Required so a Pyth
+# market omits the 3 trailing Switchboard read-arm accounts and keeps its tx
+# byte-identical. Inert for every existing instruction (the only other Option
+# account, epoch_config, is non-trailing so never hits the empty-accounts branch).
+anchor-lang = { version = "0.32.1", features = ["init-if-needed", "allow-missing-optionals"] }
 anchor-spl = { version = "0.32.1", features = ["associated_token", "metadata", "token_2022", "token_2022_extensions"] }
 spl-token-2022 = { version = "8.0.1", features = ["no-entrypoint"] }
 spl-transfer-hook-interface = "0.10.0"

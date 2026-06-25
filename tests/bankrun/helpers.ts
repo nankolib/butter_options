@@ -25,11 +25,11 @@ import { synthWarmVolOracle, spotScaled } from "../_vol_oracle_helpers";
 
 export {
   setupBankrun, fundWallet, getClockUnix, setClockUnix, OPTA_PROGRAM_ID, HOOK_PROGRAM_ID,
-  PublicKey, Keypair, BN, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID,
+  PublicKey, Keypair, BN, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, injectPythFixture,
 };
 export const usdc = (n: number) => new BN(Math.round(n * 1_000_000));
 export const EXERCISE_WINDOW = 86_400;
-const CU = (u: number) => ComputeBudgetProgram.setComputeUnitLimit({ units: u });
+export const CU = (u: number) => ComputeBudgetProgram.setComputeUnitLimit({ units: u });
 
 export function pda(seeds: (Buffer | Uint8Array)[], programId = OPTA_PROGRAM_ID): PublicKey {
   return PublicKey.findProgramAddressSync(seeds, programId)[0];
@@ -49,7 +49,7 @@ export interface Env {
   asset: string;
 }
 
-function pythBody(feedHex: string, priceUsd: number, publishTime: number): Buffer {
+export function pythBody(feedHex: string, priceUsd: number, publishTime: number): Buffer {
   const price = BigInt(priceUsd) * 100_000_000n; // expo -8
   return serializePriceUpdateV2({
     feedIdHex: feedHex, price, conf: 1_000_000n, exponent: -8,
@@ -223,6 +223,8 @@ export async function exerciseAmerican(e: Env, vault: PublicKey, m: any, holder:
     holder: holder.publicKey, sharedVault: vault, market: e.market, priceUpdate: fix, vaultMintRecord: m.vaultMintRecord,
     optionMint: m.optionMint, holderOptionAccount: holderOptAta, vaultUsdcAccount: deriveVaultUsdc(vault),
     holderUsdcAccount: holderUsdc, token2022Program: TOKEN_2022_PROGRAM_ID, tokenProgram: TOKEN_PROGRAM_ID,
+    // Stage 3: trailing Switchboard read-arm optionals — null on the Pyth path.
+    sbQueue: null, sbSlothashes: null, sbInstructions: null,
   }).preInstructions([CU(400_000)]).signers([holder]).rpc();
 }
 
@@ -256,7 +258,7 @@ export async function withdrawPostSettlement(e: Env, vault: PublicKey, writerPos
   }).signers([writer]).rpc();
 }
 
-function deriveVaultUsdc(vault: PublicKey): PublicKey {
+export function deriveVaultUsdc(vault: PublicKey): PublicKey {
   return pda([Buffer.from("vault_usdc"), vault.toBuffer()]);
 }
 

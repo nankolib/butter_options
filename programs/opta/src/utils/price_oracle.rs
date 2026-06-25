@@ -292,6 +292,42 @@ pub fn secs_to_slots(secs: i64) -> u64 {
     (secs as u64).saturating_mul(SLOTS_PER_SEC_NUM) / SLOTS_PER_SEC_DEN
 }
 
+/// Scan the Instructions sysvar for the ED25519 precompile instruction in the
+/// CURRENT transaction and return its index as the `i64` that
+/// `QuoteVerifier::verify_instruction_at` expects. This keeps the ed25519 index
+/// OFF the instruction-data arg list (a new arg would break the Pyth path's
+/// byte-identicality) — every SB read site (1a-i/ii/iii) derives it on-chain via
+/// this one helper. Errors `NoEd25519Instruction` if the tx carries none.
+///
+/// The caller is responsible for having address-checked `instructions_sysvar`
+/// against the canonical Instructions sysvar id first.
+pub fn find_ed25519_ix_index(instructions_sysvar: &AccountInfo) -> Result<i64> {
+    use anchor_lang::solana_program::sysvar::instructions::load_instruction_at_checked;
+
+    // Ed25519 native precompile program id. Declared via anchor's `pubkey!`
+    // macro (version-agnostic) because `ed25519_program` is not re-exported
+    // through `anchor_lang::solana_program` in this toolchain (solana-program 2.3.0).
+    const ED25519_PROGRAM_ID: Pubkey =
+        anchor_lang::pubkey!("Ed25519SigVerify111111111111111111111111111");
+
+    let mut idx: usize = 0;
+    loop {
+        match load_instruction_at_checked(idx, instructions_sysvar) {
+            // In range: check the program id, else advance.
+            Ok(ix) => {
+                if ix.program_id == ED25519_PROGRAM_ID {
+                    return Ok(idx as i64);
+                }
+                idx = idx
+                    .checked_add(1)
+                    .ok_or(error!(OptaError::MathOverflow))?;
+            }
+            // Out of range (no more instructions) → none found.
+            Err(_) => return err!(OptaError::NoEd25519Instruction),
+        }
+    }
+}
+
 /// Result of a Switchboard settlement read: the settlement price in USDC 6-dec
 /// plus the verifier-resolved `recent_slot`. `recent_slot` is the ONLY "when was
 /// this quote signed" primitive Switchboard exposes (slot-based; there is no

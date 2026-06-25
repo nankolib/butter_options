@@ -306,4 +306,39 @@ pub enum OptaError {
     // 6063.
     #[msg("Switchboard feed has fewer oracle samples than the required floor")]
     SwitchboardInsufficientSamples,
+
+    // =========================================================================
+    // Oracle-source routing (Stage 3 wiring) — the match arm guards
+    // =========================================================================
+    // A Pyth-sourced market routed to the Pyth arm but the optional price_update
+    // account was absent (None). The price update is required for Pyth markets;
+    // only Switchboard markets omit it. Error code 6064.
+    #[msg("Pyth market requires the price_update account, but it was not provided")]
+    PriceUpdateMissing,
+
+    // A Switchboard-sourced market routed to the SB arm but one or more of the
+    // trailing SB accounts (queue / SlotHashes sysvar / Instructions sysvar) was
+    // absent. All three are required when oracle_source == Switchboard. Error
+    // code 6065.
+    #[msg("Switchboard market requires the queue + SlotHashes + Instructions accounts")]
+    SwitchboardAccountsMissing,
+
+    // market.oracle_source held a value that is neither Pyth (0) nor Switchboard
+    // (1). Unreachable for well-formed markets (create_market pins Pyth; the only
+    // other writer is the migration zero-fill) — fail-closed guard. Error code 6066.
+    #[msg("Unknown oracle_source value on the market")]
+    InvalidOracleSource,
+
+    // The SB arm scanned the Instructions sysvar and found no ED25519 precompile
+    // instruction in the current transaction. The caller must prepend the
+    // Switchboard ed25519 verify instruction. Error code 6067.
+    #[msg("No ED25519 instruction found in the transaction for Switchboard verification")]
+    NoEd25519Instruction,
+
+    // A SB account whose address is fixed (the SlotHashes or Instructions sysvar)
+    // did not match its canonical pubkey. Runtime-checked in the SB arm because a
+    // struct-level address constraint would fire on the absent-optional Pyth path.
+    // Error code 6068.
+    #[msg("Switchboard sysvar account address mismatch (SlotHashes or Instructions)")]
+    InvalidSwitchboardSysvar,
 }

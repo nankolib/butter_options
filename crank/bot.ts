@@ -52,6 +52,12 @@ import {
   type TriggerCrankContext,
   type TriggerCrankOptions,
 } from "./triggerCrank";
+import {
+  runSbOracleCrank,
+  parseForceFeeds,
+  type SbOracleCrankContext,
+  type SbOracleCrankOptions,
+} from "./sbOracleCrank";
 
 // ---- Constants -------------------------------------------------------------
 
@@ -1044,6 +1050,48 @@ async function main(): Promise<void> {
     loops.push(
       runTriggerCrank(triggerCrankCtx, triggerCrankOptions).catch((err) => {
         logFatal("trigger loop crashed", {
+          err: String(err),
+          stack: (err as any)?.stack,
+        });
+        throw err;
+      }),
+    );
+  }
+
+  // ---- Spawn the Stage 3 1c-ii-A SB-oracle warming crank as a side-loop ----
+  // Same fail-loud + shutdown wiring as the vol/trigger loops. Warms SB-sourced
+  // VolOracles (oracle_source==1) by posting fresh Switchboard quotes through
+  // push_vol_sample's SB arm. Env-gated:
+  //   OPTA_SB_CRANK_DISABLED=1 → skip spawning entirely (the rollout default —
+  //     no SB market exists until create-SB-market deploys with 1c-i-B+1c-ii).
+  //   OPTA_SB_DRY_RUN (default "1" = ON) → build + simulate + log, NEVER send.
+  //     Set OPTA_SB_DRY_RUN=0 ONLY after the coordinated deploy greenlight.
+  //   OPTA_SB_FORCE_FEED=<hex[,hex]> → process feedHashes with no discoverable
+  //     market yet (dry-run the push path against the 1c-i-A unlisted gold oracle).
+  const sbDryRunRaw = (process.env.OPTA_SB_DRY_RUN ?? "1").toLowerCase();
+  const sbCrankCtx: SbOracleCrankContext = {
+    connection: ctx.connection,
+    wallet: ctx.wallet,
+    program: ctx.program,
+    log: (level, msg, fields) => log(level, msg, { subsystem: "sb-oracle", ...(fields ?? {}) }),
+    shouldShutdown: () => shutdownRequested,
+    dryRun: !(sbDryRunRaw === "0" || sbDryRunRaw === "false"),
+    forceFeeds: parseForceFeeds(process.env.OPTA_SB_FORCE_FEED),
+  };
+  const sbCrankOptions: SbOracleCrankOptions = {
+    tickOnce:
+      (process.env.TICK_ONCE ?? "").toLowerCase() === "1" ||
+      (process.env.TICK_ONCE ?? "").toLowerCase() === "true",
+  };
+
+  if ((process.env.OPTA_SB_CRANK_DISABLED ?? "") === "1") {
+    logInfo("sb-oracle side-loop DISABLED via OPTA_SB_CRANK_DISABLED=1", {
+      note: "enable at the coordinated 1c-i-B+1c-ii deploy (and set OPTA_SB_DRY_RUN=0 to send)",
+    });
+  } else {
+    loops.push(
+      runSbOracleCrank(sbCrankCtx, sbCrankOptions).catch((err) => {
+        logFatal("sb-oracle loop crashed", {
           err: String(err),
           stack: (err as any)?.stack,
         });

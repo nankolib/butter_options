@@ -537,10 +537,11 @@ export async function buildPostUpdateAndCreateMarketTx(
     );
 
     const ix = await program.methods
-      .createMarket(assetName, feedIdBytes, assetClass)
-      // Phase-B prereq: .accountsPartial (was .accountsStrict). Still 3-arg
-      // create_market + the current Pyth account set — byte-identical against the
-      // current program; tolerates the Phase-B IDL's SB optionals once synced.
+      // Phase B: 4-arg create_market — oracle_source=0 (Pyth) for the FE "+ New
+      // Market" button. SB-create is the separate switchboardCreateMarket.ts path.
+      .createMarket(assetName, feedIdBytes, assetClass, 0)
+      // .accountsPartial (was .accountsStrict) tolerates the now-synced SB
+      // optionals; the Pyth create omits them → byte-identical Pyth create tx.
       .accountsPartial({
         creator: wallet.publicKey,
         protocolState: protocolStatePda,

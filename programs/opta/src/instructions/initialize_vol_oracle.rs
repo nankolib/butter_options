@@ -12,24 +12,34 @@
 // rather than 32 random bytes a griefer typed. Same defense-in-depth
 // zero-feed reject as create_market is included.
 //
-// SWITCHBOARD (Stage 3 1c-i-A): the new trailing `oracle_source: u8` arg picks
-// the spot source the born oracle reads from (push_vol_sample routes on
+// SWITCHBOARD (Stage 3 1c-i-A): the trailing `oracle_source: u8` arg picks the
+// spot source the born oracle reads from (push_vol_sample routes on
 // VolOracle.oracle_source — the keystone). Only ORACLE_SOURCE_PYTH (0) or
 // ORACLE_SOURCE_SWITCHBOARD (1) are accepted; anything else reverts
 // InvalidOracleSource. For a Switchboard oracle the feed_id holds the 32-byte
 // SB feedHash (the pyth_feed_id/feedHash double-duty — no schema change).
 //
-// PROOF ASYMMETRY: the Pyth proof-of-feed gate runs ONLY for oracle_source=0.
-// A Switchboard feedHash has no Pyth PriceUpdateV2 to prove against, so the SB
-// feed-existence proof is DEFERRED to the first push_vol_sample (its SB arm runs
-// the QuoteVerifier and rejects an unknown feedHash with SwitchboardFeedNotFound).
-// Birthing an SB oracle for a junk feedHash is INERT, not a security gap: no quote
-// ever verifies → sample_count stays 0, last_spot_price stays 0 → the oracle can
-// never feed a price into the American pricing tree. The only cost is the
-// initializer's own wasted rent (a self-DoS, harmless to the protocol). Hence
-// `price_update` is now Option: REQUIRED (present) for a Pyth oracle — wire-
-// identical to the pre-1c-i-A required form — and passed None for a Switchboard
-// oracle.
+// SEED-AT-BIRTH (instant-tradeable arc): init now SEEDS three fields so a
+// brand-new market is priceable from minute one (price_american gates on spot +
+// freshness BEFORE it reads vol, so vol alone unblocks nothing):
+//   - seed_vol (NEW arg): per-asset-class default annualized σ at SCALE (1e12),
+//     computed off-chain and passed in. Consumed by price_american ONLY while
+//     the oracle is under-warmed (sample_count < 168); 0 = no seed (legacy).
+//   - last_spot_price: read from the SAME quote that proves feed existence
+//     (Pyth PriceUpdateV2 / SB signed quote), normalized to SCALE.
+//   - last_sample_ts: Clock::get() at init — the freshness anchor.
+//
+// PROOF + SPOT, source-routed (the old Pyth-only proof now also reads spot):
+//   - Pyth (0): pyth_current_spot_scale SUBSUMES the prior inline proof
+//     (verification_level == Full + feed_id match) AND adds spot>0 / confidence
+//     (<=200bps) / freshness (<=60s), returning the spot. price_update is
+//     REQUIRED for a Pyth oracle (PriceUpdateMissing otherwise).
+//   - Switchboard (1): the SB feed-existence proof is NO LONGER DEFERRED to the
+//     first push — to seed spot, init verifies a fresh signed quote here via
+//     sb_current_spot_scale (the same path proven live in the read arms), using
+//     the 3 trailing SB accounts. A junk feedHash now fails at init
+//     (SwitchboardFeedNotFound) instead of sitting inert. The Pyth call path is
+//     unchanged (no SB accounts → all None).
 //
 // INSTRUCTION-DATA BACKWARD COMPAT: adding the trailing `oracle_source` arg
 // leaves the 8-byte discriminator unchanged (derived from the name) but grows
@@ -43,10 +53,13 @@
 //
 // One oracle per feed_id (PDA collision otherwise). Plain `init` -- a
 // second call for the same feed_id reverts with "account already in use".
-// This is acceptable because the price-update freshness gate in
-// push_vol_sample (Step 3) makes the initial last_sample_ts irrelevant:
-// the first push won't compute a return because last_spot_price is 0,
-// it just seeds the buffer.
+//
+// FIRST-PUSH INTERACTION: because init now seeds last_spot_price (non-zero) and
+// last_sample_ts, the first crank push does NOT hit push_vol_sample's seed
+// branch (which keys on last_spot_price == 0). Within ~55min of birth it hits
+// the normal branch and reverts VolOraclePushTooSoon; past ~2h it harmlessly
+// reseeds. Expected: the first realized sample is delayed up to ~55min while
+// seed_vol covers pricing. This is intended — do not "fix" it.
 //
 // Caller pays rent (~5.7 KB account, ~0.041 SOL).
 //
@@ -58,17 +71,24 @@
 // =============================================================================
 
 use anchor_lang::prelude::*;
-use pyth_solana_receiver_sdk::error::GetPriceError;
 use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
-use pyth_solana_receiver_sdk::price_update::VerificationLevel;
 
 use crate::errors::OptaError;
-use crate::state::{VolOracle, ORACLE_SOURCE_PYTH, ORACLE_SOURCE_SWITCHBOARD, VOL_ORACLE_SEED};
+use crate::instructions::push_vol_sample::VOL_ORACLE_MAX_CONF_BPS;
+use crate::state::{
+    VolOracle, ORACLE_SOURCE_PYTH, ORACLE_SOURCE_SWITCHBOARD, VOL_ORACLE_PYTH_MAX_AGE_SECS,
+    VOL_ORACLE_SEED,
+};
+use crate::utils::price_oracle::{
+    find_ed25519_ix_index, pyth_current_spot_scale, sb_current_spot_scale, secs_to_slots,
+    SB_MIN_ORACLE_SAMPLES_FLOOR,
+};
 
 pub fn handle_initialize_vol_oracle(
     ctx: Context<InitializeVolOracle>,
     feed_id: [u8; 32],
     oracle_source: u8,
+    seed_vol: i64,
 ) -> Result<()> {
     // 0. Validate the requested oracle source: Pyth (0) or Switchboard (1) only.
     require!(
@@ -76,72 +96,131 @@ pub fn handle_initialize_vol_oracle(
         OptaError::InvalidOracleSource
     );
 
-    // 1. Proof-of-feed-existence gate -- PYTH SOURCE ONLY (mirrors
-    //    create_market.rs:60-76). A Switchboard feedHash has no Pyth
-    //    PriceUpdateV2 to prove against, so its feed-existence proof is deferred
-    //    to the first push_vol_sample SB arm (see the module header). For a Pyth
-    //    oracle the price_update is REQUIRED (else PriceUpdateMissing).
-    if oracle_source == ORACLE_SOURCE_PYTH {
-        let pu = ctx
-            .accounts
-            .price_update
-            .as_ref()
-            .ok_or(error!(OptaError::PriceUpdateMissing))?;
-        require!(
-            pu.verification_level.gte(VerificationLevel::Full),
-            GetPriceError::InsufficientVerificationLevel
-        );
-        require!(
-            pu.price_message.feed_id == feed_id,
-            GetPriceError::MismatchedFeedId
-        );
-    }
-
-    // 2. Zero-feed defense-in-depth (BOTH sources; matches create_market HIGH-3
-    //    guard). For Pyth the proof above already implicitly rejects [0u8; 32];
-    //    for Switchboard this is the cheap birth-time reject of a zero feedHash.
+    // 1. Zero-feed defense-in-depth (BOTH sources) — cheap reject before any
+    //    Pyth/SB verification work below.
     require!(feed_id != [0u8; 32], OptaError::InvalidPythFeedId);
 
-    // 3. Populate the account via the zero_copy loader. `load_init` is the
-    //    correct entry point for a fresh `init`-created account: it casts
-    //    the zeroed data region as &mut VolOracle without trying to
-    //    deserialize (which would fail given the discriminator hasn't been
-    //    written yet from the program's perspective). Anchor zeroes the
-    //    data buffer for us, so samples/head/sample_count/last_*/sum_*
-    //    start at 0 without explicit writes.
+    let clock = Clock::get()?;
+    let now = clock.unix_timestamp;
+
+    // 2. Existence proof + SPOT read, source-routed. Seed-at-birth: we no longer
+    //    only prove the feed exists — we read its CURRENT spot and seed
+    //    last_spot_price + last_sample_ts so the oracle is priceable from minute
+    //    one (price_american gates on spot + freshness BEFORE it reads vol). Both
+    //    arms reuse the exact proven read paths push_vol_sample uses — no new
+    //    verify logic is written here.
+    let new_spot_u128: u128 = match oracle_source {
+        ORACLE_SOURCE_PYTH => {
+            // pyth_current_spot_scale SUBSUMES the prior inline proof (checks
+            // verification_level == Full + feed_id == feed_id) AND adds spot>0,
+            // confidence (<=200bps), and freshness (<=60s), returning SPOT at
+            // SCALE. price_update is REQUIRED for a Pyth oracle.
+            let pu = ctx
+                .accounts
+                .price_update
+                .as_ref()
+                .ok_or(error!(OptaError::PriceUpdateMissing))?;
+            pyth_current_spot_scale(
+                pu,
+                feed_id,
+                now,
+                VOL_ORACLE_PYTH_MAX_AGE_SECS,
+                VOL_ORACLE_MAX_CONF_BPS,
+            )?
+        }
+        ORACLE_SOURCE_SWITCHBOARD => {
+            // SB existence proof UN-DEFERRED to init (was deferred to first push):
+            // verify a fresh signed quote and extract the matched feed's spot at
+            // SCALE via the same sb_current_spot_scale proven live in the read
+            // arms. A junk feedHash now fails here (SwitchboardFeedNotFound).
+            let queue = ctx
+                .accounts
+                .sb_queue
+                .as_ref()
+                .ok_or(error!(OptaError::SwitchboardAccountsMissing))?;
+            let slothashes = ctx
+                .accounts
+                .sb_slothashes
+                .as_ref()
+                .ok_or(error!(OptaError::SwitchboardAccountsMissing))?;
+            let instructions = ctx
+                .accounts
+                .sb_instructions
+                .as_ref()
+                .ok_or(error!(OptaError::SwitchboardAccountsMissing))?;
+            require_keys_eq!(
+                slothashes.key(),
+                anchor_lang::solana_program::sysvar::slot_hashes::ID,
+                OptaError::InvalidSwitchboardSysvar
+            );
+            require_keys_eq!(
+                instructions.key(),
+                anchor_lang::solana_program::sysvar::instructions::ID,
+                OptaError::InvalidSwitchboardSysvar
+            );
+            let instructions_ai = instructions.to_account_info();
+            let ed25519_ix_index = find_ed25519_ix_index(&instructions_ai)?;
+            sb_current_spot_scale(
+                &queue.to_account_info(),
+                &slothashes.to_account_info(),
+                &instructions_ai,
+                ed25519_ix_index,
+                clock.slot,
+                secs_to_slots(VOL_ORACLE_PYTH_MAX_AGE_SECS),
+                feed_id,
+                SB_MIN_ORACLE_SAMPLES_FLOOR,
+            )?
+        }
+        _ => return Err(error!(OptaError::InvalidOracleSource)),
+    };
+
+    // Cap to i64 storage (mirrors push_vol_sample new_spot_i64). Max i64
+    // ~9.2e18 covers spot up to ~$9.2M at SCALE.
+    let new_spot_i64 = i64::try_from(new_spot_u128)
+        .map_err(|_| error!(OptaError::MathOverflow))?;
+
+    // 3. Populate via the zero_copy loader. `load_init` casts the zeroed data
+    //    region as &mut VolOracle without deserializing (the discriminator isn't
+    //    written yet). Anchor zeroes the buffer, so samples/head/sample_count/
+    //    sum_* stay 0. We explicitly seed the three birth fields that make the
+    //    oracle instant-tradeable:
+    //      - seed_vol       : under-warmed pricing input (0 = no seed, as before)
+    //      - last_spot_price: BS-2002 spot input (price_american requires > 0)
+    //      - last_sample_ts : freshness anchor (price_american 6h staleness gate)
     let mut oracle = ctx.accounts.vol_oracle.load_init()?;
     oracle.feed_id = feed_id;
     oracle.bump = ctx.bumps.vol_oracle;
-    // Stage 3 1c-i-A: born with the requested source (validated above).
     oracle.oracle_source = oracle_source;
+    oracle.seed_vol = seed_vol;
+    oracle.last_spot_price = new_spot_i64;
+    oracle.last_sample_ts = now;
 
     msg!(
-        "VolOracle initialized: feed_id={:?} source={} pda={}",
+        "VolOracle initialized: feed_id={:?} source={} seed_vol={} spot={} ts={} pda={}",
         feed_id,
         oracle_source,
+        seed_vol,
+        new_spot_i64,
+        now,
         ctx.accounts.vol_oracle.key(),
     );
     Ok(())
 }
 
 #[derive(Accounts)]
-#[instruction(feed_id: [u8; 32], oracle_source: u8)]
+#[instruction(feed_id: [u8; 32], oracle_source: u8, seed_vol: i64)]
 pub struct InitializeVolOracle<'info> {
     /// Permissionless. Any signer pays for account creation.
     #[account(mut)]
     pub initializer: Signer<'info>,
 
-    /// Fresh PriceUpdateV2 from the Pyth Receiver program. The handler
-    /// verifies `verification_level == Full` and
-    /// `price_message.feed_id == feed_id` to prove the caller-supplied
-    /// feed_id corresponds to a real Pyth feed. Read-only -- never mutated.
-    ///
-    /// Stage 3 1c-i-A: now `Option`. REQUIRED (present) for a Pyth oracle
-    /// (oracle_source=0) -- a present account is wire-identical to the prior
-    /// required form, so existing Pyth inits are unaffected. Passed None for a
-    /// Switchboard oracle (oracle_source=1): the SB feed-existence proof is
-    /// deferred to the first push_vol_sample SB arm (see the module header).
-    /// The Pyth arm errors `PriceUpdateMissing` if absent on a Pyth init.
+    /// Fresh PriceUpdateV2 from the Pyth Receiver program. REQUIRED (present)
+    /// for a Pyth oracle (oracle_source=0): the handler reads its CURRENT spot
+    /// via `pyth_current_spot_scale` to seed `last_spot_price` AND proves feed
+    /// existence (verification_level == Full + feed_id match) in the same call.
+    /// Read-only -- never mutated. Passed None for a Switchboard oracle
+    /// (oracle_source=1): spot is seeded from the SB quote instead. The Pyth arm
+    /// errors `PriceUpdateMissing` if absent on a Pyth init.
     pub price_update: Option<Account<'info, PriceUpdateV2>>,
 
     /// The VolOracle PDA. One per Pyth feed_id. Plain `init` -- a second
@@ -157,4 +236,22 @@ pub struct InitializeVolOracle<'info> {
     pub vol_oracle: AccountLoader<'info, VolOracle>,
 
     pub system_program: Program<'info, System>,
+
+    // --- Switchboard seed-at-birth accounts. TRAILING optionals: a Pyth init
+    // omits all three (allow-missing-optionals → None), keeping its tx
+    // byte-identical to today. Required only when oracle_source == Switchboard;
+    // the handler unwraps + runtime-address-checks the two sysvars, then runs one
+    // QuoteVerifier pass to prove existence AND read spot. Appended AFTER
+    // system_program; no existing account moved. ---
+    /// CHECK: Switchboard oracle queue; validated by QuoteVerifier (oracle-key
+    /// set) in the SB arm. Not address-pinned (per-network queue).
+    pub sb_queue: Option<UncheckedAccount<'info>>,
+
+    /// CHECK: SlotHashes sysvar; address-checked == sysvar::slot_hashes::ID at
+    /// runtime in the SB arm.
+    pub sb_slothashes: Option<UncheckedAccount<'info>>,
+
+    /// CHECK: Instructions sysvar; address-checked == sysvar::instructions::ID at
+    /// runtime in the SB arm, then scanned for the ed25519 ix index.
+    pub sb_instructions: Option<UncheckedAccount<'info>>,
 }

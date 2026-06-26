@@ -171,8 +171,12 @@ describe("bankrun: Stage 3 1c-i-B — create_market oracle_source + branched HIG
     await flipMarketSource(e, marketPda("IDEM2"), 1);
     let err = "";
     try {
+      // Distinct CU preInstruction varies the tx so bankrun executes the re-call
+      // (not dedup-as-already-processed) — same workaround the (IDok) sibling
+      // uses above; without it this byte-identical re-call is order-sensitive.
       await e.opta.methods.createMarket("IDEM2", feed.bytes, 0, 0)
-        .accountsStrict(createArgs(e, "IDEM2", fix, null)).rpc();
+        .accountsStrict(createArgs(e, "IDEM2", fix, null))
+        .preInstructions([CU(390_000)]).rpc();
     } catch (ex: any) { err = String(ex); }
     console.log(`    (IDx) ${err.slice(0, 120)}`);
     assert.match(err, /AssetMismatch/, "source mismatch on re-call must reject AssetMismatch");

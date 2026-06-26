@@ -29,7 +29,7 @@
 use anchor_lang::prelude::*;
 
 use crate::errors::OptaError;
-use crate::state::{OptionType, VolOracle, realized_vol_annualized};
+use crate::state::{OptionType, VolOracle, realized_vol_annualized, VOL_ORACLE_WARMUP_SAMPLES};
 use crate::utils::solmath_bridge::{scale_to_usdc, seconds_to_time_scale, usdc_to_scale};
 
 use super::{american_call_price, american_put_price};
@@ -99,8 +99,27 @@ pub fn price_american(
     require!(oracle.last_spot_price > 0, OptaError::VolOracleInvalidSpot);
     let spot_scaled: u128 = oracle.last_spot_price as u128;
 
-    // Vol at SCALE (i64). Propagates Warmup/Stale/NotInitialized verbatim.
-    let vol_scaled: i64 = realized_vol_annualized(oracle, now_ts)?;
+    // Vol at SCALE (i64). Seed-at-birth handoff — ONE site, abrupt switch:
+    //   - warm (sample_count >= VOL_ORACLE_WARMUP_SAMPLES): realized vol, the
+    //     unchanged path. A warm oracle NEVER consults seed_vol, so the warm
+    //     majors (BTC/ETH/SOL) are byte-identical to today.
+    //   - cold + seeded (seed_vol != 0): use the per-asset-class seed so a
+    //     brand-new market is priceable from minute one while the ring warms.
+    //   - cold + unseeded (seed_vol == 0): revert exactly as before. Same error
+    //     CODE as today (VolOracleWarmup); only the logged source location moves
+    //     from vol_oracle.rs (realized_vol's require!) to here.
+    //
+    // The staleness gate and the last_spot_price > 0 gate ABOVE this line already
+    // passed for a freshly-seeded oracle because initialize_vol_oracle wrote
+    // last_sample_ts + last_spot_price at birth (Change 2). Those gates are
+    // untouched.
+    let vol_scaled: i64 = if oracle.sample_count >= VOL_ORACLE_WARMUP_SAMPLES {
+        realized_vol_annualized(oracle, now_ts)?
+    } else if oracle.seed_vol != 0 {
+        oracle.seed_vol
+    } else {
+        return Err(error!(OptaError::VolOracleWarmup));
+    };
     let sigma_u128: u128 = vol_scaled as u128;
 
     // TTE: gate expiry strictly > now before the conversion.

@@ -492,11 +492,13 @@ pub mod opta {
         ctx: Context<InitializeVolOracle>,
         feed_id: [u8; 32],
         oracle_source: u8,
+        seed_vol: i64,
     ) -> Result<()> {
         instructions::initialize_vol_oracle::handle_initialize_vol_oracle(
             ctx,
             feed_id,
             oracle_source,
+            seed_vol,
         )
     }
 

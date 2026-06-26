@@ -43,12 +43,14 @@
 // this module locks the layout against silent drift.
 //
 // Future-extension contract (mirrors SharedVault.carry_rate_bps in Stage A):
-// any new field MUST be appended AFTER `bump` and BEFORE `_padding`, with
-// `_padding` shrunk by the new field's byte count to preserve the 5856-byte
-// total. Anchor's typed Account deser is strict on length, so pre-existing
-// oracles would need an admin-only realloc migration instruction (same
-// pattern as migrate_shared_vault_carry_rate). Do NOT insert fields
-// mid-struct; the layout assertion will fire if anyone tries.
+// the free padding budget is now FULLY SPENT. The original `_padding: [u8; 11]`
+// became [u8; 10] (oracle_source, Stage 3) and is now [u8; 2] alignment slack +
+// `seed_vol: i64` (seed-at-birth arc) — zero free bytes remain. A NEW field can
+// no longer be claimed in place: it would push `size_of` past 5856 and break
+// `AccountLoader::load` (bytemuck length mismatch) on every pre-existing oracle,
+// so it REQUIRES an admin-only realloc migration instruction (same pattern as
+// migrate_shared_vault_carry_rate). Do NOT insert fields mid-struct and do NOT
+// repurpose `_pad_align`; the layout assertion will fire if anyone tries.
 // =============================================================================
 
 use anchor_lang::prelude::*;
@@ -119,13 +121,37 @@ pub struct VolOracle {
     /// `AccountLoader::load` (bytemuck length mismatch) on every legacy oracle.
     pub oracle_source: u8,
 
-    /// MANDATORY Pod alignment padding -- NOT reserved future-field space.
-    /// `bytemuck::Pod` requires zero uninitialized bytes; this pads the
-    /// struct to a 16-byte boundary (i128 alignment). Shrunk 11→10 when
-    /// `oracle_source` was claimed above (Stage 3). Future fields must
-    /// be appended AFTER the last real field and BEFORE this padding,
-    /// reducing `_padding` correspondingly, preserving the 5856-byte total.
-    _padding: [u8; 10],
+    /// Explicit alignment slack (offsets 5846..5848) so `seed_vol` below lands
+    /// on an 8-byte boundary at offset 5848. `oracle_source` ends at 5846 and
+    /// i64 requires 8-byte alignment, so 2 slack bytes are mandatory. This pad
+    /// is NAMED (not compiler-implicit) because `bytemuck::Pod` forbids
+    /// uninitialized gap bytes — implicit padding fails the zero_copy derive.
+    ///
+    /// THIS IS ALIGNMENT SLACK, NOT RESERVED FUTURE-FIELD SPACE. The old
+    /// `_padding: [u8; 10]` is now fully spent: 2 bytes here + 8 bytes of
+    /// `seed_vol`. There is NO free padding left. A future field cannot be
+    /// claimed in place — it would grow `size_of` past 5856 and panic
+    /// `AccountLoader::load` (bytemuck length mismatch) on every legacy
+    /// oracle, requiring an admin realloc migration. Do NOT repurpose these
+    /// 2 bytes for a new field; they exist solely to align `seed_vol`.
+    _pad_align: [u8; 2],
+
+    /// SEED volatility for the under-warmed window — annualized σ at solmath
+    /// SCALE (1e12), i64. Claimed in place from the old `_padding` (offsets
+    /// 5848..5856); a SIZE-PRESERVING change, same migration-free trick as
+    /// `oracle_source`: every legacy on-chain oracle reads this as 0 via
+    /// `load_init` zero-fill, with NO migration and NO realloc. A size-GROWING
+    /// change would instead panic `AccountLoader::load` on every legacy oracle.
+    ///
+    /// ZERO-SAFE SENTINEL: `seed_vol == 0` means "no seed — behave exactly as
+    /// before." The American pricing path (`price_american`) consults this
+    /// ONLY when the oracle is under-warmed (`sample_count <
+    /// VOL_ORACLE_WARMUP_SAMPLES`); a warm oracle always uses realized vol and
+    /// never reads `seed_vol`. Written at birth by `initialize_vol_oracle` so a
+    /// brand-new market is priceable from minute one while the realized-vol
+    /// ring warms in the background and later takes over. Encode off-chain as
+    /// `round(annualized_sigma * 1e12)` (e.g. crypto 0.80 → 800_000_000_000).
+    pub seed_vol: i64,
 }
 
 /// PDA seed prefix for VolOracle accounts.
@@ -290,10 +316,12 @@ pub fn realized_vol_annualized(
 // Compile-time layout assertion
 // -----------------------------------------------------------------------------
 // Locks the on-disk byte size of VolOracle. If a future change reorders
-// fields, adds one without shrinking `_padding`, or inadvertently flips
-// alignment, the build fails here with a clear pointer to this file.
-// Update the constant ONLY in coordination with an admin realloc
-// migration instruction for pre-existing on-chain accounts.
+// fields, adds one without shrinking the alignment slack, or inadvertently
+// flips alignment, the build fails here with a clear pointer to this file.
+// The 5856 total covers the `_pad_align[2] + seed_vol: i64` tail (seed-at-birth
+// arc) exactly as it covered the old `_padding[10]`. Update the constant ONLY
+// in coordination with an admin realloc migration instruction for pre-existing
+// on-chain accounts.
 const _: () = assert!(
     std::mem::size_of::<VolOracle>() == 5856,
     "VolOracle layout drift -- update size constant and audit field offsets"

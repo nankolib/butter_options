@@ -1,26 +1,27 @@
 // =============================================================================
-// tests/bankrun/sb-init-vol-oracle-source.test.ts  (Stage 3 1c-i-A)
+// tests/bankrun/sb-init-vol-oracle-source.test.ts  (Stage 3 1c-i-A + seed-at-birth)
 //
-// Guard proofs for the generalized initialize_vol_oracle(feed_id, oracle_source):
-// the birth path that lets a VolOracle be born Switchboard-sourced (the keystone
-// read in push_vol_sample routes on VolOracle.oracle_source). litesvm cannot
-// fabricate a valid signed_slothash, so the SB happy-path (a real quote) is the
-// devnet smoke; here we prove only the routing/validation surface.
+// Guard proofs for initialize_vol_oracle(feed_id, oracle_source, seed_vol). The
+// seed-at-birth arc UN-DEFERS the Switchboard feed-existence proof to init time:
+// a Switchboard oracle now REQUIRES the 3 SB verify accounts at birth (so it can
+// read + cache spot), instead of deferring the proof to the first push. litesvm
+// cannot fabricate a valid signed_slothash, so the SB happy-path (a real quote →
+// born SB with cached spot) is the devnet smoke; here we prove the guard surface.
 //
 //   (P)  oracle_source = 0 (Pyth): present price_update + matching feed → born
-//        Pyth; oracle_source byte reads 0. Unchanged behavior, new explicit arg.
-//   (SB) oracle_source = 1 (Switchboard): NO price_update (None) → born SB; the
-//        oracle_source byte reads 1. The Pyth proof is skipped (deferred to the
-//        first push_vol_sample SB arm). feed_id holds an arbitrary 32-byte
-//        feedHash (double-duty field).
+//        Pyth. Spot + last_sample_ts + seed_vol are seeded at birth (the proof
+//        PriceUpdateV2 supplies the spot via pyth_current_spot_scale).
+//   (SB) oracle_source = 1 (Switchboard) with NO SB accounts → reverts
+//        SwitchboardAccountsMissing (6065): the proof is no longer deferred, so
+//        the SB verify accounts are mandatory at birth.
 //   (X)  oracle_source = 2 (invalid): reverts InvalidOracleSource (6066).
 //   (M)  oracle_source = 0 but NO price_update → PriceUpdateMissing (6064): the
-//        Pyth arm requires the (now-optional) account to be present.
+//        Pyth arm requires the (optional) account to be present.
 // =============================================================================
 
 import { assert } from "chai";
 import { SystemProgram } from "@solana/web3.js";
-import { setupEnv, getClockUnix, pda, injectPythFixture, pythBody } from "./helpers";
+import { setupEnv, getClockUnix, pda, injectPythFixture, pythBody, spotScaled, BN } from "./helpers";
 import { synthFeedIdHex } from "../_pyth_fixtures";
 
 // A fresh feed distinct from the one setupEnv already initialized, so each init
@@ -30,11 +31,12 @@ function freshFeed(label: string): { hex: string; bytes: number[] } {
   return { hex, bytes: Array.from(Buffer.from(hex, "hex")) };
 }
 const volOraclePda = (bytes: number[]) => pda([Buffer.from("vol_oracle"), Buffer.from(bytes)]);
+const SEED = new BN("800000000000"); // 0.80 σ @ SCALE
 
-describe("bankrun: Stage 3 1c-i-A — initialize_vol_oracle oracle_source", function () {
+describe("bankrun: Stage 3 1c-i-A — initialize_vol_oracle oracle_source + seed-at-birth", function () {
   this.timeout(180_000);
 
-  it("(P) oracle_source=0 (Pyth) + present price_update → born Pyth", async () => {
+  it("(P) oracle_source=0 (Pyth) + present price_update → born Pyth, seeded at birth", async () => {
     const e = await setupEnv("SBINIT0", "sbinit0", 100);
     const feed = freshFeed("sbinit0-pyth");
     const oracle = volOraclePda(feed.bytes);
@@ -42,37 +44,41 @@ describe("bankrun: Stage 3 1c-i-A — initialize_vol_oracle oracle_source", func
 
     const { Keypair } = await import("@solana/web3.js");
     const fix = Keypair.generate().publicKey;
-    injectPythFixture(e.h.context, fix, pythBody(feed.hex, 100, now)); // feed_id matches → proof passes
+    injectPythFixture(e.h.context, fix, pythBody(feed.hex, 100, now)); // feed_id matches + fresh
 
-    await e.opta.methods.initializeVolOracle(feed.bytes, 0).accountsStrict({
+    await e.opta.methods.initializeVolOracle(feed.bytes, 0, SEED).accountsStrict({
       initializer: e.admin.publicKey, priceUpdate: fix, volOracle: oracle,
       systemProgram: SystemProgram.programId,
+      sbQueue: null, sbSlothashes: null, sbInstructions: null,
     }).rpc();
 
     const o: any = await e.opta.account.volOracle.fetch(oracle);
     assert.equal(o.oracleSource, 0, "born Pyth (oracle_source = 0)");
     assert.deepEqual(Array.from(o.feedId), feed.bytes, "feed_id stored");
     assert.equal(o.sampleCount, 0, "fresh oracle, sample_count 0");
-    console.log(`    (P) Pyth init OK: oracle_source=${o.oracleSource}`);
+    assert.equal(o.seedVol.toString(), SEED.toString(), "seed_vol seeded at birth");
+    assert.equal(o.lastSpotPrice.toString(), spotScaled(100).toString(), "spot seeded from the proof update");
+    assert.isAtMost(Math.abs(Number(o.lastSampleTs) - now), 5, "last_sample_ts ≈ now");
+    console.log(`    (P) Pyth init OK: source=${o.oracleSource} seed_vol=${o.seedVol} spot=${o.lastSpotPrice}`);
   });
 
-  it("(SB) oracle_source=1 (Switchboard) + NO price_update → born Switchboard", async () => {
+  it("(SB) oracle_source=1 (Switchboard) with NO sb accounts → SwitchboardAccountsMissing (6065)", async () => {
     const e = await setupEnv("SBINIT1", "sbinit1", 100);
     const feed = freshFeed("sbinit1-sb");
     const oracle = volOraclePda(feed.bytes);
 
-    // No price_update (None) — the SB feed-existence proof is deferred to the
-    // first push_vol_sample. feed_id holds the (arbitrary, here) 32-byte feedHash.
-    await e.opta.methods.initializeVolOracle(feed.bytes, 1).accountsStrict({
-      initializer: e.admin.publicKey, priceUpdate: null, volOracle: oracle,
-      systemProgram: SystemProgram.programId,
-    }).rpc();
-
-    const o: any = await e.opta.account.volOracle.fetch(oracle);
-    assert.equal(o.oracleSource, 1, "born Switchboard (oracle_source = 1)");
-    assert.deepEqual(Array.from(o.feedId), feed.bytes, "feedHash stored in feed_id (double-duty)");
-    assert.equal(o.lastSpotPrice.toString(), "0", "no spot yet (push deferred)");
-    console.log(`    (SB) Switchboard init OK: oracle_source=${o.oracleSource}, price_update omitted`);
+    // The SB proof is no longer deferred — birth now REQUIRES the SB verify
+    // accounts. Omitting them (null) reverts before any state is written.
+    let err = "";
+    try {
+      await e.opta.methods.initializeVolOracle(feed.bytes, 1, SEED).accountsStrict({
+        initializer: e.admin.publicKey, priceUpdate: null, volOracle: oracle,
+        systemProgram: SystemProgram.programId,
+        sbQueue: null, sbSlothashes: null, sbInstructions: null,
+      }).rpc();
+    } catch (ex: any) { err = String(ex); }
+    console.log(`    (SB) ${err.slice(0, 120)}`);
+    assert.match(err, /SwitchboardAccountsMissing|6065/, "SB birth must require the SB verify accounts");
   });
 
   it("(X) oracle_source=2 (invalid) → InvalidOracleSource (6066)", async () => {
@@ -81,9 +87,10 @@ describe("bankrun: Stage 3 1c-i-A — initialize_vol_oracle oracle_source", func
     const oracle = volOraclePda(feed.bytes);
     let err = "";
     try {
-      await e.opta.methods.initializeVolOracle(feed.bytes, 2).accountsStrict({
+      await e.opta.methods.initializeVolOracle(feed.bytes, 2, SEED).accountsStrict({
         initializer: e.admin.publicKey, priceUpdate: null, volOracle: oracle,
         systemProgram: SystemProgram.programId,
+        sbQueue: null, sbSlothashes: null, sbInstructions: null,
       }).rpc();
     } catch (ex: any) { err = String(ex); }
     console.log(`    (X) ${err.slice(0, 120)}`);
@@ -96,9 +103,10 @@ describe("bankrun: Stage 3 1c-i-A — initialize_vol_oracle oracle_source", func
     const oracle = volOraclePda(feed.bytes);
     let err = "";
     try {
-      await e.opta.methods.initializeVolOracle(feed.bytes, 0).accountsStrict({
+      await e.opta.methods.initializeVolOracle(feed.bytes, 0, SEED).accountsStrict({
         initializer: e.admin.publicKey, priceUpdate: null, volOracle: oracle,
         systemProgram: SystemProgram.programId,
+        sbQueue: null, sbSlothashes: null, sbInstructions: null,
       }).rpc();
     } catch (ex: any) { err = String(ex); }
     console.log(`    (M) ${err.slice(0, 120)}`);

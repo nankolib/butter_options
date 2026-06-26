@@ -654,6 +654,7 @@ export async function buildPostUpdateAndInitializeVolOracleTx(
   program: Program<Opta>,
   wallet: SignerWallet,
   pythFeedIdHex: string,
+  seedVol: number,
   hermesBase: string = DEFAULT_HERMES_BASE,
 ): Promise<BuiltTx[]> {
   const priceUpdateData = await fetchHermesUpdate(pythFeedIdHex, hermesBase);
@@ -691,17 +692,28 @@ export async function buildPostUpdateAndInitializeVolOracleTx(
       program.programId,
     );
 
-    const ix = await program.methods
-      // Stage 3 1c-i-A: initialize_vol_oracle gained a trailing oracle_source
-      // arg. The FE/crank vol-oracle path is always Pyth-sourced → pass 0
-      // (ORACLE_SOURCE_PYTH). Switchboard oracles are born off-chain via the
-      // standalone SB smoke/crank path, not this builder.
-      .initializeVolOracle(feedIdBytes, 0)
+    const ix = await (program.methods as any)
+      // Stage 3 1c-i-A → seed-at-birth: initialize_vol_oracle takes
+      // (feed_id, oracle_source, seed_vol). The FE/crank vol-oracle path is
+      // always Pyth-sourced → oracle_source 0 (ORACLE_SOURCE_PYTH); seed_vol is
+      // the per-asset-class day-0 vol (caller-supplied via seedVolForAssetClass),
+      // wrapped in BN at the i64 boundary. Switchboard oracles are born via the
+      // SB crank path (sbOracleCrank.birthSbOracle), not this builder.
+      //
+      // `as any` (DEFERRED-DEPLOY): the 3-arg signature + the trailing SB
+      // optional accounts are NOT in the stale app/src/idl/opta.ts this session;
+      // the runtime-loaded IDL (post deploy-bundle IDL sync) has them. UN-`as
+      // any` this chain once the IDL is synced.
+      .initializeVolOracle(feedIdBytes, 0, new BN(seedVol))
       .accountsStrict({
         initializer: wallet.publicKey,
         priceUpdate: priceUpdatePda,
         volOracle: volOraclePda,
         systemProgram: SystemProgram.programId,
+        // Pyth path: trailing SB optionals are null (no Switchboard accounts).
+        sbQueue: null,
+        sbSlothashes: null,
+        sbInstructions: null,
       })
       .instruction();
 

@@ -31,6 +31,7 @@ import type { Opta } from "@app/idl/opta";
 import { safeFetchAll } from "@app/hooks/useFetchAccounts";
 import { hexFromBytes } from "@app/utils/format";
 import { VOL_ORACLE_SEED } from "@app/utils/constants";
+import { seedVolForAssetClass } from "@app/utils/seedVol";
 import {
   buildPostUpdateAndInitializeVolOracleTx,
   buildPostUpdateAndPushVolSampleTx,
@@ -175,6 +176,15 @@ export async function tickOnce(
   const uniqueFeeds = dedupeFeedIds(allFeeds);
   report.feedsDiscovered = uniqueFeeds.length;
 
+  // feedHash → asset_class (first market per feed wins; markets that share a
+  // feed agree on class in practice). Drives the per-class day-0 seed_vol that
+  // initialize_vol_oracle now seeds at birth (instant-tradeable arc).
+  const classByFeed = new Map<string, number>();
+  for (const m of markets) {
+    const hex = hexFromBytes(m.account.pythFeedId as number[]);
+    if (!classByFeed.has(hex)) classByFeed.set(hex, m.account.assetClass as number);
+  }
+
   ctx.log("info", "vol-oracle tick: discovered feeds", {
     markets: markets.length,
     uniqueFeeds: uniqueFeeds.length,
@@ -182,7 +192,20 @@ export async function tickOnce(
 
   for (const feedIdBytes of uniqueFeeds) {
     if (ctx.shouldShutdown()) break;
-    await processOneFeed(ctx, feedIdBytes, report);
+    // Resolve the per-class day-0 seed_vol for this feed. Skip (log, don't crash
+    // the loop) if the class is unresolved — shouldn't happen (asset_class is
+    // bounded 0-4 at create), but a missing class must not seed 0 (= "no seed").
+    let seedVol: number;
+    try {
+      seedVol = seedVolForAssetClass(classByFeed.get(hexFromBytes(feedIdBytes)) as number);
+    } catch (err) {
+      ctx.log("warn", "vol-oracle skip: unresolved seed_vol for feed", {
+        feed: hexFromBytes(feedIdBytes).slice(0, 8),
+        err: String(err),
+      });
+      continue;
+    }
+    await processOneFeed(ctx, feedIdBytes, seedVol, report);
   }
 
   report.durationMs = Date.now() - startMs;
@@ -193,6 +216,7 @@ export async function tickOnce(
 async function processOneFeed(
   ctx: VolOracleCrankContext,
   feedIdBytes: number[],
+  seedVol: number,
   report: TickReport,
 ): Promise<void> {
   const feedIdHex = hexFromBytes(feedIdBytes);
@@ -228,6 +252,7 @@ async function processOneFeed(
         ctx.program,
         ctx.wallet,
         feedIdHex,
+        seedVol,
         ctx.hermesBase,
       );
       const initSig = await submitWithFallback(ctx.connection, ctx.wallet, initTxs);

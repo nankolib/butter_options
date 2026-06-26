@@ -9,9 +9,12 @@
 //
 // PER TICK: safeFetchAll("optionsMarket") → filter oracle_source==1 → dedup
 // feedHashes → filter to registry-supported → per-feed init-or-push.
-//   - if no VolOracle yet: birth via initialize_vol_oracle(feedHash, source=1),
-//     price_update=null (the deployed 1c-i-A path — no SB accounts at birth, the
-//     SB proof was deferred to the first push).
+//   - if no VolOracle yet: birth via initialize_vol_oracle(feedHash, source=1,
+//     seed_vol), price_update=null — seed-at-birth UN-DEFERS the SB feed-
+//     existence proof to birth, so birth now attaches the 3 SB accounts + a
+//     fresh signed quote ([CU, ed25519, init], like the push) and seeds the
+//     per-class day-0 vol. (Pre-seed-at-birth this was a no-account 2-ix tx
+//     with the SB proof deferred to the first push.)
 //   - else: warming push — resolve jobs (registry) → fetch fresh quote via
 //     buildManagedQuoteUpdateIxs (self-packed ed25519) → build
 //     [CU, ed25519Ix, push_vol_sample(+SB accounts, price_update:null)] →
@@ -46,6 +49,7 @@ import type { Opta } from "@app/idl/opta";
 import { safeFetchAll } from "@app/hooks/useFetchAccounts";
 import { hexFromBytes } from "@app/utils/format";
 import { VOL_ORACLE_SEED } from "@app/utils/constants";
+import { seedVolForAssetClass } from "@app/utils/seedVol";
 
 import { buildManagedQuoteUpdateIxs } from "./switchboardQuotePost";
 import {
@@ -89,6 +93,7 @@ export interface SbMarketRec {
   marketPda: PublicKey;
   assetName: string;
   feedHashHex: string;
+  assetClass: number;
 }
 
 export interface SbOracleCrankOptions {
@@ -262,6 +267,7 @@ export async function discoverSbMarkets(ctx: SbOracleCrankContext): Promise<SbMa
       marketPda: m.publicKey,
       assetName: m.account.assetName as string,
       feedHashHex: normFeedHash(hexFromBytes(m.account.pythFeedId as number[])),
+      assetClass: m.account.assetClass as number,
     });
   }
   return out;
@@ -318,9 +324,17 @@ export async function runWarmingTick(
     unsupported: unsupported.length, forced: ctx.forceFeeds.length,
   });
 
+  // feedHash → asset_class from the on-chain SB markets — drives the per-class
+  // day-0 seed_vol at birth. A FORCE_FEED with no on-chain market has no class:
+  // its birth is skipped (the warming push path still runs unaffected).
+  const classByFeed = new Map<string, number>();
+  for (const m of sbMarkets) {
+    if (!classByFeed.has(m.feedHashHex)) classByFeed.set(m.feedHashHex, m.assetClass);
+  }
+
   for (const feedHashHex of supported) {
     if (ctx.shouldShutdown()) break;
-    await processOneSbFeed(ctx, sb, feedHashHex, report);
+    await processOneSbFeed(ctx, sb, feedHashHex, classByFeed.get(feedHashHex), report);
   }
 
   report.durationMs = Date.now() - startMs;
@@ -332,6 +346,7 @@ export async function processOneSbFeed(
   ctx: SbOracleCrankContext,
   sb: SbClients,
   feedHashHex: string,
+  assetClass: number | undefined,
   report: SbTickReport,
 ): Promise<void> {
   const entry = lookupSbFeed(feedHashHex);
@@ -359,36 +374,84 @@ export async function processOneSbFeed(
   }
 
   if (!existing) {
-    await birthSbOracle(ctx, entry, feedIdBytes, oraclePda, feedShort, report);
+    await birthSbOracle(ctx, sb, entry, feedIdBytes, oraclePda, feedShort, assetClass, report);
     return;
   }
   await warmingPushWithRetry(ctx, sb, entry, oraclePda, feedShort, report);
 }
 
-// ---- Birth (initialize_vol_oracle, oracle_source=1, no SB accounts) ---------
+// ---- Birth (initialize_vol_oracle, oracle_source=1, SB-quote-proven) --------
+// Seed-at-birth UN-DEFERS the SB feed-existence proof to birth: initialize_vol_
+// oracle now reads spot from a fresh signed quote, so SB birth requires the 3 SB
+// accounts + a self-packed ed25519 quote (same [CU, ed25519, ix] shape as the
+// warming push), plus the per-class day-0 seed_vol. A FORCE_FEED with no
+// on-chain market has no asset_class → birth is skipped (never birth an unseeded
+// SB oracle; the warming push path is unaffected).
 
 async function birthSbOracle(
   ctx: SbOracleCrankContext,
+  sb: SbClients,
   entry: SbFeedEntry,
   feedIdBytes: number[],
   oraclePda: PublicKey,
   feedShort: string,
+  assetClass: number | undefined,
   report: SbTickReport,
 ): Promise<void> {
+  // Resolve the per-class day-0 seed_vol. Skip BIRTH (not the whole feed) if the
+  // class is unresolved — a missing class must not seed 0 (= "no seed").
+  let seedVol: number;
   try {
-    // Cast to `any`: the crank's @app/idl/opta TYPE is stale for the SB surface
-    // (priceUpdate-optional + push SB accounts not synced into app/src/idl) — the
-    // RUNTIME-loaded IDL has them. The IDL sync is deferred deploy work (report).
+    seedVol = seedVolForAssetClass(assetClass as number);
+  } catch (err) {
+    ctx.log("warn", "sb-oracle skip birth: unresolved seed_vol (no asset_class)", {
+      feed: feedShort, err: String(err),
+    });
+    return;
+  }
+
+  const feed = buildOracleFeed(entry);
+  const edPid = Ed25519Program.programId.toBase58();
+
+  try {
+    // (a) fetch a FRESH signed quote → self-packed ed25519 ix. This IS the
+    //     un-deferred SB feed-existence proof (initialize_vol_oracle verifies it).
+    let edIx: TransactionInstruction;
+    try {
+      const { ixs } = await buildManagedQuoteUpdateIxs(
+        sb.qObj, sb.crossbar, feed, ctx.wallet.publicKey,
+        { numSignatures: 2, instructionIdx: 1 },
+      );
+      const found = ixs.find((ix) => ix.programId.toBase58() === edPid);
+      if (!found) throw new Error("no ed25519 ix in managed-update output");
+      edIx = found;
+    } catch (err) {
+      ctx.log("info", "sb-oracle birth quote fetch/pack failed (retry next tick)", {
+        feed: feedShort, err: String(err).slice(0, 140),
+      });
+      report.feedsErrored += 1;
+      return;
+    }
+
+    // (b) [CU, ed25519(idx 1), initialize_vol_oracle(source=1, seed_vol, +SB accounts)].
+    //     Cast `any` (DEFERRED-DEPLOY): the @app/idl/opta TYPE is stale for the SB
+    //     surface (3-arg init + the init/push SB accounts not synced into
+    //     app/src/idl) — the RUNTIME-loaded IDL has them. UN-`as any` post IDL sync.
     const birthIx = await (ctx.program.methods as any)
-      .initializeVolOracle(feedIdBytes, 1) // oracle_source = Switchboard
+      .initializeVolOracle(feedIdBytes, 1, new BN(seedVol)) // oracle_source = Switchboard
       .accounts({
         initializer: ctx.wallet.publicKey,
-        priceUpdate: null, // SB feed-existence proof deferred to first push
+        priceUpdate: null, // SB path: spot comes from the verified quote, not Pyth
         volOracle: oraclePda,
         systemProgram: SystemProgram.programId,
+        sbQueue: entry.queue,
+        sbSlothashes: SPL_SYSVAR_SLOT_HASHES_ID,
+        sbInstructions: SPL_SYSVAR_INSTRUCTIONS_ID,
       })
       .instruction();
-    const sim = await simulate(ctx, [cuLimitIx(), birthIx]);
+    const instructions = [cuLimitIx(), edIx, birthIx];
+
+    const sim = await simulate(ctx, instructions);
     if (sim.err) {
       ctx.log("warn", "sb-oracle birth sim failed (retry next tick)", {
         feed: feedShort, err: JSON.stringify(sim.err),
@@ -398,13 +461,13 @@ async function birthSbOracle(
     }
     if (ctx.dryRun) {
       ctx.log("info", "WOULD-BIRTH sb vol-oracle (dry-run, NOT sent)", {
-        feed: feedShort, pda: oraclePda.toBase58(), oracleSource: 1, simOk: true,
+        feed: feedShort, pda: oraclePda.toBase58(), oracleSource: 1, seedVol, simOk: true,
       });
       report.feedsInitialized += 1;
       return;
     }
-    const sig = await send(ctx, [cuLimitIx(), birthIx]);
-    ctx.log("info", "sb-oracle birthed", { feed: feedShort, pda: oraclePda.toBase58(), sig });
+    const sig = await send(ctx, instructions);
+    ctx.log("info", "sb-oracle birthed", { feed: feedShort, pda: oraclePda.toBase58(), seedVol, sig });
     report.feedsInitialized += 1;
   } catch (err) {
     ctx.log("error", "sb-oracle birth failed", { feed: feedShort, err: String(err) });

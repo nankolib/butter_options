@@ -262,7 +262,7 @@ describe("zzz-exercise-american (Stage F)", function () {
     );
     if (!(await provider.connection.getAccountInfo(marketPda))) {
       await (program.methods as any)
-        .createMarket(TEST_ASSET, FEED_ID, 0)
+        .createMarket(TEST_ASSET, FEED_ID, 0, 0)
         .accounts({
           creator: payer.publicKey, protocolState: protocolStatePda, market: marketPda,
           priceUpdate: FEED_FRESH, systemProgram: SystemProgram.programId,

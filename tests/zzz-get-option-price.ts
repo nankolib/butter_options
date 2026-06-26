@@ -96,7 +96,7 @@ describe("get_option_price view (Phase 2 Stage C Pass 3)", () => {
 
     try {
       await (program as any).methods
-        .createMarket(GOP_ASSET, GOP_FEED, 0)
+        .createMarket(GOP_ASSET, GOP_FEED, 0, 0)
         .accounts({
           creator: provider.wallet.publicKey,
           protocolState: protocolStatePda,

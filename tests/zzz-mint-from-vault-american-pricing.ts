@@ -206,7 +206,7 @@ describe("zzz-mint-from-vault-american-pricing (Stage C Pass 2 Step 2)", functio
     );
     if (!(await provider.connection.getAccountInfo(marketPda))) {
       await (program.methods as any)
-        .createMarket(TEST_ASSET, FEED_ID, 0)
+        .createMarket(TEST_ASSET, FEED_ID, 0, 0)
         .accounts({
           creator: payer.publicKey,
           protocolState: protocolStatePda,

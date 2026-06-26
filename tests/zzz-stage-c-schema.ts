@@ -139,7 +139,7 @@ describe("zzz-stage-c-schema (Stage C Pass 1)", function () {
     const marketExisting = await provider.connection.getAccountInfo(marketPda);
     if (!marketExisting) {
       await (program.methods as any)
-        .createMarket(TEST_ASSET, Array.from(SOL_FEED_ID), 0)
+        .createMarket(TEST_ASSET, Array.from(SOL_FEED_ID), 0, 0)
         .accounts({
           creator: payer.publicKey,
           protocolState: protocolStatePda,

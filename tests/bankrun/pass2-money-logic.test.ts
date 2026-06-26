@@ -99,7 +99,7 @@ describe("bankrun Pass-2 money-logic (Stage G)", function () {
 
     const feedFixture = Keypair.generate().publicKey;
     injectPythFixture(h.context, feedFixture, pythBody(100, now0));
-    await opta.methods.createMarket(ASSET, FEED_ID, 0).accountsStrict({
+    await opta.methods.createMarket(ASSET, FEED_ID, 0, 0).accountsStrict({ sbQueue: null, sbSlothashes: null, sbInstructions: null,
       creator: admin().publicKey, protocolState, market, priceUpdate: feedFixture,
       systemProgram: SystemProgram.programId,
     }).rpc();

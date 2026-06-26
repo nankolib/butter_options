@@ -262,7 +262,7 @@ describe.skip("CRIT-1 holders-first gate [ported to tests/bankrun/crit1-holders-
     [marketPda] = deriveMarketPda("SOL");
     try {
       await (program as any).methods
-        .createMarket("SOL", SOL_ID, 0)
+        .createMarket("SOL", SOL_ID, 0, 0)
         .accounts({
           creator: payer.publicKey,
           protocolState: protocolStatePda,

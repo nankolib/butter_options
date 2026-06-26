@@ -489,6 +489,39 @@ pub fn sb_settlement_price_usdc<'info>(
     })
 }
 
+/// create_market existence proof (Stage 3 1c-i-B). Verify an ed25519-signed
+/// Switchboard quote and assert a feed matching `expected_feed_id` exists in it
+/// (with the min-oracle-samples floor) — then DISCARD the value. create_market
+/// needs only proof the feed is REAL (the SB analog of the Pyth HIGH-5
+/// `feed_id == pyth_feed_id` gate); it stores NO price, so there is nothing to
+/// normalize. Reuses the same fused verify+extract proven live in the read arms
+/// (1c-i-A smoke). Surfaces `SwitchboardFeedNotFound` when the quote carries no
+/// matching feed, `SwitchboardInsufficientSamples` when the feed is too thin,
+/// and `SwitchboardVerifyFailed` when the quote itself fails verification.
+#[allow(clippy::too_many_arguments)]
+pub fn sb_prove_feed_exists<'info>(
+    queue: &AccountInfo<'info>,
+    slothash_sysvar: &AccountInfo<'info>,
+    ix_sysvar: &AccountInfo<'info>,
+    ed25519_ix_index: i64,
+    clock_slot: u64,
+    max_age_slots: u64,
+    expected_feed_id: [u8; 32],
+    min_samples_floor: u8,
+) -> Result<()> {
+    sb_verify_and_extract(
+        queue,
+        slothash_sysvar,
+        ix_sysvar,
+        ed25519_ix_index,
+        clock_slot,
+        max_age_slots,
+        expected_feed_id,
+        min_samples_floor,
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod sb_tests {
     use super::*;

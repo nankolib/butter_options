@@ -35,7 +35,21 @@ use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
 use pyth_solana_receiver_sdk::price_update::VerificationLevel;
 
 use crate::errors::OptaError;
-use crate::state::{OptionsMarket, ProtocolState, MARKET_SEED, MAX_ASSET_CLASS, MAX_ASSET_NAME_LEN, ORACLE_SOURCE_PYTH, PROTOCOL_SEED};
+use crate::state::{
+    OptionsMarket, ProtocolState, MARKET_SEED, MAX_ASSET_CLASS, MAX_ASSET_NAME_LEN,
+    ORACLE_SOURCE_PYTH, ORACLE_SOURCE_SWITCHBOARD, PROTOCOL_SEED,
+};
+use crate::utils::price_oracle::{
+    find_ed25519_ix_index, sb_prove_feed_exists, secs_to_slots, SB_MIN_ORACLE_SAMPLES_FLOOR,
+};
+
+/// Freshness budget for the Switchboard create-time existence proof, in seconds
+/// → slots via `secs_to_slots`. The quote's `signed_slothash` must resolve within
+/// this many slots of `clock.slot`. The real ceiling is the ~512-slot SlotHashes
+/// retention (~3.5 min); 300 s (= 750 slots) is a generous upper bound that the
+/// SlotHashes wall clamps in practice — mirrors `SB_SETTLE_WINDOW_SECS`. Create
+/// carries a FRESH quote (same tightly-sequenced fetch→land as the 1c-i-A smoke).
+pub const CREATE_SB_PROOF_MAX_AGE_SECS: i64 = 300;
 
 /// Verify the asset name conforms to the normalization contract:
 /// 1..=16 ASCII uppercase letters or digits. Caller must pre-normalize.
@@ -56,28 +70,83 @@ pub fn handle_create_market(
     asset_name: String,
     pyth_feed_id: [u8; 32],
     asset_class: u8,
+    oracle_source: u8,
 ) -> Result<()> {
-    // HIGH-5 proof gate (audit Run-7). Verify the caller-supplied feed_id
-    // is proof-bound to a real Pyth feed by checking the supplied
-    // PriceUpdateV2 account: verification_level must be Full and the
-    // price_message's feed_id must match the argument. Mirrors the
-    // canonical check in settle_expiry.rs:88-97. Replaces the prior
-    // HIGH-2 admin gate — proof-of-feed-existence is strictly stronger:
-    // it rejects random-byte griefers AND admin fat-fingers, and unblocks
-    // permissionless asset listing.
-    let pu = &ctx.accounts.price_update;
-    require!(
-        pu.verification_level.gte(VerificationLevel::Full),
-        GetPriceError::InsufficientVerificationLevel
-    );
-    require!(
-        pu.price_message.feed_id == pyth_feed_id,
-        GetPriceError::MismatchedFeedId
-    );
+    // HIGH-5 proof gate (audit Run-7), BRANCHED by oracle_source (Stage 3
+    // 1c-i-B). Both arms prove the caller-supplied feed_id is bound to a REAL
+    // feed before the asset is registered; the match also validates the source
+    // (a value other than Pyth/Switchboard reverts InvalidOracleSource). The
+    // proof is PURE EXISTENCE for both arms — no price is stored at create.
+    match oracle_source {
+        ORACLE_SOURCE_PYTH => {
+            // Unchanged Pyth proof: Full verification + feed_id match. Mirrors
+            // settle_expiry.rs:88-97. price_update is REQUIRED for a Pyth create
+            // (a present account is wire-identical to the pre-1c-i-B form).
+            let pu = ctx
+                .accounts
+                .price_update
+                .as_ref()
+                .ok_or(error!(OptaError::PriceUpdateMissing))?;
+            require!(
+                pu.verification_level.gte(VerificationLevel::Full),
+                GetPriceError::InsufficientVerificationLevel
+            );
+            require!(
+                pu.price_message.feed_id == pyth_feed_id,
+                GetPriceError::MismatchedFeedId
+            );
+        }
+        ORACLE_SOURCE_SWITCHBOARD => {
+            // SB existence proof: one QuoteVerifier pass asserting a feed whose
+            // feed_id() == pyth_feed_id (the 32-byte SB feedHash, double-duty
+            // field) exists in a FRESH signed quote. The verify+extract is the
+            // same path proven live in the 1c-i-A smoke; here we discard the
+            // value (create stores no price). ed25519 index derived on-chain.
+            let queue = ctx
+                .accounts
+                .sb_queue
+                .as_ref()
+                .ok_or(error!(OptaError::SwitchboardAccountsMissing))?;
+            let slothashes = ctx
+                .accounts
+                .sb_slothashes
+                .as_ref()
+                .ok_or(error!(OptaError::SwitchboardAccountsMissing))?;
+            let instructions = ctx
+                .accounts
+                .sb_instructions
+                .as_ref()
+                .ok_or(error!(OptaError::SwitchboardAccountsMissing))?;
+            require_keys_eq!(
+                slothashes.key(),
+                anchor_lang::solana_program::sysvar::slot_hashes::ID,
+                OptaError::InvalidSwitchboardSysvar
+            );
+            require_keys_eq!(
+                instructions.key(),
+                anchor_lang::solana_program::sysvar::instructions::ID,
+                OptaError::InvalidSwitchboardSysvar
+            );
+            let instructions_ai = instructions.to_account_info();
+            let ed25519_ix_index = find_ed25519_ix_index(&instructions_ai)?;
+            let clock = Clock::get()?;
+            sb_prove_feed_exists(
+                &queue.to_account_info(),
+                &slothashes.to_account_info(),
+                &instructions_ai,
+                ed25519_ix_index,
+                clock.slot,
+                secs_to_slots(CREATE_SB_PROOF_MAX_AGE_SECS),
+                pyth_feed_id,
+                SB_MIN_ORACLE_SAMPLES_FLOOR,
+            )?;
+        }
+        _ => return Err(error!(OptaError::InvalidOracleSource)),
+    }
 
-    // HIGH-3 same-arc zero-feed guard. Defense-in-depth — the proof check
-    // above already implicitly rejects [0u8; 32] (no real Pyth feed has
-    // a zero feed_id), but kept as a belt-and-suspenders explicit reject.
+    // HIGH-3 same-arc zero-feed guard (BOTH arms). Defense-in-depth — the Pyth
+    // proof already implicitly rejects [0u8; 32]; for Switchboard this is the
+    // cheap reject of a zero feedHash.
     require!(pyth_feed_id != [0u8; 32], OptaError::InvalidPythFeedId);
 
     // 1. Asset name normalization contract
@@ -86,13 +155,19 @@ pub fn handle_create_market(
     // 2. Asset class bound (0..=4)
     require!(asset_class <= MAX_ASSET_CLASS, OptaError::InvalidAssetClass);
 
-    // 3. Idempotent init: if account already populated, verify match
+    // 3. Idempotent init: if account already populated, verify match. Now
+    //    SOURCE-AWARE (1c-i-B) — re-creating an existing market with a different
+    //    oracle_source rejects AssetMismatch (the same error a feed/class
+    //    mismatch raises). The proof gate above runs BEFORE this short-circuit,
+    //    so an SB re-call must still carry a fresh quote to reach here — mild,
+    //    consistent with the original Pyth re-call (which also re-runs its proof).
     let market = &mut ctx.accounts.market;
     if !market.asset_name.is_empty() {
         require!(
             market.asset_name == asset_name
                 && market.pyth_feed_id == pyth_feed_id
-                && market.asset_class == asset_class,
+                && market.asset_class == asset_class
+                && market.oracle_source == oracle_source,
             OptaError::AssetMismatch
         );
         msg!("Market already exists for {} — idempotent Ok", asset_name);
@@ -104,11 +179,8 @@ pub fn handle_create_market(
     market.pyth_feed_id = pyth_feed_id;
     market.asset_class = asset_class;
     market.bump = ctx.bumps.market;
-    // Stage 2 (Switchboard arc): new markets are born Pyth-sourced
-    // unconditionally. Creating a Switchboard-sourced market is a Stage 3
-    // capability; this is a pure default-set and does NOT touch the HIGH-5
-    // proof gate above.
-    market.oracle_source = ORACLE_SOURCE_PYTH;
+    // Stage 3 1c-i-B: born with the requested (validated) source.
+    market.oracle_source = oracle_source;
 
     let protocol = &mut ctx.accounts.protocol_state;
     protocol.total_markets = protocol
@@ -126,12 +198,13 @@ pub fn handle_create_market(
 }
 
 #[derive(Accounts)]
-#[instruction(asset_name: String, pyth_feed_id: [u8; 32], asset_class: u8)]
+#[instruction(asset_name: String, pyth_feed_id: [u8; 32], asset_class: u8, oracle_source: u8)]
 pub struct CreateMarket<'info> {
     /// Permissionless post-HIGH-5 fix (audit Run-7). Any signer pays for
     /// account creation on first init; pays nothing on idempotent re-call
     /// because `init_if_needed` short-circuits. The proof-of-feed gate is
-    /// enforced via the `price_update` account below.
+    /// enforced via the `price_update` account (Pyth) or the trailing SB
+    /// accounts (Switchboard) below.
     #[account(mut)]
     pub creator: Signer<'info>,
 
@@ -147,7 +220,14 @@ pub struct CreateMarket<'info> {
     /// verifies `verification_level == Full` and
     /// `price_message.feed_id == pyth_feed_id` to prove the caller-supplied
     /// feed_id corresponds to a real Pyth feed. Read-only — never mutated.
-    pub price_update: Account<'info, PriceUpdateV2>,
+    ///
+    /// Stage 3 1c-i-B: now `Option`. REQUIRED (present) for a Pyth create
+    /// (oracle_source=0) — a present account is wire-identical to the prior
+    /// required form, so existing Pyth creates are unaffected. Passed None for
+    /// a Switchboard create (oracle_source=1): the SB feed-existence proof runs
+    /// against the trailing SB accounts instead. Pyth arm errors
+    /// `PriceUpdateMissing` if absent on a Pyth create.
+    pub price_update: Option<Account<'info, PriceUpdateV2>>,
 
     /// Asset registry PDA. One per supported asset.
     #[account(
@@ -160,4 +240,22 @@ pub struct CreateMarket<'info> {
     pub market: Account<'info, OptionsMarket>,
 
     pub system_program: Program<'info, System>,
+
+    // --- Switchboard create-time proof accounts (Stage 3 1c-i-B). TRAILING
+    // optionals: a Pyth create omits all three (allow-missing-optionals → None),
+    // keeping its tx byte-identical. Required only when oracle_source ==
+    // Switchboard; the handler unwraps + runtime-address-checks the two sysvars,
+    // then runs one QuoteVerifier existence pass. Appended AFTER system_program;
+    // no existing account moved. ---
+    /// CHECK: Switchboard oracle queue; validated by QuoteVerifier (oracle-key
+    /// set) in the SB arm. Not address-pinned (per-network queue).
+    pub sb_queue: Option<UncheckedAccount<'info>>,
+
+    /// CHECK: SlotHashes sysvar; address-checked == sysvar::slot_hashes::ID at
+    /// runtime in the SB arm.
+    pub sb_slothashes: Option<UncheckedAccount<'info>>,
+
+    /// CHECK: Instructions sysvar; address-checked == sysvar::instructions::ID at
+    /// runtime in the SB arm, then scanned for the ed25519 ix index.
+    pub sb_instructions: Option<UncheckedAccount<'info>>,
 }

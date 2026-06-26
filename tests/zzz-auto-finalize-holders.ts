@@ -244,7 +244,7 @@ describe.skip("auto-finalize-holders [ported to tests/bankrun/auto-finalize-hold
     [marketPda] = deriveMarketPda("SOL");
     try {
       await (program as any).methods
-        .createMarket("SOL", SOL_ID, 0)
+        .createMarket("SOL", SOL_ID, 0, 0)
         .accounts({
           creator: payer.publicKey,
           protocolState: protocolStatePda,

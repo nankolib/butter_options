@@ -107,7 +107,7 @@ describe("bankrun lifecycle smoke (Stage G Pass 1)", function () {
     const feedFixture = Keypair.generate().publicKey;
     injectPythFixture(h.context, feedFixture, pythBody(SETTLE_PRICE_USD, now0));
 
-    await opta.methods.createMarket(ASSET, FEED_ID, 0).accountsStrict({
+    await opta.methods.createMarket(ASSET, FEED_ID, 0, 0).accountsStrict({ sbQueue: null, sbSlothashes: null, sbInstructions: null,
       creator: admin().publicKey, protocolState, market, priceUpdate: feedFixture,
       systemProgram: SystemProgram.programId,
     }).rpc();

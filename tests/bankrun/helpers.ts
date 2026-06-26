@@ -80,7 +80,7 @@ export async function setupEnv(asset: string, feedLabel: string, warmSpotUsd = 1
 
   const feedFixture = Keypair.generate().publicKey;
   injectPythFixture(h.context, feedFixture, pythBody(feedHex, warmSpotUsd, now));
-  await opta.methods.createMarket(asset, feedId, 0).accountsStrict({
+  await opta.methods.createMarket(asset, feedId, 0, 0).accountsStrict({ sbQueue: null, sbSlothashes: null, sbInstructions: null,
     creator: admin.publicKey, protocolState, market, priceUpdate: feedFixture,
     systemProgram: SystemProgram.programId,
   }).rpc();

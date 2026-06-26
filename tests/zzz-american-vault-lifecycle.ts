@@ -227,7 +227,7 @@ describe("zzz-american-vault-lifecycle (Stage D seed-fix proof)", function () {
     );
     if (!(await provider.connection.getAccountInfo(marketPda))) {
       await (program.methods as any)
-        .createMarket(TEST_ASSET, SOL_FEED_ID, 0)
+        .createMarket(TEST_ASSET, SOL_FEED_ID, 0, 0)
         .accounts({
           creator: payer.publicKey,
           protocolState: protocolStatePda,

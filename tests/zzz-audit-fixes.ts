@@ -335,7 +335,7 @@ describe("audit-fixes", () => {
     const [marketPda] = deriveMarketPda(onChainAssetName);
     try {
       await (program as any).methods
-        .createMarket(onChainAssetName, onChainPythFeedId, 0)
+        .createMarket(onChainAssetName, onChainPythFeedId, 0, 0)
         .accounts({
           creator: payer.publicKey,
           protocolState: protocolStatePda,
@@ -846,7 +846,7 @@ describe("audit-fixes", () => {
 
       try {
         await (program as any).methods
-          .createMarket("SOL", SOL_ID, 0)
+          .createMarket("SOL", SOL_ID, 0, 0)
           .accounts({
             creator: payer.publicKey,
             protocolState: protocolStatePda,
@@ -1102,7 +1102,7 @@ describe("audit-fixes", () => {
 
       try {
         await (program as any).methods
-          .createMarket("SOL", SOL_ID, 0)
+          .createMarket("SOL", SOL_ID, 0, 0)
           .accounts({
             creator: payer.publicKey,
             protocolState: protocolStatePda,
@@ -1171,7 +1171,7 @@ describe("audit-fixes", () => {
 
       try {
         await (program as any).methods
-          .createMarket("SOL", SOL_ID, 0)
+          .createMarket("SOL", SOL_ID, 0, 0)
           .accounts({
             creator: payer.publicKey,
             protocolState: protocolStatePda,
@@ -1566,7 +1566,7 @@ describe("audit-fixes", () => {
       const [marketPda] = deriveMarketPda("HIGH5A");
       try {
         await (program as any).methods
-          .createMarket("HIGH5A", BTC_ID, 0)
+          .createMarket("HIGH5A", BTC_ID, 0, 0)
           .accounts({
             creator: payer.publicKey,
             protocolState: deriveProtocolPda(),
@@ -1591,7 +1591,7 @@ describe("audit-fixes", () => {
 
       const [marketPda] = deriveMarketPda("HIGH5B");
       await (program as any).methods
-        .createMarket("HIGH5B", SOL_ID, 0)
+        .createMarket("HIGH5B", SOL_ID, 0, 0)
         .accounts({
           creator: randomUser.publicKey,
           protocolState: deriveProtocolPda(),
@@ -1616,7 +1616,7 @@ describe("audit-fixes", () => {
       const [marketPda] = deriveMarketPda("HIGH5C");
       try {
         await (program as any).methods
-          .createMarket("HIGH5C", BTC_ID, 0)
+          .createMarket("HIGH5C", BTC_ID, 0, 0)
           .accounts({
             creator: payer.publicKey,
             protocolState: deriveProtocolPda(),

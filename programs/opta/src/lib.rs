@@ -71,8 +71,15 @@ pub mod opta {
         asset_name: String,
         pyth_feed_id: [u8; 32],
         asset_class: u8,
+        oracle_source: u8,
     ) -> Result<()> {
-        instructions::create_market::handle_create_market(ctx, asset_name, pyth_feed_id, asset_class)
+        instructions::create_market::handle_create_market(
+            ctx,
+            asset_name,
+            pyth_feed_id,
+            asset_class,
+            oracle_source,
+        )
     }
 
     /// Record the canonical settlement price for an (asset, expiry) tuple

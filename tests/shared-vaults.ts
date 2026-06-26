@@ -356,7 +356,7 @@ describe("shared-vaults", () => {
     [marketPda] = deriveMarketPda("SOL");
     try {
       await (program as any).methods
-        .createMarket("SOL", solPythFeedId, 0)
+        .createMarket("SOL", solPythFeedId, 0, 0)
         .accounts({
           creator: payer.publicKey,
           protocolState: protocolStatePda,
@@ -437,7 +437,7 @@ describe("shared-vaults", () => {
       const [customMarketPda] = deriveMarketPda("SOL");
       try {
         await (program as any).methods
-          .createMarket("SOL", solPythFeedId, 0)
+          .createMarket("SOL", solPythFeedId, 0, 0)
           .accounts({
             creator: payer.publicKey,
             protocolState: protocolStatePda,
@@ -482,7 +482,7 @@ describe("shared-vaults", () => {
       const [badMarketPda] = deriveMarketPda("SOL");
       try {
         await (program as any).methods
-          .createMarket("SOL", solPythFeedId, 0)
+          .createMarket("SOL", solPythFeedId, 0, 0)
           .accounts({
             creator: payer.publicKey,
             protocolState: protocolStatePda,

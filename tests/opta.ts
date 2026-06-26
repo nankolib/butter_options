@@ -231,8 +231,8 @@ describe("opta", () => {
       const [marketPda] = deriveMarketPda("SOL");
 
       await program.methods
-        .createMarket("SOL", SOL_ID, 0)
-        .accountsStrict({
+        .createMarket("SOL", SOL_ID, 0, 0)
+        .accountsStrict({ sbQueue: null, sbSlothashes: null, sbInstructions: null,
           creator: admin.publicKey,
           protocolState: protocolStatePda,
           priceUpdate: SOL_180_FRESH_PK,
@@ -252,8 +252,8 @@ describe("opta", () => {
 
       // Should not revert
       await program.methods
-        .createMarket("SOL", SOL_ID, 0)
-        .accountsStrict({
+        .createMarket("SOL", SOL_ID, 0, 0)
+        .accountsStrict({ sbQueue: null, sbSlothashes: null, sbInstructions: null,
           creator: admin.publicKey,
           protocolState: protocolStatePda,
           priceUpdate: SOL_180_FRESH_PK,
@@ -277,7 +277,7 @@ describe("opta", () => {
 
       try {
         await program.methods
-          .createMarket("SOL", BTC_ID, 0)  // wrong feed for SOL
+          .createMarket("SOL", BTC_ID, 0, 0)  // wrong feed for SOL
           .accountsStrict({
             creator: admin.publicKey,
             protocolState: protocolStatePda,
@@ -296,8 +296,8 @@ describe("opta", () => {
       const [marketPda] = deriveMarketPda("BTC");
 
       await program.methods
-        .createMarket("BTC", BTC_ID, 0)
-        .accountsStrict({
+        .createMarket("BTC", BTC_ID, 0, 0)
+        .accountsStrict({ sbQueue: null, sbSlothashes: null, sbInstructions: null,
           creator: admin.publicKey,
           protocolState: protocolStatePda,
           priceUpdate: BTC_FIXTURE_PK,
@@ -325,8 +325,8 @@ describe("opta", () => {
       const [marketPda] = deriveMarketPda("PERM5");
 
       await program.methods
-        .createMarket("PERM5", SOL_ID, 0)
-        .accountsStrict({
+        .createMarket("PERM5", SOL_ID, 0, 0)
+        .accountsStrict({ sbQueue: null, sbSlothashes: null, sbInstructions: null,
           creator: randomUser.publicKey,
           protocolState: protocolStatePda,
           priceUpdate: SOL_180_FRESH_PK,
@@ -347,8 +347,8 @@ describe("opta", () => {
 
       try {
         await program.methods
-          .createMarket("sol", SOL_ID, 0)
-          .accountsStrict({
+          .createMarket("sol", SOL_ID, 0, 0)
+          .accountsStrict({ sbQueue: null, sbSlothashes: null, sbInstructions: null,
             creator: admin.publicKey,
             protocolState: protocolStatePda,
             priceUpdate: SOL_180_FRESH_PK,
@@ -367,8 +367,8 @@ describe("opta", () => {
 
       try {
         await program.methods
-          .createMarket("", SOL_ID, 0)
-          .accountsStrict({
+          .createMarket("", SOL_ID, 0, 0)
+          .accountsStrict({ sbQueue: null, sbSlothashes: null, sbInstructions: null,
             creator: admin.publicKey,
             protocolState: protocolStatePda,
             priceUpdate: SOL_180_FRESH_PK,
@@ -469,8 +469,8 @@ describe("opta", () => {
       // Ensure SOL market exists (idempotent).
       const [marketPda] = deriveMarketPda("SOL");
       await program.methods
-        .createMarket("SOL", SOL_ID, 0)
-        .accountsStrict({
+        .createMarket("SOL", SOL_ID, 0, 0)
+        .accountsStrict({ sbQueue: null, sbSlothashes: null, sbInstructions: null,
           creator: admin.publicKey, protocolState: protocolStatePda,
           priceUpdate: SOL_180_FRESH_PK,
           market: marketPda, systemProgram: SystemProgram.programId,

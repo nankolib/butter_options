@@ -407,7 +407,13 @@ export async function buildPostUpdateAndSettleTx(
 
     const ix = await program.methods
       .settleExpiry(assetName, expiryBN)
-      .accountsStrict({
+      // Phase-B prereq: .accountsPartial (was .accountsStrict) so this builder
+      // tolerates an IDL that later describes the SB trailing optionals — partial
+      // resolution auto-omits optionals not provided → byte-identical Pyth tx. The
+      // explicit account set is unchanged (no SB accounts added here). NB: plain
+      // .accounts() rejects explicitly-passed derivable PDAs (market/settlement);
+      // .accountsPartial keeps them while tolerating the new optionals.
+      .accountsPartial({
         caller: wallet.publicKey,
         market: marketPda,
         priceUpdate: priceUpdatePda,
@@ -532,7 +538,10 @@ export async function buildPostUpdateAndCreateMarketTx(
 
     const ix = await program.methods
       .createMarket(assetName, feedIdBytes, assetClass)
-      .accountsStrict({
+      // Phase-B prereq: .accountsPartial (was .accountsStrict). Still 3-arg
+      // create_market + the current Pyth account set — byte-identical against the
+      // current program; tolerates the Phase-B IDL's SB optionals once synced.
+      .accountsPartial({
         creator: wallet.publicKey,
         protocolState: protocolStatePda,
         priceUpdate: priceUpdatePda,
@@ -753,7 +762,9 @@ export async function buildPostUpdateAndPushVolSampleTx(
 
     const ix = await program.methods
       .pushVolSample()
-      .accountsStrict({
+      // Phase-B prereq: .accountsPartial (was .accountsStrict) — tolerates the
+      // SB optionals once the IDL syncs; byte-identical Pyth push for now.
+      .accountsPartial({
         signer: wallet.publicKey,
         priceUpdate: priceUpdatePda,
         volOracle: volOraclePda,
@@ -823,7 +834,9 @@ export async function buildPostUpdateAndExerciseAmericanTx(
 
     const ix = await program.methods
       .exerciseAmerican(new BN(params.quantity))
-      .accountsStrict({
+      // Phase-B prereq: .accountsPartial (was .accountsStrict) — tolerates the
+      // SB optionals once the IDL syncs; byte-identical Pyth exercise for now.
+      .accountsPartial({
         holder: wallet.publicKey,
         sharedVault: params.sharedVault,
         market: params.market,

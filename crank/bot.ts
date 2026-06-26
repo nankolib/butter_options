@@ -55,6 +55,7 @@ import {
 import {
   runSbOracleCrank,
   parseForceFeeds,
+  parseForceSettles,
   type SbOracleCrankContext,
   type SbOracleCrankOptions,
 } from "./sbOracleCrank";
@@ -212,6 +213,13 @@ function computeExpiredTuples(
     if (v.account.isSettled) continue;
     const market = marketByPda.get((v.account.market as PublicKey).toBase58());
     if (!market) continue;
+    // Stage 3 1c-ii-B: Switchboard markets (oracle_source==1) are settled by the
+    // sb-oracle crank's SB settle-at-expiry pass (fresh quote + settle_expiry SB
+    // arm within the 300s window) — NOT the Pyth/Hermes path. Skip them here so
+    // the Pyth settle loop never tries (and errors SwitchboardAccountsMissing) on
+    // them. Pyth markets (oracle_source==0/undefined) are unaffected — byte-
+    // identical tuple grouping.
+    if ((market.account.oracleSource as number) === 1) continue;
     const asset = market.account.assetName as string;
     if (!asset) continue;
     const key = `${asset}:${expiry}`;
@@ -1077,6 +1085,7 @@ async function main(): Promise<void> {
     shouldShutdown: () => shutdownRequested,
     dryRun: !(sbDryRunRaw === "0" || sbDryRunRaw === "false"),
     forceFeeds: parseForceFeeds(process.env.OPTA_SB_FORCE_FEED),
+    forceSettles: parseForceSettles(process.env.OPTA_SB_FORCE_SETTLE),
   };
   const sbCrankOptions: SbOracleCrankOptions = {
     tickOnce:

@@ -54,6 +54,12 @@ async function main(): Promise<void> {
 
   console.log(JSON.stringify({ ev: "dryrun-boot", rpc: redact(rpcUrl), wallet: wallet.publicKey.toBase58(), idl: "target/idl/opta.json (fresh)" }));
 
+  // Forced SETTLE target: a synthetic (asset, expiry) for the gold feed, expiry
+  // just past so it's inside the 300s window. No real SB market exists, so the
+  // settle sim is EXPECTED to revert at market-load — proving the tx is well-formed
+  // (SB accounts + ed25519 wired) up to the missing market.
+  const forcedExpiry = Math.floor(Date.now() / 1000) - 30;
+
   const logs: any[] = [];
   const ctx: SbOracleCrankContext = {
     connection,
@@ -67,6 +73,7 @@ async function main(): Promise<void> {
     shouldShutdown: () => false,
     dryRun: true,
     forceFeeds: [GOLD_FEEDHASH], // exercise the push path without a discoverable SB market
+    forceSettles: [{ asset: "XAUSB", expiry: forcedExpiry, feedHashHex: GOLD_FEEDHASH }],
   };
 
   await runSbOracleCrank(ctx, { tickOnce: true });
@@ -74,20 +81,32 @@ async function main(): Promise<void> {
   console.log("\n--- DRY-RUN ASSERTIONS ---");
   const wouldSend = logs.filter((l) => l.msg === "WOULD-SEND sb push (dry-run, NOT sent)");
   const wouldBirth = logs.filter((l) => l.msg === "WOULD-BIRTH sb vol-oracle (dry-run, NOT sent)");
-  const actuallySent = logs.filter((l) => l.msg === "sb-oracle push sent" || l.msg === "sb-oracle birthed");
-  const tickComplete = logs.find((l) => l.msg === "sb-oracle tick complete");
+  const settleProof = logs.filter((l) => l.msg.startsWith("sb-oracle settle FORCED-PROOF"));
+  const settleWouldSend = logs.filter((l) => l.msg === "WOULD-SEND sb settle (dry-run, NOT sent)");
+  const actuallySent = logs.filter((l) =>
+    ["sb-oracle push sent", "sb-oracle birthed", "sb-oracle settle sent"].includes(l.msg));
+  const settleWiringBug = logs.filter((l) => l.msg === "sb-oracle settle WIRING bug (SB accounts/ed25519)");
 
   let ok = true;
   const check = (cond: boolean, label: string) => { console.log(`${cond ? "✓" : "✗"} ${label}`); ok = ok && cond; };
 
+  // -- Push path --
   check(actuallySent.length === 0, "NOTHING was sent (dry-run short-circuits send)");
   check(wouldSend.length === 1 || wouldBirth.length === 1,
-    `gold processed: 1 WOULD-SEND push OR 1 WOULD-BIRTH (push=${wouldSend.length} birth=${wouldBirth.length})`);
+    `gold push processed: 1 WOULD-SEND OR 1 WOULD-BIRTH (push=${wouldSend.length} birth=${wouldBirth.length})`);
   if (wouldSend.length === 1) check(wouldSend[0].simOk === true, "gold push simulated CLEAN (err null)");
-  check(!!tickComplete, "tick completed");
-  if (tickComplete) console.log(JSON.stringify({ ev: "tick-report", ...tickComplete }));
 
-  console.log(`\n${ok ? "DRY-RUN PASS" : "DRY-RUN FAIL"} — wouldSendPush=${wouldSend.length} wouldBirth=${wouldBirth.length} sent=${actuallySent.length}`);
+  // -- Settle path (forced) --
+  check(settleWiringBug.length === 0, "settle has NO SB-account/ed25519 wiring bug");
+  check(settleProof.length === 1 || settleWouldSend.length === 1,
+    `forced settle processed: tx well-formed (proof=${settleProof.length} wouldSend=${settleWouldSend.length})`);
+  const sp = settleProof[0] ?? settleWouldSend[0];
+  if (sp) {
+    check(sp.accounts === 8, `settle tx has 8 accounts (caller/market/priceUpdate/settlementRecord/system + 3 SB) (got ${sp.accounts})`);
+    check(sp.ed25519Bytes > 0, `settle tx carries the ed25519 ix (${sp.ed25519Bytes}B)`);
+  }
+
+  console.log(`\n${ok ? "DRY-RUN PASS" : "DRY-RUN FAIL"} — push:{would=${wouldSend.length},birth=${wouldBirth.length}} settle:{proof=${settleProof.length},would=${settleWouldSend.length},wiringBug=${settleWiringBug.length}} sent=${actuallySent.length}`);
   process.exit(ok ? 0 : 1);
 }
 

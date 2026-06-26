@@ -40,6 +40,7 @@ import {
   SPL_SYSVAR_SLOT_HASHES_ID, SPL_SYSVAR_INSTRUCTIONS_ID,
 } from "@switchboard-xyz/on-demand";
 import { CrossbarClient } from "@switchboard-xyz/common";
+import BN from "bn.js";
 
 import type { Opta } from "@app/idl/opta";
 import { safeFetchAll } from "@app/hooks/useFetchAccounts";
@@ -51,7 +52,6 @@ import {
   lookupSbFeed, isSupportedSbFeed, listSupportedFeeds, buildOracleFeed,
   normFeedHash, type SbFeedEntry,
 } from "./sbFeedRegistry";
-import { msUntilNextHourBoundary } from "./volOracleCrank";
 
 // ---- Types -----------------------------------------------------------------
 
@@ -73,10 +73,34 @@ export interface SbOracleCrankContext {
   dryRun: boolean;
   /** OPTA_SB_FORCE_FEED — extra feedHashes to process regardless of discovery. */
   forceFeeds: string[];
+  /** OPTA_SB_FORCE_SETTLE — synthetic settle targets (asset:expiry:feedHash) for
+   *  dry-run proof without a discoverable SB market+vault. */
+  forceSettles: ForcedSettle[];
+}
+
+export interface ForcedSettle {
+  asset: string;
+  expiry: number;
+  feedHashHex: string;
+}
+
+/** A discovered SB market record (oracle_source==1), cached for the settle pass. */
+export interface SbMarketRec {
+  marketPda: PublicKey;
+  assetName: string;
+  feedHashHex: string;
 }
 
 export interface SbOracleCrankOptions {
   tickOnce?: boolean;
+}
+
+export interface SbSettleReport {
+  sbVaultsScanned: number;
+  settleTuplesInWindow: number;
+  settleTuplesPastWindow: number;   // expired but past the 300s window → reclaim path
+  settled: number;                  // settled (or would-settle in dry-run)
+  settleErrored: number;
 }
 
 export interface SbTickReport {
@@ -106,6 +130,23 @@ const PUSH_CU_LIMIT = 400_000;
  *  never stalls the whole tick. */
 const SB_PUSH_MAX_ATTEMPTS = 4;
 const CROSSBAR_URL = "https://crossbar.switchboard.xyz";
+
+// ---- Settle-at-expiry (1c-ii-B) --------------------------------------------
+/** On-chain SB settle window (must match settle_expiry.rs SB_SETTLE_WINDOW_SECS).
+ *  settle_expiry's SB arm reverts SwitchboardSettleWindowElapsed past this. */
+const SB_SETTLE_WINDOW_SECS = 300;
+/** Near-expiry settle-check sub-cadence: the loop wakes this often to catch SB
+ *  vaults inside the 300s window (the hourly warming cadence is far too coarse).
+ *  45s ≪ 250s leaves comfortable margin for fetch+land inside the window. */
+const SETTLE_CHECK_INTERVAL_MS = 45_000;
+/** Bounded retry per settle tuple (mirrors SB_PUSH_MAX_ATTEMPTS): each attempt
+ *  re-fetches a FRESH quote. A miss → next settle-check tick retries (still inside
+ *  the window if time remains); a full miss → reclaim_unsettled (holders forfeit,
+ *  no fund loss — timing is optimization, not correctness). */
+const SB_SETTLE_MAX_ATTEMPTS = 3;
+const HOUR_MS = 60 * 60 * 1000;
+const SETTLEMENT_SEED = "settlement";
+const SETTLE_CU_LIMIT = 400_000;
 
 // ---- Bootstrap -------------------------------------------------------------
 
@@ -152,47 +193,105 @@ export async function runSbOracleCrank(
     return;
   }
 
-  await runTickWithGuard(ctx, sb);
+  // DUAL CADENCE: warming push is HOURLY (vol samples are hourly); the SB
+  // settle-check is FAST (~45s) so it catches expiries inside the 300s window.
+  // One loop, two cadences: it wakes every SETTLE_CHECK_INTERVAL_MS to run the
+  // settle pass (cheap — a no-op when there are no SB markets), and refreshes the
+  // SB-market cache + runs the warming push when the wall-clock hour rolls over.
+  let sbMarkets = await discoverSbMarketsGuarded(ctx);
+  await runWarmingGuard(ctx, sb, sbMarkets);
+  let lastWarmHour = Math.floor(Date.now() / HOUR_MS);
+
   while (!ctx.shouldShutdown()) {
-    const sleepMs = msUntilNextHourBoundary(Date.now());
-    ctx.log("info", "sb-oracle crank sleeping until next hour boundary", {
-      sleepMs, wakeAt: new Date(Date.now() + sleepMs).toISOString(),
-    });
-    await sleepInterruptibly(sleepMs, ctx.shouldShutdown);
+    await sleepInterruptibly(SETTLE_CHECK_INTERVAL_MS, ctx.shouldShutdown);
     if (ctx.shouldShutdown()) break;
-    await runTickWithGuard(ctx, sb);
+
+    // Fast settle-check every tick (uses the cached SB-market set).
+    await runSettleGuard(ctx, sb, sbMarkets);
+
+    // Hourly: re-discover markets + warming push.
+    const hr = Math.floor(Date.now() / HOUR_MS);
+    if (hr > lastWarmHour) {
+      sbMarkets = await discoverSbMarketsGuarded(ctx);
+      await runWarmingGuard(ctx, sb, sbMarkets);
+      lastWarmHour = hr;
+    }
   }
   ctx.log("info", "sb-oracle crank stopped cleanly");
 }
 
-async function runTickWithGuard(ctx: SbOracleCrankContext, sb: SbClients): Promise<void> {
+async function discoverSbMarketsGuarded(ctx: SbOracleCrankContext): Promise<SbMarketRec[]> {
   try {
-    await tickOnce(ctx, sb);
+    return await discoverSbMarkets(ctx);
   } catch (err) {
-    ctx.log("error", "sb-oracle tick crashed (will retry next hour)", {
+    ctx.log("error", "sb-oracle market discovery failed (will retry next cycle)", { err: String(err) });
+    return [];
+  }
+}
+
+async function runWarmingGuard(ctx: SbOracleCrankContext, sb: SbClients, sbMarkets: SbMarketRec[]): Promise<void> {
+  try {
+    await runWarmingTick(ctx, sb, sbMarkets);
+  } catch (err) {
+    ctx.log("error", "sb-oracle warming tick crashed (will retry next hour)", {
       err: String(err), stack: (err as any)?.stack,
     });
   }
 }
 
-// ---- One tick --------------------------------------------------------------
+async function runSettleGuard(ctx: SbOracleCrankContext, sb: SbClients, sbMarkets: SbMarketRec[]): Promise<void> {
+  try {
+    await settleCheckTick(ctx, sb, sbMarkets);
+  } catch (err) {
+    ctx.log("error", "sb-oracle settle-check crashed (will retry next interval)", {
+      err: String(err), stack: (err as any)?.stack,
+    });
+  }
+}
+
+// ---- Discovery -------------------------------------------------------------
+
+/** Scan optionsMarket for SB markets (oracle_source==1). Returns the records the
+ *  warming pass + the settle pass both consume. */
+export async function discoverSbMarkets(ctx: SbOracleCrankContext): Promise<SbMarketRec[]> {
+  const markets = await safeFetchAll<any>(ctx.program, "optionsMarket");
+  const out: SbMarketRec[] = [];
+  for (const m of markets) {
+    if (m.account.oracleSource !== 1) continue;
+    out.push({
+      marketPda: m.publicKey,
+      assetName: m.account.assetName as string,
+      feedHashHex: normFeedHash(hexFromBytes(m.account.pythFeedId as number[])),
+    });
+  }
+  return out;
+}
+
+// ---- One full pass (TICK_ONCE / harness): discover → warm → settle-check ----
 
 export async function tickOnce(
   ctx: SbOracleCrankContext,
   sb: SbClients,
+): Promise<SbTickReport & SbSettleReport> {
+  const sbMarkets = await discoverSbMarketsGuarded(ctx);
+  const warm = await runWarmingTick(ctx, sb, sbMarkets);
+  const settle = await settleCheckTick(ctx, sb, sbMarkets);
+  return { ...warm, ...settle };
+}
+
+// ---- Warming pass (hourly) -------------------------------------------------
+
+export async function runWarmingTick(
+  ctx: SbOracleCrankContext,
+  sb: SbClients,
+  sbMarkets: SbMarketRec[],
 ): Promise<SbTickReport> {
   const startMs = Date.now();
   const report: SbTickReport = {
-    marketsScanned: 0, sbMarketsFound: 0, feedsSupported: 0,
+    marketsScanned: 0, sbMarketsFound: sbMarkets.length, feedsSupported: 0,
     feedsSkippedUnsupported: 0, feedsInitialized: 0, feedsPushed: 0,
     feedsErrored: 0, durationMs: 0,
   };
-
-  // Discover on-chain SB markets (oracle_source == 1) → dedup feedHashes.
-  const markets = await safeFetchAll<any>(ctx.program, "optionsMarket");
-  report.marketsScanned = markets.length;
-  const sbMarkets = markets.filter((m) => m.account.oracleSource === 1);
-  report.sbMarketsFound = sbMarkets.length;
 
   const seen = new Set<string>();
   const feedHashes: string[] = [];
@@ -202,11 +301,10 @@ export async function tickOnce(
     seen.add(k);
     feedHashes.push(k);
   };
-  for (const m of sbMarkets) pushFeed(hexFromBytes(m.account.pythFeedId as number[]));
+  for (const m of sbMarkets) pushFeed(m.feedHashHex);
   // OPTA_SB_FORCE_FEED — dev/ops hook (process even with no discoverable market).
   for (const f of ctx.forceFeeds) pushFeed(f);
 
-  // Allow-gate: registry-supported only.
   const supported = feedHashes.filter((h) => isSupportedSbFeed(h));
   const unsupported = feedHashes.filter((h) => !isSupportedSbFeed(h));
   report.feedsSupported = supported.length;
@@ -215,10 +313,9 @@ export async function tickOnce(
     ctx.log("warn", "sb-oracle skip: feedHash not in registry", { feed: h.slice(0, 10) });
   }
 
-  ctx.log("info", "sb-oracle tick: discovered SB feeds", {
-    markets: markets.length, sbMarkets: sbMarkets.length,
-    supported: supported.length, unsupported: unsupported.length,
-    forced: ctx.forceFeeds.length,
+  ctx.log("info", "sb-oracle warming tick: discovered SB feeds", {
+    sbMarkets: sbMarkets.length, supported: supported.length,
+    unsupported: unsupported.length, forced: ctx.forceFeeds.length,
   });
 
   for (const feedHashHex of supported) {
@@ -227,7 +324,7 @@ export async function tickOnce(
   }
 
   report.durationMs = Date.now() - startMs;
-  ctx.log("info", "sb-oracle tick complete", { ...report });
+  ctx.log("info", "sb-oracle warming tick complete", { ...report });
   return report;
 }
 
@@ -403,6 +500,195 @@ async function warmingPushWithRetry(
   report.feedsErrored += 1;
 }
 
+// ---- Settle-at-expiry pass (fast cadence) ----------------------------------
+
+/**
+ * Discover SB vaults that are expired-and-unsettled AND still inside the 300s
+ * window, group by (asset, expiry), and settle each via the SB arm of
+ * settle_expiry. Vaults past the window are counted (→ reclaim_unsettled, no
+ * fund loss) but not chased. Fast-path no-op when there are no SB markets and no
+ * forced targets (skips the sharedVault GPA — the common case until create-SB-
+ * market deploys).
+ */
+export async function settleCheckTick(
+  ctx: SbOracleCrankContext,
+  sb: SbClients,
+  sbMarkets: SbMarketRec[],
+): Promise<SbSettleReport> {
+  const report: SbSettleReport = {
+    sbVaultsScanned: 0, settleTuplesInWindow: 0, settleTuplesPastWindow: 0,
+    settled: 0, settleErrored: 0,
+  };
+
+  const targets = new Map<string, ForcedSettle>(); // key = asset:expiry
+
+  if (sbMarkets.length > 0) {
+    const marketByPda = new Map<string, SbMarketRec>();
+    for (const m of sbMarkets) marketByPda.set(m.marketPda.toBase58(), m);
+    const vaults = await safeFetchAll<any>(ctx.program, "sharedVault");
+    const now = Math.floor(Date.now() / 1000);
+    for (const v of vaults) {
+      const mkt = marketByPda.get((v.account.market as PublicKey).toBase58());
+      if (!mkt) continue;                       // not an SB market's vault
+      report.sbVaultsScanned += 1;
+      if (v.account.isSettled) continue;
+      const expiry = typeof v.account.expiry === "number"
+        ? v.account.expiry : v.account.expiry.toNumber();
+      if (expiry >= now) continue;              // not expired yet
+      if (now - expiry > SB_SETTLE_WINDOW_SECS) { // past window → reclaim path
+        report.settleTuplesPastWindow += 1;
+        continue;
+      }
+      targets.set(`${mkt.assetName}:${expiry}`, {
+        asset: mkt.assetName, expiry, feedHashHex: mkt.feedHashHex,
+      });
+    }
+  }
+
+  // OPTA_SB_FORCE_SETTLE — synthetic targets (dry-run proof without a real vault).
+  for (const f of ctx.forceSettles) targets.set(`${f.asset}:${f.expiry}`, f);
+
+  report.settleTuplesInWindow = targets.size;
+  if (targets.size === 0) return report;        // no-op (the common case)
+
+  ctx.log("info", "sb-oracle settle-check: tuples in window", {
+    inWindow: targets.size, pastWindow: report.settleTuplesPastWindow,
+    forced: ctx.forceSettles.length,
+  });
+
+  for (const t of targets.values()) {
+    if (ctx.shouldShutdown()) break;
+    await settleSbTuple(ctx, sb, t, report);
+  }
+  return report;
+}
+
+/**
+ * Settle one (asset, expiry) tuple via the SB arm of settle_expiry. Bounded
+ * retry-with-fresh-quote. The SB account set is IDENTICAL to the push arm
+ * (queue/slothashes/instructions + on-chain-derived ed25519); only the non-SB
+ * accounts differ (settlement_record/market/caller vs vol_oracle/signer).
+ */
+async function settleSbTuple(
+  ctx: SbOracleCrankContext,
+  sb: SbClients,
+  t: ForcedSettle,
+  report: SbSettleReport,
+): Promise<void> {
+  const entry = lookupSbFeed(t.feedHashHex);
+  if (!entry) {
+    ctx.log("warn", "sb-oracle settle skip: feedHash not in registry", {
+      asset: t.asset, feed: t.feedHashHex.slice(0, 10),
+    });
+    report.settleErrored += 1;
+    return;
+  }
+  const expiryBN = new BN(t.expiry);
+  const [marketPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("market"), Buffer.from(t.asset)], ctx.program.programId);
+  const [settlementPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from(SETTLEMENT_SEED), Buffer.from(t.asset), expiryBN.toArrayLike(Buffer, "le", 8)],
+    ctx.program.programId);
+
+  const feed = buildOracleFeed(entry);
+  const edPid = Ed25519Program.programId.toBase58();
+  const isForced = ctx.forceSettles.some((f) => f.asset === t.asset && f.expiry === t.expiry);
+
+  for (let attempt = 1; attempt <= SB_SETTLE_MAX_ATTEMPTS; attempt++) {
+    if (ctx.shouldShutdown()) return;
+
+    // (a) fetch a FRESH signed quote → self-packed ed25519 ix (same as push).
+    let edIx: TransactionInstruction;
+    try {
+      const { ixs } = await buildManagedQuoteUpdateIxs(
+        sb.qObj, sb.crossbar, feed, ctx.wallet.publicKey,
+        { numSignatures: 2, instructionIdx: 1 });
+      const found = ixs.find((ix) => ix.programId.toBase58() === edPid);
+      if (!found) throw new Error("no ed25519 ix in managed-update output");
+      edIx = found;
+    } catch (err) {
+      ctx.log("info", "sb-oracle settle quote fetch/pack failed (re-fetch fresh)", {
+        asset: t.asset, attempt, err: String(err).slice(0, 140),
+      });
+      continue;
+    }
+
+    // (b) [CU, ed25519(idx 1), settle_expiry(asset, expiry, +SB accounts)].
+    //     Cast to `any` (same as push) — @app/idl/opta is stale for settle's SB
+    //     accounts; the runtime-loaded IDL has them.
+    const settleIx = await (ctx.program.methods as any)
+      .settleExpiry(t.asset, expiryBN)
+      .accounts({
+        caller: ctx.wallet.publicKey,
+        market: marketPda,
+        priceUpdate: null,            // SB path → no Pyth account
+        settlementRecord: settlementPda,
+        systemProgram: SystemProgram.programId,
+        sbQueue: entry.queue,
+        sbSlothashes: SPL_SYSVAR_SLOT_HASHES_ID,
+        sbInstructions: SPL_SYSVAR_INSTRUCTIONS_ID,
+      })
+      .instruction();
+    const instructions = [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: SETTLE_CU_LIMIT }), edIx, settleIx,
+    ];
+
+    // (c) simulate-gate.
+    const sim = await simulate(ctx, instructions);
+    if (sim.err) {
+      const errStr = JSON.stringify(sim.err);
+      // A WIRING failure (SB accounts/ed25519/sysvar) would be a real bug — stop.
+      if (/SwitchboardAccountsMissing|NoEd25519Instruction|InvalidSwitchboardSysvar/.test(errStr)) {
+        ctx.log("error", "sb-oracle settle WIRING bug (SB accounts/ed25519)", {
+          asset: t.asset, err: errStr.slice(0, 160),
+        });
+        report.settleErrored += 1;
+        return;
+      }
+      // FORCED dry-run target has no real market → reverts at account load
+      // (AccountNotInitialized) — EXPECTED; proves the tx is well-formed up to the
+      // missing market (past the SB-account wiring).
+      if (isForced) {
+        ctx.log("info", "sb-oracle settle FORCED-PROOF: tx well-formed (reverts at missing market, NOT wiring)", {
+          asset: t.asset, accounts: settleIx.keys.length, ed25519Bytes: edIx.data.length,
+          simErr: errStr.slice(0, 120),
+        });
+        return;
+      }
+      ctx.log("info", "sb-oracle settle sim err (re-fetch fresh)", {
+        asset: t.asset, attempt, err: errStr.slice(0, 160),
+      });
+      continue;
+    }
+
+    if (ctx.dryRun) {
+      ctx.log("info", "WOULD-SEND sb settle (dry-run, NOT sent)", {
+        asset: t.asset, expiry: t.expiry, attempt,
+        accounts: settleIx.keys.length, ed25519Bytes: edIx.data.length, simOk: true,
+      });
+      report.settled += 1;
+      return;
+    }
+
+    try {
+      const sig = await send(ctx, instructions);
+      ctx.log("info", "sb-oracle settle sent", { asset: t.asset, expiry: t.expiry, sig });
+      report.settled += 1;
+    } catch (err) {
+      ctx.log("info", "sb-oracle settle send failed (re-fetch fresh)", {
+        asset: t.asset, attempt, err: String(err).slice(0, 140),
+      });
+      continue;
+    }
+    return;
+  }
+
+  ctx.log("warn", "sb-oracle settle failed after max attempts (→ reclaim_unsettled after 7d)", {
+    asset: t.asset, attempts: SB_SETTLE_MAX_ATTEMPTS,
+  });
+  report.settleErrored += 1;
+}
+
 // ---- Tx helpers ------------------------------------------------------------
 
 function cuLimitIx(): TransactionInstruction {
@@ -466,4 +752,20 @@ async function sleepInterruptibly(totalMs: number, shouldStop: () => boolean): P
 export function parseForceFeeds(raw: string | undefined): string[] {
   if (!raw) return [];
   return raw.split(",").map((s) => normFeedHash(s.trim())).filter((s) => s.length === 64);
+}
+
+/** Parse OPTA_SB_FORCE_SETTLE (comma-separated `asset:expiry:feedHash` triples) —
+ *  synthetic settle targets for dry-run proof without a discoverable SB vault. */
+export function parseForceSettles(raw: string | undefined): ForcedSettle[] {
+  if (!raw) return [];
+  const out: ForcedSettle[] = [];
+  for (const part of raw.split(",")) {
+    const [asset, expiryRaw, feedRaw] = part.split(":").map((s) => s.trim());
+    const expiry = parseInt(expiryRaw, 10);
+    const feedHashHex = normFeedHash(feedRaw ?? "");
+    if (asset && Number.isFinite(expiry) && feedHashHex.length === 64) {
+      out.push({ asset, expiry, feedHashHex });
+    }
+  }
+  return out;
 }

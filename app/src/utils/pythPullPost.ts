@@ -407,18 +407,20 @@ export async function buildPostUpdateAndSettleTx(
 
     const ix = await program.methods
       .settleExpiry(assetName, expiryBN)
-      // Phase-B prereq: .accountsPartial (was .accountsStrict) so this builder
-      // tolerates an IDL that later describes the SB trailing optionals — partial
-      // resolution auto-omits optionals not provided → byte-identical Pyth tx. The
-      // explicit account set is unchanged (no SB accounts added here). NB: plain
-      // .accounts() rejects explicitly-passed derivable PDAs (market/settlement);
-      // .accountsPartial keeps them while tolerating the new optionals.
+      // Pyth path: pass the 3 SB optional accounts as null. anchor 0.32.1 does NOT
+      // auto-null unprovided optional accounts at .instruction() — it throws
+      // "Account `sbQueue` not provided". .accountsPartial (not .accounts) is kept
+      // because plain .accounts() rejects the explicitly-passed derivable PDAs
+      // (market/settlement). Explicit null = no Switchboard accounts on a Pyth feed.
       .accountsPartial({
         caller: wallet.publicKey,
         market: marketPda,
         priceUpdate: priceUpdatePda,
         settlementRecord: settlementPda,
         systemProgram: SystemProgram.programId,
+        sbQueue: null,
+        sbSlothashes: null,
+        sbInstructions: null,
       })
       .instruction();
 
@@ -540,14 +542,19 @@ export async function buildPostUpdateAndCreateMarketTx(
       // Phase B: 4-arg create_market — oracle_source=0 (Pyth) for the FE "+ New
       // Market" button. SB-create is the separate switchboardCreateMarket.ts path.
       .createMarket(assetName, feedIdBytes, assetClass, 0)
-      // .accountsPartial (was .accountsStrict) tolerates the now-synced SB
-      // optionals; the Pyth create omits them → byte-identical Pyth create tx.
+      // Pyth path: pass the 3 SB optional accounts as null. anchor 0.32.1 does NOT
+      // auto-null unprovided optionals at .instruction() — it throws "Account
+      // `sbQueue` not provided". Explicit null = no Switchboard accounts on a Pyth
+      // create (oracle_source=0). SB-create is the switchboardCreateMarket.ts path.
       .accountsPartial({
         creator: wallet.publicKey,
         protocolState: protocolStatePda,
         priceUpdate: priceUpdatePda,
         market: marketPda,
         systemProgram: SystemProgram.programId,
+        sbQueue: null,
+        sbSlothashes: null,
+        sbInstructions: null,
       })
       .instruction();
 
@@ -771,13 +778,18 @@ export async function buildPostUpdateAndPushVolSampleTx(
 
     const ix = await program.methods
       .pushVolSample()
-      // Phase-B prereq: .accountsPartial (was .accountsStrict) — tolerates the
-      // SB optionals once the IDL syncs; byte-identical Pyth push for now.
+      // Pyth path: pass the 3 SB optional accounts as null. anchor 0.32.1 does
+      // NOT auto-null unprovided optional accounts at .instruction() build time —
+      // it throws "Account `sbQueue` not provided" before any tx is sent. Explicit
+      // null = no Switchboard accounts on a Pyth (oracle_source=0) feed.
       .accountsPartial({
         signer: wallet.publicKey,
         priceUpdate: priceUpdatePda,
         volOracle: volOraclePda,
         systemProgram: SystemProgram.programId,
+        sbQueue: null,
+        sbSlothashes: null,
+        sbInstructions: null,
       })
       .instruction();
 
@@ -843,8 +855,10 @@ export async function buildPostUpdateAndExerciseAmericanTx(
 
     const ix = await program.methods
       .exerciseAmerican(new BN(params.quantity))
-      // Phase-B prereq: .accountsPartial (was .accountsStrict) — tolerates the
-      // SB optionals once the IDL syncs; byte-identical Pyth exercise for now.
+      // Pyth path: pass the 3 SB optional accounts as null. anchor 0.32.1 does NOT
+      // auto-null unprovided optional accounts at .instruction() — it throws
+      // "Account `sbQueue` not provided". Explicit null = no Switchboard accounts
+      // on a Pyth (oracle_source=0) feed.
       .accountsPartial({
         holder: wallet.publicKey,
         sharedVault: params.sharedVault,
@@ -857,6 +871,9 @@ export async function buildPostUpdateAndExerciseAmericanTx(
         holderUsdcAccount: params.holderUsdcAccount,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         tokenProgram: TOKEN_PROGRAM_ID,
+        sbQueue: null,
+        sbSlothashes: null,
+        sbInstructions: null,
       })
       .instruction();
 

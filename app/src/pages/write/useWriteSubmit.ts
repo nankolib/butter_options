@@ -31,21 +31,18 @@ import {
 import { toUsdcBN } from "../../utils/format";
 import { decodeError, isWalletReplay } from "../../utils/errorDecoder";
 
-const EXTRA_CU_400K = ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 });
-const EXTRA_CU_800K = ComputeBudgetProgram.setComputeUnitLimit({ units: 800_000 });
-// American mint prices BS-2002 on-chain (solmath) — heavier than the EUR
-// path's TS-supplied premium. 1.4M matches the crank's auto-finalize budget
-// and the Stage D scope note for mint_from_vault's American branch.
-const EXTRA_CU_1_4M = ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 });
+// Single compute-budget for the whole atomic bundle. Measured worst case is
+// ~435K CU (ATM PUT: create_and_deposit + mint_from_vault, full BS-2002), so
+// 600K leaves ~165K headroom. Replaces the old per-stage 400K/800K/1.4M ladder.
+const EXTRA_CU_600K = ComputeBudgetProgram.setComputeUnitLimit({ units: 600_000 });
 
 // On-chain seed constant — must match Rust (programs/opta/src/state/market.rs:65).
 //   MARKET_SEED = b"market"
 const MARKET_SEED = "market";
 
 export type WriteSubmitInput = {
-  /** Source market on chain — provides assetName for the (now single-seed)
-   *  market PDA derivation. createMarket itself is no longer called here;
-   *  the caller is expected to register the asset via Markets first. */
+  /** Source market on chain — provides assetName for the (single-seed) market
+   *  PDA derivation. The asset must already be registered via Markets. */
   market: { publicKey: PublicKey; account: any };
   side: "call" | "put";
   /** Exercise style. European (default) or American (Stage H toggle). */
@@ -71,77 +68,33 @@ export type WriteSubmitResult = {
 
 export type UseWriteSubmit = {
   submitting: boolean;
-  /** Stage label visible to the UI while a submit is in flight. Cleared on completion. */
+  /** Single in-flight label (the flow is now one tx, not three stages). */
   stageLabel: string | null;
   submit: (input: WriteSubmitInput) => Promise<WriteSubmitResult | null>;
 };
 
-// Decoder-coupling note: this helper inspects the decoded error message for
-// the substring "already confirmed", which is the wallet-replay sentinel
-// produced by errorDecoder.ts:65-73 (raw RPC "already been processed" →
-// "Transaction already confirmed."). If the decoder is ever refactored,
-// update this helper in lockstep.
 /**
- * Sends one stage of the 3-stage write flow with race-recovery built in.
+ * Atomic single-transaction write flow (post direct-write-bundle).
  *
- * Happy path:  awaits sendFn, returns its tx signature.
+ * One user-signed legacy tx — one wallet approval — carrying:
+ *   [ setComputeUnitLimit(600K), create_and_deposit, mint_from_vault ]
  *
- * Recovery path: if sendFn rejects with the wallet-replay sentinel
- *   ("Transaction already confirmed."), we run landedCheckFn against the
- *   chain. If true, the stage actually landed despite the bad reject — we
- *   resolve with whatever signature we can recover from the rejection.
- *   If false, we throw a real per-stage error.
+ * `create_and_deposit` (Pass C) is `init_if_needed`, so it creates the vault +
+ * USDC ATA + writer_position and deposits collateral in a single instruction,
+ * whether or not the vault already exists. `mint_from_vault` then mints against
+ * the just-deposited collateral in the SAME tx. Because it is one atomic send,
+ * a failure reverts everything — no stranded collateral, no half-built vault,
+ * no double-deposit-on-retry. The old three-stage scaffolding
+ * (submitStageWithRecovery / vault-exists pre-check / deposit snapshot /
+ * per-stage landed checks / 1·2·3 labels) is gone.
  *
- * Non-recovery path: any other rejection rethrows the original error
- *   unchanged, so the outer try/catch can decode it normally.
- */
-async function submitStageWithRecovery(
-  stageName: "Vault create" | "Deposit" | "Mint",
-  sendFn: () => Promise<string>,
-  landedCheckFn: () => Promise<boolean>,
-): Promise<string> {
-  try {
-    return await sendFn();
-  } catch (err: any) {
-    if (!isWalletReplay(err)) {
-      throw err;
-    }
-    const landed = await landedCheckFn();
-    if (!landed) {
-      throw new Error(`${stageName} did not confirm — please retry.`);
-    }
-    // Best-effort signature extraction. Phantom's wallet-replay rejects
-    // don't always carry a signature; we accept "(unrecoverable)" in those
-    // cases. Stage 3 is the only consumer that exposes the sig in the
-    // result toast — see WriteSubmitResult.txSignature handling below.
-    const recoveredSig: string = err?.signature ?? err?.txid ?? "";
-    console.warn(
-      `[useWriteSubmit] ${stageName} reported 'already confirmed', ` +
-        `verified on-chain — continuing.`,
-      { signature: recoveredSig || "(unrecoverable)" },
-    );
-    return recoveredSig;
-  }
-}
-
-/**
- * Bundles the three-step write sequence (post-Stage-P4c, post-Stage-2):
- *   1. createSharedVault        (skip if PDA exists)
- *   2. depositToVault
- *   3. mintFromVault
+ * mint_from_vault prices American options from the crank-warmed VolOracle PDA
+ * (no in-tx Pyth post); callers gate submit on the oracle being seeded (W1).
  *
- * createMarket is no longer part of this flow — markets are per-asset
- * registry rows now (Stage 2), and the user is expected to register an
- * asset via the Markets page before writing options on it. If
- * `input.market` is missing, we surface a clear error pointing back there.
- *
- * createSharedVault gained a 5th positional arg `collateral_mint: Pubkey`
- * in Stage 3 (USDC-only validation lives on the vault, not the market).
- * We pass `protocolState.usdcMint` for that arg.
- *
- * Each step is a separate RPC submitted sequentially. On any failure
- * the caller receives `null` and we throw the decoded error string for
- * the toaster to display.
+ * The lone retained resilience is a single wallet-replay guard: a wallet's
+ * optimistic resimulate against a lagged RPC can reject a tx that actually
+ * landed ("already processed"). We detect that and confirm via the
+ * vault_mint_record before deciding success — see errorDecoder.isWalletReplay.
  */
 export function useWriteSubmit(): UseWriteSubmit {
   const { program } = useProgram();
@@ -158,17 +111,17 @@ export function useWriteSubmit(): UseWriteSubmit {
         );
       }
       setSubmitting(true);
-      setStageLabel("Preparing…");
+      setStageLabel("Writing…");
 
       try {
         const asset = input.market.account.assetName as string;
         const optTypeEnum = input.side === "call" ? { call: {} } : { put: {} };
         const optTypeIndex = input.side === "call" ? 0 : 1;
-        // ExerciseStyle Anchor enum, encoded { european: {} } | { american: {} }
-        // — same shape as optTypeEnum. Stage H toggle drives this; the enum
-        // detail stays inside the hook (callers pass "european" | "american").
+        // ExerciseStyle Anchor enum, { european: {} } | { american: {} }.
         const isAmerican = input.exerciseStyle === "american";
         const exerciseStyleEnum = isAmerican ? { american: {} } : { european: {} };
+        const vaultTypeEnum =
+          input.vaultType === "epoch" ? { epoch: {} } : { custom: {} };
 
         const strikeBN = toUsdcBN(input.strike);
         const expiryBN = new BN(input.expiry);
@@ -187,14 +140,13 @@ export function useWriteSubmit(): UseWriteSubmit {
           publicKey,
         );
 
-        // Single-seed market PDA — strike/expiry/side moved to SharedVault
-        // in Stage 2, so the market is per-asset only.
+        // Single-seed market PDA (per-asset registry).
         const [marketPda] = PublicKey.findProgramAddressSync(
           [Buffer.from(MARKET_SEED), Buffer.from(asset)],
           program.programId,
         );
 
-        // ---- Step 1: createSharedVault (skip if exists) ----
+        // ---- Shared spec PDAs (vault side) ----
         const [sharedVaultPda] = deriveSharedVault(
           marketPda,
           strikeBN,
@@ -203,110 +155,11 @@ export function useWriteSubmit(): UseWriteSubmit {
           input.exerciseStyle,
         );
         const [vaultUsdcPda] = deriveVaultUsdc(sharedVaultPda);
-
-        let vaultExists = false;
-        try {
-          await program.account.sharedVault.fetch(sharedVaultPda);
-          vaultExists = true;
-        } catch {
-          // not yet created
-        }
-
-        if (!vaultExists) {
-          setStageLabel("1/3 · Creating vault");
-          const [epochConfigPda] = deriveEpochConfig();
-          await submitStageWithRecovery(
-            "Vault create",
-            () =>
-              program.methods
-                .createSharedVault(
-                  strikeBN,
-                  expiryBN,
-                  optTypeEnum as any,
-                  input.vaultType === "epoch" ? { epoch: {} } : ({ custom: {} } as any),
-                  protocolState.usdcMint,
-                  // carry_rate_bps: 0 for all current crypto-only assets. See
-                  // SharedVault::carry_rate_bps doc for the no-dividend default.
-                  0,
-                  // exercise_style: driven by the Stage H EUR/AMER toggle. While
-                  // AMERICAN_ENABLED_UI is false the toggle can't select American,
-                  // so this stays European in production; an American value here
-                  // (flag flipped at Stage I) creates an American vault.
-                  exerciseStyleEnum as any,
-                )
-                .accountsStrict({
-                  creator: publicKey,
-                  market: marketPda,
-                  sharedVault: sharedVaultPda,
-                  vaultUsdcAccount: vaultUsdcPda,
-                  usdcMint: protocolState.usdcMint,
-                  protocolState: protocolStatePda,
-                  epochConfig: input.vaultType === "epoch" ? epochConfigPda : null,
-                  tokenProgram: TOKEN_PROGRAM_ID,
-                  systemProgram: SystemProgram.programId,
-                })
-                .preInstructions([EXTRA_CU_400K])
-                .rpc({ commitment: "confirmed" }),
-            async () => {
-              try {
-                await program.account.sharedVault.fetch(sharedVaultPda);
-                return true;
-              } catch {
-                return false;
-              }
-            },
-          );
-        }
-
-        // ---- Step 2: depositToVault ----
-        setStageLabel("2/3 · Depositing collateral");
         const [writerPositionPda] = deriveWriterPosition(sharedVaultPda, publicKey);
+        const [epochConfigPda] = deriveEpochConfig();
 
-        // Snapshot deposited_collateral before sending — used by the
-        // race-recovery landed-check to confirm THIS deposit landed (vs a
-        // prior deposit by the same writer to the same vault).
-        let depositSnapshot: BN = new BN(0);
-        try {
-          const existingPosition = await program.account.writerPosition.fetch(writerPositionPda);
-          depositSnapshot = existingPosition.depositedCollateral as BN;
-        } catch {
-          // first deposit — no WriterPosition yet; snapshot stays at 0.
-        }
-
-        await submitStageWithRecovery(
-          "Deposit",
-          () =>
-            program.methods
-              .depositToVault(collateralBN)
-              .accountsStrict({
-                writer: publicKey,
-                sharedVault: sharedVaultPda,
-                writerPosition: writerPositionPda,
-                writerUsdcAccount,
-                vaultUsdcAccount: vaultUsdcPda,
-                protocolState: protocolStatePda,
-                tokenProgram: TOKEN_PROGRAM_ID,
-                systemProgram: SystemProgram.programId,
-              })
-              .preInstructions([EXTRA_CU_400K])
-              .rpc({ commitment: "confirmed" }),
-          async () => {
-            try {
-              const after = await program.account.writerPosition.fetch(writerPositionPda);
-              return (after.depositedCollateral as BN).gte(depositSnapshot.add(collateralBN));
-            } catch {
-              return false;
-            }
-          },
-        );
-
-        // ---- Step 3: mintFromVault ----
-        setStageLabel("3/3 · Minting contracts");
-        const [optionMintPda] = deriveVaultOptionMint(
-          sharedVaultPda,
-          publicKey,
-          createdAt,
-        );
+        // ---- Mint-side PDAs (per-writer per-mint) ----
+        const [optionMintPda] = deriveVaultOptionMint(sharedVaultPda, publicKey, createdAt);
         const [purchaseEscrowPda] = deriveVaultPurchaseEscrow(
           sharedVaultPda,
           publicKey,
@@ -316,60 +169,93 @@ export function useWriteSubmit(): UseWriteSubmit {
         const [extraAccountMetaList] = deriveExtraAccountMetaListPda(optionMintPda);
         const [hookState] = deriveHookStatePda(optionMintPda);
 
-        // Phase 2 Stage C Pass 2: vol_oracle is now a REQUIRED account on
-        // mint_from_vault (uniform context across EUR + AMER). The PDA is
-        // keyed on the market's Pyth feed_id. The handler reads it only on
-        // the American branch; EUR mints carry the account but never touch it.
-        //
-        // Stage H branch on exerciseStyle (matches mint_from_vault.rs):
-        //   - European: pass the TS-computed premium verbatim + 800K CU.
-        //   - American: the handler IGNORES the supplied premium and prices
-        //     BS-2002 on-chain, so we pass a premium=1 sentinel (non-zero to
-        //     pass the > 0 arg guard) + a 1.4M CU budget for the solmath path.
-        const mintPremiumBN = isAmerican ? new BN(1) : premiumBN;
-        const mintCuIx = isAmerican ? EXTRA_CU_1_4M : EXTRA_CU_800K;
+        // vol_oracle PDA — keyed on the market's Pyth feed_id. Read-only here;
+        // mint_from_vault's American branch prices BS-2002 from the crank-warmed
+        // oracle (no in-tx Pyth post). EUR carries it but never reads it.
         const pythFeedIdBuf = Buffer.from(input.market.account.pythFeedId);
         const [volOraclePda] = PublicKey.findProgramAddressSync(
           [Buffer.from(VOL_ORACLE_SEED), pythFeedIdBuf],
           program.programId,
         );
 
-        const tx = await submitStageWithRecovery(
-          "Mint",
-          () =>
-            program.methods
-              .mintFromVault(contractsBN, mintPremiumBN, createdAt)
-              .accountsStrict({
-                writer: publicKey,
-                sharedVault: sharedVaultPda,
-                writerPosition: writerPositionPda,
-                market: marketPda,
-                volOracle: volOraclePda,
-                protocolState: protocolStatePda,
-                optionMint: optionMintPda,
-                purchaseEscrow: purchaseEscrowPda,
-                vaultMintRecord: vaultMintRecordPda,
-                transferHookProgram: TRANSFER_HOOK_PROGRAM_ID,
-                extraAccountMetaList,
-                hookState,
-                systemProgram: SystemProgram.programId,
-                token2022Program: TOKEN_2022_PROGRAM_ID,
-                rent: SYSVAR_RENT_PUBKEY,
-              })
-              .preInstructions([mintCuIx])
-              .rpc({ commitment: "confirmed" }),
-          async () => {
-            try {
-              await program.account.vaultMint.fetch(vaultMintRecordPda);
-              return true;
-            } catch {
-              return false;
-            }
-          },
-        );
+        // American mint IGNORES the supplied premium (prices on-chain); pass a
+        // non-zero sentinel to satisfy the `> 0` arg guard. European passes the
+        // TS-computed premium verbatim.
+        const mintPremiumBN = isAmerican ? new BN(1) : premiumBN;
+
+        // ---- Instruction 1: create_and_deposit (init_if_needed; one ix) ----
+        const createAndDepositIx = await program.methods
+          .createAndDeposit(
+            strikeBN,
+            expiryBN,
+            optTypeEnum as any,
+            vaultTypeEnum as any,
+            protocolState.usdcMint,
+            // carry_rate_bps: 0 for current crypto-only assets.
+            0,
+            exerciseStyleEnum as any,
+            collateralBN,
+          )
+          .accountsStrict({
+            writer: publicKey,
+            market: marketPda,
+            sharedVault: sharedVaultPda,
+            vaultUsdcAccount: vaultUsdcPda,
+            usdcMint: protocolState.usdcMint,
+            writerPosition: writerPositionPda,
+            writerUsdcAccount,
+            protocolState: protocolStatePda,
+            // Required for Epoch (fresh) creation; null for Custom.
+            epochConfig: input.vaultType === "epoch" ? epochConfigPda : null,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .instruction();
+
+        // ---- Instruction 2 (terminal): mint_from_vault ----
+        // Whole bundle in ONE tx / ONE approval:
+        //   [ EXTRA_CU_600K, createAndDepositIx, mintFromVault ]
+        let txSignature: string;
+        try {
+          txSignature = await program.methods
+            .mintFromVault(contractsBN, mintPremiumBN, createdAt)
+            .accountsStrict({
+              writer: publicKey,
+              sharedVault: sharedVaultPda,
+              writerPosition: writerPositionPda,
+              market: marketPda,
+              volOracle: volOraclePda,
+              protocolState: protocolStatePda,
+              optionMint: optionMintPda,
+              purchaseEscrow: purchaseEscrowPda,
+              vaultMintRecord: vaultMintRecordPda,
+              transferHookProgram: TRANSFER_HOOK_PROGRAM_ID,
+              extraAccountMetaList,
+              hookState,
+              systemProgram: SystemProgram.programId,
+              token2022Program: TOKEN_2022_PROGRAM_ID,
+              rent: SYSVAR_RENT_PUBKEY,
+            })
+            .preInstructions([EXTRA_CU_600K, createAndDepositIx])
+            .rpc({ commitment: "confirmed" });
+        } catch (err: any) {
+          // Wallet-replay artifact: an optimistic resimulate against a lagged
+          // RPC pool sees the now-landed tx as "already processed". Confirm via
+          // the vault_mint_record before deciding. Any other error rethrows to
+          // the outer decode.
+          if (!isWalletReplay(err)) throw err;
+          const landed = await program.account.vaultMint
+            .fetch(vaultMintRecordPda)
+            .then(() => true)
+            .catch(() => false);
+          if (!landed) {
+            throw new Error("Write did not confirm — please retry.");
+          }
+          txSignature = err?.signature ?? err?.txid ?? "";
+        }
 
         return {
-          txSignature: tx,
+          txSignature,
           vaultPda: sharedVaultPda,
           optionMint: optionMintPda,
         };

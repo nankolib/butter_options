@@ -3590,17 +3590,13 @@ export type Opta = {
         {
           "name": "priceUpdate",
           "docs": [
-            "Fresh PriceUpdateV2 from the Pyth Receiver program. The handler",
-            "verifies `verification_level == Full` and",
-            "`price_message.feed_id == feed_id` to prove the caller-supplied",
-            "feed_id corresponds to a real Pyth feed. Read-only -- never mutated.",
-            "",
-            "Stage 3 1c-i-A: now `Option`. REQUIRED (present) for a Pyth oracle",
-            "(oracle_source=0) -- a present account is wire-identical to the prior",
-            "required form, so existing Pyth inits are unaffected. Passed None for a",
-            "Switchboard oracle (oracle_source=1): the SB feed-existence proof is",
-            "deferred to the first push_vol_sample SB arm (see the module header).",
-            "The Pyth arm errors `PriceUpdateMissing` if absent on a Pyth init."
+            "Fresh PriceUpdateV2 from the Pyth Receiver program. REQUIRED (present)",
+            "for a Pyth oracle (oracle_source=0): the handler reads its CURRENT spot",
+            "via `pyth_current_spot_scale` to seed `last_spot_price` AND proves feed",
+            "existence (verification_level == Full + feed_id match) in the same call.",
+            "Read-only -- never mutated. Passed None for a Switchboard oracle",
+            "(oracle_source=1): spot is seeded from the SB quote instead. The Pyth arm",
+            "errors `PriceUpdateMissing` if absent on a Pyth init."
           ],
           "optional": true
         },
@@ -3639,6 +3635,27 @@ export type Opta = {
         {
           "name": "systemProgram",
           "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "sbQueue",
+          "docs": [
+            "set) in the SB arm. Not address-pinned (per-network queue)."
+          ],
+          "optional": true
+        },
+        {
+          "name": "sbSlothashes",
+          "docs": [
+            "runtime in the SB arm."
+          ],
+          "optional": true
+        },
+        {
+          "name": "sbInstructions",
+          "docs": [
+            "runtime in the SB arm, then scanned for the ed25519 ix index."
+          ],
+          "optional": true
         }
       ],
       "args": [
@@ -3654,6 +3671,10 @@ export type Opta = {
         {
           "name": "oracleSource",
           "type": "u8"
+        },
+        {
+          "name": "seedVol",
+          "type": "i64"
         }
       ]
     },
@@ -9503,21 +9524,49 @@ export type Opta = {
             "type": "u8"
           },
           {
-            "name": "padding",
+            "name": "padAlign",
             "docs": [
-              "MANDATORY Pod alignment padding -- NOT reserved future-field space.",
-              "`bytemuck::Pod` requires zero uninitialized bytes; this pads the",
-              "struct to a 16-byte boundary (i128 alignment). Shrunk 11\u219210 when",
-              "`oracle_source` was claimed above (Stage 3). Future fields must",
-              "be appended AFTER the last real field and BEFORE this padding,",
-              "reducing `_padding` correspondingly, preserving the 5856-byte total."
+              "Explicit alignment slack (offsets 5846..5848) so `seed_vol` below lands",
+              "on an 8-byte boundary at offset 5848. `oracle_source` ends at 5846 and",
+              "i64 requires 8-byte alignment, so 2 slack bytes are mandatory. This pad",
+              "is NAMED (not compiler-implicit) because `bytemuck::Pod` forbids",
+              "uninitialized gap bytes \u2014 implicit padding fails the zero_copy derive.",
+              "",
+              "THIS IS ALIGNMENT SLACK, NOT RESERVED FUTURE-FIELD SPACE. The old",
+              "`_padding: [u8; 10]` is now fully spent: 2 bytes here + 8 bytes of",
+              "`seed_vol`. There is NO free padding left. A future field cannot be",
+              "claimed in place \u2014 it would grow `size_of` past 5856 and panic",
+              "`AccountLoader::load` (bytemuck length mismatch) on every legacy",
+              "oracle, requiring an admin realloc migration. Do NOT repurpose these",
+              "2 bytes for a new field; they exist solely to align `seed_vol`."
             ],
             "type": {
               "array": [
                 "u8",
-                10
+                2
               ]
             }
+          },
+          {
+            "name": "seedVol",
+            "docs": [
+              "SEED volatility for the under-warmed window \u2014 annualized \u03c3 at solmath",
+              "SCALE (1e12), i64. Claimed in place from the old `_padding` (offsets",
+              "5848..5856); a SIZE-PRESERVING change, same migration-free trick as",
+              "`oracle_source`: every legacy on-chain oracle reads this as 0 via",
+              "`load_init` zero-fill, with NO migration and NO realloc. A size-GROWING",
+              "change would instead panic `AccountLoader::load` on every legacy oracle.",
+              "",
+              "ZERO-SAFE SENTINEL: `seed_vol == 0` means \"no seed \u2014 behave exactly as",
+              "before.\" The American pricing path (`price_american`) consults this",
+              "ONLY when the oracle is under-warmed (`sample_count <",
+              "VOL_ORACLE_WARMUP_SAMPLES`); a warm oracle always uses realized vol and",
+              "never reads `seed_vol`. Written at birth by `initialize_vol_oracle` so a",
+              "brand-new market is priceable from minute one while the realized-vol",
+              "ring warms in the background and later takes over. Encode off-chain as",
+              "`round(annualized_sigma * 1e12)` (e.g. crypto 0.80 \u2192 800_000_000_000)."
+            ],
+            "type": "i64"
           }
         ]
       }

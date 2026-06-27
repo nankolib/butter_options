@@ -692,18 +692,14 @@ export async function buildPostUpdateAndInitializeVolOracleTx(
       program.programId,
     );
 
-    const ix = await (program.methods as any)
-      // Stage 3 1c-i-A → seed-at-birth: initialize_vol_oracle takes
-      // (feed_id, oracle_source, seed_vol). The FE/crank vol-oracle path is
-      // always Pyth-sourced → oracle_source 0 (ORACLE_SOURCE_PYTH); seed_vol is
-      // the per-asset-class day-0 vol (caller-supplied via seedVolForAssetClass),
-      // wrapped in BN at the i64 boundary. Switchboard oracles are born via the
-      // SB crank path (sbOracleCrank.birthSbOracle), not this builder.
-      //
-      // `as any` (DEFERRED-DEPLOY): the 3-arg signature + the trailing SB
-      // optional accounts are NOT in the stale app/src/idl/opta.ts this session;
-      // the runtime-loaded IDL (post deploy-bundle IDL sync) has them. UN-`as
-      // any` this chain once the IDL is synced.
+    const ix = await program.methods
+      // Seed-at-birth: initialize_vol_oracle takes (feed_id, oracle_source,
+      // seed_vol). The FE/crank vol-oracle path is always Pyth-sourced →
+      // oracle_source 0 (ORACLE_SOURCE_PYTH); seed_vol is the per-asset-class
+      // day-0 vol (caller-supplied via seedVolForAssetClass), wrapped in BN at
+      // the i64 boundary. Switchboard oracles are born via the SB crank path
+      // (sbOracleCrank.birthSbOracle), not this builder. Typed call: the synced
+      // app IDL (deploy step 2) carries the 3-arg signature + SB optional accounts.
       .initializeVolOracle(feedIdBytes, 0, new BN(seedVol))
       .accountsStrict({
         initializer: wallet.publicKey,

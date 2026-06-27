@@ -1,5 +1,5 @@
 import type { FC } from "react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { SectionNumber } from "../../components/layout";
@@ -13,13 +13,20 @@ import {
   getDefaultVolatility,
 } from "../../utils/blackScholes";
 import { requiredCollateralPerContract } from "../../utils/collateral";
-import { useWriteSubmit, type WriteSubmitResult } from "./useWriteSubmit";
+import {
+  useWriteSubmit,
+  type WriteCell,
+  type WriteSuccessPayload,
+} from "./useWriteSubmit";
 import { decodeError } from "../../utils/errorDecoder";
 import {
   isMarketHours,
   buildMarketClosedTooltip,
   type AssetClass,
 } from "../../utils/marketHours";
+import { tenorExpiry, snapLadder, type TenorLabel } from "../../utils/tenors";
+
+const ALL_TENORS: TenorLabel[] = ["Weekly", "Monthly", "Quarterly"];
 
 type EpochVaultSectionProps = {
   values: WriterFormValues;
@@ -27,24 +34,18 @@ type EpochVaultSectionProps = {
   assets: AssetOption[];
   spotForChosenAsset: number | null;
   spotStale: boolean;
-  /** Computed expiry timestamp for next Friday (Unix seconds). */
-  epochExpiryTs: number;
-  /** Pretty label for the expiry, rendered in the form's read-only tail. */
-  epochExpiryLabel: string;
-  /** Called on successful submit so the page can render its banner. */
-  onSuccess: (result: WriteSubmitResult & { kind: "epoch" | "custom" }) => void;
+  /** Called on (partial) success so the page can render its banner + retry. */
+  onSuccess: (payload: WriteSuccessPayload) => void;
   /** W1 vol-oracle gate inputs. See CustomVaultSection for full notes. */
   unseededTickers: ReadonlySet<string>;
   checkVolOracle: (feedIdHex: string) => Promise<boolean>;
 };
 
 /**
- * § 01 · Epoch vault section. RECOMMENDED pill in the header,
- * italic tagline on the right, paired form + LiveQuoteCard underneath.
- *
- * Form values are owned by the parent (WritePage) so each section's
- * values persist when the user scrolls between sections without
- * losing input.
+ * § 01 · Epoch vault section. Adds a tenor selector (Weekly/Monthly/Quarterly)
+ * and a ladder mode (% split across tenors). Every tenor resolves to a Friday
+ * 08:00 UTC expiry — a valid Epoch expiry on-chain. Single-tenor is the
+ * degenerate 1-cell ladder; ladder fans out into N sequential atomic writes.
  */
 export const EpochVaultSection: FC<EpochVaultSectionProps> = ({
   values,
@@ -52,37 +53,72 @@ export const EpochVaultSection: FC<EpochVaultSectionProps> = ({
   assets,
   spotForChosenAsset,
   spotStale,
-  epochExpiryTs,
-  epochExpiryLabel,
   onSuccess,
   unseededTickers,
   checkVolOracle,
 }) => {
   const { connected } = useWallet();
   const { setVisible } = useWalletModal();
-  const { submitting, stageLabel, submit } = useWriteSubmit();
+  const { submitting, stageLabel, submit, retry } = useWriteSubmit();
 
   const contractsNum = parseInt(values.contracts || "0", 10) || 0;
   const strikeNum = parseFloat(values.strike) || 0;
+
+  // ---- Tenor / ladder local state (Epoch-only; not in the shared form type) ----
+  const [tenorMode, setTenorMode] = useState<"single" | "ladder">("single");
+  const [singleTenor, setSingleTenor] = useState<TenorLabel>("Weekly");
+  const [split, setSplit] = useState<Record<TenorLabel, number>>({
+    Weekly: 50,
+    Monthly: 30,
+    Quarterly: 20,
+  });
+  const splitTotal = split.Weekly + split.Monthly + split.Quarterly;
 
   const chosen = useMemo(
     () => assets.find((a) => a.ticker === values.asset) ?? null,
     [assets, values.asset],
   );
 
-  // W3 market-hours gate. Epoch expiry is fixed at 08:00 UTC, which is
-  // ALWAYS before NYSE opens (13:30 UTC DST / 14:30 UTC standard) — so for
-  // equity/ETF assets the Epoch flow is structurally un-settleable until
-  // EpochConfig supports a per-asset-class hour. v1 blocks at submit.
+  const collateralPerContract = requiredCollateralPerContract(strikeNum, values.side);
+
+  // Resolve tenors -> snapped, collision-merged cells (post-snap whole contracts).
+  const ladderResult = useMemo(() => {
+    const now = Date.now();
+    const tenors =
+      tenorMode === "single"
+        ? [{ label: singleTenor, pct: 100, expiryTs: tenorExpiry(singleTenor, now) }]
+        : ALL_TENORS.filter((t) => split[t] > 0).map((t) => ({
+            label: t,
+            pct: split[t],
+            expiryTs: tenorExpiry(t, now),
+          }));
+    return snapLadder(contractsNum, tenors, collateralPerContract);
+  }, [tenorMode, singleTenor, split, contractsNum, collateralPerContract]);
+
+  const cells = ladderResult.cells ?? [];
+  const ladderError =
+    ladderResult.error ??
+    (tenorMode === "ladder" && splitTotal !== 100 ? "Percentages must sum to 100." : null);
+  const totalCollateral = cells.reduce((s, c) => s + c.collateral, 0);
+
+  // Front (earliest) resolved expiry — drives the market-hours gate + LiveQuoteCard.
+  const frontExpiryTs = useMemo(() => {
+    const now = Date.now();
+    if (tenorMode === "single") return tenorExpiry(singleTenor, now);
+    const sel = ALL_TENORS.filter((t) => split[t] > 0).map((t) => tenorExpiry(t, now));
+    return sel.length ? Math.min(...sel) : tenorExpiry("Weekly", now);
+  }, [tenorMode, singleTenor, split]);
+
+  // W3 market-hours gate. Epoch expiries are Friday 08:00 UTC — always before
+  // NYSE opens — so equity/ETF Epoch vaults are structurally un-settleable. All
+  // cells share that property; the front expiry is representative.
   const marketHoursBlock = useMemo<{ tooltip: string } | null>(() => {
     if (!chosen) return null;
     const assetClass = chosen.market.account.assetClass as AssetClass;
-    const result = isMarketHours(epochExpiryTs, assetClass);
+    const result = isMarketHours(frontExpiryTs, assetClass);
     if (result.ok) return null;
-    return {
-      tooltip: buildMarketClosedTooltip(result, Math.floor(Date.now() / 1000)),
-    };
-  }, [chosen, epochExpiryTs]);
+    return { tooltip: buildMarketClosedTooltip(result, Math.floor(Date.now() / 1000)) };
+  }, [chosen, frontExpiryTs]);
 
   // W1 vol-oracle gate. See CustomVaultSection for full notes.
   const volOracleBlock = useMemo<{ tooltip: string } | null>(() => {
@@ -94,7 +130,7 @@ export const EpochVaultSection: FC<EpochVaultSectionProps> = ({
   }, [chosen, unseededTickers]);
 
   const handleSubmit = async () => {
-    if (!chosen || strikeNum <= 0 || contractsNum <= 0) return;
+    if (!chosen || strikeNum <= 0 || contractsNum <= 0 || ladderError || cells.length === 0) return;
     try {
       // W1 submit-click pre-flight — see CustomVaultSection for full notes.
       const feedIdHex = Buffer.from(chosen.market.account.pythFeedId as number[]).toString("hex");
@@ -105,9 +141,8 @@ export const EpochVaultSection: FC<EpochVaultSectionProps> = ({
         );
       }
 
-      // MED-6: prefer Advanced-mode override if writer provided a valid
-      // positive value. Empty string or invalid input falls back to the
-      // Black-Scholes-derived default (matches LiveQuoteCard's preview).
+      // MED-6: prefer Advanced-mode override if valid + positive. Otherwise the
+      // Black-Scholes default — recomputed PER CELL on each cell's expiry below.
       const overrideStr = values.premiumPerContract.trim();
       const overrideNum = overrideStr ? parseFloat(overrideStr) : NaN;
       const useOverride = !isNaN(overrideNum) && overrideNum > 0;
@@ -117,47 +152,150 @@ export const EpochVaultSection: FC<EpochVaultSectionProps> = ({
         spot > 0
           ? applyVolSmile(getDefaultVolatility(chosen.ticker), spot, strikeNum, chosen.ticker)
           : getDefaultVolatility(chosen.ticker);
-      const days = Math.max(0, (epochExpiryTs - Date.now() / 1000) / 86400);
-      const bsPremium =
-        spot > 0 && days > 0
-          ? values.side === "call"
-            ? calculateCallPremium(spot, strikeNum, days, baselineIv)
-            : calculatePutPremium(spot, strikeNum, days, baselineIv)
-          : 0;
-      const premiumPerContract = useOverride ? overrideNum : bsPremium;
-      const collateralPerContract = requiredCollateralPerContract(strikeNum, values.side);
-      const collateral = collateralPerContract * contractsNum;
 
-      const result = await submit({
+      // ---- PER-CELL premium (keyed on each cell's expiryTs) ----
+      const writeCells: WriteCell[] = cells.map((c) => {
+        let premium: number;
+        if (useOverride) {
+          premium = overrideNum; // flat ask — honor across all cells as-is
+        } else {
+          const days = Math.max(0, (c.expiryTs - Date.now() / 1000) / 86400);
+          premium =
+            spot > 0 && days > 0
+              ? values.side === "call"
+                ? calculateCallPremium(spot, strikeNum, days, baselineIv)
+                : calculatePutPremium(spot, strikeNum, days, baselineIv)
+              : 0;
+        }
+        return {
+          expiryTs: c.expiryTs,
+          contracts: c.contracts,
+          collateral: c.collateral,
+          premiumPerContract: Math.max(premium, 0.000001),
+          tenorLabels: c.tenorLabels,
+        };
+      });
+
+      const base = {
         market: chosen.market,
         side: values.side,
         exerciseStyle: values.exerciseStyle,
         strike: strikeNum,
-        expiry: epochExpiryTs,
-        contracts: contractsNum,
-        premiumPerContract: Math.max(premiumPerContract, 0.000001),
-        collateral,
-        vaultType: "epoch",
-      });
+        vaultType: "epoch" as const,
+      };
 
-      if (result) {
+      const results = await submit({ ...base, cells: writeCells });
+      if (results) {
+        const landed = results.filter((r) => r.status === "landed").length;
+        const failed = results.length - landed;
         showToast({
-          type: "success",
-          title: "Epoch vault written",
-          message: `${contractsNum} ${chosen.ticker} ${values.side.toUpperCase()} contracts minted`,
-          txSignature: result.txSignature,
+          type: failed === 0 ? "success" : "info",
+          title: failed === 0 ? "Epoch write confirmed" : `Wrote ${landed}/${results.length} tenors`,
+          message: `${chosen.ticker} ${values.side.toUpperCase()} · ${landed} landed${
+            failed ? `, ${failed} failed` : ""
+          }`,
         });
-        onSuccess({ ...result, kind: "epoch" });
+        onSuccess({
+          kind: "epoch",
+          cells: results,
+          retryFailed: (failedCells: WriteCell[]) => retry({ ...base, cells: failedCells }),
+        });
       }
     } catch (err: any) {
-      const msg = decodeError(err);
-      showToast({
-        type: "error",
-        title: "Write failed",
-        message: msg,
-      });
+      showToast({ type: "error", title: "Write failed", message: decodeError(err) });
     }
   };
+
+  // ---- Tenor selector + ladder controls + pre-sign preview (Epoch slot) ----
+  const expirySlot = (
+    <div className="space-y-3">
+      <div className="font-mono font-medium text-[10.5px] uppercase tracking-[0.2em] text-ink-muted">
+        Tenor
+      </div>
+      <div className="flex gap-2">
+        <Pill active={tenorMode === "single"} onClick={() => setTenorMode("single")}>
+          Single
+        </Pill>
+        <Pill active={tenorMode === "ladder"} onClick={() => setTenorMode("ladder")}>
+          Ladder
+        </Pill>
+      </div>
+
+      {tenorMode === "single" ? (
+        <div className="flex gap-2">
+          {ALL_TENORS.map((t) => (
+            <Pill key={t} active={singleTenor === t} onClick={() => setSingleTenor(t)}>
+              {t}
+            </Pill>
+          ))}
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {ALL_TENORS.map((t) => (
+            <div key={t} className="flex items-center justify-between gap-3">
+              <span className="font-mono text-[11px] uppercase tracking-[0.18em] text-ink-muted">
+                {t}
+              </span>
+              <div className="flex items-center gap-1">
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={split[t]}
+                  onChange={(e) =>
+                    setSplit((s) => ({ ...s, [t]: Math.max(0, parseInt(e.target.value || "0", 10) || 0) }))
+                  }
+                  className="w-16 bg-paper-2 border border-rule rounded-sm px-2 py-1 font-mono text-[14px] text-ink focus:outline-none focus:border-ink transition-colors duration-200"
+                />
+                <span className="font-mono text-[11px] text-ink-muted">%</span>
+              </div>
+            </div>
+          ))}
+          <div
+            className={`font-mono font-medium text-[10px] uppercase tracking-[0.18em] ${
+              splitTotal === 100 ? "text-ink-muted" : "text-crimson"
+            }`}
+          >
+            Total {splitTotal}%{splitTotal === 100 ? "" : " · must equal 100"}
+          </div>
+        </div>
+      )}
+
+      {/* Pre-sign preview */}
+      <div className="border border-rule-soft rounded-sm p-3 space-y-1">
+        {ladderError ? (
+          <div className="font-sans italic font-medium leading-[1.5] text-crimson text-[12.5px]">
+            {ladderError}
+          </div>
+        ) : (
+          <>
+            {cells.map((c) => (
+              <div
+                key={c.expiryTs}
+                className="flex items-baseline justify-between gap-3 font-mono text-[11.5px] text-ink"
+              >
+                <span className="text-ink-muted">
+                  {c.tenorLabels.join(" + ")} · {fmtDate(c.expiryTs)}
+                </span>
+                <span>
+                  {c.contracts} × ${strikeNum.toLocaleString()} = ${c.collateral.toLocaleString()}
+                </span>
+              </div>
+            ))}
+            <div className="flex items-baseline justify-between border-t border-rule-soft pt-1 mt-1 font-mono text-[11.5px] text-ink">
+              <span className="text-ink-muted">Total collateral</span>
+              <span>${totalCollateral.toLocaleString()}</span>
+            </div>
+            {cells.length > 1 && (
+              <div className="font-mono font-medium text-[10px] uppercase tracking-[0.18em] text-crimson pt-0.5">
+                {cells.length} wallet approvals · one per tenor
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
 
   return (
     <section className="mt-16">
@@ -169,8 +307,8 @@ export const EpochVaultSection: FC<EpochVaultSectionProps> = ({
           </span>
         </div>
         <p className="m-0 max-w-[420px] font-sans italic font-normal leading-[1.5] opacity-75 text-[14px]">
-          Weekly settlement, every Friday. Writers deposit USDC and receive
-          writer-share tokens that earn premium as buyers fill the strike.
+          Weekly, monthly, or quarterly settlement — all on Friday 08:00 UTC.
+          Ladder mode splits collateral across tenors, one atomic write each.
         </p>
       </div>
 
@@ -180,7 +318,6 @@ export const EpochVaultSection: FC<EpochVaultSectionProps> = ({
           values={values}
           onChange={onChange}
           assets={assets}
-          epochExpiryLabel={epochExpiryLabel}
           spotForChosenAsset={spotForChosenAsset}
           connected={connected}
           submitting={submitting}
@@ -190,6 +327,8 @@ export const EpochVaultSection: FC<EpochVaultSectionProps> = ({
           marketHoursBlock={marketHoursBlock}
           volOracleBlock={volOracleBlock}
           unseededTickers={unseededTickers}
+          epochExpirySlot={expirySlot}
+          ladderBlock={ladderError ? { tooltip: ladderError } : null}
         />
         <LiveQuoteCard
           asset={values.asset}
@@ -197,7 +336,7 @@ export const EpochVaultSection: FC<EpochVaultSectionProps> = ({
           exerciseStyle={values.exerciseStyle}
           market={chosen?.market ?? null}
           strike={strikeNum}
-          expiry={epochExpiryTs}
+          expiry={frontExpiryTs}
           contracts={contractsNum}
           spot={spotForChosenAsset}
           spotStale={spotStale}
@@ -208,5 +347,33 @@ export const EpochVaultSection: FC<EpochVaultSectionProps> = ({
     </section>
   );
 };
+
+const Pill: FC<{ active: boolean; onClick: () => void; children: React.ReactNode }> = ({
+  active,
+  onClick,
+  children,
+}) => (
+  <button
+    type="button"
+    onClick={onClick}
+    aria-pressed={active}
+    className={`rounded-full border px-[14px] py-[6px] font-mono font-medium text-[10.5px] uppercase tracking-[0.18em] transition-colors duration-300 ease-opta ${
+      active
+        ? "border-crimson text-ink"
+        : "border-rule text-ink-muted hover:text-ink hover:border-ink"
+    }`}
+  >
+    {children}
+  </button>
+);
+
+function fmtDate(ts: number): string {
+  return new Date(ts * 1000).toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
 
 export default EpochVaultSection;

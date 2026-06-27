@@ -13,7 +13,11 @@ import {
   getDefaultVolatility,
 } from "../../utils/blackScholes";
 import { requiredCollateralPerContract } from "../../utils/collateral";
-import { useWriteSubmit, type WriteSubmitResult } from "./useWriteSubmit";
+import {
+  useWriteSubmit,
+  type WriteCell,
+  type WriteSuccessPayload,
+} from "./useWriteSubmit";
 import { decodeError } from "../../utils/errorDecoder";
 import {
   isMarketHours,
@@ -27,7 +31,7 @@ type CustomVaultSectionProps = {
   assets: AssetOption[];
   spotForChosenAsset: number | null;
   spotStale: boolean;
-  onSuccess: (result: WriteSubmitResult & { kind: "epoch" | "custom" }) => void;
+  onSuccess: (payload: WriteSuccessPayload) => void;
   /** W1 vol-oracle gate: tickers whose VolOracle PDA is missing on chain.
    *  Drives the asset-chip "oracle pending" badge in WriterForm and the
    *  inline form-level block when the chosen ticker is unseeded. */
@@ -40,7 +44,8 @@ type CustomVaultSectionProps = {
 
 /**
  * § 02 · Custom vault section. Same form shape as Epoch but with the
- * ExpiryPicker tail (preset row + date+time inputs).
+ * ExpiryPicker tail (preset row + date+time inputs). Always a single cell
+ * (arbitrary, possibly non-Friday expiry) — no tenor/ladder controls.
  */
 export const CustomVaultSection: FC<CustomVaultSectionProps> = ({
   values,
@@ -54,7 +59,7 @@ export const CustomVaultSection: FC<CustomVaultSectionProps> = ({
 }) => {
   const { connected } = useWallet();
   const { setVisible } = useWalletModal();
-  const { submitting, stageLabel, submit } = useWriteSubmit();
+  const { submitting, stageLabel, submit, retry } = useWriteSubmit();
 
   const contractsNum = parseInt(values.contracts || "0", 10) || 0;
   const strikeNum = parseFloat(values.strike) || 0;
@@ -95,8 +100,7 @@ export const CustomVaultSection: FC<CustomVaultSectionProps> = ({
       // W1 submit-click pre-flight. Even if the cache says "unseeded,"
       // re-check the chain right now — the crank may have seeded the
       // oracle since the last scan. If still missing, refuse with a
-      // friendly toast rather than letting stage 3 (mint_from_vault)
-      // revert with 3007 mid-flight.
+      // friendly toast rather than letting the mint revert with 3007 mid-flight.
       const feedIdHex = Buffer.from(chosen.market.account.pythFeedId as number[]).toString("hex");
       const oracleOk = await checkVolOracle(feedIdHex);
       if (!oracleOk) {
@@ -107,7 +111,7 @@ export const CustomVaultSection: FC<CustomVaultSectionProps> = ({
 
       // MED-6: prefer Advanced-mode override if writer provided a valid
       // positive value. Empty string or invalid input falls back to the
-      // Black-Scholes-derived default (matches LiveQuoteCard's preview).
+      // Black-Scholes-derived default for this expiry.
       const overrideStr = values.premiumPerContract.trim();
       const overrideNum = overrideStr ? parseFloat(overrideStr) : NaN;
       const useOverride = !isNaN(overrideNum) && overrideNum > 0;
@@ -128,26 +132,38 @@ export const CustomVaultSection: FC<CustomVaultSectionProps> = ({
       const collateralPerContract = requiredCollateralPerContract(strikeNum, values.side);
       const collateral = collateralPerContract * contractsNum;
 
-      const result = await submit({
+      const base = {
         market: chosen.market,
         side: values.side,
         exerciseStyle: values.exerciseStyle,
         strike: strikeNum,
-        expiry: values.expiry,
-        contracts: contractsNum,
-        premiumPerContract: Math.max(premiumPerContract, 0.000001),
-        collateral,
-        vaultType: "custom",
-      });
+        vaultType: "custom" as const,
+      };
+      // Custom is always a single cell (one arbitrary expiry).
+      const cells: WriteCell[] = [
+        {
+          expiryTs: values.expiry,
+          contracts: contractsNum,
+          collateral,
+          premiumPerContract: Math.max(premiumPerContract, 0.000001),
+          tenorLabels: ["Custom"],
+        },
+      ];
 
-      if (result) {
+      const results = await submit({ ...base, cells });
+      if (results) {
+        const landed = results.filter((r) => r.status === "landed").length;
         showToast({
-          type: "success",
-          title: "Custom vault written",
-          message: `${contractsNum} ${chosen.ticker} ${values.side.toUpperCase()} contracts minted`,
-          txSignature: result.txSignature,
+          type: landed ? "success" : "error",
+          title: landed ? "Custom vault written" : "Write failed",
+          message: `${contractsNum} ${chosen.ticker} ${values.side.toUpperCase()} contracts`,
+          txSignature: results[0]?.txSignature,
         });
-        onSuccess({ ...result, kind: "custom" });
+        onSuccess({
+          kind: "custom",
+          cells: results,
+          retryFailed: (failedCells: WriteCell[]) => retry({ ...base, cells: failedCells }),
+        });
       }
     } catch (err: any) {
       const msg = decodeError(err);

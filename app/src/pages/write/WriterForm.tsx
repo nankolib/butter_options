@@ -45,6 +45,11 @@ type WriterFormProps = {
   assets: AssetOption[];
   /** For Epoch mode: read-only label for "settles next Friday". Ignored in Custom. */
   epochExpiryLabel?: string;
+  /** Epoch-only: when provided, replaces the read-only "next Friday" block with
+   *  the tenor selector + ladder controls + pre-sign preview (EpochVaultSection). */
+  epochExpirySlot?: React.ReactNode;
+  /** Form-level block (e.g. ladder %≠100 or N<#tenors). Disables submit + tooltip. */
+  ladderBlock?: { tooltip: string } | null;
   /** Live spot for the currently chosen asset. Drives the moneyness hint. Null when missing. */
   spotForChosenAsset: number | null;
   /** Wallet connection — controls submit-button copy and enabled state. */
@@ -104,6 +109,8 @@ export const WriterForm: FC<WriterFormProps> = ({
   marketHoursBlock,
   volOracleBlock,
   unseededTickers,
+  epochExpirySlot,
+  ladderBlock,
 }) => {
   // If the chosen asset disappears from the asset list (e.g. data refresh
   // dropped it), reset to first available.
@@ -254,15 +261,17 @@ export const WriterForm: FC<WriterFormProps> = ({
       </Field>
 
       {mode === "epoch" ? (
-        <div>
-          <div className="font-mono font-medium text-[10.5px] uppercase tracking-[0.2em] text-ink-muted mb-2">
-            Expiry
+        epochExpirySlot ?? (
+          <div>
+            <div className="font-mono font-medium text-[10.5px] uppercase tracking-[0.2em] text-ink-muted mb-2">
+              Expiry
+            </div>
+            <div className="border border-rule-soft rounded-sm p-3 font-mono text-[12px] text-ink">
+              <span className="text-ink-muted">Settles next Friday · </span>
+              <span>{epochExpiryLabel ?? "—"}</span>
+            </div>
           </div>
-          <div className="border border-rule-soft rounded-sm p-3 font-mono text-[12px] text-ink">
-            <span className="text-ink-muted">Settles next Friday · </span>
-            <span>{epochExpiryLabel ?? "—"}</span>
-          </div>
-        </div>
+        )
       ) : (
         <ExpiryPicker
           preset={values.expiryPreset}
@@ -305,15 +314,21 @@ export const WriterForm: FC<WriterFormProps> = ({
         onClick={connected ? onSubmit : onConnectClick}
         disabled={
           connected &&
-          (submitting || !fieldsReady || marketHoursBlock !== null || volOracleBlock !== null)
+          (submitting ||
+            !fieldsReady ||
+            marketHoursBlock !== null ||
+            volOracleBlock !== null ||
+            (ladderBlock ?? null) !== null)
         }
         title={
           connected
-            ? volOracleBlock
-              ? volOracleBlock.tooltip
-              : marketHoursBlock
-                ? marketHoursBlock.tooltip
-                : undefined
+            ? ladderBlock
+              ? ladderBlock.tooltip
+              : volOracleBlock
+                ? volOracleBlock.tooltip
+                : marketHoursBlock
+                  ? marketHoursBlock.tooltip
+                  : undefined
             : undefined
         }
         className="w-full inline-flex items-center justify-center gap-2 rounded-full border border-ink bg-ink text-paper px-4 py-3 font-mono text-[11px] uppercase tracking-[0.2em] hover:bg-transparent hover:text-ink transition-colors duration-300 ease-opta disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-ink disabled:hover:text-paper"

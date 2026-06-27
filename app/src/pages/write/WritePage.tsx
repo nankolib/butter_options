@@ -15,8 +15,9 @@ import { AppNav } from "../../components/AppNav";
 import { WriteStatementHeader } from "./WriteStatementHeader";
 import { EpochVaultSection } from "./EpochVaultSection";
 import { CustomVaultSection } from "./CustomVaultSection";
+import { weeklyExpiry } from "../../utils/tenors";
 import type { WriterFormValues, AssetOption } from "./WriterForm";
-import type { WriteSubmitResult } from "./useWriteSubmit";
+import type { WriteCell, WriteSuccessPayload } from "./useWriteSubmit";
 
 interface MarketAccount {
   publicKey: PublicKey;
@@ -26,17 +27,13 @@ interface MarketAccount {
 /**
  * WritePage — the trader's write surface.
  *
- * Two side-by-side flows divided by a hairline: § 01 Epoch (Friday
- * weekly) and § 02 Custom (any expiry). Each section pairs a
- * WriterForm with a sticky LiveQuoteCard.
+ * Two side-by-side flows divided by a hairline: § 01 Epoch (tenor selector +
+ * ladder, all Friday 08:00 UTC) and § 02 Custom (any expiry). Each section
+ * pairs a WriterForm with a sticky LiveQuoteCard.
  *
- * Asset chips are derived from the on-chain markets list via dedupe —
- * we do NOT hardcode a 5-asset list. When no markets exist, each
- * section renders a clean empty-state pointing the user at /markets.
- *
- * Form values are owned at the page level so each section's state
- * persists independently and we can render a single page-level
- * confirmation banner after a successful submit.
+ * A write may fan out into N tenors (ladder) → N sequential atomic txs. The
+ * page-level banner lists each tenor's result (landed → tx link, failed →
+ * reason) and offers a scoped "Retry failed" that re-runs ONLY the failed cells.
  */
 export const WritePage: FC = () => {
   usePaperPalette();
@@ -47,9 +44,7 @@ export const WritePage: FC = () => {
     [connection.rpcEndpoint],
   );
   const [markets, setMarkets] = useState<MarketAccount[]>([]);
-  const [lastSuccess, setLastSuccess] = useState<
-    (WriteSubmitResult & { kind: "epoch" | "custom" }) | null
-  >(null);
+  const [lastSuccess, setLastSuccess] = useState<WriteSuccessPayload | null>(null);
 
   const refetchMarkets = async () => {
     if (!program) return;
@@ -110,27 +105,15 @@ export const WritePage: FC = () => {
     return out;
   }, [feeds, volOracleStatus.unseeded]);
 
-  const epochExpiryTs = useMemo(() => nextFridayUtc8(), []);
-  const epochExpiryLabel = useMemo(
-    () =>
-      new Date(epochExpiryTs * 1000).toLocaleDateString("en-GB", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-        timeZone: "UTC",
-      }) + " UTC",
-    [epochExpiryTs],
-  );
-
   const [epochValues, setEpochValues] = useState<WriterFormValues>({
     asset: null,
     side: "call",
     exerciseStyle: "european",
     strike: "",
     contracts: "1",
-    expiry: epochExpiryTs,
+    // Epoch expiry is tenor-derived inside EpochVaultSection; this field is
+    // unused there (seeded to the front weekly for sanity).
+    expiry: weeklyExpiry(),
     expiryPreset: "7D",
     premiumPerContract: "",
   });
@@ -145,13 +128,6 @@ export const WritePage: FC = () => {
     expiryPreset: "1D",
     premiumPerContract: "",
   });
-
-  // Keep the Epoch values' `expiry` field in sync with the computed
-  // next-Friday timestamp. Form doesn't expose it as editable but
-  // the LiveQuoteCard reads it.
-  useEffect(() => {
-    setEpochValues((v) => ({ ...v, expiry: epochExpiryTs }));
-  }, [epochExpiryTs]);
 
   const monthLabel = useMemo(
     () => new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" }),
@@ -172,13 +148,40 @@ export const WritePage: FC = () => {
     return `${datePart} · ${timePart} UTC`;
   }, []);
 
-  const handleSuccess = (result: WriteSubmitResult & { kind: "epoch" | "custom" }) => {
-    setLastSuccess(result);
+  const handleSuccess = (payload: WriteSuccessPayload) => {
+    setLastSuccess(payload);
     refetchMarkets();
     if (typeof window !== "undefined") {
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
   };
+
+  const handleRetryFailed = async () => {
+    if (!lastSuccess) return;
+    const failedCells: WriteCell[] = lastSuccess.cells
+      .filter((c) => c.status === "failed")
+      .map((c) => ({
+        expiryTs: c.expiryTs,
+        contracts: c.contracts,
+        collateral: c.collateral,
+        premiumPerContract: c.premiumPerContract,
+        tenorLabels: c.tenorLabels,
+      }));
+    if (failedCells.length === 0) return;
+    const retried = await lastSuccess.retryFailed(failedCells);
+    if (retried) {
+      // Merge: replace each failed entry with its retry outcome (keyed by expiry).
+      const byExp = new Map(retried.map((r) => [r.expiryTs, r]));
+      setLastSuccess({
+        ...lastSuccess,
+        cells: lastSuccess.cells.map((c) => byExp.get(c.expiryTs) ?? c),
+      });
+      refetchMarkets();
+    }
+  };
+
+  const landedCount = lastSuccess?.cells.filter((c) => c.status === "landed").length ?? 0;
+  const failedCount = (lastSuccess?.cells.length ?? 0) - landedCount;
 
   return (
     <div className="relative bg-paper text-ink overflow-x-hidden min-h-screen">
@@ -188,22 +191,15 @@ export const WritePage: FC = () => {
         <WriteStatementHeader monthLabel={monthLabel} timestampLabel={timestampLabel} />
 
         {lastSuccess && (
-          <div className="border border-rule rounded-md p-5 mb-12 flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <span aria-hidden="true" className="inline-block w-[6px] h-[6px] rounded-full bg-crimson" />
-              <span className="font-mono text-[11.5px] uppercase tracking-[0.2em]">
-                {lastSuccess.kind === "epoch" ? "Epoch" : "Custom"} write confirmed
-              </span>
-              <a
-                href={getSolscanTxUrl(lastSuccess.txSignature, cluster)}
-                target="_blank"
-                rel="noreferrer"
-                className="font-mono font-medium text-[10.5px] uppercase tracking-[0.18em] text-ink-muted hover:text-crimson transition-colors duration-300 ease-opta"
-              >
-                {lastSuccess.txSignature.slice(0, 8)}…{lastSuccess.txSignature.slice(-6)} ↗
-              </a>
-            </div>
-            <div className="flex items-center gap-4">
+          <div className="border border-rule rounded-md p-5 mb-12 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <span aria-hidden="true" className="inline-block w-[6px] h-[6px] rounded-full bg-crimson" />
+                <span className="font-mono text-[11.5px] uppercase tracking-[0.2em]">
+                  {lastSuccess.kind === "epoch" ? "Epoch" : "Custom"} write — {landedCount}/
+                  {lastSuccess.cells.length} landed
+                </span>
+              </div>
               <button
                 type="button"
                 onClick={() => setLastSuccess(null)}
@@ -211,6 +207,51 @@ export const WritePage: FC = () => {
               >
                 Dismiss
               </button>
+            </div>
+
+            <div className="space-y-1.5">
+              {lastSuccess.cells.map((c) => (
+                <div
+                  key={c.expiryTs}
+                  className="flex items-baseline justify-between gap-3 font-mono text-[10.5px]"
+                >
+                  <span className="uppercase tracking-[0.18em] text-ink-muted">
+                    {c.tenorLabels.join(" + ")} ·{" "}
+                    {new Date(c.expiryTs * 1000).toLocaleDateString("en-GB", {
+                      day: "2-digit",
+                      month: "short",
+                      timeZone: "UTC",
+                    })}{" "}
+                    · {c.contracts}×
+                  </span>
+                  {c.status === "landed" && c.txSignature ? (
+                    <a
+                      href={getSolscanTxUrl(c.txSignature, cluster)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="font-medium tracking-[0.14em] text-ink-muted hover:text-crimson transition-colors duration-300 ease-opta"
+                    >
+                      {c.txSignature.slice(0, 8)}…{c.txSignature.slice(-6)} ↗
+                    </a>
+                  ) : (
+                    <span className="text-crimson uppercase tracking-[0.14em]">
+                      {c.error ?? "Failed"}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <div className="flex items-center gap-4 pt-1">
+              {failedCount > 0 && (
+                <button
+                  type="button"
+                  onClick={handleRetryFailed}
+                  className="font-mono text-[11px] uppercase tracking-[0.2em] text-crimson no-underline border-b border-crimson pb-0.5 hover:opacity-70 transition-opacity duration-200"
+                >
+                  Retry {failedCount} failed
+                </button>
+              )}
               <Link
                 to="/portfolio"
                 className="inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.2em] text-ink no-underline border-b border-ink pb-0.5 hover:border-crimson hover:text-crimson transition-colors duration-300 ease-opta"
@@ -227,8 +268,6 @@ export const WritePage: FC = () => {
           assets={assets}
           spotForChosenAsset={epochValues.asset ? spotPrices[epochValues.asset] ?? null : null}
           spotStale={pricesStale}
-          epochExpiryTs={epochExpiryTs}
-          epochExpiryLabel={epochExpiryLabel}
           onSuccess={handleSuccess}
           unseededTickers={unseededTickers}
           checkVolOracle={volOracleStatus.checkOne}
@@ -252,22 +291,5 @@ export const WritePage: FC = () => {
     </div>
   );
 };
-
-/**
- * Compute the next Friday at 08:00 UTC as a Unix timestamp (seconds).
- * Matches the on-chain default `EpochConfig` (weekly_expiry_day=5,
- * weekly_expiry_hour=8). If today is Friday but past 08:00 UTC, rolls
- * to the following Friday. The on-chain epoch_config can override this
- * — alignment work is parked for a later pass.
- */
-function nextFridayUtc8(): number {
-  const d = new Date();
-  d.setUTCHours(8, 0, 0, 0);
-  const day = d.getUTCDay(); // Sun=0, Fri=5
-  let delta = (5 - day + 7) % 7;
-  if (delta === 0 && d.getTime() <= Date.now()) delta = 7;
-  d.setUTCDate(d.getUTCDate() + delta);
-  return Math.floor(d.getTime() / 1000);
-}
 
 export default WritePage;

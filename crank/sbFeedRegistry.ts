@@ -29,6 +29,11 @@ import {
   ON_DEMAND_DEVNET_QUEUE,
   QUOTE_PROGRAM_ID,
 } from "@switchboard-xyz/on-demand";
+import {
+  SB_FEED_DATA,
+  normSbFeedHash,
+  type SbFeedDatum,
+} from "@app/utils/sbFeedData";
 
 export interface SbFeedEntry {
   /** 64-char lowercase hex, no 0x prefix. */
@@ -45,26 +50,61 @@ export interface SbFeedEntry {
   jobs: Array<Record<string, unknown>>;
 }
 
-// ---- Gold (XAU/USD via PAXG) — the 1c-i-A-proven pilot feed ----------------
-const GOLD: SbFeedEntry = {
-  feedHashHex: "6c3c5cc720d1ffd8108aca22bf7834d659612b7e1a4e5f623b76846d1167355e",
-  symbol: "XAU/USD",
-  queue: ON_DEMAND_DEVNET_QUEUE,
-  quoteProgram: QUOTE_PROGRAM_ID,
-  minOracleSamples: 2,
-  jobs: [
+// ---- Per-feed cached/fallback OracleJob specs (SDK construction; keyed by
+// normalized feedHash). These stay HERE, not in sbFeedData.ts: they are the
+// SB-managed-quote job source, conceptually part of the SDK path, and the FE
+// has no use for them. ----
+const JOBS_BY_FEED: Record<string, Array<Record<string, unknown>>> = {
+  // Gold (XAU/USD via PAXG)
+  "6c3c5cc720d1ffd8108aca22bf7834d659612b7e1a4e5f623b76846d1167355e": [
     { tasks: [{ httpTask: { url: "https://api.binance.com/api/v3/ticker/price?symbol=PAXGUSDT" } }, { jsonParseTask: { path: "$.price" } }] },
     { tasks: [{ httpTask: { url: "https://api.exchange.coinbase.com/products/PAXG-USD/ticker" } }, { jsonParseTask: { path: "$.price" } }] },
   ],
 };
 
-const REGISTRY: Map<string, SbFeedEntry> = new Map([
-  [GOLD.feedHashHex, GOLD],
-]);
+// Map each pure-data base58 string → the live SDK constant, asserting equality
+// so a future SDK constant change fails the crank LOUDLY instead of drifting.
+const QUEUE_BY_B58: Record<string, PublicKey> = {
+  [ON_DEMAND_DEVNET_QUEUE.toBase58()]: ON_DEMAND_DEVNET_QUEUE,
+};
+const PROGRAM_BY_B58: Record<string, PublicKey> = {
+  [QUOTE_PROGRAM_ID.toBase58()]: QUOTE_PROGRAM_ID,
+};
 
-/** Normalize a feedHash (strip 0x, lowercase) for registry keying. */
+function resolveQueue(b58: string): PublicKey {
+  const q = QUEUE_BY_B58[b58];
+  if (!q) throw new Error(`sbFeedRegistry: unknown SB queue ${b58} (sbFeedData drifted from SDK constant)`);
+  return q;
+}
+function resolveProgram(b58: string): PublicKey {
+  const p = PROGRAM_BY_B58[b58];
+  if (!p) throw new Error(`sbFeedRegistry: unknown SB quote program ${b58} (sbFeedData drifted from SDK constant)`);
+  return p;
+}
+
+function entryFromDatum(d: SbFeedDatum): SbFeedEntry {
+  const key = normSbFeedHash(d.feedHashHex);
+  const jobs = JOBS_BY_FEED[key];
+  if (!jobs) throw new Error(`sbFeedRegistry: no job spec for ${d.symbol} (${key.slice(0, 10)})`);
+  return {
+    feedHashHex: key,
+    symbol: d.symbol,
+    queue: resolveQueue(d.queuePubkey),
+    quoteProgram: resolveProgram(d.quoteProgramPubkey),
+    minOracleSamples: d.minOracleSamples,
+    jobs,
+  };
+}
+
+const REGISTRY: Map<string, SbFeedEntry> = new Map(
+  SB_FEED_DATA.map((d) => [normSbFeedHash(d.feedHashHex), entryFromDatum(d)]),
+);
+
+/** Normalize a feedHash (strip 0x, lowercase) for registry keying. Thin
+ *  re-export of the shared pure-data normalizer so existing callers
+ *  (switchboardCreateMarket.ts) stay untouched. */
 export function normFeedHash(feedHashHex: string): string {
-  return feedHashHex.replace(/^0x/, "").toLowerCase();
+  return normSbFeedHash(feedHashHex);
 }
 
 /** Registry entry for a feedHash, or undefined if unsupported. */

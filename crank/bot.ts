@@ -59,6 +59,10 @@ import {
   type SbOracleCrankContext,
   type SbOracleCrankOptions,
 } from "./sbOracleCrank";
+import {
+  startSbCreateMarketServer,
+  type SbCreateServerHandle,
+} from "./sbCreateMarketEndpoint";
 
 // ---- Constants -------------------------------------------------------------
 
@@ -1109,6 +1113,32 @@ async function main(): Promise<void> {
     );
   }
 
+  // ---- Mount the SB create-market HTTP endpoint (Part 2) -------------------
+  // CRASH-ISOLATED + mounted OUTSIDE `loops`: a failure here can NEVER reject
+  // Promise.all or take down settle/vol/trigger/sb. Env-gated OFF by default —
+  // set OPTA_SB_CREATE_ENABLED=1 at the coordinated SB-create deploy. The
+  // listener binds 127.0.0.1 by default; front it with nginx TLS on the public
+  // domain the FE points at.
+  let sbCreateServer: SbCreateServerHandle | null = null;
+  if ((process.env.OPTA_SB_CREATE_ENABLED ?? "") === "1") {
+    try {
+      sbCreateServer = startSbCreateMarketServer({
+        connection: ctx.connection,
+        wallet: ctx.wallet,
+        program: ctx.program,
+        log: (level, msg, fields) =>
+          log(level, msg, { subsystem: "sb-create", ...(fields ?? {}) }),
+      });
+    } catch (err) {
+      // Mount-time failure must not take the crank down.
+      log("error", "sb-create endpoint failed to start (continuing without it)", {
+        err: String(err),
+      });
+    }
+  } else {
+    logInfo("sb-create endpoint DISABLED (set OPTA_SB_CREATE_ENABLED=1 to start)");
+  }
+
   try {
     await Promise.all(loops);
   } catch (err) {
@@ -1118,6 +1148,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  if (sbCreateServer) sbCreateServer.close();
   logInfo("crank stopped cleanly");
 }
 

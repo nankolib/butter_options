@@ -1,6 +1,6 @@
 import type { FC } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { PublicKey } from "@solana/web3.js";
+import { PublicKey, VersionedTransaction, type Connection } from "@solana/web3.js";
 import { useAnchorWallet, useWallet } from "@solana/wallet-adapter-react";
 import { useProgram } from "../../hooks/useProgram";
 import { showToast } from "../../components/Toast";
@@ -18,7 +18,7 @@ import {
   lookupSbFeedDatum,
   type SbFeedDatum,
 } from "../../utils/sbFeedData";
-import { getHermesBase } from "../../utils/env";
+import { getHermesBase, getSbCreateEndpoint } from "../../utils/env";
 import {
   buildPostUpdateAndCreateMarketTx,
   submitWithFallback,
@@ -87,20 +87,241 @@ function sbDatumToChoice(d: SbFeedDatum): FeedChoice {
   };
 }
 
+// ===========================================================================
+// Switchboard create-market flow (FE side)
+// ===========================================================================
+//
+// The FE does NO Switchboard SDK work — it POSTs to the VPS builder endpoint,
+// receives an UNSIGNED VersionedTransaction (base64), signs it with the user's
+// wallet, and submits. The endpoint is stateless + freshness-bound (the tx
+// blockhash expires before the embedded oracle quote does), so on a genuine
+// stale failure we RE-POST for a fresh tx and re-sign the FRESH one — never
+// re-submit or re-sign the stale tx. DELIBERATELY imports NO @switchboard-xyz/*
+// or crank code; all SB SDK work lives server-side.
+
+type SbCreateResponse = {
+  transactionBase64: string;
+  marketPda: string;
+  lastValidBlockHeight: number;
+};
+
+/** A non-2xx response from the create endpoint, carrying the HTTP status so the
+ *  caller can map it to a clean toast. Fails fast — never retried. */
+class SbEndpointError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "SbEndpointError";
+  }
+}
+/** The endpoint was unreachable (fetch threw). Fails fast — never retried. */
+class SbNetworkError extends Error {
+  constructor() {
+    super("Could not reach create service.");
+    this.name = "SbNetworkError";
+  }
+}
+/** The user declined the wallet signature. Fails fast — never retried; surfaced
+ *  as a neutral (info) toast, not an error. */
+class SbUserRejectedError extends Error {
+  constructor() {
+    super("Signature cancelled");
+    this.name = "SbUserRejectedError";
+  }
+}
+
+type WalletSigner = {
+  publicKey: PublicKey;
+  signTransaction: (tx: VersionedTransaction) => Promise<VersionedTransaction>;
+};
+
+/** True ONLY for a wallet user-rejection — must NOT be treated as stale (no
+ *  retry) and surfaces as a neutral toast. */
+function isUserRejection(e: any): boolean {
+  if (e?.code === 4001) return true;
+  const msg = String(e?.message ?? e ?? "").toLowerCase();
+  return (
+    msg.includes("user rejected") ||
+    msg.includes("user denied") ||
+    msg.includes("rejected the request") ||
+    msg.includes("request rejected")
+  );
+}
+
+/** True ONLY for a genuine blockhash-expiry / quote-staleness signal during
+ *  submit/confirm — the ONE error class that triggers the single refetch-retry.
+ *  Deliberately narrow: a user rejection, a 4xx/5xx, a network error, or any
+ *  other program error returns false and fails fast. */
+function isStaleSubmitError(e: any): boolean {
+  const name = String(e?.name ?? "");
+  if (
+    name === "TransactionExpiredBlockheightExceededError" ||
+    name === "TransactionExpiredTimeoutError"
+  ) {
+    return true;
+  }
+  const msg = String(e?.message ?? e ?? "").toLowerCase();
+  return (
+    msg.includes("block height exceeded") ||
+    msg.includes("blockhash not found") ||
+    msg.includes("transactionexpired") ||
+    // On-chain SB quote staleness — rare (blockhash expires first per the
+    // endpoint's documented freshness invariant), included defensively.
+    msg.includes("switchboardverifyfailed")
+  );
+}
+
+/** POST to the create endpoint for a fresh unsigned tx. Throws SbNetworkError
+ *  (unreachable) or SbEndpointError (non-2xx / malformed) — both fail fast. */
+async function postSbCreate(
+  endpoint: string,
+  body: {
+    assetName: string;
+    feedHashHex: string;
+    assetClass: number;
+    userPublicKey: string;
+  },
+): Promise<SbCreateResponse> {
+  let resp: Response;
+  try {
+    resp = await fetch(`${endpoint}/sb-create-market`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    throw new SbNetworkError();
+  }
+  if (!resp.ok) {
+    let msg = "";
+    try {
+      const j = await resp.json();
+      if (j && typeof j.error === "string") msg = j.error;
+    } catch {
+      /* non-JSON error body — leave msg empty, mapped by status */
+    }
+    throw new SbEndpointError(resp.status, msg);
+  }
+  let json: any;
+  try {
+    json = await resp.json();
+  } catch {
+    throw new SbEndpointError(resp.status, "malformed response from create service");
+  }
+  if (
+    typeof json?.transactionBase64 !== "string" ||
+    typeof json?.lastValidBlockHeight !== "number"
+  ) {
+    throw new SbEndpointError(resp.status, "malformed response from create service");
+  }
+  return {
+    transactionBase64: json.transactionBase64,
+    marketPda: typeof json.marketPda === "string" ? json.marketPda : "",
+    lastValidBlockHeight: json.lastValidBlockHeight,
+  };
+}
+
 /**
- * Switchboard create-market builder — STUB (this increment).
+ * Fetch → deserialize → sign → submit → confirm the SB create tx, with a
+ * retry-once policy that fires ONLY on a genuine stale signal.
  *
- * The real SB create needs a fresh ed25519-signed Switchboard quote (Crossbar
- * fetch + on-chain QuoteVerifier existence proof) — confirmed required by the
- * on-chain create_market SB arm; static accounts alone don't pass. That pulls
- * the heavy SB SDK into the FE bundle, so it lands in a later increment. Until
- * then this throws a clean coming-soon error the modal surfaces inline.
- *
- * DELIBERATELY imports NO @switchboard-xyz/* or crank code — keeps the SB SDK
- * out of the FE bundle.
+ * Error-class routing (precise by design — a too-broad retry would be a bug):
+ *   - postSbCreate throw (network / 4xx / 5xx) → propagates, NO retry.
+ *   - signTransaction throw → if user-rejection, SbUserRejectedError (NO retry);
+ *     any other sign error propagates (NO retry).
+ *   - send/confirm throw → ONLY isStaleSubmitError triggers ONE refetch-retry
+ *     (re-POST + re-sign the FRESH tx). Anything else propagates immediately.
+ * Capped at exactly one refetch (2 attempts total).
  */
-async function buildSbCreateMarketTx(): Promise<never> {
-  throw new Error("Switchboard market creation is not yet wired — coming soon");
+async function submitSbCreateMarket(args: {
+  endpoint: string;
+  connection: Connection;
+  wallet: WalletSigner;
+  assetName: string;
+  feedHashHex: string;
+  assetClass: number;
+  userPublicKey: string;
+}): Promise<string> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    // 1. Fresh tx every attempt (stateless endpoint). Endpoint/network errors
+    //    propagate here — NOT candidates for the stale-retry.
+    const resp = await postSbCreate(args.endpoint, {
+      assetName: args.assetName,
+      feedHashHex: args.feedHashHex,
+      assetClass: args.assetClass,
+      userPublicKey: args.userPublicKey,
+    });
+    const tx = VersionedTransaction.deserialize(
+      Buffer.from(resp.transactionBase64, "base64"),
+    );
+
+    // 2. Sign the FRESH tx. A user rejection is NOT stale — fail fast clean.
+    let signed: VersionedTransaction;
+    try {
+      signed = await args.wallet.signTransaction(tx);
+    } catch (e) {
+      if (isUserRejection(e)) throw new SbUserRejectedError();
+      throw e; // other sign error — fail fast, no retry
+    }
+
+    // 3. Submit + confirm. ONLY a genuine stale signal here triggers the single
+    //    refetch-retry; everything else fails fast.
+    try {
+      const sig = await args.connection.sendRawTransaction(signed.serialize(), {
+        skipPreflight: false,
+        maxRetries: 3,
+      });
+      await args.connection.confirmTransaction(
+        {
+          signature: sig,
+          blockhash: tx.message.recentBlockhash,
+          lastValidBlockHeight: resp.lastValidBlockHeight,
+        },
+        "confirmed",
+      );
+      return sig;
+    } catch (e) {
+      if (attempt === 0 && isStaleSubmitError(e)) {
+        // Stale → loop re-POSTs a FRESH tx + re-signs it. Never re-submit the
+        // stale tx.
+        continue;
+      }
+      throw e; // non-stale, or already retried once — fail fast
+    }
+  }
+  // Unreachable: the loop returns on success or throws. Defensive only.
+  throw new Error("SB create: exhausted retries");
+}
+
+/** Map an SB create failure to a clean inline toast message (title fixed to
+ *  match the Pyth arm). User-rejection is handled separately by the caller. */
+function mapSbError(e: unknown): { title: string; message: string } {
+  const title = "Create market failed";
+  if (e instanceof SbNetworkError) {
+    return { title, message: "Could not reach create service." };
+  }
+  if (e instanceof SbEndpointError) {
+    switch (e.status) {
+      case 400:
+        return { title, message: e.message || "Invalid request." };
+      case 403:
+      case 404:
+        return { title, message: "SB create unavailable." };
+      case 413:
+      case 429:
+        return { title, message: "Too many requests, try shortly." };
+      case 502:
+        return { title, message: "Switchboard quote unavailable, please retry." };
+      default:
+        return { title, message: e.message || "Create service error." };
+    }
+  }
+  if (isStaleSubmitError(e)) {
+    return { title, message: "Transaction expired — please try again." };
+  }
+  return { title, message: decodeError(e) };
 }
 
 /**
@@ -355,19 +576,50 @@ export const NewMarketModal: FC<NewMarketModalProps> = ({
         return;
       }
 
-      // --- Switchboard arm (oracle_source = 1): routed but not yet wired. ---
-      // The local stub throws a clean coming-soon error; surface it inline (no
-      // crash) and bail. NO @switchboard-xyz/* import reaches the FE bundle.
+      // --- Switchboard arm (oracle_source = 1): build via the VPS endpoint, ---
+      // sign client-side, submit. The FE pulls in NO @switchboard-xyz/* — the
+      // endpoint does all SB SDK work and returns an unsigned tx.
       if (activeFeed.oracleSource !== 0) {
-        try {
-          await buildSbCreateMarketTx();
-        } catch (sbErr: any) {
+        const endpoint = getSbCreateEndpoint();
+        if (!endpoint) {
           showToast({
             type: "error",
-            title: "Coming soon",
+            title: "SB create not configured",
             message:
-              sbErr?.message ?? "Switchboard market creation is not yet wired",
+              "Switchboard market creation isn't configured for this deployment.",
           });
+          return;
+        }
+        try {
+          const sig = await submitSbCreateMarket({
+            endpoint,
+            connection: program.provider.connection,
+            wallet: anchorWallet,
+            assetName,
+            feedHashHex: activeFeed.feedIdHex,
+            assetClass: activeFeed.assetClass,
+            userPublicKey: publicKey.toBase58(),
+          });
+          showToast({
+            type: "success",
+            title: "Market created",
+            message: `${assetName} registered on-chain`,
+            txSignature: sig,
+          });
+          onCreated();
+          onClose();
+        } catch (e) {
+          if (e instanceof SbUserRejectedError) {
+            // Neutral, not error-looking — the user chose to cancel.
+            showToast({
+              type: "info",
+              title: "Signature cancelled",
+              message: "You declined the transaction.",
+            });
+          } else {
+            const { title, message } = mapSbError(e);
+            showToast({ type: "error", title, message });
+          }
         }
         return;
       }

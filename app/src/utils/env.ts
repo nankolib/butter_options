@@ -17,6 +17,22 @@ export function getHermesBase(): string {
   return typeof v === "string" && v.length > 0 ? v : DEFAULT_HERMES_BASE;
 }
 
+/**
+ * Resolve the Switchboard create-market endpoint base URL. Reads
+ * `VITE_SB_CREATE_ENDPOINT` from Vite's env. Returns `null` when unset/empty so
+ * the SB create arm can show a clean "not configured" message instead of
+ * constructing a request against `undefined`.
+ *
+ * Value shape: the HTTPS base ONLY (e.g. `https://sb-create.opta.fyi`) — the
+ * `/sb-create-market` path is appended by the caller. A trailing slash is
+ * trimmed so `${base}/sb-create-market` never doubles up.
+ */
+export function getSbCreateEndpoint(): string | null {
+  const v = import.meta.env.VITE_SB_CREATE_ENDPOINT;
+  if (typeof v !== "string" || v.length === 0) return null;
+  return v.replace(/\/+$/, "");
+}
+
 // ============================================================================
 // Cluster inference & display helpers
 // ============================================================================

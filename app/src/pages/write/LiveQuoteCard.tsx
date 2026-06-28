@@ -109,11 +109,41 @@ export const LiveQuoteCard: FC<LiveQuoteCardProps> = ({
     loading: amerLoading,
   } = useOptionPriceQuote(isAmerican && ready, market, amerParams);
 
+  // ---- Stale/warming-oracle fallback (Phase 2c-FE) ----
+  // When the American on-chain quote reverts because the vol oracle is STALE or
+  // still WARMING, the write WILL fail on-chain — but the page shouldn't go blank.
+  // Show the European client-side estimate as an INDICATIVE figure (if a spot is
+  // available) + a tailored advisory. ONLY these two revert kinds trigger this;
+  // every other error keeps its existing muted status line. NEVER disables the
+  // write button (the program is the real gate — advisory, not blocking).
+  const oracleUnavailableKind =
+    isAmerican &&
+    (amerError?.kind === "oracle-stale" || amerError?.kind === "oracle-warmup")
+      ? amerError.kind
+      : null;
+  const useIndicative = oracleUnavailableKind != null && bsPremiumPerContract != null;
+  const oracleAdvisory =
+    oracleUnavailableKind === "oracle-stale"
+      ? "On-chain oracle is stale — writes will fail until a fresh price pushes (typically after market open / on an SB-sourced market)."
+      : oracleUnavailableKind === "oracle-warmup"
+        ? "On-chain oracle is still warming up — writes unavailable until it has enough samples."
+        : null;
+
   // ---- Display values (branch on style) ----
-  const displayIv = isAmerican ? amerQuote?.volAnnualized ?? null : baselineIv;
-  const ivLabel = isAmerican ? "On-chain IV" : "Baseline IV";
+  const displayIv = isAmerican
+    ? useIndicative
+      ? baselineIv
+      : amerQuote?.volAnnualized ?? null
+    : baselineIv;
+  const ivLabel = isAmerican
+    ? useIndicative
+      ? "Indicative IV"
+      : "On-chain IV"
+    : "Baseline IV";
   const premiumPerContract = isAmerican
-    ? amerQuote?.premiumPerContract ?? null
+    ? useIndicative
+      ? bsPremiumPerContract
+      : amerQuote?.premiumPerContract ?? null
     : bsPremiumPerContract;
 
   const totalPremium =
@@ -132,8 +162,11 @@ export const LiveQuoteCard: FC<LiveQuoteCardProps> = ({
         : strike - premiumPerContract
       : null;
 
+  // For the stale/warmup case the prominent advisory below replaces the muted
+  // status line; keep the muted line for every other state (loading, fresh
+  // quote, other reverts).
   const amerStatus =
-    isAmerican && ready
+    isAmerican && ready && !oracleAdvisory
       ? describeOptionPriceQuoteStatus(amerLoading, amerError, amerQuote)
       : null;
 
@@ -161,6 +194,11 @@ export const LiveQuoteCard: FC<LiveQuoteCardProps> = ({
         <Row label="Premium / contract">
           {premiumPerContract != null ? <MoneyAmount value={premiumPerContract} /> : "—"}
         </Row>
+        {useIndicative && (
+          <div className="font-mono font-medium text-[9.5px] uppercase tracking-[0.16em] text-ink-muted -mt-1 mb-1 text-right leading-[1.5]">
+            indicative — not the on-chain price
+          </div>
+        )}
         <Row label="Total premium" emphasis>
           {totalPremium != null ? (
             <span className="text-crimson"><MoneyAmount value={totalPremium} /></span>
@@ -178,6 +216,15 @@ export const LiveQuoteCard: FC<LiveQuoteCardProps> = ({
         {amerStatus && (
           <div className="font-mono font-medium text-[10px] uppercase tracking-[0.16em] text-ink-muted mt-3 leading-[1.5]">
             {amerStatus}
+          </div>
+        )}
+
+        {/* Prominent, unmissable advisory for a stale/warming oracle — the write
+            will fail on-chain. Informational only; the Create/Write button stays
+            enabled (the program is the real gate). */}
+        {oracleAdvisory && (
+          <div className="border border-crimson/30 rounded-sm p-3 mt-3 font-sans italic font-medium leading-[1.5] text-ink-body text-[13px]">
+            {oracleAdvisory}
           </div>
         )}
 

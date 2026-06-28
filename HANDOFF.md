@@ -1,5 +1,21 @@
 # Opta — Engineer Handoff
 
+> **2026-06-29 (SESSION CLOSE — write-flow + supply-side arcs) — three arcs shipped (atomic write, tenor/ladder, ladder generator); Trade-v2 flip ABORTED (broken on localhost); priority pivots to the SPARTAN meeting (Wed).**
+>
+> **(A) SHIPPED (live on master+main):** (1) Atomic write bundle — useWriteSubmit.ts collapsed 3 approvals → 1 (create_and_deposit + mint_from_vault, one legacy tx); proven on-chain tx 4Q8pm2J8…, 433,655 CU. (2) Tenor/ladder write flow — new utils/tenors.ts (wk/mo/qtr date math + snapLadder reserve-1-then-floor + same-Friday collision merge); single tenor or %-split across tenors → N sequential atomic cells, per-cell BS premium on each tenor's TTE, retry scoped to failed cells; pure FE. (3) Admin ladder generator — crank/ladderGenerator.ts (cc5931b), one-shot CLI seeding ask-only vault-pegged inventory ([create_series, create_and_deposit], mint-on-fill, spread_bps=0); DRY-RUN default, LIVE dual-gated; idempotent scan + policy-B proven live.
+>
+> **(B) GENERATOR DRY-RUN VERIFIED (local), NOT RUN LIVE.** 161 cells (168 gross − 7 policy-B user-vault skips), 4 Fridays (Jul-3/Jul-10/Jul-31/Sep-25, no collisions), $3.39M USDC + 3.23 SOL, coverage OK. Admin keypair 5YRMuuoY is LOCAL ONLY (/home/nanko/.config/solana/id.json) — NOT on VPS by design; generator runs locally.
+>
+> **(C) NEXT CHECKPOINT — SOL canary (Nanko's run):** --asset SOL --side call --live (~25 cells / ~$1,750 / ~0.5 SOL), then fill one seeded cell to prove seed→ask→mint-on-fill. Only after a clean fill → widen SOL→ETH→BTC. First real-capital op.
+>
+> **(D) TRADE-V2 FLIP — ABORTED.** v2 tested on localhost → broken → flip cancelled, TRADE_V2_UI stays false, nothing committed. Do NOT flip until v2 fixed AND CSP proven on a Vercel preview branch (localhost can't prove the Vercel-applied CSP header).
+>
+> **(E) PRIORITY — SPARTAN MEETING WED.** Clay (Colosseum) intro'd Nanko to Eric (venture @ The Spartan Group, top-tier crypto VC). Next 2 days = prep. VC framing not hackathon: 2-min narrative (why options on Solana, why now, why permissionless, defensibility); working demo (atomic write live + Solscan + ladder UI); hard questions + answers; what Nanko wants from Spartan. Traction: Anatoly QRT, Colosseum Frontier, Foundation outreach.
+>
+> **(F) WEEKEND TWITTER (Sun night).** Off the live atomic-write + ladder work (not broken v2). Ladder screenshot + term-structure/liquidity narrative; self-reply on writer yield; QRT'd from personal.
+>
+> **(G) STILL OPEN (non-blocking):** live ladder smoke; SOL canary + fill; Namecheap DNS → SB-create; set_spread_bps Rust IF LP markup wanted later.
+
 > **2026-06-28 (Write-page arc — post-handoff, via live smoke) — SHIPPED. Two Write-page fixes surfaced by live testing after the session-close handoff below. master+main at `6ce7b48`.**
 >
 > - **2c-FE — `6904aaf`** (`feat(write): indicative premium + stale/warmup oracle advisory`). When the American on-chain quote reverts on a stale/warming vol oracle, the Write panel shows the European client-side estimate labeled "indicative — not the on-chain price" (if a Hermes spot resolves) + a prominent tailored advisory (distinguishes `oracle-stale` 6045 vs `oracle-warmup` 6044) instead of blank dashes. Write button gating unchanged (the program is the real gate).

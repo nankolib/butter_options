@@ -72,9 +72,13 @@ export const LiveQuoteCard: FC<LiveQuoteCardProps> = ({
     return () => clearInterval(id);
   }, []);
 
-  const ready = Boolean(
-    !isPlaceholder && asset && strike > 0 && expiry != null && spot != null && spot > 0,
-  );
+  // Base readiness — everything the American on-chain quote needs. It carries
+  // the oracle's OWN spot, so it does NOT require the Hermes display spot; a
+  // transient Hermes-spot miss must not suppress it.
+  const baseReady = Boolean(!isPlaceholder && asset && strike > 0 && expiry != null);
+  // Full readiness for the European client-side estimate, which genuinely needs
+  // a spot client-side (calculateCallPremium / applyVolSmile take spot).
+  const ready = baseReady && spot != null && spot > 0;
 
   // ---- European (off-chain Black-Scholes) ----
   // Baseline IV — static per-asset default. Smile-adjusted for the strike.
@@ -91,10 +95,11 @@ export const LiveQuoteCard: FC<LiveQuoteCardProps> = ({
       : null;
 
   // ---- American (on-chain get_option_price view, lazy + debounced) ----
-  // Only fetches when American + inputs ready (enabled gate); the shared hook
-  // owns the debounce + .view() call. carry 0 matches createSharedVault.
+  // Gated on baseReady (NOT `ready`) — the on-chain quote carries the oracle's
+  // own spot, so it fires even when the Hermes display spot is momentarily null.
+  // The shared hook owns the debounce + .view() call. carry 0 matches createSharedVault.
   const amerParams =
-    isAmerican && ready && expiry != null
+    isAmerican && baseReady && expiry != null
       ? {
           strike,
           expiryTs: expiry,
@@ -107,7 +112,7 @@ export const LiveQuoteCard: FC<LiveQuoteCardProps> = ({
     quote: amerQuote,
     error: amerError,
     loading: amerLoading,
-  } = useOptionPriceQuote(isAmerican && ready, market, amerParams);
+  } = useOptionPriceQuote(isAmerican && baseReady, market, amerParams);
 
   // ---- Stale/warming-oracle fallback (Phase 2c-FE) ----
   // When the American on-chain quote reverts because the vol oracle is STALE or
@@ -162,11 +167,18 @@ export const LiveQuoteCard: FC<LiveQuoteCardProps> = ({
         : strike - premiumPerContract
       : null;
 
-  // For the stale/warmup case the prominent advisory below replaces the muted
-  // status line; keep the muted line for every other state (loading, fresh
-  // quote, other reverts).
+  // SPOT row value: the Hermes display spot, or — when American + the Hermes spot
+  // is null but the on-chain quote succeeded — the oracle's own spot from the
+  // quote. Degrades to "—" only when BOTH are null; never blanks the premium rows.
+  const spotFromOracle = spot == null && isAmerican && amerQuote?.spotUsed != null;
+  const displaySpot = spot ?? (isAmerican ? amerQuote?.spotUsed ?? null : null);
+
+  // Gated on baseReady (NOT `ready`) so the status/advisory show whenever the
+  // quote actually ran — independent of the Hermes display spot. For the
+  // stale/warmup case the prominent advisory below replaces the muted line; keep
+  // the muted line for every other state (loading, fresh quote, other reverts).
   const amerStatus =
-    isAmerican && ready && !oracleAdvisory
+    isAmerican && baseReady && !oracleAdvisory
       ? describeOptionPriceQuoteStatus(amerLoading, amerError, amerQuote)
       : null;
 
@@ -181,10 +193,13 @@ export const LiveQuoteCard: FC<LiveQuoteCardProps> = ({
         </div>
 
         <Row label="Spot">
-          {spot != null && !isPlaceholder ? (
+          {displaySpot != null && !isPlaceholder ? (
             <>
-              <MoneyAmount value={spot} />
-              {spotStale && <span className="text-ink-muted"> · delayed</span>}
+              <MoneyAmount value={displaySpot} />
+              {spotStale && !spotFromOracle && (
+                <span className="text-ink-muted"> · delayed</span>
+              )}
+              {spotFromOracle && <span className="text-ink-muted"> · oracle</span>}
             </>
           ) : "—"}
         </Row>

@@ -18,6 +18,7 @@ import {
   type AssetRegistryEntry,
 } from "../../utils/assetRegistry";
 import { getHermesBase, getSbCreateEndpoint } from "../../utils/env";
+import { getLiveness, resolveSource, type LivenessMap } from "../../utils/liveness";
 import {
   buildPostUpdateAndCreateMarketTx,
   submitWithFallback,
@@ -379,6 +380,9 @@ export const NewMarketModal: FC<NewMarketModalProps> = ({
   const [pastedHex, setPastedHex] = useState("");
   const [pastedClass, setPastedClass] = useState<number>(0);
   const [submitting, setSubmitting] = useState(false);
+  // Crank-published source-liveness map (Phase 2b). null = unfetched / stale /
+  // unreachable → routing degrades silently to the Phase-1 static default.
+  const [liveness, setLiveness] = useState<LivenessMap | null>(null);
 
   // A dead Hermes catalog only blocks CRYPTO (the SB classes don't use it), so a
   // Hermes failure forces Advanced paste for crypto ONLY. SB classes keep showing
@@ -394,7 +398,7 @@ export const NewMarketModal: FC<NewMarketModalProps> = ({
   // other class → Switchboard (1). This is correct for both the scoped path
   // (selection class == selectedClass) and advanced (class == pastedClass).
   const activeFeed:
-    | { feedIdHex: string; assetClass: number; oracleSource: number }
+    | { feedIdHex: string; assetClass: number; oracleSource: number; stale: boolean }
     | null = useMemo(() => {
     if (selectedClass === null) return null;
     if (advancedActive) {
@@ -404,21 +408,23 @@ export const NewMarketModal: FC<NewMarketModalProps> = ({
         feedIdHex: hex,
         assetClass: pastedClass,
         oracleSource: pastedClass === 0 ? 0 : 1,
+        stale: false, // manual paste — liveness not consulted
       };
     }
     if (!selected) return null;
-    // Route by the row's resolved default source + pick the matching feed id.
-    // Dual-source rows carry both ids; Phase 2 re-resolves this per-create from a
-    // liveness map (Pyth/SB are peers, not preferred-vs-fallback).
-    const feedIdHex =
-      selected.canonicalSource === 0 ? selected.pythFeedId : selected.sbFeedHash;
-    if (!feedIdHex) return null; // guard — canonicalSource guarantees its id is set
+    // Phase 2b ADVISORY peer routing: resolveSource picks the LIVE source from the
+    // liveness map (dual-source → live peer / tie-break; single-source → its
+    // source, never blocked). A null/stale map degrades silently to the Phase-1
+    // static default. `stale` is advisory only (drives a hint, never disables).
+    const resolved = resolveSource(selected, liveness);
+    if (!resolved) return null;
     return {
-      feedIdHex,
+      feedIdHex: resolved.feedIdHex,
       assetClass: selected.assetClass,
-      oracleSource: selected.canonicalSource,
+      oracleSource: resolved.oracleSource,
+      stale: resolved.stale,
     };
-  }, [selectedClass, advancedActive, pastedHex, pastedClass, selected]);
+  }, [selectedClass, advancedActive, pastedHex, pastedClass, selected, liveness]);
 
   // Load catalog on mount. React-18-canonical fetch-on-mount: rely on
   // the per-mount `cancelled` flag to suppress stale-mount setter calls.
@@ -447,6 +453,22 @@ export const NewMarketModal: FC<NewMarketModalProps> = ({
         // derivation routes crypto to Advanced while leaving SB classes on
         // their (catalog-independent) feed list.
         setCatalogState({ kind: "failed", error: err?.message ?? "unknown" });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Load the liveness map on mount (advisory — null on any failure → routing
+  // degrades silently to the Phase-1 static default). Same cancellation contract.
+  useEffect(() => {
+    let cancelled = false;
+    getLiveness()
+      .then((m) => {
+        if (!cancelled) setLiveness(m);
+      })
+      .catch(() => {
+        /* getLiveness never throws, but be defensive — leave liveness null */
       });
     return () => {
       cancelled = true;
@@ -890,6 +912,17 @@ export const NewMarketModal: FC<NewMarketModalProps> = ({
               {ASSET_CLASS_LABEL[activeFeed.assetClass]}
             </div>
           </Field>
+        )}
+
+        {/* Advisory liveness hint (Phase 2b) — informational only; the routed
+            oracle is currently stale (e.g. weekend/off-hours TradFi). The market
+            can still be created now (the create-proof needs existence, not
+            freshness); pricing activates when the market reopens. NEVER disables
+            Create. */}
+        {activeFeed?.stale && (
+          <div className="border border-rule-soft rounded-sm p-3 mb-5 font-sans italic font-medium leading-[1.5] text-ink-body text-[13px]">
+            Oracle pricing resumes at market open — the market can be created now.
+          </div>
         )}
 
         <div className="flex gap-3">

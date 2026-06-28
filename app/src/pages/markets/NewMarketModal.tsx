@@ -145,10 +145,20 @@ function isUserRejection(e: any): boolean {
   );
 }
 
-/** True ONLY for a genuine blockhash-expiry / quote-staleness signal during
- *  submit/confirm — the ONE error class that triggers the single refetch-retry.
- *  Deliberately narrow: a user rejection, a 4xx/5xx, a network error, or any
- *  other program error returns false and fails fast. */
+/** Stale-submit detection for the SB create arm ONLY (this fn is referenced only
+ *  in submitSbCreateMarket + mapSbError — the Pyth path never calls it, so this
+ *  cannot loosen Pyth stale handling). Triggers the single refetch-retry. A user
+ *  rejection, a 4xx/5xx, a network error, or a genuine Opta create error returns
+ *  false and fails fast.
+ *
+ *  GOLD5 broadening: when the user is slow to approve, the SB quote/blockhash
+ *  expires and the on-chain verify rejects the tx, surfacing NOT as a clean
+ *  stale string but as an opaque `custom program error: 0x3` (an InstructionError
+ *  on the ed25519/verify path) or Phantom's generic "failed to simulate". These
+ *  are the stale-EXECUTION fingerprint — and they are NEVER genuine Opta create
+ *  errors: the Opta enum is 6000+ (`0x1770`+), so a real on-chain failure
+ *  (e.g. SwitchboardFeedNotFound=6062) decodes to a message, never `0x3`. Matching
+ *  them therefore cannot retry a real failure. */
 function isStaleSubmitError(e: any): boolean {
   const name = String(e?.name ?? "");
   if (
@@ -164,7 +174,10 @@ function isStaleSubmitError(e: any): boolean {
     msg.includes("transactionexpired") ||
     // On-chain SB quote staleness — rare (blockhash expires first per the
     // endpoint's documented freshness invariant), included defensively.
-    msg.includes("switchboardverifyfailed")
+    msg.includes("switchboardverifyfailed") ||
+    // GOLD5 stale-execution fingerprint (opaque, but never an Opta 6000+ error).
+    msg.includes("custom program error: 0x3") ||
+    msg.includes("failed to simulate")
   );
 }
 
@@ -226,9 +239,13 @@ async function postSbCreate(
  *   - postSbCreate throw (network / 4xx / 5xx) → propagates, NO retry.
  *   - signTransaction throw → if user-rejection, SbUserRejectedError (NO retry);
  *     any other sign error propagates (NO retry).
+ *   - signTransaction throw → user-rejection (NO retry) is checked FIRST; a
+ *     stale-sim refusal (Phantom "failed to simulate") triggers ONE refetch.
  *   - send/confirm throw → ONLY isStaleSubmitError triggers ONE refetch-retry
  *     (re-POST + re-sign the FRESH tx). Anything else propagates immediately.
- * Capped at exactly one refetch (2 attempts total).
+ * Capped at exactly one refetch (2 attempts total). `onRefetch` (optional) fires
+ * just before the retry so the caller can tell a slow-approve user why a second
+ * wallet prompt is appearing.
  */
 async function submitSbCreateMarket(args: {
   endpoint: string;
@@ -238,6 +255,7 @@ async function submitSbCreateMarket(args: {
   feedHashHex: string;
   assetClass: number;
   userPublicKey: string;
+  onRefetch?: () => void;
 }): Promise<string> {
   for (let attempt = 0; attempt < 2; attempt++) {
     // 1. Fresh tx every attempt (stateless endpoint). Endpoint/network errors
@@ -252,13 +270,20 @@ async function submitSbCreateMarket(args: {
       Buffer.from(resp.transactionBase64, "base64"),
     );
 
-    // 2. Sign the FRESH tx. A user rejection is NOT stale — fail fast clean.
+    // 2. Sign the FRESH tx. A user rejection is NOT stale — fail fast clean. But
+    //    a stale-sim refusal (Phantom "failed to simulate" on an aged quote) IS
+    //    stale → refetch once. The user-rejection check runs FIRST, so a genuine
+    //    cancel still fails fast as "Signature cancelled".
     let signed: VersionedTransaction;
     try {
       signed = await args.wallet.signTransaction(tx);
     } catch (e) {
       if (isUserRejection(e)) throw new SbUserRejectedError();
-      throw e; // other sign error — fail fast, no retry
+      if (attempt === 0 && isStaleSubmitError(e)) {
+        args.onRefetch?.();
+        continue;
+      }
+      throw e; // genuine sign error — fail fast, no retry
     }
 
     // 3. Submit + confirm. ONLY a genuine stale signal here triggers the single
@@ -281,6 +306,7 @@ async function submitSbCreateMarket(args: {
       if (attempt === 0 && isStaleSubmitError(e)) {
         // Stale → loop re-POSTs a FRESH tx + re-signs it. Never re-submit the
         // stale tx.
+        args.onRefetch?.();
         continue;
       }
       throw e; // non-stale, or already retried once — fail fast
@@ -314,7 +340,7 @@ function mapSbError(e: unknown): { title: string; message: string } {
     }
   }
   if (isStaleSubmitError(e)) {
-    return { title, message: "Transaction expired — please try again." };
+    return { title, message: "Transaction expired — please try again promptly." };
   }
   return { title, message: decodeError(e) };
 }
@@ -587,6 +613,12 @@ export const NewMarketModal: FC<NewMarketModalProps> = ({
             feedHashHex: activeFeed.feedIdHex,
             assetClass: activeFeed.assetClass,
             userPublicKey: publicKey.toBase58(),
+            onRefetch: () =>
+              showToast({
+                type: "info",
+                title: "Fetching a fresh quote",
+                message: "The previous quote expired — approve the new wallet prompt promptly.",
+              }),
           });
           showToast({
             type: "success",

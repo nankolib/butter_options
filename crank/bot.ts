@@ -1131,6 +1131,7 @@ async function main(): Promise<void> {
   if (livenessEnabled) {
     const livenessCtx: LivenessCrankContext = {
       hermesBase: ctx.hermesBase,
+      program: ctx.program,
       log: (level, msg, fields) =>
         log(level, msg, { subsystem: "liveness", ...(fields ?? {}) }),
       shouldShutdown: () => shutdownRequested,

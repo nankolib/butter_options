@@ -38,11 +38,16 @@
 import { CrossbarClient } from "@switchboard-xyz/common";
 import { fetchCatalog } from "@app/utils/hermesCatalog";
 import { SB_FEED_DATA } from "@app/utils/sbFeedData";
+import { safeFetchAll } from "@app/hooks/useFetchAccounts";
+import { hexFromBytes } from "@app/utils/format";
+import type { Program } from "@coral-xyz/anchor";
 import { lookupSbFeed } from "./sbFeedRegistry";
 import { setLivenessMap, type FeedLiveness } from "./livenessStore";
 
 export interface LivenessCrankContext {
   hermesBase: string;
+  /** For scanning existing on-chain markets (their feed ids are always probed). */
+  program: Program<any>;
   log: (
     level: "info" | "warn" | "error",
     msg: string,
@@ -50,6 +55,17 @@ export interface LivenessCrankContext {
   ) => void;
   shouldShutdown: () => boolean;
 }
+
+/** Marquee TradFi the create UI is likely to offer. Resolved to feed ids against
+ *  the live catalog by `suggestedTicker`; unmatched tickers are simply skipped.
+ *  Crypto is intentionally absent — it's ~always-live and the FE defaults
+ *  crypto→Pyth, so probing it is wasted Hermes load. */
+const CURATED_TICKERS = new Set<string>([
+  "XAU", "XAG", "XPT", "XPD", "WTI", "BRENT", "USOIL", "UKOIL", "NATGAS", // commodity (1)
+  "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD", "USDCNH", // forex (3)
+  "AAPL", "TSLA", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "AMD", "NFLX", "COIN", // equity (2)
+  "SPY", "QQQ", // etf (4)
+]);
 
 export interface LivenessCrankOptions {
   tickOnce?: boolean;
@@ -153,30 +169,7 @@ export async function runLivenessCrank(
   };
 
   const refreshFeedSet = async () => {
-    // Pyth feeds from the live Hermes catalog (TradFi by default; +crypto if PROBE_ALL).
-    try {
-      const entries = await fetchCatalog(ctx.hermesBase);
-      let added = 0;
-      for (const e of entries) {
-        if (!PROBE_ALL_PYTH && e.suggestedAssetClass === 0) continue;
-        const id = norm(e.feedIdHex);
-        if (!state.has(id)) {
-          state.set(id, { source: 0, live: false, asOf: 0, samples: null, misses: 0 });
-          added++;
-        }
-      }
-      ctx.log("info", "liveness feed-set refreshed (Pyth)", {
-        catalogEntries: entries.length,
-        pythTracked: [...state.values()].filter((s) => s.source === 0).length,
-        added,
-        probeAllPyth: PROBE_ALL_PYTH,
-      });
-    } catch (e) {
-      ctx.log("warn", "liveness catalog refresh failed (keeping prior feed set)", {
-        err: short(e),
-      });
-    }
-    // SB feeds (always probed — the high-value set).
+    // (a) SB feeds — always (the high-value set).
     for (const d of SB_FEED_DATA) {
       const id = norm(d.feedHashHex);
       if (!state.has(id)) {
@@ -190,6 +183,65 @@ export async function runLivenessCrank(
           misses: 0,
         });
       }
+    }
+
+    // (b) Feeds backing EXISTING on-chain markets — so the FE has liveness for
+    //     anything already deployed, regardless of the curated list.
+    try {
+      const markets = await safeFetchAll<any>(ctx.program, "optionsMarket");
+      for (const m of markets) {
+        const src = m.account.oracleSource === 1 ? 1 : 0;
+        const id = norm(hexFromBytes(m.account.pythFeedId as number[]));
+        if (!state.has(id)) {
+          const sb = src === 1 ? lookupSbFeed(id) : undefined;
+          state.set(id, {
+            source: src,
+            jobs: sb?.jobs,
+            live: false,
+            asOf: 0,
+            samples: sb?.minOracleSamples ?? null,
+            misses: 0,
+          });
+        }
+      }
+    } catch (e) {
+      ctx.log("warn", "liveness market scan failed (keeping prior feed set)", {
+        err: short(e),
+      });
+    }
+
+    // (c) Curated marquee Pyth feeds, resolved from the catalog by ticker.
+    //     PROBE_ALL escape hatch reverts to the entire TradFi catalog.
+    try {
+      const entries = await fetchCatalog(ctx.hermesBase);
+      let curatedAdded = 0;
+      const matched: string[] = [];
+      for (const e of entries) {
+        const isCurated = CURATED_TICKERS.has(e.suggestedTicker.toUpperCase());
+        const include = PROBE_ALL_PYTH ? e.suggestedAssetClass !== 0 : isCurated;
+        if (!include) continue;
+        if (isCurated && !PROBE_ALL_PYTH) matched.push(e.suggestedTicker.toUpperCase());
+        const id = norm(e.feedIdHex);
+        if (!state.has(id)) {
+          state.set(id, { source: 0, live: false, asOf: 0, samples: null, misses: 0 });
+          curatedAdded++;
+        }
+      }
+      const skipped = PROBE_ALL_PYTH
+        ? []
+        : [...CURATED_TICKERS].filter((t) => !matched.includes(t));
+      ctx.log("info", "liveness feed-set refreshed", {
+        mode: PROBE_ALL_PYTH ? "full-catalog" : "scoped",
+        pythTracked: [...state.values()].filter((s) => s.source === 0).length,
+        sbTracked: [...state.values()].filter((s) => s.source === 1).length,
+        curatedAdded,
+        curatedMatched: matched.sort(),
+        curatedSkipped: skipped.sort(),
+      });
+    } catch (e) {
+      ctx.log("warn", "liveness catalog refresh failed (keeping prior feed set)", {
+        err: short(e),
+      });
     }
   };
 

@@ -63,6 +63,11 @@ import {
   startSbCreateMarketServer,
   type SbCreateServerHandle,
 } from "./sbCreateMarketEndpoint";
+import {
+  runLivenessCrank,
+  type LivenessCrankContext,
+  type LivenessCrankOptions,
+} from "./livenessCrank";
 
 // ---- Constants -------------------------------------------------------------
 
@@ -1111,6 +1116,43 @@ async function main(): Promise<void> {
         throw err;
       }),
     );
+  }
+
+  // ---- Spawn the liveness probe loop (Phase 2a) ---------------------------
+  // Fills the shared liveness map the sb-create endpoint's GET /liveness serves.
+  // Gated on OPTA_SB_CREATE_ENABLED (the map is only useful when the create
+  // endpoint is live) + an OPTA_LIVENESS_DISABLED escape hatch (turn the loop off
+  // without disabling create — e.g. if Hermes rate-limits). Same fail-loud
+  // wrapper as the other side-loops; the loop body is fully defensive, so only a
+  // genuine bug (not a transient probe failure) propagates → supervisor restart.
+  const livenessEnabled =
+    (process.env.OPTA_SB_CREATE_ENABLED ?? "") === "1" &&
+    (process.env.OPTA_LIVENESS_DISABLED ?? "") !== "1";
+  if (livenessEnabled) {
+    const livenessCtx: LivenessCrankContext = {
+      hermesBase: ctx.hermesBase,
+      log: (level, msg, fields) =>
+        log(level, msg, { subsystem: "liveness", ...(fields ?? {}) }),
+      shouldShutdown: () => shutdownRequested,
+    };
+    const livenessOptions: LivenessCrankOptions = {
+      tickOnce:
+        (process.env.TICK_ONCE ?? "").toLowerCase() === "1" ||
+        (process.env.TICK_ONCE ?? "").toLowerCase() === "true",
+    };
+    loops.push(
+      runLivenessCrank(livenessCtx, livenessOptions).catch((err) => {
+        logFatal("liveness loop crashed", {
+          err: String(err),
+          stack: (err as any)?.stack,
+        });
+        throw err;
+      }),
+    );
+  } else {
+    logInfo("liveness loop DISABLED", {
+      note: "needs OPTA_SB_CREATE_ENABLED=1 and OPTA_LIVENESS_DISABLED!=1",
+    });
   }
 
   // ---- Mount the SB create-market HTTP endpoint (Part 2) -------------------

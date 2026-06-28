@@ -59,6 +59,7 @@ import type { Opta } from "@app/idl/opta";
 import { lookupSbFeedDatum, normSbFeedHash } from "@app/utils/sbFeedData";
 import { isSupportedSbFeed } from "./sbFeedRegistry";
 import { buildSwitchboardCreateMarketTx } from "./switchboardCreateMarket";
+import { getLivenessMap } from "./livenessStore";
 
 type LogFn = (
   level: "info" | "warn" | "error",
@@ -288,6 +289,26 @@ async function handleRequest(
   }
 
   const path = (req.url ?? "").split("?")[0];
+
+  // GET /liveness (Phase 2a) — serve the crank-maintained source-liveness map.
+  // Reuses the CORS echoOrigin + the createServer crash-isolation wrapper. Short
+  // cache so the FE can poll without hammering. Always returns a valid map (the
+  // empty default before the loop's first publish) → the FE degrades to its
+  // static default when the map is empty/stale.
+  if (req.method === "GET" && path === "/liveness") {
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+      "cache-control": "public, max-age=10",
+    };
+    if (echoOrigin) {
+      headers["access-control-allow-origin"] = echoOrigin;
+      headers["vary"] = "Origin";
+    }
+    res.writeHead(200, headers);
+    res.end(JSON.stringify(getLivenessMap()));
+    return;
+  }
+
   if (req.method !== "POST" || path !== "/sb-create-market") {
     sendJson(res, 404, echoOrigin, { error: "not found" });
     return;

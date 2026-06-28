@@ -8,16 +8,15 @@ import { decodeError } from "../../utils/errorDecoder";
 import { hexFromBytes } from "../../utils/format";
 import {
   getCatalog,
-  searchAssets,
   lookupByFeedId,
   type CatalogEntry,
 } from "../../utils/hermesCatalog";
+import { SB_FEED_DATA, lookupSbFeedDatum } from "../../utils/sbFeedData";
 import {
-  SB_FEED_DATA,
-  normSbFeedHash,
-  lookupSbFeedDatum,
-  type SbFeedDatum,
-} from "../../utils/sbFeedData";
+  buildAssetRegistry,
+  sbBaseTicker,
+  type AssetRegistryEntry,
+} from "../../utils/assetRegistry";
 import { getHermesBase, getSbCreateEndpoint } from "../../utils/env";
 import {
   buildPostUpdateAndCreateMarketTx,
@@ -51,39 +50,35 @@ type CatalogState =
 /** Unified, source-agnostic selection shape rendered in the result list and
  *  consumed by the create call. Built from either a Hermes CatalogEntry
  *  (crypto / Pyth) or an SbFeedDatum (commodity/equity/forex/etf / Switchboard). */
+/**
+ * A selectable asset in the create list. Carries BOTH oracle ids + the
+ * currently-resolved default source (see assetRegistry.ts) so routing picks the
+ * matching feed id at create time. Pyth and SB are PEERS — `canonicalSource` is
+ * a per-row default, not a permanent preference (Phase 2 re-resolves per-create).
+ */
 type FeedChoice = {
-  /** 64-char lowercase hex, no 0x prefix. */
-  feedIdHex: string;
-  /** Suggested on-chain asset name. */
+  /** Suggested on-chain asset name (the list/selection key). */
   ticker: string;
   /** Secondary display label (Hermes symbol or SB symbol). */
   label: string;
   /** On-chain asset_class u8 (0-4). */
   assetClass: number;
+  /** 64-hex Pyth feed id, or null. */
+  pythFeedId: string | null;
+  /** 64-hex SB feed hash, or null. */
+  sbFeedHash: string | null;
+  /** Resolved default source: 0 Pyth / 1 SB. */
+  canonicalSource: 0 | 1;
 };
 
-/** Derive a /^[A-Z0-9]{1,16}$/-friendly default ticker from an SB symbol like
- *  "XAU/USD" → "XAU". Strips the quote leg + non-alphanumerics. User-editable. */
-function sbTickerFromSymbol(symbol: string): string {
-  const base = symbol.split("/")[0] ?? symbol;
-  return base.replace(/[^A-Za-z0-9]/g, "").toUpperCase().slice(0, 16);
-}
-
-function catalogEntryToChoice(e: CatalogEntry): FeedChoice {
+function registryEntryToChoice(e: AssetRegistryEntry): FeedChoice {
   return {
-    feedIdHex: e.feedIdHex,
-    ticker: e.suggestedTicker,
-    label: e.hermesSymbol,
-    assetClass: e.suggestedAssetClass,
-  };
-}
-
-function sbDatumToChoice(d: SbFeedDatum): FeedChoice {
-  return {
-    feedIdHex: normSbFeedHash(d.feedHashHex),
-    ticker: sbTickerFromSymbol(d.symbol),
-    label: d.symbol,
-    assetClass: d.suggestedAssetClass,
+    ticker: e.ticker,
+    label: e.commonName,
+    assetClass: e.assetClass,
+    pythFeedId: e.pythFeedId,
+    sbFeedHash: e.sbFeedHash,
+    canonicalSource: e.canonicalSource,
   };
 }
 
@@ -386,10 +381,16 @@ export const NewMarketModal: FC<NewMarketModalProps> = ({
       };
     }
     if (!selected) return null;
+    // Route by the row's resolved default source + pick the matching feed id.
+    // Dual-source rows carry both ids; Phase 2 re-resolves this per-create from a
+    // liveness map (Pyth/SB are peers, not preferred-vs-fallback).
+    const feedIdHex =
+      selected.canonicalSource === 0 ? selected.pythFeedId : selected.sbFeedHash;
+    if (!feedIdHex) return null; // guard — canonicalSource guarantees its id is set
     return {
-      feedIdHex: selected.feedIdHex,
+      feedIdHex,
       assetClass: selected.assetClass,
-      oracleSource: selected.assetClass === 0 ? 0 : 1,
+      oracleSource: selected.canonicalSource,
     };
   }, [selectedClass, advancedActive, pastedHex, pastedClass, selected]);
 
@@ -452,56 +453,43 @@ export const NewMarketModal: FC<NewMarketModalProps> = ({
         return;
       }
       const knownSb = lookupSbFeedDatum(hex);
-      if (knownSb) setAssetName(sbTickerFromSymbol(knownSb.symbol));
+      if (knownSb) setAssetName(sbBaseTicker(knownSb.symbol));
       return;
     }
     if (selected) setAssetName(selected.ticker);
   }, [advancedActive, pastedHex, selected, catalogState]);
 
-  // Class-scoped crypto results (Hermes catalog, filtered to class 0).
-  const cryptoResults = useMemo<FeedChoice[]>(() => {
-    if (selectedClass !== 0) return [];
-    const entries = entriesFromState(catalogState);
-    if (!entries) return [];
-    return searchAssets(entries, query)
-      .filter((e) => e.suggestedAssetClass === 0)
-      .slice(0, 12)
-      .map(catalogEntryToChoice);
-  }, [selectedClass, catalogState, query]);
+  // Unified registry: the live Pyth catalog (broad base) merged with sbFeedData
+  // (SB hashes). DEGRADES on an empty/loading catalog — buildAssetRegistry([], …)
+  // yields SB-only rows (gold) and never throws, so the modal stays usable.
+  const registry = useMemo<AssetRegistryEntry[]>(
+    () => buildAssetRegistry(entriesFromState(catalogState) ?? [], SB_FEED_DATA),
+    [catalogState],
+  );
 
-  // Class-scoped Switchboard results (sbFeedData, filtered to selectedClass).
-  const sbResults = useMemo<FeedChoice[]>(() => {
-    if (selectedClass === null || selectedClass === 0) return [];
+  // One merged, class-filtered list (replaces the old crypto-vs-SB branch). Every
+  // class now draws from the same registry; a TradFi row carries its Pyth id +
+  // (where matched) its SB hash, and routes by canonicalSource at create time.
+  const results = useMemo<FeedChoice[]>(() => {
+    if (selectedClass === null) return [];
     const q = query.trim().toLowerCase();
-    return SB_FEED_DATA.filter((d) => d.suggestedAssetClass === selectedClass)
+    return registry
+      .filter((r) => r.assetClass === selectedClass)
       .filter(
-        (d) =>
+        (r) =>
           !q ||
-          d.symbol.toLowerCase().includes(q) ||
-          sbTickerFromSymbol(d.symbol).toLowerCase().includes(q),
+          r.ticker.toLowerCase().includes(q) ||
+          r.commonName.toLowerCase().includes(q),
       )
       .slice(0, 12)
-      .map(sbDatumToChoice);
-  }, [selectedClass, query]);
+      .map(registryEntryToChoice);
+  }, [registry, selectedClass, query]);
 
-  const results = selectedClass === 0 ? cryptoResults : sbResults;
-
-  const sbClassHasAnyFeed =
-    selectedClass !== null &&
-    selectedClass !== 0 &&
-    SB_FEED_DATA.some((d) => d.suggestedAssetClass === selectedClass);
-
-  // Empty-state copy for the active scope.
+  // Empty-state copy — uniform across classes now.
   const emptyMsg: string | null = (() => {
-    if (results.length > 0) return null;
-    if (selectedClass === 0) {
-      return catalogState.kind !== "loading" && query ? "No matches in catalog" : null;
-    }
-    if (selectedClass !== null) {
-      if (!sbClassHasAnyFeed)
-        return "No Switchboard feeds available for this class yet";
-      if (query) return "No matches";
-    }
+    if (selectedClass === null || results.length > 0) return null;
+    if (catalogState.kind === "loading") return null; // input shows the loading hint
+    if (query) return "No matches in catalog";
     return null;
   })();
 
@@ -673,14 +661,14 @@ export const NewMarketModal: FC<NewMarketModalProps> = ({
     }
   };
 
-  const showCryptoCatalogBanners = selectedClass === 0;
+  // The Hermes/Pyth catalog now feeds EVERY class (the broad base of the merge),
+  // so its stale/failed banners are relevant for all classes, not just crypto.
+  const showCatalogBanners = selectedClass !== null;
   const showSearchBlock = selectedClass !== null && !advancedActive;
   const searchPlaceholder =
-    selectedClass === 0
-      ? catalogState.kind === "loading"
-        ? "Loading Hermes catalog…"
-        : "Search by ticker or symbol (e.g. SOL, BTC)"
-      : "Search (e.g. XAU, gold)";
+    catalogState.kind === "loading"
+      ? "Loading Hermes catalog…"
+      : "Search by name or ticker (e.g. SOL, XAU, AAPL)";
 
   return (
     <div
@@ -734,13 +722,13 @@ export const NewMarketModal: FC<NewMarketModalProps> = ({
         )}
 
         {/* Hermes catalog banners — crypto only (SB classes don't use it). */}
-        {showCryptoCatalogBanners && catalogState.kind === "stale" && (
+        {showCatalogBanners && catalogState.kind === "stale" && (
           <div className="border border-rule-soft rounded-sm p-3 mb-5 text-[11px] font-mono font-medium uppercase tracking-[0.16em] text-ink-body">
             ⚠ Hermes unreachable — showing cached catalog from{" "}
             {new Date(catalogState.lastRefresh).toLocaleString()}
           </div>
         )}
-        {showCryptoCatalogBanners && catalogState.kind === "failed" && (
+        {showCatalogBanners && catalogState.kind === "failed" && (
           <div className="border border-rule-soft rounded-sm p-3 mb-5 text-[11px] font-mono uppercase tracking-[0.16em] text-crimson">
             Hermes unreachable & no cached catalog. Use Advanced → paste feed_id hex.
             <div className="text-ink-body normal-case mt-1.5 tracking-normal">
@@ -763,9 +751,9 @@ export const NewMarketModal: FC<NewMarketModalProps> = ({
             {results.length > 0 && (
               <ul className="border border-rule-soft rounded-sm mt-2 max-h-[240px] overflow-y-auto">
                 {results.map((choice) => {
-                  const isSelected = selected?.feedIdHex === choice.feedIdHex;
+                  const isSelected = selected?.ticker === choice.ticker;
                   return (
-                    <li key={choice.feedIdHex}>
+                    <li key={choice.ticker}>
                       <button
                         type="button"
                         onClick={() => {

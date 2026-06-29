@@ -273,6 +273,7 @@ describe("bankrun: reclaim_unsettled (Pass D dead-feed hatch)", function () {
       await e.opta.methods.settleVault().accountsStrict({
         authority: e.admin.publicKey, sharedVault: vault, market: e.market,
         settlementRecord: settlementRecordPda(e, expiry),
+        vaultUsdcAccount: null, writerAskPot: null, writerAskPotUsdc: null, protocolState: null, tokenProgram: null,
       }).rpc();
     } catch (ex: any) { svReverted = true; svErr = String(ex); }
     console.log(`    settle_vault reverted=${svReverted} (${svErr.slice(0, 120)})`);

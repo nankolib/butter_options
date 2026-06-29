@@ -229,6 +229,7 @@ describe("bankrun lifecycle smoke (Stage G Pass 1)", function () {
 
     await opta.methods.settleVault().accountsStrict({
       authority: admin().publicKey, sharedVault: vault, market, settlementRecord,
+      vaultUsdcAccount: null, writerAskPot: null, writerAskPotUsdc: null, protocolState: null, tokenProgram: null,
     }).rpc();
 
     const v: any = await opta.account.sharedVault.fetch(vault);

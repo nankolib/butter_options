@@ -213,6 +213,27 @@ pub struct SharedVault {
     /// (Stage A), exercise_style (Stage C Pass 1), and exercise tracking (Stage F).
     pub spread_bps: u16,
     pub voided: bool,
+
+    /// Phase 3 Slice D1 (exchange) — writer-ask pot collateral folded into this
+    /// vault at settlement. `settle_vault` sweeps `WriterAskPot.total_collateral`
+    /// (the counter, donation-proof) from `writer_ask_pot_usdc` into the vault's
+    /// USDC and records it here, once, in the `is_settled` block. 0 for EUR /
+    /// pool-only vaults and any vault with no WriterAsk pot.
+    ///
+    /// This becomes the FROZEN residual denominator for D2/D3:
+    ///   merged = total_collateral_at_settle + writer_ask_collateral_swept,
+    /// splitting the post-holder residual pool-vs-writer-ask pro-rata. The sweep
+    /// asserts `pot_usdc.balance >= total_collateral` before recording, so the
+    /// denominator never exceeds the real backing.
+    ///
+    /// MUST be the last field. Pre-D1 vaults were serialized without it (8 bytes
+    /// shorter than the new INIT_SPACE). The admin-only
+    /// `migrate_shared_vault_writer_ask_swept` grows them and zero-fills the
+    /// trailing 8 bytes — which deserialize as 0, the correct default. Same
+    /// append+migrate discipline as carry_rate_bps (Stage A), exercise_style
+    /// (Stage C Pass 1), exercise tracking (Stage F), and spread_bps/voided
+    /// (Pass A) — the 6th such append.
+    pub writer_ask_collateral_swept: u64,
 }
 
 /// PDA seed prefix for SharedVault accounts.
@@ -389,7 +410,7 @@ mod tests {
     }
 
     #[test]
-    fn shared_vault_init_space_is_252() {
+    fn shared_vault_init_space_is_260() {
         // Locks the byte total against silent drift. If a future field
         // change shifts this, the migration script's hardcoded constants
         // and the matching `tests/realloc-shared-vault-exercise-style.ts` /
@@ -398,8 +419,8 @@ mod tests {
         //
         // 233 (pre-Stage-F) + 16 (Stage F: exercised_options u64 +
         // early_exercise_payout u64) = 249; + 3 (Pass A: spread_bps u16 +
-        // voided bool) = 252. On-disk account size is 8 (discriminator)
-        // + 252 = 260.
-        assert_eq!(SharedVault::INIT_SPACE, 252);
+        // voided bool) = 252; + 8 (Slice D1: writer_ask_collateral_swept u64)
+        // = 260. On-disk account size is 8 (discriminator) + 260 = 268.
+        assert_eq!(SharedVault::INIT_SPACE, 260);
     }
 }

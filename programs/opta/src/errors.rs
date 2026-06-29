@@ -372,4 +372,16 @@ pub enum OptaError {
     // non-empty revert. Error code 6071.
     #[msg("Per-order escrow is not empty — collateral did not fully move to the pot")]
     EscrowNotEmpty,
+
+    // =========================================================================
+    // Exchange writer-ask settlement sweep (Phase 3 Slice D1 — settle_vault)
+    // =========================================================================
+    // The pot sweep is all-or-nothing: if the writer_ask_pot is present, the
+    // other sweep accounts (pot USDC, vault USDC, protocol_state, token program)
+    // MUST also be present. ALSO raised if the pot USDC balance is below
+    // pot.total_collateral (the counter that becomes the frozen residual
+    // denominator) — fail closed rather than freeze an over-credited denominator.
+    // Error code 6072.
+    #[msg("Writer-ask pot sweep accounts missing or pot USDC balance below the recorded counter")]
+    WriterAskSweepAccountsMissing,
 }

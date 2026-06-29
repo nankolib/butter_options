@@ -143,6 +143,10 @@ pub struct VaultSettled {
     pub settlement_price: u64,
     pub total_payout: u64,
     pub collateral_remaining: u64,
+    /// Phase 3 Slice D1 — writer-ask pot collateral folded at settle (0 if no
+    /// pot). Lets indexers reconstruct the merged-waterfall denominator.
+    /// Additive trailing field (Borsh-append-safe).
+    pub writer_ask_collateral_swept: u64,
 }
 
 #[event]

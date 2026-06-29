@@ -16,6 +16,7 @@
 // =============================================================================
 
 use anchor_lang::prelude::*;
+use anchor_spl::token::{self, Token, TokenAccount, Transfer};
 
 use crate::errors::OptaError;
 use crate::events::VaultSettled;
@@ -86,7 +87,79 @@ pub fn handle_settle_vault(ctx: Context<SettleVault>) -> Result<()> {
     // total_collateral MINUS that drawdown. European: early_exercise_payout == 0
     // → unchanged. saturating_sub (not checked) is defensive — the per-contract
     // cap guarantees payout never exceeds collateral, but never panic at settle.
-    let collateral_remaining = vault.total_collateral.saturating_sub(vault.early_exercise_payout);
+    // ---- Phase 3 Slice D1: writer-ask pot sweep (None → byte-identical) ----
+    // Fold WriterAskPot.total_collateral (the COUNTER — donation-proof, INFO-3)
+    // into the waterfall: move pot USDC → vault USDC and add it to
+    // collateral_remaining, so the merged collateral backs the merged (pool +
+    // writer-ask) contracts. Skipped entirely for EUR / pool-only vaults (no pot
+    // → writer_ask_pot is None) → settlement is byte-identical to pre-D1. The
+    // sweep is once-only (gated by the is_settled guard at the top). Writer
+    // residual refunds + pool-writer scaling are D2/D3 — NOT here.
+    let writer_ask_collateral_swept: u64 = if let Some(pot) = ctx.accounts.writer_ask_pot.as_ref() {
+        // All-or-nothing: pot present ⇒ every sweep account must be present.
+        let pot_usdc = ctx
+            .accounts
+            .writer_ask_pot_usdc
+            .as_ref()
+            .ok_or(OptaError::WriterAskSweepAccountsMissing)?;
+        let vault_usdc = ctx
+            .accounts
+            .vault_usdc_account
+            .as_ref()
+            .ok_or(OptaError::WriterAskSweepAccountsMissing)?;
+        let protocol = ctx
+            .accounts
+            .protocol_state
+            .as_ref()
+            .ok_or(OptaError::WriterAskSweepAccountsMissing)?;
+        let token_prog = ctx
+            .accounts
+            .token_program
+            .as_ref()
+            .ok_or(OptaError::WriterAskSweepAccountsMissing)?;
+
+        // Pin the pot to THIS vault + its USDC account; pin the vault USDC.
+        require!(pot.vault == vault.key(), OptaError::InvalidVaultMint);
+        require!(pot_usdc.key() == pot.usdc_account, OptaError::InvalidVaultMint);
+        require!(
+            vault_usdc.key() == vault.vault_usdc_account,
+            OptaError::InvalidVaultMint
+        );
+
+        let swept = pot.total_collateral;
+        // Required addition: prove the pot USDC actually backs the counter
+        // BEFORE freezing it as the D2/D3 residual denominator. Fail closed if
+        // the recorded counter ever exceeds the real on-chain backing.
+        require!(
+            pot_usdc.amount >= swept,
+            OptaError::WriterAskSweepAccountsMissing
+        );
+
+        if swept > 0 {
+            let protocol_seeds: &[&[u8]] = &[PROTOCOL_SEED, &[protocol.bump]];
+            token::transfer(
+                CpiContext::new_with_signer(
+                    token_prog.to_account_info(),
+                    Transfer {
+                        from: pot_usdc.to_account_info(),
+                        to: vault_usdc.to_account_info(),
+                        authority: protocol.to_account_info(),
+                    },
+                    &[protocol_seeds],
+                ),
+                swept,
+            )?;
+        }
+        swept
+    } else {
+        0
+    };
+
+    let collateral_remaining = vault
+        .total_collateral
+        .checked_add(writer_ask_collateral_swept)
+        .ok_or(OptaError::MathOverflow)?
+        .saturating_sub(vault.early_exercise_payout);
 
     // Update vault state
     let vault_key = ctx.accounts.shared_vault.key();
@@ -95,12 +168,14 @@ pub fn handle_settle_vault(ctx: Context<SettleVault>) -> Result<()> {
     vault.is_settled = true;
     vault.settlement_price = settlement_price;
     vault.collateral_remaining = collateral_remaining;
+    vault.writer_ask_collateral_swept = writer_ask_collateral_swept;
 
     emit!(VaultSettled {
         vault: vault_key,
         settlement_price,
         total_payout,
         collateral_remaining,
+        writer_ask_collateral_swept,
     });
 
     Ok(())
@@ -133,4 +208,29 @@ pub struct SettleVault<'info> {
         bump = settlement_record.bump,
     )]
     pub settlement_record: Account<'info, SettlementRecord>,
+
+    // ---- Phase 3 Slice D1 — writer-ask pot sweep (TRAILING OPTIONALS) -------
+    // ALL None for EUR / pool-only vaults (no WriterAsk pot) → the sweep branch
+    // is skipped and settlement is byte-identical. Pass all Some (the canonical
+    // series pot) to sweep. `allow-missing-optionals` (Cargo) lets these trailing
+    // optionals deserialize to None when omitted. The handler enforces
+    // all-or-nothing presence + pins each to the vault.
+    /// Vault USDC — sweep destination.
+    #[account(mut)]
+    pub vault_usdc_account: Option<Box<Account<'info, TokenAccount>>>,
+
+    /// The series' WriterAskPot record — read for total_collateral; pinned to
+    /// this vault in-handler (pot.vault == shared_vault.key()).
+    pub writer_ask_pot: Option<Box<Account<'info, WriterAskPot>>>,
+
+    /// The pot's USDC account — sweep source (authority = protocol_state).
+    #[account(mut)]
+    pub writer_ask_pot_usdc: Option<Box<Account<'info, TokenAccount>>>,
+
+    /// Protocol state — signs the pot→vault USDC transfer.
+    #[account(seeds = [PROTOCOL_SEED], bump)]
+    pub protocol_state: Option<Account<'info, ProtocolState>>,
+
+    /// Classic SPL Token program — for the USDC sweep transfer.
+    pub token_program: Option<Program<'info, Token>>,
 }

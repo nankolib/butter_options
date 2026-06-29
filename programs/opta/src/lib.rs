@@ -491,6 +491,17 @@ pub mod opta {
         instructions::migrate_shared_vault_exchange_fields::handle_migrate_shared_vault_exchange_fields(ctx)
     }
 
+    /// Phase 3 Slice D1 — one-time SharedVault migration: append the trailing
+    /// `writer_ask_collateral_swept` field (252→260 INIT_SPACE; on-disk 260→268).
+    /// Admin-only, batched via remaining_accounts (recommended batch: 20).
+    /// Idempotent: vaults already at 268 bytes are skipped. Zero-fill on the new
+    /// 8 bytes deserializes as writer_ask_collateral_swept=0. The 6th such append.
+    pub fn migrate_shared_vault_writer_ask_swept<'info>(
+        ctx: Context<'_, '_, '_, 'info, MigrateSharedVaultWriterAskSwept<'info>>,
+    ) -> Result<()> {
+        instructions::migrate_shared_vault_writer_ask_swept::handle_migrate_shared_vault_writer_ask_swept(ctx)
+    }
+
     // =========================================================================
     // Phase 2 Stage B -- realized-vol oracle
     // =========================================================================

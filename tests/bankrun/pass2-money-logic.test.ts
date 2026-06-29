@@ -180,6 +180,7 @@ describe("bankrun Pass-2 money-logic (Stage G)", function () {
     }).preInstructions([CU_400]).rpc();
     await opta.methods.settleVault().accountsStrict({
       authority: admin().publicKey, sharedVault: vault, market, settlementRecord,
+      vaultUsdcAccount: null, writerAskPot: null, writerAskPotUsdc: null, protocolState: null, tokenProgram: null,
     }).rpc();
   }
 

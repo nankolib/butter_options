@@ -207,6 +207,8 @@ export async function settle(e: Env, vault: PublicKey, expiry: BN, priceUsd: num
   await settleExpiry(e, expiry, priceUsd, exp + 5);
   await e.opta.methods.settleVault().accountsStrict({
     authority: e.admin.publicKey, sharedVault: vault, market: e.market, settlementRecord: settlementRecordPda(e, expiry),
+    // Slice D1 trailing optionals — null for the no-pot settle path.
+    vaultUsdcAccount: null, writerAskPot: null, writerAskPotUsdc: null, protocolState: null, tokenProgram: null,
   }).rpc();
 }
 

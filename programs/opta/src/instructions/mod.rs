@@ -65,6 +65,7 @@ pub mod migrate_shared_vault_exercise_style;
 pub mod migrate_shared_vault_exercise_tracking;
 // SharedVault exchange-fields (spread_bps + voided) schema migration (Phase 2 Pass A)
 pub mod migrate_shared_vault_exchange_fields;
+pub mod migrate_shared_vault_writer_ask_swept;
 
 // Phase 2 Stage B -- realized-vol oracle
 pub mod initialize_vol_oracle;
@@ -154,6 +155,7 @@ pub use migrate_shared_vault_carry_rate::*;
 pub use migrate_shared_vault_exercise_style::*;
 pub use migrate_shared_vault_exercise_tracking::*;
 pub use migrate_shared_vault_exchange_fields::*;
+pub use migrate_shared_vault_writer_ask_swept::*;
 
 // Phase 2 Stage B -- realized-vol oracle
 pub use initialize_vol_oracle::*;

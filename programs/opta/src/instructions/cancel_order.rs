@@ -109,7 +109,43 @@ pub fn handle_cancel_order(ctx: Context<CancelOrder>) -> Result<()> {
                 protocol_signer,
             )?;
         }
-        OrderKind::WriterAsk => return err!(OptaError::WriterAsksDisabled),
+        // Phase 3 Slice C — WriterAsk refund = the Bid mechanic verbatim (USDC
+        // escrow → owner, protocol-signed; full balance = cpt × quantity_remaining
+        // + any dust). Owner-only (PDA seed embeds owner + close=owner + Signer),
+        // so the dest is owner-controlled. Pot/WriterAskPosition are intentionally
+        // absent from this context — cancel never touches the already-filled
+        // collateral backing live minted contracts (settled in Slice D).
+        OrderKind::WriterAsk => {
+            if escrow_balance > 0 {
+                token::transfer(
+                    CpiContext::new_with_signer(
+                        ctx.accounts.token_program.to_account_info(),
+                        Transfer {
+                            from: ctx.accounts.escrow.to_account_info(),
+                            to: ctx.accounts.owner_usdc_account.to_account_info(),
+                            authority: ctx.accounts.protocol_state.to_account_info(),
+                        },
+                        protocol_signer,
+                    ),
+                    escrow_balance,
+                )?;
+            }
+            invoke_signed(
+                &spl_token::instruction::close_account(
+                    &ctx.accounts.token_program.key(),
+                    ctx.accounts.escrow.key,
+                    ctx.accounts.owner.key,
+                    &ctx.accounts.protocol_state.key(),
+                    &[],
+                )?,
+                &[
+                    ctx.accounts.escrow.to_account_info(),
+                    ctx.accounts.owner.to_account_info(),
+                    ctx.accounts.protocol_state.to_account_info(),
+                ],
+                protocol_signer,
+            )?;
+        }
         // VaultPeg is never a resting order (post_order rejects it) — no stored
         // order can carry this kind, so this branch is structurally unreachable.
         OrderKind::VaultPeg => unreachable!("VaultPeg is never a resting order"),

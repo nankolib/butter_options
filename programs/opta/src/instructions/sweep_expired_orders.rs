@@ -119,6 +119,22 @@ pub fn handle_sweep_expired_orders<'info>(
             u64::from_le_bytes(bytes)
         };
 
+        // 5b. SECURITY (sweep is permissionless): owner_asset is the COLLATERAL
+        //     refund destination and is caller-supplied. Pin its token-account
+        //     owner to order.owner BEFORE any refund so a sweeper cannot redirect
+        //     the refund to themselves. order_owner derives from the validated
+        //     order PDA (step 1 deser + step 4 re-derivation), NOT a tuple field.
+        //     Fails closed on a malformed/short account (data.len() >= 72). This
+        //     runs before every kind arm's transfer. (owner_wallet, the rent dest,
+        //     is already pinned at step 3.)
+        {
+            let data = owner_asset_info.try_borrow_data()?;
+            require!(data.len() >= 72, OptaError::MathOverflow);
+            let asset_owner = Pubkey::try_from(&data[32..64])
+                .map_err(|_| OptaError::MathOverflow)?;
+            require_keys_eq!(asset_owner, order_owner, OptaError::NotResaleSeller);
+        }
+
         // 6. Return escrow contents (grace-skip on zero) + close the escrow.
         match order_kind {
             OrderKind::ResaleAsk => {
@@ -186,9 +202,41 @@ pub fn handle_sweep_expired_orders<'info>(
                     protocol_signer,
                 )?;
             }
-            // WriterAsk can never be posted (post_order rejects it), so an order
-            // of this kind cannot exist — a tuple carrying one is a bug.
-            OrderKind::WriterAsk => return err!(OptaError::WriterAsksDisabled),
+            // Phase 3 Slice C — WriterAsk refund = the Bid mechanic (USDC escrow
+            // → owner_asset, protocol-signed; full balance = cpt × quantity_remaining
+            // + any dust). owner_asset is owner-pinned at step 5b. Pot/position
+            // untouched — only the unfilled remainder is refunded.
+            OrderKind::WriterAsk => {
+                if escrow_balance > 0 {
+                    token::transfer(
+                        CpiContext::new_with_signer(
+                            ctx.accounts.token_program.to_account_info(),
+                            Transfer {
+                                from: escrow_info.clone(),
+                                to: owner_asset_info.clone(),
+                                authority: ctx.accounts.protocol_state.to_account_info(),
+                            },
+                            protocol_signer,
+                        ),
+                        escrow_balance,
+                    )?;
+                }
+                invoke_signed(
+                    &spl_token::instruction::close_account(
+                        &token_classic_key,
+                        escrow_info.key,
+                        owner_wallet_info.key,
+                        &protocol_key,
+                        &[],
+                    )?,
+                    &[
+                        escrow_info.clone(),
+                        owner_wallet_info.clone(),
+                        ctx.accounts.protocol_state.to_account_info(),
+                    ],
+                    protocol_signer,
+                )?;
+            }
             // VaultPeg is virtual (fill_vault_peg) and never a resting order —
             // structurally unreachable for the same reason.
             OrderKind::VaultPeg => unreachable!("VaultPeg is never a resting order"),

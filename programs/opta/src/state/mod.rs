@@ -16,6 +16,8 @@ pub mod trigger_order;
 pub mod vault_mint;
 pub mod vault_resale_listing;
 pub mod vol_oracle;
+pub mod writer_ask_position;
+pub mod writer_ask_pot;
 pub mod writer_position;
 
 pub use epoch_config::*;
@@ -28,4 +30,6 @@ pub use trigger_order::*;
 pub use vault_mint::*;
 pub use vault_resale_listing::*;
 pub use vol_oracle::*;
+pub use writer_ask_position::*;
+pub use writer_ask_pot::*;
 pub use writer_position::*;

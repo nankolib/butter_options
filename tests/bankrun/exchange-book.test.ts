@@ -325,10 +325,15 @@ describe("exchange book (Phase 1 — RestingOrder limit book)", function () {
   it("5 — rejects: WriterAsk, qty 0, over-qty, nonce collision, non-owner cancel", async () => {
     const sellerUsdc = await usdcAta(e, seller.publicKey);
 
-    // WriterAsk rejected.
+    // WriterAsk rejected on this EUROPEAN vault. Phase 3 Slice A: under the
+    // `testing` build WRITER_ASKS_ENABLED is true (dark gate open), so the
+    // WriterAsk arm proceeds past the dark gate and is then rejected by the
+    // American-only gate (D12) — this vault is European. (The feature-free dark
+    // gate → 6054 is covered by tests/bankrun/writer-ask-dark-gate.test.ts and
+    // the feature_flags.rs unit test.)
     const wa = await postOrder(seller, WRITER_ASK, usdc(5), 1, nextNonce(), sellerOptAta, sellerUsdc, true);
-    assert.isNotNull(wa.result, "WriterAsk post must fail");
-    assert.isTrue(wa.logs.join("\n").includes("WriterAsksDisabled"), "error = WriterAsksDisabled");
+    assert.isNotNull(wa.result, "WriterAsk post on a European vault must fail");
+    assert.isTrue(wa.logs.join("\n").includes("NotAmericanOption"), "error = NotAmericanOption (American-only gate)");
 
     // qty 0 rejected.
     const q0 = await postOrder(seller, RESALE_ASK, usdc(5), 0, nextNonce(), sellerOptAta, sellerUsdc, true);

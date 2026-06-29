@@ -28,7 +28,9 @@ use spl_token_2022::extension::ExtensionType;
 
 use crate::errors::OptaError;
 use crate::events::OrderPosted;
+use crate::feature_flags::WRITER_ASKS_ENABLED;
 use crate::state::*;
+use crate::utils::collateral::required_collateral_per_contract;
 
 pub fn handle_post_order(
     ctx: Context<PostOrder>,
@@ -41,7 +43,8 @@ pub fn handle_post_order(
     let vault = &ctx.accounts.shared_vault;
 
     // ---- 1. Common pre-flight checks --------------------------------------
-    require!(kind != OrderKind::WriterAsk, OptaError::WriterAsksDisabled);
+    // Phase 3 Slice A: the WriterAsk top reject is removed; the dark gate moved
+    // into the WriterAsk match arm below (require!(WRITER_ASKS_ENABLED, ...)).
     // Phase 2 Pass B: the vault peg is VIRTUAL (priced + minted on the fly by
     // fill_vault_peg) — it is never a resting order. Refuse it at the only
     // client-reachable entry point. Reuses WriterAsksDisabled (no new error
@@ -62,6 +65,9 @@ pub fn handle_post_order(
     ];
 
     // ---- 2. Branch: create escrow + move collateral in --------------------
+    // Snapshotted onto the order in section 3. 0 = N/A (Bid / ResaleAsk); set to
+    // the protocol cpt on the WriterAsk arm (lock-at-post personal collateral).
+    let mut collateral_per_contract: u64 = 0;
     match kind {
         OrderKind::ResaleAsk => {
             // Seller balance: raw Token-2022 amount at bytes 64..72.
@@ -178,7 +184,93 @@ pub fn handle_post_order(
                 )?;
             }
         }
-        OrderKind::WriterAsk => unreachable!("rejected above"),
+        OrderKind::WriterAsk => {
+            // Dark gate (Phase 3 Slice A): reachable only under the `testing`
+            // feature; a feature-free production build rejects with 6054. The
+            // top-of-handler reject moved here — no new error code.
+            require!(WRITER_ASKS_ENABLED, OptaError::WriterAsksDisabled);
+
+            // American-only series (D12). AMERICAN_ENABLED is permanently true
+            // post Stage-I, but we keep the gate for parity with fill_vault_peg
+            // and to fail closed if it ever flips back.
+            require!(
+                crate::feature_flags::AMERICAN_ENABLED,
+                OptaError::AmericanVaultsDisabled
+            );
+            require!(
+                vault.exercise_style == ExerciseStyle::American,
+                OptaError::NotAmericanOption
+            );
+
+            // Protocol-set collateral per contract — the writer does NOT choose
+            // it. Symmetric 1× strike, the exact source mint_from_vault /
+            // fill_vault_peg use, so post-time and fill-time cpt agree.
+            let cpt = required_collateral_per_contract(vault.strike_price, vault.option_type);
+            collateral_per_contract = cpt;
+            let total = (cpt as u128)
+                .checked_mul(quantity as u128)
+                .ok_or(OptaError::MathOverflow)?;
+            let total: u64 = total.try_into().map_err(|_| OptaError::MathOverflow)?;
+
+            // Clean pre-flight balance error (reuses InsufficientCollateral — no
+            // new error code). Writer USDC amount at bytes 64..72.
+            {
+                let data = ctx.accounts.owner_usdc_account.try_borrow_data()?;
+                require!(data.len() >= 72, OptaError::MathOverflow);
+                let bal = u64::from_le_bytes(
+                    data[64..72]
+                        .try_into()
+                        .map_err(|_| OptaError::MathOverflow)?,
+                );
+                require!(bal >= total, OptaError::InsufficientCollateral);
+            }
+
+            // === Bid USDC-escrow mechanic, verbatim (only `total` differs) ====
+            // Plain SPL USDC escrow (owner = protocol_state, mint =
+            // protocol_state.usdc_mint), same 165-byte create+init shape as Bid.
+            let escrow_space =
+                ExtensionType::try_calculate_account_len::<spl_token_2022::state::Account>(&[])
+                    .map_err(|_| OptaError::MathOverflow)?;
+            let escrow_lamports = Rent::get()?.minimum_balance(escrow_space);
+            let token_classic_key = ctx.accounts.token_program.key();
+
+            invoke_signed(
+                &system_instruction::create_account(
+                    ctx.accounts.owner.key,
+                    escrow_info.key,
+                    escrow_lamports,
+                    escrow_space as u64,
+                    &token_classic_key,
+                ),
+                &[ctx.accounts.owner.to_account_info(), escrow_info.clone()],
+                &[escrow_seeds],
+            )?;
+            anchor_lang::solana_program::program::invoke(
+                &spl_token::instruction::initialize_account3(
+                    &token_classic_key,
+                    escrow_info.key,
+                    &ctx.accounts.usdc_mint.key(),
+                    &ctx.accounts.protocol_state.key(),
+                )?,
+                &[escrow_info.clone(), ctx.accounts.usdc_mint.to_account_info()],
+            )?;
+
+            // Move USDC owner → escrow (owner signs). SPL transfer enforces
+            // from.mint == escrow.mint, so a non-USDC source is rejected here.
+            if total > 0 {
+                token::transfer(
+                    CpiContext::new(
+                        ctx.accounts.token_program.to_account_info(),
+                        Transfer {
+                            from: ctx.accounts.owner_usdc_account.to_account_info(),
+                            to: escrow_info.clone(),
+                            authority: ctx.accounts.owner.to_account_info(),
+                        },
+                    ),
+                    total,
+                )?;
+            }
+        }
         OrderKind::VaultPeg => unreachable!("rejected above"),
     }
 
@@ -194,6 +286,7 @@ pub fn handle_post_order(
     order.created_at = clock.unix_timestamp;
     order.nonce = nonce;
     order.bump = ctx.bumps.order;
+    order.collateral_per_contract = collateral_per_contract;
 
     emit!(OrderPosted {
         order: order_key,

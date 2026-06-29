@@ -13,6 +13,9 @@
 //     resale escrow (see list_v2_for_resale.rs:54-100).
 //   - Bid: a plain SPL USDC account, owner = protocol_state, mint pinned to
 //     protocol_state.usdc_mint.
+//   - WriterAsk (Phase 3 Slice A): the SAME plain SPL USDC escrow as Bid, but
+//     holding the writer's PERSONAL collateral = cpt × quantity (cpt = 1× strike
+//     via required_collateral_per_contract), escrowed at post (lock-at-post).
 //
 // PDA seeds:
 //   RestingOrder : ["resting_order", option_mint, owner, nonce_le_bytes]
@@ -99,6 +102,21 @@ pub struct RestingOrder {
 
     /// PDA bump seed.
     pub bump: u8,
+
+    /// Phase 3 Slice A — protocol-set collateral requirement per contract
+    /// (USDC, 6dp), snapshotted at post time from
+    /// `required_collateral_per_contract(vault.strike_price, vault.option_type)`.
+    /// Set ONLY on `WriterAsk` orders (the personal-collateral lock-at-post);
+    /// `0` (sentinel = N/A) on `Bid` / `ResaleAsk`. Slice B reads it to move the
+    /// filled slice into the series pot; Slice C refunds the unfilled remainder
+    /// at cancel/expiry.
+    ///
+    /// MUST be the last field — pre-Slice-A `RestingOrder` accounts were 8 bytes
+    /// shorter (146 on-disk vs the new 154). Live devnet orders are cleared by
+    /// `cancel_order` before deploy (clean cutover), so no realloc-migration path
+    /// is required — unlike the SharedVault append+migrate discipline, there are
+    /// no long-lived RestingOrder accounts to grow.
+    pub collateral_per_contract: u64,
 }
 
 /// Seed prefix for RestingOrder PDAs: ["resting_order", option_mint, owner, nonce_le].

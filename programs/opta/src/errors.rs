@@ -227,9 +227,13 @@ pub enum OptaError {
     // =========================================================================
     // Exchange book errors (Phase 1 — RestingOrder limit book)
     // =========================================================================
-    // WriterAsk is reserved for Phase 3 (writer limit asks, mint-on-fill from
-    // personal collateral). post_order rejects it until then. Error code 6054.
-    #[msg("Writer asks are not enabled yet — reserved for Phase 3")]
+    // Phase 3 Slice A: WriterAsk posting (lock-at-post personal collateral) is
+    // gated by feature_flags::WRITER_ASKS_ENABLED — true only under the `testing`
+    // feature, false on a feature-free production build (the dark gate). The
+    // post_order WriterAsk arm guards on it with this error; fill_order /
+    // cancel_order / sweep_expired_orders still reject WriterAsk with it until
+    // Slices B/C land. Repurposed as the dark gate, not retired. Error code 6054.
+    #[msg("Writer asks are not enabled in this build (dark gate) — see WRITER_ASKS_ENABLED")]
     WriterAsksDisabled,
 
     // =========================================================================

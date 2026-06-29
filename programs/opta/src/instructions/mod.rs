@@ -41,6 +41,9 @@ pub mod create_series;
 // Exchange peg (Phase 2 Pass B — mint-on-fill vault peg)
 pub mod fill_vault_peg;
 
+// Exchange writer-ask fill (Phase 3 Slice B — mint-on-fill from personal collateral)
+pub mod fill_writer_ask;
+
 // Exchange write-flow collapse (Phase 2 Pass C — atomic create+deposit)
 pub mod create_and_deposit;
 
@@ -129,6 +132,9 @@ pub use create_series::*;
 
 // Exchange peg (Phase 2 Pass B — mint-on-fill vault peg)
 pub use fill_vault_peg::*;
+
+// Exchange writer-ask fill (Phase 3 Slice B — mint-on-fill from personal collateral)
+pub use fill_writer_ask::*;
 
 // Exchange write-flow collapse (Phase 2 Pass C — atomic create+deposit)
 pub use create_and_deposit::*;

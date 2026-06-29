@@ -355,4 +355,21 @@ pub enum OptaError {
     // Error code 6069.
     #[msg("Switchboard settlement window elapsed — settle within 5 min of expiry or reclaim after grace")]
     SwitchboardSettleWindowElapsed,
+
+    // =========================================================================
+    // Exchange writer-ask fill (Phase 3 Slice B — fill_writer_ask)
+    // =========================================================================
+    // The RestingOrder PDA seed is shared across kinds, so a Bid/ResaleAsk order
+    // could be passed to fill_writer_ask. Its collateral_per_contract is 0, which
+    // would mint uncollateralized contracts — fail closed. Error code 6070.
+    #[msg("Order is not a writer ask — fill it through fill_order")]
+    NotAWriterAsk,
+
+    // Money-conservation guard on the full-fill close path: every micro-USDC of
+    // the per-order escrow must have moved into the WriterAskPot before the
+    // escrow is closed. A non-zero balance (accounting bug or dust-grief) blocks
+    // the close explicitly rather than relying on close_account's implicit
+    // non-empty revert. Error code 6071.
+    #[msg("Per-order escrow is not empty — collateral did not fully move to the pot")]
+    EscrowNotEmpty,
 }

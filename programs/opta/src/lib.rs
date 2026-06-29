@@ -343,6 +343,17 @@ pub mod opta {
         instructions::fill_vault_peg::handle_fill_vault_peg(ctx, quantity, max_premium)
     }
 
+    /// Exchange Phase 3 Slice B — fill a writer's limit ask. Mint-on-fill from
+    /// the writer's PERSONAL collateral (Slice A's per-order escrow): premium
+    /// (maker-set price) taker→writer, fee→treasury, mint `fill_quantity` series
+    /// contracts to the taker, move cpt×fill_quantity escrow→WriterAskPot. Bumps
+    /// only the pot + position — never the vault counters. Dark behind
+    /// WRITER_ASKS_ENABLED + AMERICAN_ENABLED. Settlement of these contracts is
+    /// Slice D. Spec: §8 (P3/D7).
+    pub fn fill_writer_ask(ctx: Context<FillWriterAsk>, fill_quantity: u64) -> Result<()> {
+        instructions::fill_writer_ask::handle_fill_writer_ask(ctx, fill_quantity)
+    }
+
     /// Exchange Phase 2 Pass C — atomic write merge (D9). Fuses create_shared_vault
     /// + deposit_to_vault into ONE tx via init_if_needed: the first caller for a
     /// spec creates + deposits, a subsequent caller just deposits. The heavy mint

@@ -48,6 +48,10 @@ pub mod fill_writer_ask;
 pub mod withdraw_writer_ask_residual;
 pub mod close_settled_writer_ask_vault;
 
+// Exchange void-path reconciliation (Phase 3 Slice D3)
+pub mod initialize_void;
+pub mod reclaim_writer_ask_residual;
+
 // Exchange write-flow collapse (Phase 2 Pass C — atomic create+deposit)
 pub mod create_and_deposit;
 
@@ -147,6 +151,10 @@ pub use fill_writer_ask::*;
 // Exchange writer-ask residual + close (Phase 3 Slice D2a)
 pub use withdraw_writer_ask_residual::*;
 pub use close_settled_writer_ask_vault::*;
+
+// Exchange void-path reconciliation (Phase 3 Slice D3)
+pub use initialize_void::*;
+pub use reclaim_writer_ask_residual::*;
 
 // Exchange write-flow collapse (Phase 2 Pass C — atomic create+deposit)
 pub use create_and_deposit::*;

@@ -169,6 +169,20 @@ pub struct WriterAskResidualWithdrawn {
     pub payout: u64,
 }
 
+/// Phase 3 Slice D3 — emitted once per vault when `initialize_void` performs the
+/// void transition: sweeps the canonical writer-ask pot (`swept`), applies the
+/// shares-unification merge (`equiv_total` added to total_shares), seeds the
+/// merged `collateral_remaining`, and flips `voided`. `swept`/`equiv_total` are 0
+/// for a pool-only / EUR voided vault (the no-pot branch). Lets indexers tell a
+/// merged-void wind-down apart from an ordinary reclaim.
+#[event]
+pub struct VaultVoidInitialized {
+    pub vault: Pubkey,
+    pub swept: u64,
+    pub equiv_total: u64,
+    pub collateral_remaining: u64,
+}
+
 /// Phase 3 Slice D2a — emitted when `close_settled_writer_ask_vault` reclaims a
 /// fully-drained (total_shares == 0) writer-ask vault's USDC account. `dust_swept`
 /// is the residual micro-USDC moved to the treasury before the close; the account

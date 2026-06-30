@@ -56,8 +56,31 @@ async function createEpochVault(e: any, style: "european" | "american", strike: 
   return { vault, vaultUsdc };
 }
 
-/** reclaim_unsettled — permissionless: `cranker` signs, payout lands in `writer`'s USDC ATA. */
-async function reclaimUnsettled(e: any, vault: any, expiry: BN, writer: Keypair, cranker: Keypair) {
+const VAULT_OPTION_MINT_SEED = Buffer.from("vault_option_mint");
+const WRITER_ASK_POT_SEED = Buffer.from("writer_ask_pot");
+const WRITER_ASK_POT_USDC_SEED = Buffer.from("writer_ask_pot_usdc");
+
+/** initialize_void (Phase 3 D3) — the SOLE voider. For these pool-only/EUR vaults
+ * there is no canonical writer-ask mint, so the derived pot is empty → the no-pot
+ * branch (swept = 0, collateral_remaining = TC − E). Must run before any reclaim. */
+async function initVoid(e: any, vault: any, expiry: BN, strike: BN, style: "european" | "american", otByte = 0) {
+  const esByte = style === "american" ? 1 : 0;
+  const canon = pda([VAULT_OPTION_MINT_SEED, e.market.toBuffer(), strike.toArrayLike(Buffer, "le", 8),
+    expiry.toArrayLike(Buffer, "le", 8), Buffer.from([otByte]), Buffer.from([esByte])]);
+  await e.opta.methods.initializeVoid().accountsStrict({
+    cranker: e.admin.publicKey, sharedVault: vault, market: e.market,
+    settlementRecord: settlementRecordPda(e, expiry),
+    optionMint: canon,
+    writerAskPot: pda([WRITER_ASK_POT_SEED, canon.toBuffer()]),
+    writerAskPotUsdc: pda([WRITER_ASK_POT_USDC_SEED, canon.toBuffer()]),
+    vaultUsdcAccount: pda([Buffer.from("vault_usdc"), vault.toBuffer()]),
+    protocolState: e.protocolState, treasury: e.treasury, tokenProgram: TOKEN_PROGRAM_ID,
+  }).preInstructions([CU(400_000)]).rpc();
+}
+
+/** reclaim_unsettled — Phase 3 D3: voided-gated (requires initVoid first); the
+ * market + settlement_record accounts were dropped. Permissionless: `cranker` signs. */
+async function reclaimUnsettled(e: any, vault: any, _expiry: BN, writer: Keypair, cranker: Keypair) {
   const wp = pda([Buffer.from("writer_position"), vault.toBuffer(), writer.publicKey.toBuffer()]);
   const vaultUsdc = pda([Buffer.from("vault_usdc"), vault.toBuffer()]);
   const writerUsdc = await usdcAta(e, writer.publicKey);
@@ -66,8 +89,6 @@ async function reclaimUnsettled(e: any, vault: any, expiry: BN, writer: Keypair,
     writer: writer.publicKey,
     sharedVault: vault,
     writerPosition: wp,
-    market: e.market,
-    settlementRecord: settlementRecordPda(e, expiry),
     vaultUsdcAccount: vaultUsdc,
     writerUsdcAccount: writerUsdc,
     tokenProgram: TOKEN_PROGRAM_ID,
@@ -87,6 +108,7 @@ describe("bankrun: reclaim_unsettled (Pass D dead-feed hatch)", function () {
 
     // Never settle. Advance past the 7-day grace window.
     await setClockUnix(e.h.context, expiry.toNumber() + GRACE_WINDOW + 60);
+    await initVoid(e, vault, expiry, usdc(100), "american"); // D3: the sole voider (no-pot branch)
     const wusdc = wAta(e.usdcMint, writer.publicKey);
     const before = await bal(e, wusdc);
     await reclaimUnsettled(e, vault, expiry, writer, cranker);
@@ -113,6 +135,7 @@ describe("bankrun: reclaim_unsettled (Pass D dead-feed hatch)", function () {
     const wp = await deposit(e, vault, vaultUsdc, writer, 750);
 
     await setClockUnix(e.h.context, expiry.toNumber() + GRACE_WINDOW + 60);
+    await initVoid(e, vault, expiry, usdc(100), "european"); // D3 sole voider (EUR, no-pot)
     const wusdc = wAta(e.usdcMint, writer.publicKey);
     const before = await bal(e, wusdc);
     await reclaimUnsettled(e, vault, expiry, writer, cranker);
@@ -141,9 +164,10 @@ describe("bankrun: reclaim_unsettled (Pass D dead-feed hatch)", function () {
     const u1 = wAta(e.usdcMint, w1.publicKey), u2 = wAta(e.usdcMint, w2.publicKey);
     const b1 = await bal(e, u1), b2 = await bal(e, u2);
 
+    await initVoid(e, vault, expiry, usdc(100), "european"); // D3: voids once; both writers then reclaim
     await reclaimUnsettled(e, vault, expiry, w1, cranker);
     const v1: any = await e.opta.account.sharedVault.fetch(vault);
-    assert.isTrue(v1.voided, "first reclaim flips voided");
+    assert.isTrue(v1.voided, "vault voided (by initialize_void)");
 
     // Second writer must NOT be blocked by voided (idempotency is per-position).
     await reclaimUnsettled(e, vault, expiry, w2, cranker);
@@ -172,6 +196,7 @@ describe("bankrun: reclaim_unsettled (Pass D dead-feed hatch)", function () {
     // Writer must clear premium first (decision 4), then reclaim after grace.
     await claimPremium(e, vault, wp, writer);
     await setClockUnix(e.h.context, expiry.toNumber() + GRACE_WINDOW + 60);
+    await initVoid(e, vault, expiry, usdc(100), "american"); // seeds CR = TC − E (the netting now lives here)
     const wusdc = wAta(e.usdcMint, writer.publicKey);
     const before = await bal(e, wusdc);
     await reclaimUnsettled(e, vault, expiry, writer, cranker);
@@ -190,11 +215,12 @@ describe("bankrun: reclaim_unsettled (Pass D dead-feed hatch)", function () {
 
     await setClockUnix(e.h.context, expiry.toNumber() + GRACE_WINDOW + 60);
     await settleExpiry(e, expiry, 120, expiry.toNumber() + 5); // record now EXISTS (feed was alive)
+    // D3: the no-record gate moved to initialize_void (the sole voider).
     let reverted = false, err = "";
-    try { await reclaimUnsettled(e, vault, expiry, writer, cranker); }
+    try { await initVoid(e, vault, expiry, usdc(100), "american"); }
     catch (ex: any) { reverted = true; err = String(ex); }
     console.log(`    record-present reverted=${reverted} (${err.slice(0, 120)})`);
-    assert.isTrue(reverted && /SettlementRecordExists/.test(err), "must revert SettlementRecordExists");
+    assert.isTrue(reverted && /SettlementRecordExists/.test(err), "initialize_void must revert SettlementRecordExists");
   });
 
   it("revert: grace window not elapsed → GracePeriodNotElapsed (6058)", async () => {
@@ -205,13 +231,13 @@ describe("bankrun: reclaim_unsettled (Pass D dead-feed hatch)", function () {
     const { vault, vaultUsdc } = await createVault(e, "american", usdc(100), expiry, { call: {} }, writer);
     await deposit(e, vault, vaultUsdc, writer, 1000);
 
-    // Past expiry but BEFORE grace end.
+    // Past expiry but BEFORE grace end. D3: the grace gate moved to initialize_void.
     await setClockUnix(e.h.context, expiry.toNumber() + 30);
     let reverted = false, err = "";
-    try { await reclaimUnsettled(e, vault, expiry, writer, cranker); }
+    try { await initVoid(e, vault, expiry, usdc(100), "american"); }
     catch (ex: any) { reverted = true; err = String(ex); }
     console.log(`    pre-grace reverted=${reverted} (${err.slice(0, 120)})`);
-    assert.isTrue(reverted && /GracePeriodNotElapsed/.test(err), "must revert GracePeriodNotElapsed");
+    assert.isTrue(reverted && /GracePeriodNotElapsed/.test(err), "initialize_void must revert GracePeriodNotElapsed");
   });
 
   it("revert: unclaimed premium → ClaimPremiumFirst", async () => {
@@ -225,6 +251,7 @@ describe("bankrun: reclaim_unsettled (Pass D dead-feed hatch)", function () {
     await purchase(e, vault, wp, m, vaultUsdc, buyer, 5); // accrues premium to the writer
 
     await setClockUnix(e.h.context, expiry.toNumber() + GRACE_WINDOW + 60);
+    await initVoid(e, vault, expiry, usdc(100), "american"); // void first; premium-claimed-first stays in reclaim
     let reverted = false, err = "";
     try { await reclaimUnsettled(e, vault, expiry, writer, cranker); } // premium NOT claimed
     catch (ex: any) { reverted = true; err = String(ex); }
@@ -244,6 +271,7 @@ describe("bankrun: reclaim_unsettled (Pass D dead-feed hatch)", function () {
     await deposit(e, vault, vaultUsdc, writer, 1000);
 
     await setClockUnix(e.h.context, expiry.toNumber() + GRACE_WINDOW + 60);
+    await initVoid(e, vault, expiry, usdc(100), "american"); // void once; then two per-writer reclaims
     await reclaimUnsettled(e, vault, expiry, writer, cranker); // first claim: shares → 0
     let reverted = false, err = "";
     try { await reclaimUnsettled(e, vault, expiry, writer, cranker2); } // second claim (distinct signer)
@@ -264,7 +292,7 @@ describe("bankrun: reclaim_unsettled (Pass D dead-feed hatch)", function () {
     await deposit(e, vault, vaultUsdc, w2, 400);
 
     await setClockUnix(e.h.context, expiry.toNumber() + GRACE_WINDOW + 60);
-    await reclaimUnsettled(e, vault, expiry, w1, cranker); // voids vault; w2 still has shares
+    await initVoid(e, vault, expiry, usdc(100), "european"); // D3: voids the vault (w1/w2 still have shares)
 
     // settle_vault: create a (late) record so the handler reaches the !voided guard.
     await settleExpiry(e, expiry, 120, expiry.toNumber() + 5);
@@ -297,9 +325,9 @@ describe("bankrun: reclaim_unsettled (Pass D dead-feed hatch)", function () {
     const m = await mint(e, vault, wp, writer, 10, now, true);
     const { buyerOptionAta, buyerUsdc } = await purchase(e, vault, wp, m, vaultUsdc, buyer, 5);
 
-    await claimPremium(e, vault, wp, writer); // so the writer reclaim doesn't trip ClaimPremiumFirst
+    await claimPremium(e, vault, wp, writer);
     await setClockUnix(e.h.context, expiry.toNumber() + GRACE_WINDOW + 60);
-    await reclaimUnsettled(e, vault, expiry, writer, cranker); // voids vault
+    await initVoid(e, vault, expiry, usdc(100), "american"); // D3: voids the vault
 
     // exercise_from_vault: holder still holds tokens but the vault is voided.
     let xReverted = false, xErr = "";

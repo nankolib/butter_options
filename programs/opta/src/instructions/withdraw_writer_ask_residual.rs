@@ -53,35 +53,72 @@ use crate::state::*;
 
 pub fn handle_withdraw_writer_ask_residual(ctx: Context<WithdrawWriterAskResidual>) -> Result<()> {
     let vault = &ctx.accounts.shared_vault;
-    let position = &ctx.accounts.writer_ask_position;
 
-    // ---- Guards -----------------------------------------------------------
+    // ---- Settle-path gate -------------------------------------------------
     require!(vault.is_settled, OptaError::VaultNotSettled);
     // A voided vault (dead-feed hatch) pays holders nothing and unwinds through
-    // reclaim_unsettled; the writer-ask residual is the settled path only (D3
-    // reconciles the void path). Never treat voided as settled (invariant #6).
+    // the void path (reclaim_writer_ask_residual, D3). The settled residual is the
+    // is_settled path only. Never treat voided as settled (invariant #6).
     require!(!vault.voided, OptaError::VaultVoided);
 
+    // enforce_window = true: settled writer-ask-minted holders may still exercise
+    // from the merged collateral, so backers wait the 24h window (CRIT-1).
+    writer_ask_residual_core(
+        &mut ctx.accounts.shared_vault,
+        &mut ctx.accounts.writer_ask_position,
+        &ctx.accounts.vault_usdc_account.to_account_info(),
+        &ctx.accounts.writer_usdc_account.to_account_info(),
+        &ctx.accounts.token_program.to_account_info(),
+        true,
+    )
+}
+
+// =============================================================================
+// writer_ask_residual_core — shared backer residual economics (Phase 3 Slice D3)
+// =============================================================================
+//
+// Single source of truth for a writer-ask backer's pro-rata residual claim,
+// shared by the SETTLED path (withdraw_writer_ask_residual, enforce_window =
+// true) and the VOID path (reclaim_writer_ask_residual, enforce_window = false —
+// voided holders are paid nothing, so there is no holder window to respect; the
+// 7-day GRACE_WINDOW already elapsed at initialize_void). Both call sites pay from
+// `vault_usdc` (Slice D1 swept the pot in on settle; D3's initialize_void swept it
+// in on void) against the unified (collateral_remaining, total_shares). Pure: pay
+// → decrement → zero the position. The is_settled-vs-voided gate + the
+// recipient/seeds pins live in each WRAPPER's context, not here.
+//
+// Extracted VERBATIM from the D2a body — the settled wrapper is byte-identical
+// (the D2a residual suite is the purity proof: it must pass unchanged).
+pub fn writer_ask_residual_core<'info>(
+    vault: &mut Account<'info, SharedVault>,
+    position: &mut Account<'info, WriterAskPosition>,
+    vault_usdc: &AccountInfo<'info>,
+    writer_usdc: &AccountInfo<'info>,
+    token_program: &AccountInfo<'info>,
+    enforce_window: bool,
+) -> Result<()> {
     let swept = vault.writer_ask_collateral_swept;
-    // Not a writer-ask-bearing settled vault (or the no-pot path) → nothing here.
+    // Not a writer-ask-bearing vault (or the no-pot path) → nothing here.
     require!(swept > 0, OptaError::NothingToClaim);
 
     let committed = position.collateral_committed;
     // Double-claim guard: a claimed position is zeroed below; a second call reverts.
     require!(committed > 0, OptaError::NothingToClaim);
 
-    // Holders-first: writer-ask-minted holders may still exercise from the merged
-    // collateral. Make backers wait the full 24h post-expiry window, exactly like
-    // pool writers in withdraw_post_settlement (CRIT-1).
-    let clock = Clock::get()?;
-    let window_end = vault
-        .expiry
-        .checked_add(EXERCISE_WINDOW)
-        .ok_or(OptaError::MathOverflow)?;
-    require!(
-        clock.unix_timestamp >= window_end,
-        OptaError::HolderExerciseWindowOpen
-    );
+    if enforce_window {
+        // Holders-first (settled path): writer-ask-minted holders may still
+        // exercise the merged collateral, so backers wait the 24h post-expiry
+        // window, exactly like pool writers in withdraw_post_settlement (CRIT-1).
+        let clock = Clock::get()?;
+        let window_end = vault
+            .expiry
+            .checked_add(EXERCISE_WINDOW)
+            .ok_or(OptaError::MathOverflow)?;
+        require!(
+            clock.unix_timestamp >= window_end,
+            OptaError::HolderExerciseWindowOpen
+        );
+    }
 
     // ---- Size this backer's claim against the unified denominator ----------
     // equiv_shares = committed × writer_ask_equiv_shares / swept   (floor)
@@ -106,7 +143,7 @@ pub fn handle_withdraw_writer_ask_residual(ctx: Context<WithdrawWriterAskResidua
     };
 
     // ---- Transfer payout: vault_usdc → backer (vault PDA signs) -------------
-    let vault_key = ctx.accounts.shared_vault.key();
+    let vault_key = vault.key();
     let backer = position.backer;
     let option_mint = position.option_mint;
 
@@ -131,11 +168,11 @@ pub fn handle_withdraw_writer_ask_residual(ctx: Context<WithdrawWriterAskResidua
     if payout > 0 {
         token::transfer(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
+                token_program.clone(),
                 Transfer {
-                    from: ctx.accounts.vault_usdc_account.to_account_info(),
-                    to: ctx.accounts.writer_usdc_account.to_account_info(),
-                    authority: ctx.accounts.shared_vault.to_account_info(),
+                    from: vault_usdc.clone(),
+                    to: writer_usdc.clone(),
+                    authority: vault.to_account_info(),
                 },
                 signer_seeds,
             ),
@@ -149,11 +186,9 @@ pub fn handle_withdraw_writer_ask_residual(ctx: Context<WithdrawWriterAskResidua
     // so both checked_subs hold. total_collateral is NOT touched: the swept
     // writer-ask collateral was never added to total_collateral (Slice B
     // isolation) — it lives only in collateral_remaining.
-    let position = &mut ctx.accounts.writer_ask_position;
     position.collateral_committed = 0;
     position.contracts_written = 0;
 
-    let vault = &mut ctx.accounts.shared_vault;
     vault.collateral_remaining = vault
         .collateral_remaining
         .checked_sub(payout)

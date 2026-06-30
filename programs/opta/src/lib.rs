@@ -406,16 +406,37 @@ pub mod opta {
         )
     }
 
-    /// Phase 2 Pass D — dead-feed safety hatch. Permissionless. Lets writers
-    /// reclaim pooled collateral pro-rata from a vault whose settlement price
-    /// NEVER landed (no SettlementRecord for its (asset, expiry)) once the 7-day
-    /// GRACE_WINDOW past expiry has elapsed. Per-writer claim (one WriterPosition
-    /// per call; cranker may call on a writer's behalf). Sets `voided = true` on
-    /// the first call; NEVER sets `is_settled` and NEVER writes a SettlementRecord
-    /// (invariant #6 — a voided vault pays holders nothing). NOT gated by
-    /// AMERICAN_ENABLED: the exit path stays open regardless of the flag.
+    /// Phase 2 Pass D — dead-feed safety hatch (pool-writer side). Permissionless,
+    /// per-writer pro-rata reclaim from a voided vault. Phase 3 D3: now REQUIRES
+    /// `voided == true` (set atomically by `initialize_void`, the sole voider) —
+    /// it no longer self-voids and no longer takes the market/settlement_record
+    /// accounts (CRANK: drop those two before redeploy). The pro-rata payout is
+    /// byte-identical (auto-scales on the bumped total_shares + merged
+    /// collateral_remaining). NOT gated by AMERICAN_ENABLED.
     pub fn reclaim_unsettled(ctx: Context<ReclaimUnsettled>) -> Result<()> {
         instructions::reclaim_unsettled::handle_reclaim_unsettled(ctx)
+    }
+
+    /// Phase 3 Slice D3 — atomic dead-feed void transition. The SOLE setter of
+    /// `voided`. After the 7-day grace with no SettlementRecord, derives the
+    /// canonical writer-ask pot from vault identity (un-omittable; sound via D2.5's
+    /// canonical-mint pin), sweeps it into vault_usdc (donation→treasury, closes
+    /// pot_usdc), applies the D2a shares-unification merge (total_shares +=
+    /// equiv_total, collateral_remaining = TC + swept − E), and flips voided — all
+    /// atomically. No-pot/EUR → byte-identical to the old self-void seed (swept 0).
+    /// Both reclaim paths require voided, so none can run before the merge.
+    /// Permissionless, UNGATED, once-only. Spec: §8 void path.
+    pub fn initialize_void(ctx: Context<InitializeVoid>) -> Result<()> {
+        instructions::initialize_void::handle_initialize_void(ctx)
+    }
+
+    /// Phase 3 Slice D3 — writer-ask backer's VOID-path residual claim (the void
+    /// twin of withdraw_writer_ask_residual; shares the same pure core). Gates on
+    /// `voided` (not is_settled), no holders-first window (voided holders get
+    /// nothing). Pays the backer their pro-rata of the merged residual from
+    /// vault_usdc. Permissionless, backer-pinned, double-claim guarded. Spec: §8.
+    pub fn reclaim_writer_ask_residual(ctx: Context<ReclaimWriterAskResidual>) -> Result<()> {
+        instructions::reclaim_writer_ask_residual::handle_reclaim_writer_ask_residual(ctx)
     }
 
     // =========================================================================

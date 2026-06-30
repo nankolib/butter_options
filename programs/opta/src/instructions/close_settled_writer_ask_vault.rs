@@ -52,12 +52,20 @@ pub fn handle_close_settled_writer_ask_vault(
 ) -> Result<()> {
     let vault = &ctx.accounts.shared_vault;
 
-    // ---- EXACT all-drained precondition (Opt-1) ---------------------------
-    // is_settled && !voided && swept > 0 && total_shares == 0
-    require!(vault.is_settled, OptaError::VaultNotSettled);
-    require!(!vault.voided, OptaError::VaultVoided);
+    // ---- EXACT all-drained precondition (Opt-1; D3 void arm) --------------
+    //   total_shares == 0 && ( voided || (is_settled && swept > 0) )
+    // total_shares == 0 is the unspoofable all-drained signal (any owed claimant's
+    // weight is still in it). The SETTLED arm keeps swept > 0 (scope to writer-ask
+    // vaults — pool-only SETTLED vaults close via the pooled last-writer path). The
+    // VOID arm (D3) drops swept > 0: a voided vault (pot OR pool-only/EUR — all
+    // wound down via initialize_void + reclaim) closes here when drained, which also
+    // fixes the pre-existing pool-only-voided vault_usdc rent-strand (reclaim_unsettled
+    // has no last-writer close).
+    // Scope-check FIRST (preserves the D2a revert order: a non-writer-ask /
+    // un-drained settled vault reverts NotAWriterAskVault), then the all-drained
+    // signal. Same logical precondition either way.
     require!(
-        vault.writer_ask_collateral_swept > 0,
+        vault.voided || (vault.is_settled && vault.writer_ask_collateral_swept > 0),
         OptaError::NotAWriterAskVault
     );
     require!(vault.total_shares == 0, OptaError::VaultNotFullyDrained);

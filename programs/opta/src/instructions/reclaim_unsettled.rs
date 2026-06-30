@@ -47,31 +47,20 @@ pub fn handle_reclaim_unsettled(ctx: Context<ReclaimUnsettled>) -> Result<()> {
     let vault = &ctx.accounts.shared_vault;
     let writer_pos = &ctx.accounts.writer_position;
 
-    // ---- 1. Precondition: SettlementRecord must NOT exist --------------------
-    // The novel "account must not exist" pattern. The account is seeds-pinned to
-    // [SETTLEMENT_SEED, asset_name, expiry] in the context, so the caller cannot
-    // substitute a different empty account. If it holds data, settle_expiry
-    // created it for this (asset, expiry) → the feed was alive → hatch forbidden
-    // forever. (Granularity note: the record is per-(asset, expiry), so any
-    // settled vault for this expiry closes the hatch for all of them — intended:
-    // a live feed means nothing was stranded.)
-    require!(
-        ctx.accounts.settlement_record.data_is_empty(),
-        OptaError::SettlementRecordExists
-    );
+    // ---- 1. Precondition: the vault must be VOIDED (Phase 3 Slice D3) --------
+    // `initialize_void` is the SOLE voided-setter and runs the full merge (pot
+    // sweep + shares-unification + collateral_remaining seed) ATOMICALLY before
+    // flipping voided. require!(voided) therefore guarantees the merge committed
+    // before this per-writer claim — there is no path to a reclaim against a
+    // voided-but-unmerged vault. The no-SettlementRecord + 7-day grace gates AND
+    // the seed/void transition that used to live here MOVED to initialize_void;
+    // reclaim never re-checks them, so a post-void SettlementRecord (a late feed)
+    // cannot re-block reclaim — and settle_vault's !voided guard blocks ever
+    // applying it. The pro-rata payout below is byte-identical (it auto-scales on
+    // the bumped total_shares + merged collateral_remaining initialize_void seeded).
+    require!(vault.voided, OptaError::VaultNotVoided);
 
-    // ---- 2. Precondition: 7-day dead-feed grace window ----------------------
-    let clock = Clock::get()?;
-    let grace_end = vault
-        .expiry
-        .checked_add(GRACE_WINDOW)
-        .ok_or(OptaError::MathOverflow)?;
-    require!(
-        clock.unix_timestamp >= grace_end,
-        OptaError::GracePeriodNotElapsed
-    );
-
-    // ---- 3. Caller authorization + zero-shares idempotency ------------------
+    // ---- 2. Caller authorization + zero-shares idempotency ------------------
     // Same guards withdraw_post_settlement uses. `writer` is the position owner
     // (NOT necessarily the signer — permissionless on-behalf-of crank).
     require!(
@@ -93,21 +82,9 @@ pub fn handle_reclaim_unsettled(ctx: Context<ReclaimUnsettled>) -> Result<()> {
         .saturating_sub(writer_pos.premium_claimed as u128) as u64;
     require!(unclaimed == 0, OptaError::ClaimPremiumFirst);
 
-    // ---- 5. Void transition (FIRST call only) ------------------------------
-    // Seed collateral_remaining from the unsettled pot, netting early-exercise
-    // payouts (decisions 2/3). Mirrors settle_vault setting collateral_remaining
-    // and Stage G's `total_collateral − early_exercise_payout`. Set voided so
-    // the defensive guards fire and a late settle can never apply.
-    if !ctx.accounts.shared_vault.voided {
-        let vault_mut = &mut ctx.accounts.shared_vault;
-        vault_mut.collateral_remaining = vault_mut
-            .total_collateral
-            .checked_sub(vault_mut.early_exercise_payout)
-            .ok_or(OptaError::MathOverflow)?;
-        vault_mut.voided = true;
-    }
-
-    // ---- 6. Per-writer pro-rata payout (withdraw_post_settlement formula) ----
+    // ---- 4. Per-writer pro-rata payout (withdraw_post_settlement formula) ----
+    // collateral_remaining + total_shares were seeded/merged by initialize_void
+    // (the void transition that used to live here). Byte-identical math.
     let vault = &ctx.accounts.shared_vault;
     let writer_remaining = (writer_pos.shares as u128)
         .checked_mul(vault.collateral_remaining as u128)
@@ -203,25 +180,10 @@ pub struct ReclaimUnsettled<'info> {
     )]
     pub writer_position: Box<Account<'info, WriterPosition>>,
 
-    /// The vault's market — needed to derive the SettlementRecord PDA from
-    /// `market.asset_name`. Pinned to the vault's recorded market.
-    #[account(constraint = market.key() == shared_vault.market)]
-    pub market: Account<'info, OptionsMarket>,
-
-    /// The per-(asset, expiry) SettlementRecord — which MUST NOT exist for the
-    /// hatch to open. Seeds-constrained so the caller cannot substitute an
-    /// arbitrary empty account; the handler asserts it is empty.
-    /// CHECK: existence is the gate. Anchor validates the address against the
-    /// derived PDA; the handler requires `data_is_empty()`.
-    #[account(
-        seeds = [
-            SETTLEMENT_SEED,
-            market.asset_name.as_bytes(),
-            &shared_vault.expiry.to_le_bytes(),
-        ],
-        bump,
-    )]
-    pub settlement_record: UncheckedAccount<'info>,
+    // D3: `market` + `settlement_record` were dropped — the no-record gate they
+    // served moved to initialize_void (which is now the sole voider). reclaim
+    // gates on `voided` instead. CRANK: drop these two accounts from the
+    // reclaim_unsettled call before redeploy (a pre-flip wiring task).
 
     /// Vault's USDC token account — source of the pro-rata payout.
     #[account(

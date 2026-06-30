@@ -419,4 +419,18 @@ pub enum OptaError {
     // code 6075.
     #[msg("Writer asks may only be posted on a canonical create_series mint")]
     CanonicalMintRequired,
+
+    // =========================================================================
+    // Exchange void-path reconciliation (Phase 3 Slice D3)
+    // =========================================================================
+    // The void path is two-phase: `initialize_void` is the SOLE setter of
+    // `voided` (it atomically sweeps the canonical pot, applies the
+    // shares-unification merge, seeds collateral_remaining, and flips voided),
+    // and BOTH reclaim paths (reclaim_unsettled for pool writers,
+    // reclaim_writer_ask_residual for backers) require voided == true. This error
+    // fires when a reclaim is attempted on a vault that has not been
+    // initialize_void'd yet — guaranteeing no claim runs against a
+    // voided-but-unmerged vault. Error code 6076.
+    #[msg("Vault not voided — call initialize_void first")]
+    VaultNotVoided,
 }

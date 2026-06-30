@@ -2,6 +2,86 @@
 
 > **⚠ ARCHITECTURAL BOUNDARY (Phase 3 Slice D1, 2026-06-30) — settle_vault sweeps EXACTLY ONE writer-ask pot.** `settle_vault` folds the writer-ask pot into the settlement waterfall by sweeping the single pot passed in its optional accounts (pinned via `writer_ask_pot.vault == shared_vault.key()`). **A vault with WriterAsk pots on >1 series mint would strand the un-passed pots — settle is once-only (the `is_settled` guard), so a second sweep can't run.** The production series model (D5: one canonical mint per American vault → one pot) prevents this. **If multi-mint-per-vault is ever introduced, `settle_vault` MUST loop over all pots (remaining_accounts) or it strands writer-ask collateral.** This is dark until the Phase 3 gate flips (post-D3).
 
+> **2026-07-01 (SESSION CLOSE — R+M+C redeploy window MID-FLIGHT, paused at R-1-complete). ▶ RESUME HERE: next action = GATE R-2 (buffer write + upgrade — THE BRICK). This entry is the canonical execution doc for the rest of the window.**
+>
+> **WINDOW STATE — R-1 (extend) LANDED, inert, NO brick. R-2…W pending.**
+> - **R-1 extend** tx `45TaWvPsRtGiBGQ2jUXNGFk164LAiAor6KJSQfFk96ZJvwZDNbNLckVeT5Hvao1sS47si5uLg6zYupk4cEampn1w`; ProgramData `1,433,552 → 1,564,624` (+131,072); admin SOL `25.801 → 24.889` (rent delta 0.9123). **Capacity now sufficient for R-2** (1,564,624 ≥ opta.so 1,489,112; 75,512 B headroom for the later F flip).
+> - ⚠ **`Last Deployed Slot` moved `472308749 → 473101461` — this is a METADATA bump from the extend tx, NOT a redeploy.** Executable unchanged; crank confirmed looping clean post-extend; all vaults still readable; **no brick**. **R-2 verify compares slot against the NEW baseline `473101461`** (a real upgrade pushes it ABOVE that), never 472308749.
+> - **NEXT = GATE R-2.** The brick window opens the instant R-2's upgrade lands. **R-2 → M1 → M2 → M3 → M4 → C → W MUST run as ONE coordinated sitting** — between R-2 and M-complete the 80 vaults are deser-bricked (260 < new 276) and all settlements revert. Crank stays RUNNING throughout (Window Rule a).
+>
+> **BUILD ARTIFACT:** `target/deploy/opta.so` sha256 **`a2e8c9e8711ad5cf427e9aa91d9d44a45fa1d0ef4c571f0091d56713500c8fef`**, 1,489,112 B, feature-free, built from master `3c328cb` via `cargo build-sbf --arch v3 --tools-version v1.54` (NO `--features` — LOW-5 clean, no `compile_error!`). Toolchain: solana-cli 4.1.0-rc.1 (Agave), cargo-build-sbf 4.1.0, platform-tools v1.54. ⚠ **If the next session is a FRESH CONTAINER the .so won't persist → REBUILD + RE-HASH-VERIFY (must equal `a2e8c9e8…00c8fef`) before R-2.**
+>
+> **CORRECTED DEPLOY FACTS (caught at R build-sanity):** (1) local `target/deploy/opta-keypair.json` = `BFoJTD7F…` ≠ deployed `CtzJ4…` → **upgrade BY ADDRESS, never the keypair file** (keypair-file deploy would create a broken new program at BFoJ). (2) program upgrade authority = admin `5YRMuuoY` = config keypair `/home/nanko/.config/solana/id.json`.
+>
+> **═══ RUNBOOK v2 — CANONICAL EXECUTION DOC ═══**
+>
+> **WINDOW RULES (apply throughout):**
+> - **(a) Crank stays RUNNING through R-2→M — do NOT pause.** Its settle/finalize loops are sim/pre-check gated (`txSent:0` on failure → gas-free); it catches+retries (no crash); the vol/sb oracle-push loops are unaffected by R/M and keep warming feeds. C restarts it with rewired code anyway.
+> - **(b) ALL expiry/settlement timing uses DEVNET CLUSTER TIME** (`getBlockTime(getSlot())`), never the local clock (~5h skew confirmed).
+> - **(c) Pre-existing Hermes-404 settle blocker is OUT-OF-WINDOW.** The crank's stuck `(asset,expiry)` tuples are old/equity vaults (PriceTooOld >30d / equity-404); a 404 there is NOT a cutover regression. GATE C uses a price-resolvable SYNTHETIC vault.
+>
+> **GATE R-2 (🔴 buffer write + upgrade — THE BRICK; verify baseline slot 473101461):**
+> ```
+> solana program write-buffer target/deploy/opta.so \
+>   --buffer-authority /home/nanko/.config/solana/id.json \
+>   --keypair /home/nanko/.config/solana/id.json \
+>   --url "$(cat ~/.opta-rpc-helius)"
+> #   → BUFFER_PUBKEY (re-runnable; on failure REUSE the buffer, don't re-write). Buffer
+> #   authority = admin so the upgrade's authority check (buffer.auth == program.upgrade_auth) passes.
+> solana program upgrade <BUFFER_PUBKEY> CtzJ4MJYX6BFvF4g67i5C24tQuwRn6ddKkaE5L84z9Cq \
+>   --upgrade-authority /home/nanko/.config/solana/id.json \
+>   --url "$(cat ~/.opta-rpc-helius)"
+> ```
+> Verify: `_phase0_capture.ts` → slot > 473101461, deployed hash == `a2e8c9e8…`, authority still admin; fetch a target vault via the new IDL → `AccountDidNotDeserialize` (BRICK CONFIRMED → go STRAIGHT to M1).
+>
+> **GATE M1–M4 (🔴 each batch its own greenlight; idempotent skip-if-grown, resumable):**
+> ```
+> OPTA_RPC_URL="$(cat ~/.opta-rpc-helius)" MODE=sim  BATCH=B1 npx ts-node --transpile-only scripts/_exec_migrate.ts
+> # greenlight, then:
+> OPTA_RPC_URL="$(cat ~/.opta-rpc-helius)" MODE=exec BATCH=B1 npx ts-node --transpile-only scripts/_exec_migrate.ts
+> ```
+> 80 healthy vaults (94 − 14 corrupt) in B1/B2/B3/B4 of 20 (partition in `scripts/_phase0_baseline.json`). Admin pays rent delta (~0.009 SOL total). Per-batch verify (in-script): all 20 → len 276; running count 20→40→60→80. ⚠ Executor **sim is only valid POST-R-2** (instruction absent pre-upgrade). The 14 corrupt are EXCLUDED (unmigratable — see corrupt-vault entry below).
+>
+> **GATE C (🟡 off-chain VPS; roll-forward):** settle crank 4→6 derived accounts (`app/src/utils/pythPullPost.ts:977`); reclaim path → 2-phase `initialize_void` → `reclaim_unsettled` (drops `market` + `settlement_record`). Pull rewired crank + synced IDL (IDL first), `npm install` if deps changed, `systemctl restart opta-crank --no-block` + poll the drain (never `journalctl -f`).
+> Verify (SYNTHETIC, deterministic): create fresh SOL EUR vault `expiry = cluster_now + ~120s` + small deposit (born 276, no migration); wait CLUSTER time past expiry; rewired crank `settle_expiry` (live SOL print, publish_time ∈ [expiry, expiry+60]) + `settle_vault` (6 accounts) → `is_settled=true`. **No pre-existing vault is settleable** (7× PriceTooOld >30d, 1× MSTR equity-404).
+>
+> **PHASE W (window-close, read-only):** all 80 at 276 & readable; the synthetic settled; crank driving; the 14 corrupt still 260 AND vault_usdc still **261,863.585 USDC** (diff vs `scripts/_phase0_baseline.json`). Cluster time throughout.
+>
+> **OUT OF WINDOW — F (`WRITER_ASKS_ENABLED` flip):** a separate later redeploy after the writer-ask lifecycle is proven; this window stays DARK (`WRITER_ASKS_ENABLED=false`).
+>
+> **OPS ARTIFACTS (untracked, local in `scripts/`):** `_phase0_capture.ts` (+ `_phase0_baseline.json` baseline), `_exec_migrate.ts` (pre-staged executor, reads the baseline), `_recon_vault_sizes.ts`, `_recon_corrupt_claims.ts`, `_recon_c_candidates.ts`, `_recon_r3_orders.ts`, `_exec_r3_cancel.ts`. VPS: `ssh -i ~/.ssh/_vps_key root@144.202.58.6` (chmod-600 copy of `/mnt/c/Users/pc/.ssh/id_ed25519`; known_hosts at `/mnt/c/Users/pc/.ssh/known_hosts`). RPC: `~/.opta-rpc-helius`. Admin keypair: `/home/nanko/.config/solana/id.json` (5YRMuuoY, LOCAL-only).
+>
+> **═══ END RUNBOOK v2 ═══**
+
+> **2026-07-01 (devnet corrupt-vault inventory — LOGGED, no action) — 14 SharedVaults are deser-corrupt at the `is_settled` byte; excluded from the 276-migration; ~261.9k devnet-USDC + 14 writer claims stranded behind them. Standalone future force-recovery workstream (NOT in R+M+C scope, NOT built, NOT proposed). Devnet test USDC, no real-money value — logged so stranded collateral isn't silently abandoned, not an emergency.**
+> **This inventory is the SOURCE of the locked 80-vault migration scope (94 live − 14 corrupt) that the R+M+C redeploy window operates on — not just a cleanup log; the migration batch count + window plan derive from the numbers here.**
+>
+> **What.** A read-only gPA-by-discriminator sweep of all 94 live SharedVaults (uniform 260 bytes; deployed `INIT_SPACE`=252) found **14** whose `is_settled` (byte 178) holds a **non-bool** value — 176 (×9), 208 (×4), 171 (×1), not 0/1. All 14 are **expired since April 2026**, `voided=0`, and never reached a clean settled/voided terminal state. **Excluded from the 276-migration:** the migration grows by SIZE only (raw realloc, never reads `is_settled`), so growing them to 276 does NOT repair the byte — Borsh rejects `is_settled ∉ {0,1}` at 276 exactly as at 260, so they stay unreadable by the typed `Account<SharedVault>` path (which is why `safeFetchAll` already drops them). Migrating them would only spend admin rent on accounts that remain dead. **Migration scope = 80 healthy vaults / 4 batches of 20.**
+>
+> **Stranded value (read-only, 2026-07-01).** 261,863.585 devnet USDC across 14 WriterPositions in 13 vaults (`ECbN1dX8…` is the lone empty husk — 0 USDC / 0 WP). Corruption is **localized to byte 178** — layout intact through byte 106, so the `vault_usdc` pointers (`stored == derived ["vault_usdc", vault]` for all 14) and balances are trustworthy. Several show `vault_usdc > WP deposited` = buyer premium from real pre-corruption trading (e.g. `8mep` 153,731.25 vs 150,000 deposited).
+> ```
+> vault                                          vault_usdc(USDC)  WPs  series
+> 8mepVcJHnp8bWxW36bnTBzNo2oBqyi7eFwd7RLG5qvY7      153,731.250     1   Call $75000
+> ET6u7t2r8Tt3qvfaRYmH8HvqDpR85KMT7jxVcKkZbTkF       85,000.000     1   Put  $85000
+> 7GBBKsubDBRU4qZzTWES92V9YHubLKyToyLjdKvd7vvp        6,400.000     1   Call $3200
+> HYnyBaQjr8ZVKYfQo5t3dgWwqEaNEjBodsJJEXrfaFf2        4,919.400     1   Call $2400
+> 4AUTwwgMzoArSCxft6WXDbbViY12gsMHd3Xcu9rkZfq8        2,004.975     1   Call $100
+> 73cXhWK83kdeEnNpnnbpX3Wyg47h52RPiedNz6Q9yziU        1,800.000     1   Call $90
+> 9wE8QzAPttjknbF6gct1jrfLneCP49jVxcdyDrbgUvBh        1,800.000     1   Call $90
+> HgLEJwExFHYWp2fdRp2wjhcVKjQp7q5fVafRXrQN7ADY        1,800.000     2   Call $90
+> HhsYhnSspWLxqXM2rzGsDZYgjvw3ME6t1maCrtzcqxGH        1,800.000     1   Call $90
+> 28R4CMDnyiPNh8qCr6HeRWMitUGry33cJbBhN5qaAt1x          807.960     1   Put  $80
+> 5SnQ5m3mF3n8UyBxqtWzxWbvdGf4TXkBSRGV9eYJfw9m          700.000     1   Put  $70
+> BzKXfkH4jR53ZbyxhXQpW2n2ge8PNXbqVSjXAy3ydzfo          700.000     1   Put  $70
+> 9SV3fN1YPbcwxzCtceW2Bb13iRZTLMyu5JXRyiRzAuqA          400.000     1   Call $200
+> ECbN1dX8ASyTQZNsQvsjNYeAfZF8t3hGsGCkuiVCvvcb            0.000     0   Put  $60  (empty husk)
+> TOTAL                                             261,863.585    14
+> ```
+>
+> **Recovery path (future, OUT of R+M+C scope — NOT built, NOT proposed).** A standalone admin workstream: either (a) a raw-write admin instruction repairing the `is_settled` byte to a valid value, then normal settle/withdraw drains each vault to its writer(s); or (b) a force-close admin instruction returning `vault_usdc` to the WriterPosition owner(s) and closing the vault. Both need new Rust + an audit; neither is part of the redeploy/migration/crank window. Flagged so the 261.9k + 14 claims aren't silently abandoned.
+>
+> **Status.** Devnet test USDC, no real-money value — NOT an emergency; a logged cleanup/recovery item. The healthy-vault migration proceeds without it.
+
 > **Phase 3 settle_vault DERIVED-POT RETRO-HARDEN SHIPPED (2026-06-30, dark — applied, gated green + audited, COMMITTED this session). Closes the omit-the-pot griefing surface flagged across the D2.5 + D3 entries — `settle_vault`'s writer-ask pot is now UN-OMITTABLE + UN-SUBSTITUTABLE, mirroring `initialize_void`'s derived-pot pin. The settle-side of the three pre-flip on-chain gates is now CLOSED.**
 > - **Handler (`settle_vault.rs:99-145`):** derive `canonical_mint` from vault identity (`[VAULT_OPTION_MINT_SEED, market, strike, expiry, option_type, exercise_style]`), `require_keys_eq!` the passed `option_mint` / `writer_ask_pot` / `writer_ask_pot_usdc` to the vault-derived addresses, THEN branch on `writer_ask_pot.data_is_empty()`. Non-empty also pins `pot.vault == vault.key()` + `pot.usdc_account == writer_ask_pot_usdc.key()` — byte-identical mechanism to `initialize_void` (D3).
 > - **Context:** the pot accounts moved from trailing OPTIONALS → REQUIRED (`UncheckedAccount`). No-pot/EUR/pool-only passes the derived-empty pot → `data_is_empty()` ⇒ swept=0 ⇒ settlement state byte-identical. NO new error (reuses `InvalidVaultMint` 6029 + `WriterAskSweepAccountsMissing` 6072). NO schema delta.

@@ -384,4 +384,26 @@ pub enum OptaError {
     // Error code 6072.
     #[msg("Writer-ask pot sweep accounts missing or pot USDC balance below the recorded counter")]
     WriterAskSweepAccountsMissing,
+
+    // =========================================================================
+    // Exchange writer-ask residual + vault close (Phase 3 Slice D2a)
+    // =========================================================================
+    // close_settled_writer_ask_vault scope guard: the vault carries no writer-ask
+    // collateral (writer_ask_collateral_swept == 0), so this is a pool-only / EUR
+    // vault — its USDC is closed by the pooled withdraw_post_settlement /
+    // auto_finalize_writers last-writer path, not here. Error code 6073.
+    #[msg("Not a writer-ask vault — pool-only/EUR vaults close via the pooled last-writer path")]
+    NotAWriterAskVault,
+
+    // close_settled_writer_ask_vault EXACT all-drained precondition: total_shares
+    // must be 0. While ANY claimant is owed (a pool WriterPosition with shares > 0
+    // or an unclaimed WriterAskPosition with collateral_committed > 0) its weight
+    // is still in total_shares ⇒ total_shares > 0 ⇒ close is refused. It is
+    // therefore impossible to close a vault that still owes a claimant. A mixed
+    // pool+writer-ask vault whose pool ratio drifted (truncated partial withdrawal)
+    // can land at total_shares == D > 0 floor-dust → close never fires: a SAFE
+    // under-close (rent stranded, no claimant harmed), reclaimable later by a
+    // future admin force-close. Error code 6074.
+    #[msg("Vault not fully drained — total_shares must be 0 before the writer-ask vault USDC can be closed")]
+    VaultNotFullyDrained,
 }

@@ -44,6 +44,10 @@ pub mod fill_vault_peg;
 // Exchange writer-ask fill (Phase 3 Slice B — mint-on-fill from personal collateral)
 pub mod fill_writer_ask;
 
+// Exchange writer-ask residual + close (Phase 3 Slice D2a)
+pub mod withdraw_writer_ask_residual;
+pub mod close_settled_writer_ask_vault;
+
 // Exchange write-flow collapse (Phase 2 Pass C — atomic create+deposit)
 pub mod create_and_deposit;
 
@@ -66,6 +70,9 @@ pub mod migrate_shared_vault_exercise_tracking;
 // SharedVault exchange-fields (spread_bps + voided) schema migration (Phase 2 Pass A)
 pub mod migrate_shared_vault_exchange_fields;
 pub mod migrate_shared_vault_writer_ask_swept;
+// SharedVault writer_ask_equiv_shares schema migration (Phase 3 Slice D2a) —
+// consolidated 276-migration; SUPERSEDES the D1 268-migration at deploy.
+pub mod migrate_shared_vault_residual_shares;
 
 // Phase 2 Stage B -- realized-vol oracle
 pub mod initialize_vol_oracle;
@@ -137,6 +144,10 @@ pub use fill_vault_peg::*;
 // Exchange writer-ask fill (Phase 3 Slice B — mint-on-fill from personal collateral)
 pub use fill_writer_ask::*;
 
+// Exchange writer-ask residual + close (Phase 3 Slice D2a)
+pub use withdraw_writer_ask_residual::*;
+pub use close_settled_writer_ask_vault::*;
+
 // Exchange write-flow collapse (Phase 2 Pass C — atomic create+deposit)
 pub use create_and_deposit::*;
 
@@ -156,6 +167,7 @@ pub use migrate_shared_vault_exercise_style::*;
 pub use migrate_shared_vault_exercise_tracking::*;
 pub use migrate_shared_vault_exchange_fields::*;
 pub use migrate_shared_vault_writer_ask_swept::*;
+pub use migrate_shared_vault_residual_shares::*;
 
 // Phase 2 Stage B -- realized-vol oracle
 pub use initialize_vol_oracle::*;

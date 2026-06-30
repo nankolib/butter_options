@@ -234,6 +234,29 @@ pub struct SharedVault {
     /// (Stage C Pass 1), exercise tracking (Stage F), and spread_bps/voided
     /// (Pass A) — the 6th such append.
     pub writer_ask_collateral_swept: u64,
+
+    /// Phase 3 Slice D2a (exchange) — writer-ask SHARE-equivalent folded into
+    /// `total_shares` at settlement (shares-unification). `settle_vault` sets
+    ///   writer_ask_equiv_shares = writer_ask_collateral_swept × total_shares / total_collateral
+    /// (or = writer_ask_collateral_swept when total_collateral == 0, the pure
+    /// writer-ask vault) and ADDS it to `total_shares`, so pool-writers and
+    /// writer-ask-writers both claim the post-holder residual against ONE
+    /// jointly-decremented denominator (the conservation-preserving model). 0 for
+    /// EUR / pool-only vaults and any vault with no WriterAsk pot.
+    ///
+    /// This is the FROZEN numerator `withdraw_writer_ask_residual` reads to size
+    /// each backer's equiv_shares: `equiv_shares = committed × writer_ask_equiv_shares / swept`.
+    /// `close_settled_writer_ask_vault` keys off `total_shares == 0` (every
+    /// claimant drained) — never off this field directly.
+    ///
+    /// MUST be the last field. Pre-D2a vaults were serialized without it (8 bytes
+    /// shorter than the new INIT_SPACE). The admin-only
+    /// `migrate_shared_vault_residual_shares` grows them and zero-fills the
+    /// trailing 8 bytes — which deserialize as 0, the correct default. That one
+    /// consolidated migration grows a vault at ANY prior size (260 pre-D1 or 268
+    /// post-D1) straight to 276, so it SUPERSEDES the D1 268-migration at deploy.
+    /// The 7th such append.
+    pub writer_ask_equiv_shares: u64,
 }
 
 /// PDA seed prefix for SharedVault accounts.
@@ -410,17 +433,18 @@ mod tests {
     }
 
     #[test]
-    fn shared_vault_init_space_is_260() {
+    fn shared_vault_init_space_is_268() {
         // Locks the byte total against silent drift. If a future field
         // change shifts this, the migration script's hardcoded constants
         // and the matching `tests/realloc-shared-vault-exercise-style.ts` /
-        // `tests/zzz-stage-c-schema.ts` expectations need to be updated in
-        // lockstep.
+        // `tests/zzz-stage-c-schema.ts` / `tests/bankrun/series-create.test.ts`
+        // expectations need to be updated in lockstep.
         //
         // 233 (pre-Stage-F) + 16 (Stage F: exercised_options u64 +
         // early_exercise_payout u64) = 249; + 3 (Pass A: spread_bps u16 +
         // voided bool) = 252; + 8 (Slice D1: writer_ask_collateral_swept u64)
-        // = 260. On-disk account size is 8 (discriminator) + 260 = 268.
-        assert_eq!(SharedVault::INIT_SPACE, 260);
+        // = 260; + 8 (Slice D2a: writer_ask_equiv_shares u64) = 268. On-disk
+        // account size is 8 (discriminator) + 268 = 276.
+        assert_eq!(SharedVault::INIT_SPACE, 268);
     }
 }

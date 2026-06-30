@@ -147,6 +147,37 @@ pub struct VaultSettled {
     /// pot). Lets indexers reconstruct the merged-waterfall denominator.
     /// Additive trailing field (Borsh-append-safe).
     pub writer_ask_collateral_swept: u64,
+    /// Phase 3 Slice D2a — writer-ask SHARE-equivalent added to total_shares at
+    /// settle (= swept × total_shares / total_collateral, or = swept when
+    /// total_collateral == 0). 0 if no pot. Additive trailing field
+    /// (Borsh-append-safe) — lets indexers reconstruct the unified denominator.
+    pub writer_ask_equiv_shares: u64,
+}
+
+/// Phase 3 Slice D2a — emitted once per writer-ask backer's post-settlement
+/// residual claim (`withdraw_writer_ask_residual`). `equiv_shares` is the
+/// share-equivalent removed from the unified `total_shares` denominator;
+/// `payout` is the USDC (6dp) paid from the merged `collateral_remaining`.
+/// Distinct from VaultPostSettlementWithdraw (the pooled path) so indexers can
+/// separate writer-ask residual refunds from pool-writer withdrawals.
+#[event]
+pub struct WriterAskResidualWithdrawn {
+    pub vault: Pubkey,
+    pub backer: Pubkey,
+    pub option_mint: Pubkey,
+    pub equiv_shares: u64,
+    pub payout: u64,
+}
+
+/// Phase 3 Slice D2a — emitted when `close_settled_writer_ask_vault` reclaims a
+/// fully-drained (total_shares == 0) writer-ask vault's USDC account. `dust_swept`
+/// is the residual micro-USDC moved to the treasury before the close; the account
+/// rent SOL also goes to the treasury.
+#[event]
+pub struct SettledWriterAskVaultClosed {
+    pub vault: Pubkey,
+    pub dust_swept: u64,
+    pub ts: i64,
 }
 
 #[event]

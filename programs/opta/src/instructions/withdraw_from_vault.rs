@@ -109,6 +109,18 @@ pub fn handle_withdraw_from_vault(
     // to the pooled D6/D7 model already locked — accepted, not engineered around.
     // =========================================================================
     if vault.exercise_style == ExerciseStyle::American {
+        // Phase 3 Slice D2b (DROPPED — this gate is already correct under the
+        // merged pool+writer-ask-pot model, so no fold is applied here). Every
+        // writer-ask contract is backed by the SAME cpt as a pool contract
+        // (uniform per series), so WriterAskPot.total_collateral ≡ cpt ×
+        // WriterAskPot.total_contracts. Folding the pot into BOTH the net and the
+        // committed term therefore cancels exactly (folded ≡ this expression), and
+        // the pot's settle-sweep (Slice D1) reimburses the per-exercise freeing —
+        // so this OLD gate IS the correct merged-solvency bound under normal
+        // settlement. TRIPWIRE: if cpt-uniformity ever breaks (variable cpt per
+        // series) that identity fails and this gate would under-reserve —
+        // tests/bankrun/withdraw-from-vault-gate-correctness.test.ts asserts it and
+        // fails loudly. The void path (pot never swept) is reconciled in D3, here.
         let vault_free = vault_free_collateral(
             vault.total_collateral,
             vault.early_exercise_payout,

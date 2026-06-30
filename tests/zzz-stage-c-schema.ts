@@ -58,10 +58,12 @@ const TEST_ASSET = "STAGECTEST";
 // shared_vault.rs InitSpace) = 240.
 const EXERCISE_STYLE_BYTE_OFFSET = 240;
 
-// Expected account on-disk size post-Pass-A (8 discriminator + 252 INIT_SPACE).
-// Was 257 post-Stage-F; +3 bytes for spread_bps(u16) + voided(bool), appended
-// after early_exercise_payout (so EXERCISE_STYLE_BYTE_OFFSET = 240 is unchanged).
-const POST_PASS1_VAULT_SIZE = 260;
+// Expected account on-disk size (8 discriminator + 268 INIT_SPACE = 276).
+// Was 257 post-Stage-F; +3 (Pass A: spread_bps u16 + voided bool) = 260;
+// +8 (Slice D1: writer_ask_collateral_swept u64) = 268; +8 (Slice D2a:
+// writer_ask_equiv_shares u64) = 276. All appended AFTER early_exercise_payout,
+// so EXERCISE_STYLE_BYTE_OFFSET = 240 is unchanged.
+const POST_PASS1_VAULT_SIZE = 276;
 
 describe("zzz-stage-c-schema (Stage C Pass 1)", function () {
   this.timeout(60_000);

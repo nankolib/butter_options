@@ -161,6 +161,31 @@ pub fn handle_settle_vault(ctx: Context<SettleVault>) -> Result<()> {
         .ok_or(OptaError::MathOverflow)?
         .saturating_sub(vault.early_exercise_payout);
 
+    // ---- Phase 3 Slice D2a: shares-unification (writer-ask equiv-shares) ----
+    // Fold the swept writer-ask collateral into the SHARE denominator so that
+    // pool-writers and writer-ask-writers both claim the post-holder residual
+    // against ONE jointly-decremented `total_shares` (the conservation-preserving
+    // model — it reduces to the existing single-bucket telescoping proof).
+    //   equiv_total = swept × total_shares / total_collateral
+    // is the share-equivalent of the swept collateral at the settle-time pool
+    // ratio (read here using the UNMUTATED settle-time total_shares /
+    // total_collateral — settle is once-only, nothing has claimed yet). For a
+    // PURE writer-ask vault (no pool: total_collateral == 0) there is no ratio,
+    // so equiv_total = swept (1:1; the pot IS the only collateral and
+    // total_shares was 0). 0 when there is no pot (swept == 0) → total_shares
+    // unchanged → settlement stays byte-identical for EUR / pool-only vaults.
+    let writer_ask_equiv_shares: u64 = if writer_ask_collateral_swept == 0 {
+        0
+    } else if vault.total_collateral == 0 {
+        writer_ask_collateral_swept
+    } else {
+        ((writer_ask_collateral_swept as u128)
+            .checked_mul(vault.total_shares as u128)
+            .ok_or(OptaError::MathOverflow)?
+            .checked_div(vault.total_collateral as u128)
+            .ok_or(OptaError::MathOverflow)?) as u64
+    };
+
     // Update vault state
     let vault_key = ctx.accounts.shared_vault.key();
 
@@ -169,6 +194,13 @@ pub fn handle_settle_vault(ctx: Context<SettleVault>) -> Result<()> {
     vault.settlement_price = settlement_price;
     vault.collateral_remaining = collateral_remaining;
     vault.writer_ask_collateral_swept = writer_ask_collateral_swept;
+    // D2a: add the writer-ask equiv-shares to the unified denominator. No-op for
+    // the no-pot path (equiv_shares == 0) → total_shares unchanged.
+    vault.total_shares = vault
+        .total_shares
+        .checked_add(writer_ask_equiv_shares)
+        .ok_or(OptaError::MathOverflow)?;
+    vault.writer_ask_equiv_shares = writer_ask_equiv_shares;
 
     emit!(VaultSettled {
         vault: vault_key,
@@ -176,6 +208,7 @@ pub fn handle_settle_vault(ctx: Context<SettleVault>) -> Result<()> {
         total_payout,
         collateral_remaining,
         writer_ask_collateral_swept,
+        writer_ask_equiv_shares,
     });
 
     Ok(())

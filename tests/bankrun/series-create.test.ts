@@ -178,19 +178,21 @@ describe("create_series (Phase 2 Pass A)", function () {
     assert.isTrue(threw, "purchase_from_vault against a series record must fail (natural block — no per-writer escrow/position): " + msg.slice(0, 160));
   });
 
-  it("6 — migration: truncate to 257 → migrate → 268 with spread_bps=0/voided=false; idempotent", async () => {
+  it("6 — migration: truncate to 257 → migrate → 276 with spread_bps=0/voided=false; idempotent", async () => {
     const strike = usdc(200);
     const expiry = new BN(now + 7200);
     const writer = actor(e);
     await usdcAta(e, writer.publicKey);
     const { vault } = await createVault(e, "american", strike, expiry, CALL, writer);
 
-    // Simulate a legacy pre-Pass-A vault: truncate to 257 (post-Stage-F). The
-    // Pass-A migration grows short vaults to the CURRENT INIT_SPACE — now 268
-    // after the Slice D1 writer_ask_collateral_swept append (was 260) — zero-
-    // filling spread_bps + voided + writer_ask_collateral_swept.
+    // Simulate a legacy pre-Pass-A vault: truncate to 257 (post-Stage-F). Any
+    // SharedVault migration grows short vaults to the CURRENT INIT_SPACE — now 276
+    // after the Slice D2a writer_ask_equiv_shares append (was 268 post-D1, 260
+    // post-Pass-A) — zero-filling spread_bps + voided + writer_ask_collateral_swept
+    // + writer_ask_equiv_shares. (migrateSharedVaultExchangeFields grows to
+    // 8 + INIT_SPACE just like the consolidated residual-shares migration.)
     const acc = await e.h.context.banksClient.getAccount(vault);
-    assert.equal(acc!.data.length, 268, "fresh vault is 268 bytes (new schema)");
+    assert.equal(acc!.data.length, 276, "fresh vault is 276 bytes (new schema)");
     const truncated = Buffer.from(acc!.data).subarray(0, 257);
     e.h.context.setAccount(vault, { lamports: acc!.lamports, data: truncated, owner: acc!.owner, executable: acc!.executable, rentEpoch: Number(acc!.rentEpoch) });
     assert.equal((await e.h.context.banksClient.getAccount(vault))!.data.length, 257, "truncated to 257");
@@ -199,17 +201,17 @@ describe("create_series (Phase 2 Pass A)", function () {
       admin: e.admin.publicKey, protocolState: e.protocolState, systemProgram: SystemProgram.programId,
     }).remainingAccounts([{ pubkey: vault, isSigner: false, isWritable: true }]).preInstructions([CU(800_000)]).rpc();
 
-    assert.equal((await e.h.context.banksClient.getAccount(vault))!.data.length, 268, "grown to 268");
+    assert.equal((await e.h.context.banksClient.getAccount(vault))!.data.length, 276, "grown to 276");
     const v: any = await e.opta.account.sharedVault.fetch(vault);
     assert.equal((v.spreadBps as number), 0, "spread_bps = 0 after migration");
     assert.equal((v.voided as boolean), false, "voided = false after migration");
 
-    // Idempotent: second touch skips (stays 268). Distinct CU limit so the tx
+    // Idempotent: second touch skips (stays 276). Distinct CU limit so the tx
     // bytes differ from the first migrate — otherwise an identical message on the
     // same (un-advanced) bankrun blockhash is rejected as a duplicate signature.
     await e.opta.methods.migrateSharedVaultExchangeFields().accountsStrict({
       admin: e.admin.publicKey, protocolState: e.protocolState, systemProgram: SystemProgram.programId,
     }).remainingAccounts([{ pubkey: vault, isSigner: false, isWritable: true }]).preInstructions([CU(810_000)]).rpc();
-    assert.equal((await e.h.context.banksClient.getAccount(vault))!.data.length, 268, "still 268 after idempotent re-touch");
+    assert.equal((await e.h.context.banksClient.getAccount(vault))!.data.length, 276, "still 276 after idempotent re-touch");
   });
 });

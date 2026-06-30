@@ -354,6 +354,32 @@ pub mod opta {
         instructions::fill_writer_ask::handle_fill_writer_ask(ctx, fill_quantity)
     }
 
+    /// Exchange Phase 3 Slice D2a — a writer-ask backer claims their
+    /// post-settlement residual: equiv_shares = committed × writer_ask_equiv_shares
+    /// / swept, payout = equiv_shares × collateral_remaining / total_shares, both
+    /// drawn from the SAME unified (collateral_remaining, total_shares) the pool
+    /// writers use. PURE (pay → decrement → zero the position; no close logic).
+    /// Permissionless with the payout pinned to position.backer; enforces the
+    /// holders-first EXERCISE_WINDOW. UNGATED (an exit/refund path) — inert in a
+    /// feature-free build (reverts NothingToClaim, swept always 0). Spec §8.
+    pub fn withdraw_writer_ask_residual(ctx: Context<WithdrawWriterAskResidual>) -> Result<()> {
+        instructions::withdraw_writer_ask_residual::handle_withdraw_writer_ask_residual(ctx)
+    }
+
+    /// Exchange Phase 3 Slice D2a — reclaim a fully-drained writer-ask vault's
+    /// USDC account. EXACT precondition: is_settled && !voided && swept > 0 &&
+    /// total_shares == 0 (the unspoofable all-drained signal — impossible to
+    /// close while a claimant is owed). Sweeps residual dust + the account rent
+    /// SOL to the treasury. Permissionless. UNGATED — inert in a feature-free
+    /// build (reverts NotAWriterAskVault, swept always 0). A mixed vault that
+    /// lands at total_shares == D > 0 floor-dust is a SAFE under-close (never
+    /// fires; no claimant harmed). Spec §8.
+    pub fn close_settled_writer_ask_vault(
+        ctx: Context<CloseSettledWriterAskVault>,
+    ) -> Result<()> {
+        instructions::close_settled_writer_ask_vault::handle_close_settled_writer_ask_vault(ctx)
+    }
+
     /// Exchange Phase 2 Pass C — atomic write merge (D9). Fuses create_shared_vault
     /// + deposit_to_vault into ONE tx via init_if_needed: the first caller for a
     /// spec creates + deposits, a subsequent caller just deposits. The heavy mint
@@ -500,6 +526,19 @@ pub mod opta {
         ctx: Context<'_, '_, '_, 'info, MigrateSharedVaultWriterAskSwept<'info>>,
     ) -> Result<()> {
         instructions::migrate_shared_vault_writer_ask_swept::handle_migrate_shared_vault_writer_ask_swept(ctx)
+    }
+
+    /// Phase 3 Slice D2a — one-time SharedVault migration: append the trailing
+    /// `writer_ask_equiv_shares` field (260→268 INIT_SPACE; on-disk 268→276).
+    /// Admin-only, batched via remaining_accounts (recommended batch: 20).
+    /// CONSOLIDATED: grows a vault at ANY prior size (260 pre-D1 or 268 post-D1)
+    /// straight to 276, zero-filling all trailing bytes — so it SUPERSEDES the D1
+    /// 268-migration at deploy (run ONLY this one). Idempotent: vaults already at
+    /// 276 bytes are skipped. The 7th such append.
+    pub fn migrate_shared_vault_residual_shares<'info>(
+        ctx: Context<'_, '_, '_, 'info, MigrateSharedVaultResidualShares<'info>>,
+    ) -> Result<()> {
+        instructions::migrate_shared_vault_residual_shares::handle_migrate_shared_vault_residual_shares(ctx)
     }
 
     // =========================================================================

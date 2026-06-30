@@ -14,7 +14,7 @@ import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-tok
 import {
   setupEnv, createVault, deriveVault, deposit, mint, purchase, settleExpiry, settlementRecordPda,
   exerciseFromVault, exerciseAmerican, autoFinalizeHolders, withdrawFromVault, claimPremium,
-  usdcAta, usdc, bal, actor, getClockUnix, setClockUnix, pda, BN, Keypair,
+  usdcAta, usdc, bal, actor, getClockUnix, setClockUnix, pda, BN, Keypair, settlePotAccounts,
 } from "./helpers";
 
 const GRACE_WINDOW = 604_800; // 7 days — mirrors state/shared_vault.rs::GRACE_WINDOW
@@ -301,7 +301,9 @@ describe("bankrun: reclaim_unsettled (Pass D dead-feed hatch)", function () {
       await e.opta.methods.settleVault().accountsStrict({
         authority: e.admin.publicKey, sharedVault: vault, market: e.market,
         settlementRecord: settlementRecordPda(e, expiry),
-        vaultUsdcAccount: null, writerAskPot: null, writerAskPotUsdc: null, protocolState: null, tokenProgram: null,
+        // Phase 3 retro-harden — required, derived (voided vault still resolves; settle
+        // reaches the !voided guard ⇒ VaultVoided revert, the intended failure).
+        ...(await settlePotAccounts(e, vault)),
       }).rpc();
     } catch (ex: any) { svReverted = true; svErr = String(ex); }
     console.log(`    settle_vault reverted=${svReverted} (${svErr.slice(0, 120)})`);

@@ -36,13 +36,13 @@ import {
   setupEnv, createVault, deposit, usdcAta, bal, exists,
   actor, pda, getClockUnix, setClockUnix, settleExpiry, settlementRecordPda,
   withdrawPostSettlement, exerciseFromVault, EXERCISE_WINDOW,
-  HOOK_PROGRAM_ID, CU, usdc, Env,
+  HOOK_PROGRAM_ID, CU, usdc, Env, settlePotAccounts,
 } from "./helpers";
+import { settlePotPdas } from "../shared/settle-pdas";
 
 const RESTING_ORDER_SEED = Buffer.from("resting_order");
 const RESTING_ORDER_ESCROW_SEED = Buffer.from("resting_order_escrow");
-const WRITER_ASK_POT_SEED = Buffer.from("writer_ask_pot");
-const WRITER_ASK_POT_USDC_SEED = Buffer.from("writer_ask_pot_usdc");
+// Pot seeds now sourced from ../shared/settle-pdas (settlePotPdas) — single source.
 const WRITER_ASK_POSITION_SEED = Buffer.from("writer_ask_position");
 const WRITER_ASK = { writerAsk: {} };
 const CALL = { call: {} };
@@ -65,11 +65,14 @@ describe("writer-ask residual + close (Phase 3 Slice D2a)", function () {
   const nB1 = new BN(920), nB2 = new BN(921), nP = new BN(922);
   let caStamp = 8000;
 
-  const potPdas = (m: PublicKey, backer: PublicKey) => ({
-    pot: pda([WRITER_ASK_POT_SEED, m.toBuffer()]),
-    potUsdc: pda([WRITER_ASK_POT_USDC_SEED, m.toBuffer()]),
-    position: pda([WRITER_ASK_POSITION_SEED, m.toBuffer(), backer.toBuffer()]),
-  });
+  const potPdas = (m: PublicKey, backer: PublicKey) => {
+    const { writerAskPot, writerAskPotUsdc } = settlePotPdas(e.opta.programId, m);
+    return {
+      pot: writerAskPot,
+      potUsdc: writerAskPotUsdc,
+      position: pda([WRITER_ASK_POSITION_SEED, m.toBuffer(), backer.toBuffer()]),
+    };
+  };
   const orderPdas = (m: PublicKey, owner: PublicKey, nonce: BN) => {
     const order = pda([RESTING_ORDER_SEED, m.toBuffer(), owner.toBuffer(), nonce.toArrayLike(Buffer, "le", 8)]);
     return { order, escrow: pda([RESTING_ORDER_ESCROW_SEED, order.toBuffer()]) };
@@ -159,16 +162,18 @@ describe("writer-ask residual + close (Phase 3 Slice D2a)", function () {
   // settle_vault — pot variant (m) or no-pot (null). The SettlementRecord must
   // already exist + clock past expiry. Distinct `auth` varies the tx signature.
   async function settleVaultOnly(v: VaultCtx, m: any | null, backer?: PublicKey, expectError = false, auth: Keypair = e.admin) {
+    // Phase 3 retro-harden: pot is un-omittable — derive all 6 from vault identity.
+    const sp = await settlePotAccounts(e, v.vault);
+    if (m) {
+      // Loud-fail any canonical-pin mismatch: vault-derived pot MUST equal funded pot.
+      assert.isTrue(sp.optionMint.equals(m.optionMint), "derived series mint == funded series mint");
+      assert.isTrue(sp.writerAskPot.equals(potPdas(m.optionMint, backer!).pot), "derived pot == funded pot");
+    }
     const accs: any = {
       authority: auth.publicKey, sharedVault: v.vault, market: e.market,
       settlementRecord: settlementRecordPda(e, expiry),
-      vaultUsdcAccount: null, writerAskPot: null, writerAskPotUsdc: null, protocolState: null, tokenProgram: null,
+      ...sp,
     };
-    if (m) {
-      const { pot, potUsdc } = potPdas(m.optionMint, backer!);
-      accs.vaultUsdcAccount = v.vaultUsdc; accs.writerAskPot = pot; accs.writerAskPotUsdc = potUsdc;
-      accs.protocolState = e.protocolState; accs.tokenProgram = TOKEN_PROGRAM_ID;
-    }
     const ix = await e.opta.methods.settleVault().accountsStrict(accs).instruction();
     return sendTx([CU(400_000), ix], auth, expectError);
   }
@@ -393,10 +398,10 @@ describe("writer-ask residual + close (Phase 3 Slice D2a)", function () {
     await setClockUnix(e.h.context, exp + 30);
     await settleExpiry(e, qExpiry, 35, exp + 5);
     // settle Q with the new (later) expiry's SettlementRecord — settleVaultOnly uses module `expiry`; build inline.
+    // Phase 3 retro-harden: pot is un-omittable — derive all 6 from vault identity.
     const settleIx = await e.opta.methods.settleVault().accountsStrict({
       authority: e.admin.publicKey, sharedVault: Q.vault, market: e.market, settlementRecord: settlementRecordPda(e, qExpiry),
-      vaultUsdcAccount: Q.vaultUsdc, writerAskPot: potPdas(mQ.optionMint, backerQ.publicKey).pot,
-      writerAskPotUsdc: potPdas(mQ.optionMint, backerQ.publicKey).potUsdc, protocolState: e.protocolState, tokenProgram: TOKEN_PROGRAM_ID,
+      ...(await settlePotAccounts(e, Q.vault)),
     }).instruction();
     await sendTx([uCU(), settleIx], e.admin);
 

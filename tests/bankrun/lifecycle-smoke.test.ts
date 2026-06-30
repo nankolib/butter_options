@@ -31,6 +31,7 @@ import {
   getClockUnix, setClockUnix, OPTA_PROGRAM_ID, HOOK_PROGRAM_ID, Harness,
 } from "./bootstrap";
 import { serializePriceUpdateV2, synthFeedIdHex } from "../_pyth_fixtures";
+import { settlePotAccountsFor } from "../shared/settle-pdas";
 
 const usdc = (n: number) => new BN(Math.round(n * 1_000_000));
 const FEED_HEX = synthFeedIdHex("bankrun-smoke");
@@ -229,7 +230,7 @@ describe("bankrun lifecycle smoke (Stage G Pass 1)", function () {
 
     await opta.methods.settleVault().accountsStrict({
       authority: admin().publicKey, sharedVault: vault, market, settlementRecord,
-      vaultUsdcAccount: null, writerAskPot: null, writerAskPotUsdc: null, protocolState: null, tokenProgram: null,
+      ...(await settlePotAccountsFor(opta, market, vault)),
     }).rpc();
 
     const v: any = await opta.account.sharedVault.fetch(vault);

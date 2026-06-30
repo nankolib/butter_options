@@ -21,13 +21,13 @@ import { assert } from "chai";
 import {
   setupEnv, createVault, deposit, createSeries, usdcAta, bal, exists, bumpTokenAmount,
   actor, pda, getClockUnix, setClockUnix, settleExpiry, settlementRecordPda, deriveVaultUsdc,
-  exerciseFromVault, HOOK_PROGRAM_ID, CU, usdc, Env,
+  exerciseFromVault, HOOK_PROGRAM_ID, CU, usdc, Env, settlePotAccounts,
 } from "./helpers";
+import { settlePotPdas } from "../shared/settle-pdas";
 
 const RESTING_ORDER_SEED = Buffer.from("resting_order");
 const RESTING_ORDER_ESCROW_SEED = Buffer.from("resting_order_escrow");
-const WRITER_ASK_POT_SEED = Buffer.from("writer_ask_pot");
-const WRITER_ASK_POT_USDC_SEED = Buffer.from("writer_ask_pot_usdc");
+// Pot seeds now sourced from ../shared/settle-pdas (settlePotPdas) — single source.
 const WRITER_ASK_POSITION_SEED = Buffer.from("writer_ask_position");
 const WRITER_ASK = { writerAsk: {} };
 
@@ -45,11 +45,14 @@ describe("writer-ask settle pot-sweep (Phase 3 Slice D1)", function () {
   const nA = new BN(910), nD = new BN(911);
   let caStamp = 7000;
 
-  const potPdas = (m: PublicKey, backer: PublicKey) => ({
-    pot: pda([WRITER_ASK_POT_SEED, m.toBuffer()]),
-    potUsdc: pda([WRITER_ASK_POT_USDC_SEED, m.toBuffer()]),
-    position: pda([WRITER_ASK_POSITION_SEED, m.toBuffer(), backer.toBuffer()]),
-  });
+  const potPdas = (m: PublicKey, backer: PublicKey) => {
+    const { writerAskPot, writerAskPotUsdc } = settlePotPdas(e.opta.programId, m);
+    return {
+      pot: writerAskPot,
+      potUsdc: writerAskPotUsdc,
+      position: pda([WRITER_ASK_POSITION_SEED, m.toBuffer(), backer.toBuffer()]),
+    };
+  };
   const orderPdas = (m: PublicKey, owner: PublicKey, nonce: BN) => {
     const order = pda([RESTING_ORDER_SEED, m.toBuffer(), owner.toBuffer(), nonce.toArrayLike(Buffer, "le", 8)]);
     return { order, escrow: pda([RESTING_ORDER_ESCROW_SEED, order.toBuffer()]) };
@@ -114,16 +117,19 @@ describe("writer-ask settle pot-sweep (Phase 3 Slice D1)", function () {
   // to vary the tx signature (bankrun dedups byte-identical txs on the same
   // un-advanced blockhash).
   async function settleVaultOnly(v: VaultCtx, m: any | null, expectError = false, auth: Keypair = e.admin) {
+    // Phase 3 retro-harden: pot is un-omittable — derive all 6 from vault identity.
+    const sp = await settlePotAccounts(e, v.vault);
+    if (m) {
+      // Loud-fail any canonical-pin mismatch: the vault-derived pot MUST equal the
+      // pot the fills funded (potPdas keys off the same canonical series mint).
+      assert.isTrue(sp.optionMint.equals(m.optionMint), "derived series mint == funded series mint");
+      assert.isTrue(sp.writerAskPot.equals(potPdas(m.optionMint, writer.publicKey).pot), "derived pot == funded pot");
+    }
     const accs: any = {
       authority: auth.publicKey, sharedVault: v.vault, market: e.market,
       settlementRecord: settlementRecordPda(e, expiry),
-      vaultUsdcAccount: null, writerAskPot: null, writerAskPotUsdc: null, protocolState: null, tokenProgram: null,
+      ...sp,
     };
-    if (m) {
-      const { pot, potUsdc } = potPdas(m.optionMint, writer.publicKey);
-      accs.vaultUsdcAccount = v.vaultUsdc; accs.writerAskPot = pot; accs.writerAskPotUsdc = potUsdc;
-      accs.protocolState = e.protocolState; accs.tokenProgram = TOKEN_PROGRAM_ID;
-    }
     const ix = await e.opta.methods.settleVault().accountsStrict(accs).instruction();
     return sendTx([CU(400_000), ix], auth, expectError);
   }

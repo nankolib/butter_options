@@ -41,6 +41,7 @@ import { assert } from "chai";
 import BN from "bn.js";
 import { fixturePubkey } from "./_pyth_fixtures";
 import { ensureVolOracle } from "./_vol_oracle_helpers";
+import { settlePotAccountsFor } from "./shared/settle-pdas";
 
 // =============================================================================
 // Asset registry — 32-byte Pyth Pull feed IDs (mainnet hex from
@@ -1149,6 +1150,9 @@ describe("shared-vaults", () => {
             sharedVault: epochVaultPda,
             market: marketPda,
             settlementRecord: settlementPda,
+            // Phase 3 retro-harden — required, derived from vault identity (empty for no-pot).
+            // Revert is still driven by the absent SettlementRecord below.
+            ...(await settlePotAccountsFor(program, marketPda, epochVaultPda)),
           })
           .signers([payer])
           .rpc();

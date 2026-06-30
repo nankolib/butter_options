@@ -101,6 +101,7 @@ import BN from "bn.js";
 
 import { fixturePubkey, getFixtureBaseTime } from "./_pyth_fixtures";
 import { ensureVolOracle } from "./_vol_oracle_helpers";
+import { settlePotAccountsFor } from "./shared/settle-pdas";
 
 // ---- Constants -------------------------------------------------------------
 const SOL_FEED_HEX = "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d";
@@ -584,6 +585,8 @@ describe.skip("CRIT-1 holders-first gate [ported to tests/bankrun/crit1-holders-
         sharedVault: vaultPda,
         market: marketPda,
         settlementRecord: settlementPda,
+        // Phase 3 retro-harden — required, derived from vault identity (empty for no-pot).
+        ...(await settlePotAccountsFor(program, marketPda, vaultPda)),
       })
       .signers([payer])
       .rpc();

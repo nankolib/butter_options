@@ -34,6 +34,7 @@ import BN from "bn.js";
 
 import { fixturePubkey } from "./_pyth_fixtures";
 import { ensureVolOracle } from "./_vol_oracle_helpers";
+import { settlePotAccountsFor } from "./shared/settle-pdas";
 
 // =============================================================================
 // Asset registry — 32-byte Pyth Pull feed IDs (mainnet hex from
@@ -533,6 +534,8 @@ describe("audit-fixes", () => {
           sharedVault: ctx.vaultPda,
           market: ctx.marketPda,
           settlementRecord: settlementPda,
+          // Phase 3 retro-harden — required, derived from vault identity (empty for no-pot).
+          ...(await settlePotAccountsFor(program, ctx.marketPda, ctx.vaultPda)),
         })
         .signers([payer])
         .rpc();
@@ -665,6 +668,8 @@ describe("audit-fixes", () => {
           sharedVault: ctx.vaultPda,
           market: ctx.marketPda,
           settlementRecord: settlementPda,
+          // Phase 3 retro-harden — required, derived from vault identity (empty for no-pot).
+          ...(await settlePotAccountsFor(program, ctx.marketPda, ctx.vaultPda)),
         })
         .signers([payer])
         .rpc();
@@ -752,6 +757,8 @@ describe("audit-fixes", () => {
           sharedVault: ctx.vaultPda,
           market: ctx.marketPda,
           settlementRecord: settlementPda,
+          // Phase 3 retro-harden — required, derived from vault identity (empty for no-pot).
+          ...(await settlePotAccountsFor(program, ctx.marketPda, ctx.vaultPda)),
         })
         .signers([payer])
         .rpc();
@@ -1509,6 +1516,8 @@ describe("audit-fixes", () => {
           sharedVault: ctx.vaultPda,
           market: ctx.marketPda,
           settlementRecord: settlementPda,
+          // Phase 3 retro-harden — required, derived from vault identity (empty for no-pot).
+          ...(await settlePotAccountsFor(program, ctx.marketPda, ctx.vaultPda)),
         })
         .signers([payer])
         .rpc();

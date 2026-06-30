@@ -87,63 +87,84 @@ pub fn handle_settle_vault(ctx: Context<SettleVault>) -> Result<()> {
     // total_collateral MINUS that drawdown. European: early_exercise_payout == 0
     // → unchanged. saturating_sub (not checked) is defensive — the per-contract
     // cap guarantees payout never exceeds collateral, but never panic at settle.
-    // ---- Phase 3 Slice D1: writer-ask pot sweep (None → byte-identical) ----
-    // Fold WriterAskPot.total_collateral (the COUNTER — donation-proof, INFO-3)
-    // into the waterfall: move pot USDC → vault USDC and add it to
-    // collateral_remaining, so the merged collateral backs the merged (pool +
-    // writer-ask) contracts. Skipped entirely for EUR / pool-only vaults (no pot
-    // → writer_ask_pot is None) → settlement is byte-identical to pre-D1. The
-    // sweep is once-only (gated by the is_settled guard at the top). Writer
-    // residual refunds + pool-writer scaling are D2/D3 — NOT here.
-    let writer_ask_collateral_swept: u64 = if let Some(pot) = ctx.accounts.writer_ask_pot.as_ref() {
-        // All-or-nothing: pot present ⇒ every sweep account must be present.
-        let pot_usdc = ctx
-            .accounts
-            .writer_ask_pot_usdc
-            .as_ref()
-            .ok_or(OptaError::WriterAskSweepAccountsMissing)?;
-        let vault_usdc = ctx
-            .accounts
-            .vault_usdc_account
-            .as_ref()
-            .ok_or(OptaError::WriterAskSweepAccountsMissing)?;
-        let protocol = ctx
-            .accounts
-            .protocol_state
-            .as_ref()
-            .ok_or(OptaError::WriterAskSweepAccountsMissing)?;
-        let token_prog = ctx
-            .accounts
-            .token_program
-            .as_ref()
-            .ok_or(OptaError::WriterAskSweepAccountsMissing)?;
+    // ---- Phase 3 retro-harden: derive + pin the canonical pot from vault identity.
+    // Mirrors initialize_void (un-omittable / un-substitutable) — the pot accounts
+    // are REQUIRED and pinned to the vault-derived addresses, so a permissionless
+    // settle can no longer omit a funded pot and strand it (is_settled is once-only).
+    // D2.5 pins writer-asks to canonical mints ⇒ exactly one pot per vault at the
+    // derived address. No-pot / EUR / pool-only takes the data_is_empty() branch ⇒
+    // swept == 0 ⇒ settlement is byte-identical to pre-D1. The sweep folds
+    // WriterAskPot.total_collateral (the COUNTER — donation-proof) into the
+    // waterfall (counter-only; residual refunds + pool-writer scaling are D2/D3).
+    let market_key = ctx.accounts.market.key();
+    let (canonical_mint, _) = Pubkey::find_program_address(
+        &[
+            VAULT_OPTION_MINT_SEED,
+            market_key.as_ref(),
+            &vault.strike_price.to_le_bytes(),
+            &vault.expiry.to_le_bytes(),
+            &[vault.option_type as u8],
+            &[vault.exercise_style as u8],
+        ],
+        &crate::ID,
+    );
+    require_keys_eq!(
+        ctx.accounts.option_mint.key(),
+        canonical_mint,
+        OptaError::InvalidVaultMint
+    );
+    let (pot_pda, _) =
+        Pubkey::find_program_address(&[WRITER_ASK_POT_SEED, canonical_mint.as_ref()], &crate::ID);
+    require_keys_eq!(
+        ctx.accounts.writer_ask_pot.key(),
+        pot_pda,
+        OptaError::InvalidVaultMint
+    );
+    let (pot_usdc_pda, _) = Pubkey::find_program_address(
+        &[WRITER_ASK_POT_USDC_SEED, canonical_mint.as_ref()],
+        &crate::ID,
+    );
+    require_keys_eq!(
+        ctx.accounts.writer_ask_pot_usdc.key(),
+        pot_usdc_pda,
+        OptaError::InvalidVaultMint
+    );
 
-        // Pin the pot to THIS vault + its USDC account; pin the vault USDC.
+    let writer_ask_collateral_swept: u64 = if ctx.accounts.writer_ask_pot.data_is_empty() {
+        0 // EUR / pool-only / no writer-asks → byte-identical to pre-D1 settle
+    } else {
+        let pot = {
+            let data = ctx.accounts.writer_ask_pot.try_borrow_data()?;
+            WriterAskPot::try_deserialize(&mut &data[..])?
+        };
+        // Pin the pot to THIS vault + its USDC account.
         require!(pot.vault == vault.key(), OptaError::InvalidVaultMint);
-        require!(pot_usdc.key() == pot.usdc_account, OptaError::InvalidVaultMint);
         require!(
-            vault_usdc.key() == vault.vault_usdc_account,
+            pot.usdc_account == ctx.accounts.writer_ask_pot_usdc.key(),
             OptaError::InvalidVaultMint
         );
 
-        let swept = pot.total_collateral;
-        // Required addition: prove the pot USDC actually backs the counter
-        // BEFORE freezing it as the D2/D3 residual denominator. Fail closed if
-        // the recorded counter ever exceeds the real on-chain backing.
-        require!(
-            pot_usdc.amount >= swept,
-            OptaError::WriterAskSweepAccountsMissing
-        );
+        let swept = pot.total_collateral; // the COUNTER (donation-proof)
+        // Prove the pot USDC actually backs the counter BEFORE freezing it as the
+        // D2/D3 residual denominator. Fail closed if the recorded counter ever
+        // exceeds the real on-chain backing. Raw SPL `amount` at bytes 64..72
+        // (UncheckedAccount, same read as initialize_void's proven path).
+        let pot_bal = {
+            let d = ctx.accounts.writer_ask_pot_usdc.try_borrow_data()?;
+            require!(d.len() >= 72, OptaError::WriterAskSweepAccountsMissing);
+            u64::from_le_bytes(d[64..72].try_into().map_err(|_| OptaError::MathOverflow)?)
+        };
+        require!(pot_bal >= swept, OptaError::WriterAskSweepAccountsMissing);
 
         if swept > 0 {
-            let protocol_seeds: &[&[u8]] = &[PROTOCOL_SEED, &[protocol.bump]];
+            let protocol_seeds: &[&[u8]] = &[PROTOCOL_SEED, &[ctx.accounts.protocol_state.bump]];
             token::transfer(
                 CpiContext::new_with_signer(
-                    token_prog.to_account_info(),
+                    ctx.accounts.token_program.to_account_info(),
                     Transfer {
-                        from: pot_usdc.to_account_info(),
-                        to: vault_usdc.to_account_info(),
-                        authority: protocol.to_account_info(),
+                        from: ctx.accounts.writer_ask_pot_usdc.to_account_info(),
+                        to: ctx.accounts.vault_usdc_account.to_account_info(),
+                        authority: ctx.accounts.protocol_state.to_account_info(),
                     },
                     &[protocol_seeds],
                 ),
@@ -151,8 +172,6 @@ pub fn handle_settle_vault(ctx: Context<SettleVault>) -> Result<()> {
             )?;
         }
         swept
-    } else {
-        0
     };
 
     let collateral_remaining = vault
@@ -242,28 +261,37 @@ pub struct SettleVault<'info> {
     )]
     pub settlement_record: Account<'info, SettlementRecord>,
 
-    // ---- Phase 3 Slice D1 — writer-ask pot sweep (TRAILING OPTIONALS) -------
-    // ALL None for EUR / pool-only vaults (no WriterAsk pot) → the sweep branch
-    // is skipped and settlement is byte-identical. Pass all Some (the canonical
-    // series pot) to sweep. `allow-missing-optionals` (Cargo) lets these trailing
-    // optionals deserialize to None when omitted. The handler enforces
-    // all-or-nothing presence + pins each to the vault.
-    /// Vault USDC — sweep destination.
-    #[account(mut)]
-    pub vault_usdc_account: Option<Box<Account<'info, TokenAccount>>>,
+    // ---- Phase 3 retro-harden — writer-ask pot sweep (REQUIRED + DERIVED) ----
+    // The pot is no longer optionally-passed; it is derived from vault identity and
+    // pinned in-handler (mirrors initialize_void), so a permissionless settle can't
+    // omit a funded pot to strand it. EUR / pool-only vaults pass the derived-empty
+    // pot accounts → the handler's data_is_empty() branch ⇒ swept == 0 ⇒ settlement
+    // state is byte-identical. The canonical series mint, pot, and pot_usdc are all
+    // pinned via require_keys_eq in the handler.
+    /// Vault USDC — sweep destination. Required.
+    #[account(
+        mut,
+        constraint = vault_usdc_account.key() == shared_vault.vault_usdc_account @ OptaError::InvalidVaultMint,
+    )]
+    pub vault_usdc_account: Box<Account<'info, TokenAccount>>,
 
-    /// The series' WriterAskPot record — read for total_collateral; pinned to
-    /// this vault in-handler (pot.vault == shared_vault.key()).
-    pub writer_ask_pot: Option<Box<Account<'info, WriterAskPot>>>,
+    /// Canonical series mint — in-handler-pinned to the vault-derived address.
+    /// CHECK: pinned via require_keys_eq in the handler.
+    pub option_mint: UncheckedAccount<'info>,
+
+    /// The series' WriterAskPot record — in-handler-pinned; empty ⇒ no-pot branch.
+    /// CHECK: pinned via require_keys_eq; deserialized manually when non-empty.
+    pub writer_ask_pot: UncheckedAccount<'info>,
 
     /// The pot's USDC account — sweep source (authority = protocol_state).
+    /// In-handler-pinned. CHECK: pinned via require_keys_eq; balance read raw.
     #[account(mut)]
-    pub writer_ask_pot_usdc: Option<Box<Account<'info, TokenAccount>>>,
+    pub writer_ask_pot_usdc: UncheckedAccount<'info>,
 
-    /// Protocol state — signs the pot→vault USDC transfer.
-    #[account(seeds = [PROTOCOL_SEED], bump)]
-    pub protocol_state: Option<Account<'info, ProtocolState>>,
+    /// Protocol state — signs the pot→vault USDC transfer. Required.
+    #[account(seeds = [PROTOCOL_SEED], bump = protocol_state.bump)]
+    pub protocol_state: Account<'info, ProtocolState>,
 
-    /// Classic SPL Token program — for the USDC sweep transfer.
-    pub token_program: Option<Program<'info, Token>>,
+    /// Classic SPL Token program — for the USDC sweep transfer. Required.
+    pub token_program: Program<'info, Token>,
 }

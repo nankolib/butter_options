@@ -21,6 +21,7 @@ import {
   getClockUnix, setClockUnix, OPTA_PROGRAM_ID, HOOK_PROGRAM_ID, Harness,
 } from "./bootstrap";
 import { serializePriceUpdateV2, synthFeedIdHex } from "../_pyth_fixtures";
+import { settlePotAccountsFor } from "../shared/settle-pdas";
 import { synthWarmVolOracle, spotScaled } from "../_vol_oracle_helpers";
 
 export {
@@ -223,15 +224,22 @@ export async function settleExpiry(e: Env, expiry: BN, priceUsd: number, publish
   }).preInstructions([CU(400_000)]).rpc();
 }
 
+/** Phase 3 retro-harden: settle_vault's now-required pot accounts, derived from
+ * the vault's on-chain identity (empty-derived for no-pot / EUR vaults). */
+export async function settlePotAccounts(e: Env, vault: PublicKey) {
+  return settlePotAccountsFor(e.opta, e.market, vault);
+}
+
 /** Full settle at/after expiry: setClock(expiry+30), settle_expiry(publish=expiry+5), settle_vault. */
 export async function settle(e: Env, vault: PublicKey, expiry: BN, priceUsd: number) {
   const exp = expiry.toNumber();
   await setClockUnix(e.h.context, exp + 30);
   await settleExpiry(e, expiry, priceUsd, exp + 5);
+  const sp = await settlePotAccounts(e, vault);
   await e.opta.methods.settleVault().accountsStrict({
     authority: e.admin.publicKey, sharedVault: vault, market: e.market, settlementRecord: settlementRecordPda(e, expiry),
-    // Slice D1 trailing optionals — null for the no-pot settle path.
-    vaultUsdcAccount: null, writerAskPot: null, writerAskPotUsdc: null, protocolState: null, tokenProgram: null,
+    // Phase 3 retro-harden — required, derived from vault identity (empty for no-pot).
+    ...sp,
   }).rpc();
 }
 

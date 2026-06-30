@@ -30,6 +30,7 @@ import {
   getClockUnix, setClockUnix, OPTA_PROGRAM_ID, HOOK_PROGRAM_ID, Harness,
 } from "./bootstrap";
 import { serializePriceUpdateV2, synthFeedIdHex } from "../_pyth_fixtures";
+import { settlePotAccountsFor } from "../shared/settle-pdas";
 import { synthWarmVolOracle, spotScaled } from "../_vol_oracle_helpers";
 
 const usdc = (n: number) => new BN(Math.round(n * 1_000_000));
@@ -180,7 +181,7 @@ describe("bankrun Pass-2 money-logic (Stage G)", function () {
     }).preInstructions([CU_400]).rpc();
     await opta.methods.settleVault().accountsStrict({
       authority: admin().publicKey, sharedVault: vault, market, settlementRecord,
-      vaultUsdcAccount: null, writerAskPot: null, writerAskPotUsdc: null, protocolState: null, tokenProgram: null,
+      ...(await settlePotAccountsFor(opta, market, vault)),
     }).rpc();
   }
 

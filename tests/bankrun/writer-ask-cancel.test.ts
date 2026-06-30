@@ -19,7 +19,7 @@ import {
 import BN from "bn.js";
 import { assert } from "chai";
 import {
-  setupEnv, createVault, deposit, mint, usdcAta, bal, exists, bumpTokenAmount,
+  setupEnv, createVault, createSeries, usdcAta, bal, exists, bumpTokenAmount,
   actor, pda, getClockUnix, setClockUnix, HOOK_PROGRAM_ID, CU, usdc, Env,
 } from "./helpers";
 
@@ -35,9 +35,9 @@ describe("writer-ask cancel + sweep (Phase 3 Slice C — refund unfilled remaind
 
   let e: Env;
   let writer: Keypair;
-  let vault: PublicKey, vaultUsdc: PublicKey, writerPos: PublicKey;
-  let strike: BN, expiry: BN;
-  let caStamp = 6000;
+  let strike: BN;
+  let baseExpiry = 0;          // distinct expiry per series → distinct CANONICAL mint+vault
+  let expiryCtr = 0;
   let nonceCtr = 850;
   const nextNonce = () => new BN(nonceCtr++);
 
@@ -69,9 +69,12 @@ describe("writer-ask cancel + sweep (Phase 3 Slice C — refund unfilled remaind
     })();
   }
 
+  // Fresh vault + its CANONICAL create_series mint at a distinct expiry (D2.5).
   async function mkSeries(): Promise<any> {
-    const now = await getClockUnix(e.h.context);
-    return mint(e, vault, writerPos, writer, 1, now + (caStamp++), true);
+    const exp = new BN(baseExpiry + (expiryCtr++));
+    const cv = await createVault(e, "american", strike, exp, { call: {} }, writer);
+    const s = await createSeries(e, strike, exp, { call: {} });
+    return { ...s, vault: cv.vault, vaultUsdc: cv.vaultUsdc };
   }
 
   async function postWriterAsk(m: any, owner: Keypair, price: BN, qty: number, nonce: BN) {
@@ -79,7 +82,7 @@ describe("writer-ask cancel + sweep (Phase 3 Slice C — refund unfilled remaind
     const ownerUsdc = await usdcAta(e, owner.publicKey);
     const ownerOpt = getAssociatedTokenAddressSync(m.optionMint, owner.publicKey, false, TOKEN_2022_PROGRAM_ID);
     const ix = await e.opta.methods.postOrder(WRITER_ASK, price, new BN(qty), nonce).accountsStrict({
-      owner: owner.publicKey, sharedVault: vault, market: e.market, vaultMintRecord: m.vaultMintRecord,
+      owner: owner.publicKey, sharedVault: m.vault, market: e.market, vaultMintRecord: m.vaultMintRecord,
       optionMint: m.optionMint, order, escrow, protocolState: e.protocolState,
       ownerOptionAccount: ownerOpt, ownerUsdcAccount: ownerUsdc, usdcMint: e.usdcMint,
       transferHookProgram: HOOK_PROGRAM_ID, extraAccountMetaList: m.extraMetas, hookState: m.hookState,
@@ -98,7 +101,7 @@ describe("writer-ask cancel + sweep (Phase 3 Slice C — refund unfilled remaind
     const ataIx = createAssociatedTokenAccountIdempotentInstruction(
       taker.publicKey, takerOpt, taker.publicKey, m.optionMint, TOKEN_2022_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID);
     const ix = await e.opta.methods.fillWriterAsk(new BN(fillQty)).accountsStrict({
-      taker: taker.publicKey, optionMint: m.optionMint, order, maker: owner, sharedVault: vault,
+      taker: taker.publicKey, optionMint: m.optionMint, order, maker: owner, sharedVault: m.vault,
       vaultMintRecord: m.vaultMintRecord, escrow, protocolState: e.protocolState, treasury: e.treasury,
       takerUsdcAccount: takerUsdc, makerUsdcAccount: makerUsdc, takerOptionAccount: takerOpt,
       writerAskPot: pot, writerAskPotUsdc: potUsdc, writerAskPosition: position, usdcMint: e.usdcMint,
@@ -128,7 +131,7 @@ describe("writer-ask cancel + sweep (Phase 3 Slice C — refund unfilled remaind
       { pubkey: t.ownerWallet, isSigner: false, isWritable: true },
     ]));
     const ix = await e.opta.methods.sweepExpiredOrders().accountsStrict({
-      caller: caller.publicKey, sharedVault: vault, market: e.market, vaultMintRecord: m.vaultMintRecord,
+      caller: caller.publicKey, sharedVault: m.vault, market: e.market, vaultMintRecord: m.vaultMintRecord,
       optionMint: m.optionMint, protocolState: e.protocolState, transferHookProgram: HOOK_PROGRAM_ID,
       extraAccountMetaList: m.extraMetas, hookState: m.hookState,
       tokenProgram: TOKEN_PROGRAM_ID, token2022Program: TOKEN_2022_PROGRAM_ID, systemProgram: SystemProgram.programId,
@@ -145,11 +148,8 @@ describe("writer-ask cancel + sweep (Phase 3 Slice C — refund unfilled remaind
     writer = actor(e);
     await usdcAta(e, writer.publicKey, 1_000_000_000_000n);
     const now = await getClockUnix(e.h.context);
-    expiry = new BN(now + 3600);
+    baseExpiry = now + 3600;     // mkSeries derives a distinct expiry+vault+canonical mint per call
     strike = usdc(10);
-    const cv = await createVault(e, "american", strike, expiry, { call: {} }, writer);
-    vault = cv.vault; vaultUsdc = cv.vaultUsdc;
-    writerPos = await deposit(e, vault, vaultUsdc, writer, 500_000);
     await usdcAta(e, writer.publicKey);
   });
 
@@ -239,9 +239,12 @@ describe("writer-ask cancel + sweep (Phase 3 Slice C — refund unfilled remaind
     sweepHostile = { m, nonce: n };
   });
 
-  it("warp — advance clock past vault expiry", async () => {
-    await setClockUnix(e.h.context, expiry.toNumber() + 30);
-    assert.isAtLeast(await getClockUnix(e.h.context), expiry.toNumber());
+  it("warp — advance clock past every series' vault expiry", async () => {
+    // mkSeries uses baseExpiry + (ctr); the sweep vaults are the last two, so
+    // baseExpiry + expiryCtr + 30 is past all of them.
+    const past = baseExpiry + expiryCtr + 30;
+    await setClockUnix(e.h.context, past);
+    assert.isAtLeast(await getClockUnix(e.h.context), baseExpiry + expiryCtr);
   });
 
   it("5 — sweep-at-expiry (permissionless): owner refunded full balance, order/escrow closed", async () => {

@@ -26,7 +26,7 @@ import {
 import BN from "bn.js";
 import { assert } from "chai";
 import {
-  setupEnv, createVault, deposit, mint, usdcAta, bal, actor, pda, getClockUnix,
+  setupEnv, createVault, createSeries, usdcAta, bal, actor, pda, getClockUnix,
   HOOK_PROGRAM_ID, CU, usdc, Env,
 } from "./helpers";
 
@@ -101,11 +101,10 @@ describe("writer-ask post (Phase 3 Slice A — lock-at-post personal collateral)
     const cv = await createVault(e, "american", strike, expiry, { call: {} }, writer);
     vault = cv.vault;
 
-    // Mint a real American series batch → gives a valid VaultMint record (the
-    // mint↔vault proof post_order requires) + hook state. Oracle is warmed by
-    // setupEnv, so American mint prices fine.
-    const writerPos = await deposit(e, vault, cv.vaultUsdc, writer, 50_000);
-    const m: any = await mint(e, vault, writerPos, writer, 50, now, true);
+    // D2.5: writer-asks must rest on the CANONICAL create_series mint (the pin
+    // rejects per-writer mint_from_vault mints). create_series gives the valid
+    // VaultMint record (writer-sentinel == default) + hook state the post needs.
+    const m: any = await createSeries(e, strike, expiry, { call: {} });
     optionMint = m.optionMint;
     vaultMintRecord = m.vaultMintRecord;
     extraMetas = m.extraMetas;

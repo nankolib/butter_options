@@ -168,6 +168,29 @@ export async function mint(
   return { optionMint, escrow, vaultMintRecord, extraMetas, hookState };
 }
 
+/** create_series — the CANONICAL per-spec series mint (writer-sentinel == default).
+ * Phase 3 Slice D2.5: writer-asks may only rest on canonical mints, so the
+ * writer-ask test suites post on this (not the per-writer `mint()`). Returns a
+ * mint-shaped object the post/fill helpers consume. American-only (D12). */
+export async function createSeries(e: Env, strike: BN, expiry: BN, optionType: any) {
+  const otB = "put" in optionType ? 1 : 0;
+  const optionMint = pda([Buffer.from("vault_option_mint"), e.market.toBuffer(),
+    strike.toArrayLike(Buffer, "le", 8), expiry.toArrayLike(Buffer, "le", 8), Buffer.from([otB]), Buffer.from([1])]);
+  const s = {
+    optionMint,
+    vaultMintRecord: pda([Buffer.from("vault_mint_record"), optionMint.toBuffer()]),
+    extraMetas: pda([Buffer.from("extra-account-metas"), optionMint.toBuffer()], HOOK_PROGRAM_ID),
+    hookState: pda([Buffer.from("hook-state"), optionMint.toBuffer()], HOOK_PROGRAM_ID),
+  };
+  await e.opta.methods.createSeries(strike, expiry, optionType, { american: {} }).accountsStrict({
+    caller: e.admin.publicKey, market: e.market, protocolState: e.protocolState,
+    optionMint: s.optionMint, vaultMintRecord: s.vaultMintRecord, transferHookProgram: HOOK_PROGRAM_ID,
+    extraAccountMetaList: s.extraMetas, hookState: s.hookState,
+    systemProgram: SystemProgram.programId, token2022Program: TOKEN_2022_PROGRAM_ID, rent: SYSVAR_RENT_PUBKEY,
+  }).preInstructions([CU(800_000)]).rpc();
+  return s;
+}
+
 export async function purchase(e: Env, vault: PublicKey, writerPos: PublicKey, m: any, vaultUsdc: PublicKey, buyer: Keypair, qty: number) {
   const buyerOptionAta = getAssociatedTokenAddressSync(m.optionMint, buyer.publicKey, false, TOKEN_2022_PROGRAM_ID);
   const buyerUsdc = await usdcAta(e, buyer.publicKey);

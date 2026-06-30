@@ -406,4 +406,17 @@ pub enum OptaError {
     // future admin force-close. Error code 6074.
     #[msg("Vault not fully drained — total_shares must be 0 before the writer-ask vault USDC can be closed")]
     VaultNotFullyDrained,
+
+    // =========================================================================
+    // Exchange writer-ask canonical-mint pin (Phase 3 Slice D2.5)
+    // =========================================================================
+    // A WriterAsk may only rest on the CANONICAL create_series mint (its VaultMint
+    // record sentinels writer == Pubkey::default). A per-writer mint_from_vault
+    // record (writer == the minter) is rejected: its pot would be keyed by a mint
+    // NOT derivable from vault identity, so the void-path reconciliation (D3's
+    // initialize_void, which derives the canonical pot) could never reach it →
+    // stranded collateral. post_order pins it; fill_writer_ask mirrors it. Error
+    // code 6075.
+    #[msg("Writer asks may only be posted on a canonical create_series mint")]
+    CanonicalMintRequired,
 }

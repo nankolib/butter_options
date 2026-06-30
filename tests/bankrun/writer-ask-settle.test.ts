@@ -19,7 +19,7 @@ import {
 import BN from "bn.js";
 import { assert } from "chai";
 import {
-  setupEnv, createVault, deposit, mint, purchase, usdcAta, bal, exists, bumpTokenAmount,
+  setupEnv, createVault, deposit, createSeries, usdcAta, bal, exists, bumpTokenAmount,
   actor, pda, getClockUnix, setClockUnix, settleExpiry, settlementRecordPda, deriveVaultUsdc,
   exerciseFromVault, HOOK_PROGRAM_ID, CU, usdc, Env,
 } from "./helpers";
@@ -71,9 +71,11 @@ describe("writer-ask settle pot-sweep (Phase 3 Slice D1)", function () {
     const wp = await deposit(e, cv.vault, cv.vaultUsdc, writer, 100_000);
     return { vault: cv.vault, vaultUsdc: cv.vaultUsdc, writerPos: wp };
   }
-  async function mkSeriesOn(v: VaultCtx, qty: number): Promise<any> {
-    const now = await getClockUnix(e.h.context);
-    return mint(e, v.vault, v.writerPos, writer, qty, now + (caStamp++), true);
+  // D2.5: writer-asks rest on the CANONICAL create_series mint for the vault's
+  // spec. Distinct strikes per vault (A=$10, D=$13) → distinct canonical mints.
+  async function mkSeriesOn(v: VaultCtx, strike: BN): Promise<any> {
+    void v;
+    return createSeries(e, strike, expiry, { call: {} });
   }
   async function postWriterAskOn(v: VaultCtx, m: any, price: BN, qty: number, nonce: BN) {
     const { order, escrow } = orderPdas(m.optionMint, writer.publicKey, nonce);
@@ -134,11 +136,10 @@ describe("writer-ask settle pot-sweep (Phase 3 Slice D1)", function () {
     const now = await getClockUnix(e.h.context);
     expiry = new BN(now + 3600);
 
-    // A: American + pot (pool-sale 3 + WriterAsk fill 4). strike $10.
+    // A: American + pot (canonical-mint WriterAsk fill 4). strike $10. Passive LP
+    // (deposit only) — the pool sale was incidental; the merge is deposit + pot.
     A = await mkAmer(usdc(10));
-    mA = await mkSeriesOn(A, 5);
-    const buyer = actor(e);
-    await purchase(e, A.vault, A.writerPos, mA, A.vaultUsdc, buyer, 3); // total_options_sold = 3
+    mA = await mkSeriesOn(A, usdc(10));
     await postWriterAskOn(A, mA, usdc(7), 4, nA);
     takerA = actor(e);
     await fillWriterAskOn(A, mA, nA, takerA, 4); // pot = cpt($10)×4 = $40
@@ -155,7 +156,7 @@ describe("writer-ask settle pot-sweep (Phase 3 Slice D1)", function () {
 
     // D: American + pot, for the donation test. strike $13.
     D = await mkAmer(usdc(13));
-    mD = await mkSeriesOn(D, 2);
+    mD = await mkSeriesOn(D, usdc(13));
     await postWriterAskOn(D, mD, usdc(7), 2, nD);
     takerD = actor(e);
     await fillWriterAskOn(D, mD, nD, takerD, 2); // pot = cpt($13)×2 = $26

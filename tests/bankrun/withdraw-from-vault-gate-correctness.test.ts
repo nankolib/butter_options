@@ -20,7 +20,7 @@ import {
 import BN from "bn.js";
 import { assert } from "chai";
 import {
-  setupEnv, createVault, deposit, mint, purchase, usdcAta, actor, pda, getClockUnix,
+  setupEnv, createVault, deposit, mint, purchase, createSeries, usdcAta, actor, pda, getClockUnix,
   exerciseAmerican, HOOK_PROGRAM_ID, CU, usdc, Env,
 } from "./helpers";
 
@@ -45,7 +45,7 @@ describe("withdraw_from_vault gate correctness (Phase 3 Slice D2b tripwire)", fu
   this.timeout(180_000);
   let e: Env;
   let writer: Keypair, vault: PublicKey, vaultUsdc: PublicKey, writerPos: PublicKey;
-  let m: any, cpt: BN, taker: Keypair;
+  let m: any, mc: any, cpt: BN, taker: Keypair;
   const nonce = new BN(960);
 
   const potPdas = (mint: PublicKey) => ({
@@ -101,30 +101,35 @@ describe("withdraw_from_vault gate correctness (Phase 3 Slice D2b tripwire)", fu
     const buyer = actor(e);
     await purchase(e, vault, writerPos, m, vaultUsdc, buyer, 30);          // total_options_sold = 30
 
+    // D2.5: the WriterAsk rests on the CANONICAL create_series mint `mc` (the pin
+    // rejects per-writer mints); the pool stays on `m`. The fold identity
+    // (potColl == cpt × potContracts) is per-vault + mint-agnostic, so the
+    // tripwire holds across the pool(m) + writer-ask(mc) mixed-mint vault.
+    mc = await createSeries(e, cpt, expiry, { call: {} });
     // WriterAsk fill (pot funded: 20 contracts → pot.total_collateral = cpt × 20).
-    const { order, escrow } = orderPdas(m.optionMint, writer.publicKey, nonce);
+    const { order, escrow } = orderPdas(mc.optionMint, writer.publicKey, nonce);
     const ownerUsdc = await usdcAta(e, writer.publicKey);
-    const ownerOpt = getAssociatedTokenAddressSync(m.optionMint, writer.publicKey, false, TOKEN_2022_PROGRAM_ID);
+    const ownerOpt = getAssociatedTokenAddressSync(mc.optionMint, writer.publicKey, false, TOKEN_2022_PROGRAM_ID);
     const postIx = await e.opta.methods.postOrder(WRITER_ASK, usdc(7), new BN(20), nonce).accountsStrict({
-      owner: writer.publicKey, sharedVault: vault, market: e.market, vaultMintRecord: m.vaultMintRecord,
-      optionMint: m.optionMint, order, escrow, protocolState: e.protocolState,
+      owner: writer.publicKey, sharedVault: vault, market: e.market, vaultMintRecord: mc.vaultMintRecord,
+      optionMint: mc.optionMint, order, escrow, protocolState: e.protocolState,
       ownerOptionAccount: ownerOpt, ownerUsdcAccount: ownerUsdc, usdcMint: e.usdcMint,
-      transferHookProgram: HOOK_PROGRAM_ID, extraAccountMetaList: m.extraMetas, hookState: m.hookState,
+      transferHookProgram: HOOK_PROGRAM_ID, extraAccountMetaList: mc.extraMetas, hookState: mc.hookState,
       tokenProgram: TOKEN_PROGRAM_ID, token2022Program: TOKEN_2022_PROGRAM_ID,
       systemProgram: SystemProgram.programId, rent: SYSVAR_RENT_PUBKEY,
     }).preInstructions([CU(400_000)]).instruction();
     await send([postIx], writer);
 
     taker = actor(e);
-    const { pot, potUsdc, position } = potPdas(m.optionMint);
+    const { pot, potUsdc, position } = potPdas(mc.optionMint);
     const takerUsdc = await usdcAta(e, taker.publicKey);
     const makerUsdc = getAssociatedTokenAddressSync(e.usdcMint, writer.publicKey, false, TOKEN_PROGRAM_ID);
-    const takerOpt = getAssociatedTokenAddressSync(m.optionMint, taker.publicKey, false, TOKEN_2022_PROGRAM_ID);
+    const takerOpt = getAssociatedTokenAddressSync(mc.optionMint, taker.publicKey, false, TOKEN_2022_PROGRAM_ID);
     const ataIx = createAssociatedTokenAccountIdempotentInstruction(
-      taker.publicKey, takerOpt, taker.publicKey, m.optionMint, TOKEN_2022_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID);
+      taker.publicKey, takerOpt, taker.publicKey, mc.optionMint, TOKEN_2022_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID);
     const fillIx = await e.opta.methods.fillWriterAsk(new BN(20)).accountsStrict({
-      taker: taker.publicKey, optionMint: m.optionMint, order, maker: writer.publicKey, sharedVault: vault,
-      vaultMintRecord: m.vaultMintRecord, escrow, protocolState: e.protocolState, treasury: e.treasury,
+      taker: taker.publicKey, optionMint: mc.optionMint, order, maker: writer.publicKey, sharedVault: vault,
+      vaultMintRecord: mc.vaultMintRecord, escrow, protocolState: e.protocolState, treasury: e.treasury,
       takerUsdcAccount: takerUsdc, makerUsdcAccount: makerUsdc, takerOptionAccount: takerOpt,
       writerAskPot: pot, writerAskPotUsdc: potUsdc, writerAskPosition: position, usdcMint: e.usdcMint,
       tokenProgram: TOKEN_PROGRAM_ID, token2022Program: TOKEN_2022_PROGRAM_ID, systemProgram: SystemProgram.programId,
@@ -141,16 +146,16 @@ describe("withdraw_from_vault gate correctness (Phase 3 Slice D2b tripwire)", fu
   });
 
   it("2 — with-pot: OLD == folded AND pot.total_collateral == cpt × pot.total_contracts", async () => {
-    await assertGateIdentity(vault, m.optionMint);
+    await assertGateIdentity(vault, mc.optionMint);
   });
 
   it("3 — with-pot AFTER a writer-ask early-exercise: identity still holds (the case D-recon thought broke)", async () => {
-    const takerOpt = getAssociatedTokenAddressSync(m.optionMint, taker.publicKey, false, TOKEN_2022_PROGRAM_ID);
+    const takerOpt = getAssociatedTokenAddressSync(mc.optionMint, taker.publicKey, false, TOKEN_2022_PROGRAM_ID);
     const takerUsdc = await usdcAta(e, taker.publicKey);
     const now = await getClockUnix(e.h.context);
-    await exerciseAmerican(e, vault, m, taker, takerOpt, takerUsdc, 3, 15, now); // 3 writer-ask early-exercises, spot $15
+    await exerciseAmerican(e, vault, mc, taker, takerOpt, takerUsdc, 3, 15, now); // 3 writer-ask early-exercises (canonical mint), spot $15
     const va: any = await vAcc(vault);
     assert.isTrue(bnOf(va.exercisedOptions).gten(3), "exercised_options bumped by the writer-ask early-exercise (merged counter)");
-    await assertGateIdentity(vault, m.optionMint); // OLD == folded still holds
+    await assertGateIdentity(vault, mc.optionMint); // OLD == folded still holds
   });
 });

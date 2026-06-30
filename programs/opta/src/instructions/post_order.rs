@@ -202,6 +202,21 @@ pub fn handle_post_order(
                 OptaError::NotAmericanOption
             );
 
+            // Phase 3 Slice D2.5: writer-asks may ONLY rest on the CANONICAL
+            // create_series mint. The canonical-series record sentinels
+            // writer == Pubkey::default (create_series.rs); a per-writer
+            // mint_from_vault record sets writer = the minter. A WriterAsk on a
+            // per-writer mint would create a pot keyed by a mint NOT derivable
+            // from vault identity → unreconcilable on the void path (D3's
+            // initialize_void derives the canonical pot only) → stranded
+            // collateral. Pinning here makes one-canonical-pot-per-vault a hard
+            // invariant. (Dark-gate-first ordering preserved: feature-free reverts
+            // 6054 above; a European vault reverts NotAmericanOption above.)
+            require!(
+                ctx.accounts.vault_mint_record.writer == Pubkey::default(),
+                OptaError::CanonicalMintRequired
+            );
+
             // Protocol-set collateral per contract — the writer does NOT choose
             // it. Symmetric 1× strike, the exact source mint_from_vault /
             // fill_vault_peg use, so post-time and fill-time cpt agree.

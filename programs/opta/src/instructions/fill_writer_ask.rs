@@ -50,6 +50,16 @@ pub fn handle_fill_writer_ask(ctx: Context<FillWriterAsk>, fill_quantity: u64) -
 
     // ---- 2. Guards --------------------------------------------------------
     require!(ctx.accounts.order.kind == OrderKind::WriterAsk, OptaError::NotAWriterAsk);
+    // D2.5 mirror (defense-in-depth): post_order now pins WriterAsk posts to the
+    // canonical create_series mint (writer-sentinel == default), so this can only
+    // fail for a hypothetical pre-fix non-canonical order (NONE exist — the dark
+    // gate has always been false). vault_mint_record is already pinned to
+    // option_mint; refuse to fill a non-canonical WriterAsk into a
+    // void-unreconcilable pot.
+    require!(
+        ctx.accounts.vault_mint_record.writer == Pubkey::default(),
+        OptaError::CanonicalMintRequired
+    );
     require!(ctx.accounts.taker.key() != order_owner, OptaError::CannotBuyOwnOption);
     require!(
         ctx.accounts.shared_vault.exercise_style == ExerciseStyle::American,

@@ -33,7 +33,7 @@ import {
 import BN from "bn.js";
 import { assert } from "chai";
 import {
-  setupEnv, createVault, deposit, mint, purchase, usdcAta, bal, exists,
+  setupEnv, createVault, deposit, usdcAta, bal, exists,
   actor, pda, getClockUnix, setClockUnix, settleExpiry, settlementRecordPda,
   withdrawPostSettlement, exerciseFromVault, EXERCISE_WINDOW,
   HOOK_PROGRAM_ID, CU, usdc, Env,
@@ -201,10 +201,13 @@ describe("writer-ask residual + close (Phase 3 Slice D2a)", function () {
     const now = await getClockUnix(e.h.context);
     expiry = new BN(now + 3600);
 
-    // M: MIXED — pool $1000 + series(5) + pool-sale(3) + WriterAsk fills backer1(4) & backer2(3). strike $10.
+    // M: MIXED CLAIMANTS — passive pool LP $1000 (deposit → 1000 shares) +
+    // WriterAsk fills backer1(4) & backer2(3) on the CANONICAL create_series mint
+    // (D2.5 single-canonical). The pool sale was incidental (total_options_sold is
+    // only the settle event's cap calc; conservation is over pool SHARES), so
+    // dropping it preserves the EXACT numbers: CR₀=1070, pool 1000, equivs 40/30.
     M = await mkAmer(usdc(10), 1000);
-    mM = await mint(e, M.vault, M.writerPos, poolW, 5, now + (caStamp++), true);
-    await purchase(e, M.vault, M.writerPos, mM, M.vaultUsdc, buyerM, 3);  // total_options_sold = 3
+    mM = await createSeriesCanonical(usdc(10), expiry);
     await postWriterAskBy(M, mM, backer1, usdc(7), 4, nB1);
     await fillWriterAskBy(M, mM, backer1, nB1, takerM, 4);                 // pot += cpt$10 × 4 = $40
     await postWriterAskBy(M, mM, backer2, usdc(7), 3, nB2);
@@ -274,6 +277,13 @@ describe("writer-ask residual + close (Phase 3 Slice D2a)", function () {
     const committed2 = bn((await (e.opta.account as any).writerAskPosition.fetch(pos2)).collateralCommitted);
     const poolShares = bn((await posAcc(M.writerPos)).shares);
 
+    // D2.5 behavior-preservation: the canonical-mint retrofit must NOT move any
+    // economic number. The mixed vault is deposit $1000 + 7 writer-ask fills × cpt
+    // $10 = $70 swept ⇒ these exact values, UNCHANGED from the pre-retrofit test.
+    assert.equal(CR0.toString(), usdc(1070).toString(), "CR₀ == 1070 USDC (unchanged by canonical retrofit)");
+    assert.equal(swept.toString(), usdc(70).toString(), "swept == 70 USDC");
+    assert.equal(poolShares.toString(), usdc(1000).toString(), "pool shares == 1000");
+
     let payoutSum = new BN(0);
     const step = async (label: string, weight: BN, claim: () => Promise<void>) => {
       const pre: any = await vaultAcc(M.vault);
@@ -289,6 +299,8 @@ describe("writer-ask residual + close (Phase 3 Slice D2a)", function () {
     // INTERLEAVE: writer-ask backer1 → pool writer → writer-ask backer2.
     const equiv1 = committed1.mul(equivTotal).div(swept);
     const equiv2 = committed2.mul(equivTotal).div(swept);
+    assert.equal(equiv1.toString(), usdc(40).toString(), "backer1 equiv == 40 (unchanged)");
+    assert.equal(equiv2.toString(), usdc(30).toString(), "backer2 equiv == 30 (unchanged)");
     await step("backer1", equiv1, async () => { await residualClaim(M, mM.optionMint, backer1); });
     await step("poolW",   poolShares, async () => { await withdrawPostSettlement(e, M.vault, M.writerPos, poolW); });
     await step("backer2", equiv2, async () => { await residualClaim(M, mM.optionMint, backer2); });

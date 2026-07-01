@@ -68,6 +68,7 @@ import {
   type LivenessCrankContext,
   type LivenessCrankOptions,
 } from "./livenessCrank";
+import { runReclaimSweep, type ReclaimContext } from "./reclaimUnsettled";
 
 // ---- Constants -------------------------------------------------------------
 
@@ -156,6 +157,10 @@ interface CrankContext {
   hermesBackoff: HermesBackoffState;
   hermesBackoffBaseMs: number;
   hermesBackoffCeilingMs: number;
+  // Dead-feed reclaim pass (Phase 3 — opt-in, moves money)
+  reclaimEnabled: boolean;
+  reclaimCtx: ReclaimContext;
+  reclaimDryRun: boolean;
 }
 
 interface AccountRecord {
@@ -196,6 +201,11 @@ interface TickResult {
   sweepOrdersSwept: number;
   sweepOrdersAtaSkipped: number;
   sweepOrdersErrors: number;
+  // Dead-feed reclaim (Phase 3)
+  reclaimCandidates: number;
+  reclaimVoided: number;
+  reclaimWritersReclaimed: number;
+  reclaimErrors: number;
 }
 
 /**
@@ -269,6 +279,8 @@ function readEnv(): {
   // Hermes 429 adaptive backoff
   hermesBackoffBaseMs: number;
   hermesBackoffCeilingMs: number;
+  // Dead-feed reclaim pass (Phase 3 — opt-in)
+  reclaimEnabled: boolean;
 } {
   const rpcUrl = process.env.OPTA_RPC_URL;
   if (!rpcUrl) {
@@ -363,6 +375,12 @@ function readEnv(): {
     "OPTA_HERMES_BACKOFF_CEILING_MS",
   );
 
+  // Dead-feed reclaim pass — opt-in (default OFF), opposite polarity to the
+  // *_DISABLED flags because it moves money. Dry-run reuses OPTA_AUTO_FINALIZE_DRY_RUN.
+  const reclaimEnabledRaw = (process.env.OPTA_RECLAIM_CRANK_ENABLED ?? "").toLowerCase();
+  const reclaimEnabled =
+    reclaimEnabledRaw === "1" || reclaimEnabledRaw === "true" || reclaimEnabledRaw === "yes";
+
   return {
     rpcUrl,
     keypairPath,
@@ -379,6 +397,7 @@ function readEnv(): {
     balanceCheckTicks,
     hermesBackoffBaseMs,
     hermesBackoffCeilingMs,
+    reclaimEnabled,
   };
 }
 
@@ -480,6 +499,9 @@ async function bootstrapContext(): Promise<CrankContext> {
     dryRun: env.dryRun, // shares the OPTA_AUTO_FINALIZE_DRY_RUN flag
   };
 
+  // Dead-feed reclaim pass (Phase 3) — reuses the already-bootstrapped clients.
+  const reclaimCtx: ReclaimContext = { connection, program, log: finalizeLog };
+
   return {
     connection,
     wallet,
@@ -498,6 +520,9 @@ async function bootstrapContext(): Promise<CrankContext> {
     hermesBackoff: { currentMs: env.hermesBackoffBaseMs, consecutiveOk: 0 },
     hermesBackoffBaseMs: env.hermesBackoffBaseMs,
     hermesBackoffCeilingMs: env.hermesBackoffCeilingMs,
+    reclaimEnabled: env.reclaimEnabled,
+    reclaimCtx,
+    reclaimDryRun: env.dryRun, // reuse OPTA_AUTO_FINALIZE_DRY_RUN
   };
 }
 
@@ -552,6 +577,10 @@ async function tick(ctx: CrankContext): Promise<TickResult> {
     sweepOrdersSwept: 0,
     sweepOrdersAtaSkipped: 0,
     sweepOrdersErrors: 0,
+    reclaimCandidates: 0,
+    reclaimVoided: 0,
+    reclaimWritersReclaimed: 0,
+    reclaimErrors: 0,
   };
 
   // ---- Phase 1: settle expired non-settled vaults (existing behavior) ----
@@ -830,6 +859,28 @@ async function tick(ctx: CrankContext): Promise<TickResult> {
     }
   }
 
+  // ---- Phase 3: dead-feed reclaim (opt-in; moves money) -----------------
+  // OFF unless OPTA_RECLAIM_CRANK_ENABLED. Reuses refreshedVaults + markets
+  // already in hand (no new gPA). Restricted to ZERO-PREMIUM dead-feed vaults
+  // so no writer's unclaimed premium is stranded (ClaimPremiumFirst is left to
+  // the writer, by design). Per-candidate crash isolation lives in the sweep.
+  if (ctx.reclaimEnabled && !shutdownRequested) {
+    try {
+      const sweep = await runReclaimSweep(
+        ctx.reclaimCtx,
+        refreshedVaults,
+        markets as AccountRecord[],
+        { dryRun: ctx.reclaimDryRun },
+      );
+      result.reclaimCandidates = sweep.candidates;
+      result.reclaimVoided = sweep.voided;
+      result.reclaimWritersReclaimed = sweep.writersReclaimed;
+      result.reclaimErrors = sweep.errors;
+    } catch (err) {
+      logError("phase 3: reclaim sweep crashed", { err: String(err) });
+    }
+  }
+
   return result;
 }
 
@@ -889,7 +940,9 @@ async function runForever(ctx: CrankContext): Promise<void> {
       // if Phase 1 saw expired tuples OR Phase 2 considered any settled
       // vaults that weren't already cached as fully finalized.
       const hadWork =
-        result.tuplesFound > 0 || result.finalizeVaultsConsidered > 0;
+        result.tuplesFound > 0 ||
+        result.finalizeVaultsConsidered > 0 ||
+        result.reclaimCandidates > 0;
       lastTickWasIdle = !hadWork;
       if (hadWork) {
         logInfo("tick complete", {
@@ -965,6 +1018,7 @@ async function main(): Promise<void> {
       ceilingMs: ctx.hermesBackoffCeilingMs,
       currentMs: ctx.hermesBackoff.currentMs,
     },
+    reclaim: { enabled: ctx.reclaimEnabled, dryRun: ctx.reclaimDryRun },
   });
 
   await checkWalletBalance(ctx, "boot");

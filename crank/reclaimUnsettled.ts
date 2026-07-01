@@ -235,3 +235,118 @@ export async function reclaimVault(
 
   return report;
 }
+
+// ---------------------------------------------------------------------------
+// runReclaimSweep — the crank-loop pass (Phase 3). Enumerates ALREADY-FETCHED
+// vaults + markets (no new gPA), filters to zero-premium dead-feed candidates,
+// and 2-phases each via reclaimVault. Crash-isolated per candidate. Cluster
+// time (getBlockTime) gates the 7-day grace — NEVER the local clock (~5h skew).
+// ---------------------------------------------------------------------------
+const RECLAIM_GRACE_WINDOW_S = 604_800; // 7 days — mirrors state/shared_vault.rs::GRACE_WINDOW
+
+export interface ReclaimSweepResult {
+  candidates: number;
+  voided: number;
+  writersReclaimed: number;
+  usdcMoved: bigint; // vault_usdc drawn summed across candidates (0 in dry-run)
+  errors: number;
+}
+
+async function usdcBalance(connection: Connection, ata: PublicKey): Promise<bigint> {
+  const ai = await connection.getAccountInfo(ata);
+  return ai && ai.data.length >= 72 ? ai.data.readBigUInt64LE(64) : 0n;
+}
+
+export async function runReclaimSweep(
+  ctx: ReclaimContext,
+  vaults: { publicKey: PublicKey; account: any }[],
+  markets: { publicKey: PublicKey; account: any }[],
+  opts: { dryRun: boolean; computeUnitLimit?: number },
+): Promise<ReclaimSweepResult> {
+  const { connection, program, log } = ctx;
+  const res: ReclaimSweepResult = { candidates: 0, voided: 0, writersReclaimed: 0, usdcMoved: 0n, errors: 0 };
+
+  // Cluster time — NEVER the local clock (devnet ~5h skew would mis-gate the grace).
+  let clusterNow: number | null = null;
+  try {
+    clusterNow = await connection.getBlockTime(await connection.getSlot());
+  } catch (err) {
+    log("warn", "reclaim sweep: cluster-time fetch failed — skipping this tick", { err: String(err) });
+  }
+  if (clusterNow === null) return res;
+
+  const marketByPda = new Map<string, { publicKey: PublicKey; account: any }>();
+  for (const m of markets) marketByPda.set(m.publicKey.toBase58(), m);
+
+  for (const v of vaults) {
+    const acct = v.account;
+    if (acct.isSettled || acct.voided) continue;
+    const expiry = typeof acct.expiry === "number" ? acct.expiry : acct.expiry.toNumber();
+    if (expiry + RECLAIM_GRACE_WINDOW_S >= clusterNow) continue;
+    const ppsc = acct.premiumPerShareCumulative;
+    const ppscZero = typeof ppsc?.isZero === "function" ? ppsc.isZero() : String(ppsc) === "0";
+    if (!ppscZero) continue; // zero-premium ONLY — premium-bearing left writer-gated by design
+
+    const market = marketByPda.get((acct.market as PublicKey).toBase58());
+    if (!market) continue;
+    const asset = market.account.assetName as string;
+    if (!asset) continue;
+
+    // One getAccountInfo: SettlementRecord present ⇒ NOT a dead feed ⇒ skip.
+    const expiryBn = typeof acct.expiry === "number" ? new anchor.BN(acct.expiry) : acct.expiry;
+    const [settlementPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from(SETTLEMENT_SEED), Buffer.from(asset), expiryBn.toArrayLike(Buffer, "le", 8)],
+      program.programId,
+    );
+    let settlementExists: boolean;
+    try {
+      settlementExists = (await connection.getAccountInfo(settlementPda)) !== null;
+    } catch (err) {
+      log("warn", "reclaim sweep: settlement probe failed — skipping candidate", {
+        vault: v.publicKey.toBase58(), err: String(err),
+      });
+      continue;
+    }
+    if (settlementExists) continue;
+
+    res.candidates += 1;
+    const vaultUsdc = acct.vaultUsdcAccount as PublicKey;
+    const preBal = opts.dryRun ? 0n : await usdcBalance(connection, vaultUsdc);
+
+    try {
+      const report = await reclaimVault(ctx, v.publicKey, {
+        dryRun: opts.dryRun,
+        computeUnitLimit: opts.computeUnitLimit,
+      });
+      const drawn = opts.dryRun ? 0n : preBal - (await usdcBalance(connection, vaultUsdc));
+      if (drawn > 0n) res.usdcMoved += drawn;
+      if (!opts.dryRun && (report.voidSig || report.alreadyVoided)) res.voided += 1;
+      res.writersReclaimed += report.reclaimSigs.length;
+      log("info", "reclaim candidate processed", {
+        vault: report.vault, asset, expiry,
+        daysPastGrace: Math.floor((clusterNow - expiry - RECLAIM_GRACE_WINDOW_S) / 86_400),
+        dryRun: report.dryRun,
+        voidAction: report.dryRun ? "[dryRun]" : report.alreadyVoided ? "already-voided"
+          : report.voidSig ? "initialize_void" : "none",
+        voidSig: report.voidSig,
+        writersFound: report.writersFound,
+        writersReclaimed: report.reclaimSigs.length,
+        reclaimSigs: report.reclaimSigs,
+        usdcDrawn: drawn.toString(),
+      });
+    } catch (err) {
+      res.errors += 1;
+      log("error", "reclaim candidate crashed", { vault: v.publicKey.toBase58(), asset, err: String(err) });
+      continue;
+    }
+  }
+
+  if (res.candidates > 0) {
+    log("info", "reclaim sweep summary", {
+      candidates: res.candidates, voided: res.voided,
+      writersReclaimed: res.writersReclaimed, usdcMoved: res.usdcMoved.toString(),
+      errors: res.errors, dryRun: opts.dryRun,
+    });
+  }
+  return res;
+}

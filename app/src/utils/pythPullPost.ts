@@ -78,6 +78,11 @@ const WALK_MAX_CONSECUTIVE_429 = 2;
 const MARKET_SEED = "market";
 const SETTLEMENT_SEED = "settlement";
 const VOL_ORACLE_SEED = "vol_oracle";
+// Phase 3 retro-harden — settle_vault now derives the writer-ask pot from the
+// canonical series-mint identity (see settle_vault.rs / create_series.rs).
+const VAULT_OPTION_MINT_SEED = "vault_option_mint";
+const WRITER_ASK_POT_SEED = "writer_ask_pot";
+const WRITER_ASK_POT_USDC_SEED = "writer_ask_pot_usdc";
 
 // ---------------------------------------------------------------------------
 // Hermes off-chain endpoint helpers
@@ -966,13 +971,60 @@ export async function settleAllForExpiry(
     atomicSig = await submitWithFallback(connection, wallet, atomicTxs);
   }
 
-  // ---- Phase 2: settle_vault batches ----
+  // ---- Phase 2: settle_vault batches (10-account writer-ask retro-harden) ----
   if (vaultPdas.length === 0) {
     return { atomicSig, vaultSigs: [], vaultsFinalized: 0 };
   }
 
+  // protocol_state PDA — signs the pot→vault USDC sweep (constant per call).
+  const [protocolStatePda] = PublicKey.findProgramAddressSync(
+    [Buffer.from(PROTOCOL_SEED)],
+    program.programId,
+  );
+
+  // Fetch each vault ONCE — serves two purposes:
+  //   1. the option_mint / writer-ask-pot derivations need strike/expiry/type/style;
+  //   2. the already-settled SKIP GUARD. settle_vault reverts VaultAlreadySettled
+  //      (6019) on a settled vault, and AccountNotInitialized (3012) on the
+  //      settled-and-drained vaults whose vault_usdc_account has been closed. We
+  //      filter both out HERE, before building any ix, so we never fire at them.
+  const vaultAccts = await program.account.sharedVault.fetchMultiple(vaultPdas);
+
   const ixs: TransactionInstruction[] = [];
-  for (const vaultPda of vaultPdas) {
+  for (let i = 0; i < vaultPdas.length; i++) {
+    const vaultPda = vaultPdas[i];
+    const v = vaultAccts[i];
+    // SKIP GUARD: missing account or already settled → never build the ix.
+    if (!v || v.isSettled) continue;
+
+    // enum → discriminant byte (OptionType Call=0/Put=1; ExerciseStyle
+    // European=0/American=1 — from the Rust enum declaration order).
+    const otByte = "call" in v.optionType ? 0 : 1;
+    const esByte = "european" in v.exerciseStyle ? 0 : 1;
+
+    // Canonical series mint — matches settle_vault.rs / create_series.rs seeds.
+    // For legacy vaults this address may hold no mint; settle_vault uses it only
+    // as a pinned key + pot-seed source (UncheckedAccount, never deserialized).
+    const [optionMint] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from(VAULT_OPTION_MINT_SEED),
+        marketPda.toBuffer(),
+        v.strikePrice.toArrayLike(Buffer, "le", 8),
+        v.expiry.toArrayLike(Buffer, "le", 8),
+        Buffer.from([otByte]),
+        Buffer.from([esByte]),
+      ],
+      program.programId,
+    );
+    const [writerAskPot] = PublicKey.findProgramAddressSync(
+      [Buffer.from(WRITER_ASK_POT_SEED), optionMint.toBuffer()],
+      program.programId,
+    );
+    const [writerAskPotUsdc] = PublicKey.findProgramAddressSync(
+      [Buffer.from(WRITER_ASK_POT_USDC_SEED), optionMint.toBuffer()],
+      program.programId,
+    );
+
     const ix = await program.methods
       .settleVault()
       .accountsStrict({
@@ -980,9 +1032,20 @@ export async function settleAllForExpiry(
         sharedVault: vaultPda,
         market: marketPda,
         settlementRecord: settlementPda,
+        vaultUsdcAccount: v.vaultUsdcAccount, // field read off the vault
+        optionMint,
+        writerAskPot,
+        writerAskPotUsdc,
+        protocolState: protocolStatePda,
+        tokenProgram: TOKEN_PROGRAM_ID,
       })
       .instruction();
     ixs.push(ix);
+  }
+
+  // All vaults already settled (or missing) → nothing to fire.
+  if (ixs.length === 0) {
+    return { atomicSig, vaultSigs: [], vaultsFinalized: 0 };
   }
 
   const vaultSigs: string[] = [];
@@ -1004,5 +1067,6 @@ export async function settleAllForExpiry(
     vaultSigs.push(sig);
   }
 
-  return { atomicSig, vaultSigs, vaultsFinalized: vaultPdas.length };
+  // ixs.length (not vaultPdas.length) — already-settled/missing vaults were skipped.
+  return { atomicSig, vaultSigs, vaultsFinalized: ixs.length };
 }

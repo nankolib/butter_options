@@ -16,8 +16,8 @@ export type Opta = {
     {
       "name": "autoCancelListings",
       "docs": [
-        "V2 secondary listing \u2014 permissionless cleanup of stale listings at expiry.",
-        "Spec: docs/V2_SECONDARY_LISTING_PLAN.md \u00a74.2 (Design A)."
+        "V2 secondary listing — permissionless cleanup of stale listings at expiry.",
+        "Spec: docs/V2_SECONDARY_LISTING_PLAN.md §4.2 (Design A)."
       ],
       "discriminator": [
         94,
@@ -33,7 +33,7 @@ export type Opta = {
         {
           "name": "caller",
           "docs": [
-            "Permissionless caller \u2014 pays the tx fee."
+            "Permissionless caller — pays the tx fee."
           ],
           "signer": true
         },
@@ -46,13 +46,13 @@ export type Opta = {
         {
           "name": "market",
           "docs": [
-            "Market \u2014 pinned to the vault."
+            "Market — pinned to the vault."
           ]
         },
         {
           "name": "vaultMintRecord",
           "docs": [
-            "VaultMint record \u2014 pins option_mint to this vault."
+            "VaultMint record — pins option_mint to this vault."
           ]
         },
         {
@@ -65,7 +65,7 @@ export type Opta = {
         {
           "name": "protocolState",
           "docs": [
-            "Protocol state \u2014 signs the escrow-source token-return transfers."
+            "Protocol state — signs the escrow-source token-return transfers."
           ],
           "pda": {
             "seeds": [
@@ -140,7 +140,7 @@ export type Opta = {
         {
           "name": "caller",
           "docs": [
-            "Permissionless caller \u2014 pays the tx fee. Not stored anywhere."
+            "Permissionless caller — pays the tx fee. Not stored anywhere."
           ],
           "signer": true
         },
@@ -154,7 +154,7 @@ export type Opta = {
         {
           "name": "market",
           "docs": [
-            "The vault's market \u2014 pinned to the vault for sanity, not read in handler."
+            "The vault's market — pinned to the vault for sanity, not read in handler."
           ]
         },
         {
@@ -175,14 +175,14 @@ export type Opta = {
         {
           "name": "vaultUsdcAccount",
           "docs": [
-            "Vault's USDC account \u2014 payout source."
+            "Vault's USDC account — payout source."
           ],
           "writable": true
         },
         {
           "name": "protocolState",
           "docs": [
-            "Protocol state \u2014 PermanentDelegate authority on every option mint.",
+            "Protocol state — PermanentDelegate authority on every option mint.",
             "Signs as `[b\"protocol_v2\", &[bump]]` to authorize the burns."
           ],
           "pda": {
@@ -209,14 +209,14 @@ export type Opta = {
         {
           "name": "token2022Program",
           "docs": [
-            "Token-2022 program \u2014 for burning option tokens."
+            "Token-2022 program — for burning option tokens."
           ],
           "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         },
         {
           "name": "tokenProgram",
           "docs": [
-            "Standard SPL Token program \u2014 for USDC transfers from vault \u2192 holder."
+            "Standard SPL Token program — for USDC transfers from vault → holder."
           ],
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         }
@@ -248,7 +248,7 @@ export type Opta = {
         {
           "name": "caller",
           "docs": [
-            "Permissionless caller \u2014 pays the tx fee. Not stored anywhere."
+            "Permissionless caller — pays the tx fee. Not stored anywhere."
           ],
           "signer": true
         },
@@ -263,15 +263,15 @@ export type Opta = {
         {
           "name": "market",
           "docs": [
-            "The vault's market \u2014 pinned to the vault for sanity. Not read by the",
+            "The vault's market — pinned to the vault for sanity. Not read by the",
             "handler beyond the constraint."
           ]
         },
         {
           "name": "vaultUsdcAccount",
           "docs": [
-            "Vault's USDC account \u2014 payout source for in-loop writer transfers and",
-            "the last-writer dust sweep. Closed (with rent \u2192 treasury) when the last",
+            "Vault's USDC account — payout source for in-loop writer transfers and",
+            "the last-writer dust sweep. Closed (with rent → treasury) when the last",
             "writer in the batch zeros total_shares."
           ],
           "writable": true
@@ -279,7 +279,7 @@ export type Opta = {
         {
           "name": "treasury",
           "docs": [
-            "Protocol treasury USDC account \u2014 receives any leftover dust + the",
+            "Protocol treasury USDC account — receives any leftover dust + the",
             "vault_usdc_account rent SOL when the vault is fully drained. Pinned via",
             "protocol_state.treasury so callers can't redirect dust to themselves."
           ],
@@ -288,7 +288,7 @@ export type Opta = {
         {
           "name": "protocolState",
           "docs": [
-            "Protocol state \u2014 supplies the canonical treasury pubkey for the",
+            "Protocol state — supplies the canonical treasury pubkey for the",
             "constraint above."
           ],
           "pda": {
@@ -315,7 +315,7 @@ export type Opta = {
         {
           "name": "tokenProgram",
           "docs": [
-            "Standard SPL Token program \u2014 for USDC transfers and CloseAccount CPIs."
+            "Standard SPL Token program — for USDC transfers and CloseAccount CPIs."
           ],
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         }
@@ -402,7 +402,7 @@ export type Opta = {
         {
           "name": "protocolState",
           "docs": [
-            "Protocol state \u2014 signs as purchase escrow owner for the burn."
+            "Protocol state — signs as purchase escrow owner for the burn."
           ],
           "pda": {
             "seeds": [
@@ -496,8 +496,8 @@ export type Opta = {
     {
       "name": "buyV2Resale",
       "docs": [
-        "V2 secondary listing \u2014 fill (partially or fully) an existing listing.",
-        "Spec: docs/V2_SECONDARY_LISTING_PLAN.md \u00a72.2."
+        "V2 secondary listing — fill (partially or fully) an existing listing.",
+        "Spec: docs/V2_SECONDARY_LISTING_PLAN.md §2.2."
       ],
       "discriminator": [
         201,
@@ -513,7 +513,7 @@ export type Opta = {
         {
           "name": "buyer",
           "docs": [
-            "Buyer \u2014 pays USDC, receives option tokens."
+            "Buyer — pays USDC, receives option tokens."
           ],
           "writable": true,
           "signer": true
@@ -521,19 +521,19 @@ export type Opta = {
         {
           "name": "sharedVault",
           "docs": [
-            "Vault \u2014 read for collateral_mint constraints + is_settled / expiry guards."
+            "Vault — read for collateral_mint constraints + is_settled / expiry guards."
           ]
         },
         {
           "name": "market",
           "docs": [
-            "Market \u2014 pinned to the vault."
+            "Market — pinned to the vault."
           ]
         },
         {
           "name": "vaultMintRecord",
           "docs": [
-            "VaultMint record \u2014 pins option_mint to this vault."
+            "VaultMint record — pins option_mint to this vault."
           ]
         },
         {
@@ -587,7 +587,7 @@ export type Opta = {
         {
           "name": "seller",
           "docs": [
-            "Seller wallet \u2014 rent destination on full-fill close. Constraint pins",
+            "Seller wallet — rent destination on full-fill close. Constraint pins",
             "it to listing.seller so a third-party caller can't redirect rent."
           ],
           "writable": true
@@ -602,7 +602,7 @@ export type Opta = {
         {
           "name": "resaleEscrow",
           "docs": [
-            "Resale escrow \u2014 source of the option-token transfer."
+            "Resale escrow — source of the option-token transfer."
           ],
           "writable": true,
           "pda": {
@@ -641,7 +641,7 @@ export type Opta = {
         {
           "name": "buyerOptionAccount",
           "docs": [
-            "Buyer's option ATA \u2014 destination. Frontend pre-creates idempotently."
+            "Buyer's option ATA — destination. Frontend pre-creates idempotently."
           ],
           "writable": true
         },
@@ -655,14 +655,14 @@ export type Opta = {
         {
           "name": "sellerUsdcAccount",
           "docs": [
-            "Seller's USDC ATA \u2014 receives seller-share. Must exist (Open Q #6 locked)."
+            "Seller's USDC ATA — receives seller-share. Must exist (Open Q #6 locked)."
           ],
           "writable": true
         },
         {
           "name": "treasury",
           "docs": [
-            "Treasury \u2014 receives protocol fee."
+            "Treasury — receives protocol fee."
           ],
           "writable": true,
           "pda": {
@@ -689,7 +689,7 @@ export type Opta = {
         {
           "name": "protocolState",
           "docs": [
-            "Protocol state \u2014 fee_bps + total_volume + escrow signer authority."
+            "Protocol state — fee_bps + total_volume + escrow signer authority."
           ],
           "writable": true,
           "pda": {
@@ -758,8 +758,8 @@ export type Opta = {
     {
       "name": "cancelOrder",
       "docs": [
-        "Exchange book \u2014 owner cancels their own resting order; escrow + rent returned.",
-        "Spec: exchange-spec \u00a76.3 (Step 4)."
+        "Exchange book — owner cancels their own resting order; escrow + rent returned.",
+        "Spec: exchange-spec §6.3 (Step 4)."
       ],
       "discriminator": [
         95,
@@ -775,7 +775,7 @@ export type Opta = {
         {
           "name": "owner",
           "docs": [
-            "Order owner \u2014 only the owner can cancel (enforced by the seed below)."
+            "Order owner — only the owner can cancel (enforced by the seed below)."
           ],
           "writable": true,
           "signer": true
@@ -791,7 +791,7 @@ export type Opta = {
           "name": "order",
           "docs": [
             "The resting order being cancelled. Seed embeds owner.key(), so only the",
-            "owner can derive it. Closed here; rent \u2192 owner."
+            "owner can derive it. Closed here; rent → owner."
           ],
           "writable": true,
           "pda": {
@@ -873,7 +873,7 @@ export type Opta = {
         {
           "name": "protocolState",
           "docs": [
-            "Protocol state \u2014 signs the escrow-source transfer + close."
+            "Protocol state — signs the escrow-source transfer + close."
           ],
           "pda": {
             "seeds": [
@@ -899,14 +899,14 @@ export type Opta = {
         {
           "name": "ownerOptionAccount",
           "docs": [
-            "Owner's option ATA \u2014 destination on the ResaleAsk branch."
+            "Owner's option ATA — destination on the ResaleAsk branch."
           ],
           "writable": true
         },
         {
           "name": "ownerUsdcAccount",
           "docs": [
-            "Owner's USDC account \u2014 destination on the Bid branch."
+            "Owner's USDC account — destination on the Bid branch."
           ],
           "writable": true
         },
@@ -947,7 +947,7 @@ export type Opta = {
       "name": "cancelTrigger",
       "docs": [
         "Owner cancels their own trigger; refunds the full escrow (BUY) and closes",
-        "both PDAs, rent \u2192 owner. NOT flag-gated. Spec v1 \u00a7cancel."
+        "both PDAs, rent → owner. NOT flag-gated. Spec v1 §cancel."
       ],
       "discriminator": [
         208,
@@ -963,7 +963,7 @@ export type Opta = {
         {
           "name": "owner",
           "docs": [
-            "Trigger owner \u2014 only the owner can cancel (enforced by the seed below)."
+            "Trigger owner — only the owner can cancel (enforced by the seed below)."
           ],
           "writable": true,
           "signer": true
@@ -973,7 +973,7 @@ export type Opta = {
           "docs": [
             "The trigger being cancelled. Seed embeds owner.key(), so only the owner",
             "can derive it. Self-references its own stored option_mint + nonce",
-            "(the FillOrder self-seed idiom). Closed here; rent \u2192 owner."
+            "(the FillOrder self-seed idiom). Closed here; rent → owner."
           ],
           "writable": true,
           "pda": {
@@ -1051,7 +1051,7 @@ export type Opta = {
         {
           "name": "protocolState",
           "docs": [
-            "Protocol state \u2014 signs the escrow-source refund + close."
+            "Protocol state — signs the escrow-source refund + close."
           ],
           "pda": {
             "seeds": [
@@ -1077,7 +1077,7 @@ export type Opta = {
         {
           "name": "ownerUsdcAccount",
           "docs": [
-            "Owner's USDC account \u2014 refund destination (BUY). Mint enforced by the SPL",
+            "Owner's USDC account — refund destination (BUY). Mint enforced by the SPL",
             "transfer (from.mint == to.mint); unused on the SELL branch."
           ],
           "writable": true
@@ -1092,8 +1092,8 @@ export type Opta = {
     {
       "name": "cancelV2Resale",
       "docs": [
-        "V2 secondary listing \u2014 seller cancels their own listing.",
-        "Spec: docs/V2_SECONDARY_LISTING_PLAN.md \u00a72.3."
+        "V2 secondary listing — seller cancels their own listing.",
+        "Spec: docs/V2_SECONDARY_LISTING_PLAN.md §2.3."
       ],
       "discriminator": [
         3,
@@ -1109,7 +1109,7 @@ export type Opta = {
         {
           "name": "seller",
           "docs": [
-            "Seller \u2014 only the listing's seller can cancel."
+            "Seller — only the listing's seller can cancel."
           ],
           "writable": true,
           "signer": true
@@ -1117,7 +1117,7 @@ export type Opta = {
         {
           "name": "sharedVault",
           "docs": [
-            "Vault \u2014 read for context (no mutation here)."
+            "Vault — read for context (no mutation here)."
           ]
         },
         {
@@ -1130,7 +1130,7 @@ export type Opta = {
         {
           "name": "listing",
           "docs": [
-            "Listing being cancelled. Closed at instruction end; rent \u2192 seller."
+            "Listing being cancelled. Closed at instruction end; rent → seller."
           ],
           "writable": true,
           "pda": {
@@ -1174,7 +1174,7 @@ export type Opta = {
         {
           "name": "resaleEscrow",
           "docs": [
-            "Resale escrow \u2014 source of the token-return transfer."
+            "Resale escrow — source of the token-return transfer."
           ],
           "writable": true,
           "pda": {
@@ -1213,14 +1213,14 @@ export type Opta = {
         {
           "name": "sellerOptionAccount",
           "docs": [
-            "Seller's option ATA \u2014 destination of the returned tokens."
+            "Seller's option ATA — destination of the returned tokens."
           ],
           "writable": true
         },
         {
           "name": "protocolState",
           "docs": [
-            "Protocol state \u2014 signs the escrow-source transfer."
+            "Protocol state — signs the escrow-source transfer."
           ],
           "pda": {
             "seeds": [
@@ -1345,21 +1345,109 @@ export type Opta = {
         {
           "name": "vaultUsdcAccount",
           "docs": [
-            "Vault's USDC token account \u2014 source of premium."
+            "Vault's USDC token account — source of premium."
           ],
           "writable": true
         },
         {
           "name": "writerUsdcAccount",
           "docs": [
-            "Writer's USDC token account \u2014 destination."
+            "Writer's USDC token account — destination."
           ],
           "writable": true
         },
         {
           "name": "protocolState",
           "docs": [
-            "Protocol state \u2014 for USDC mint validation."
+            "Protocol state — for USDC mint validation."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "tokenProgram",
+          "docs": [
+            "Standard SPL Token program."
+          ],
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "closeSettledWriterAskVault",
+      "docs": [
+        "Exchange Phase 3 Slice D2a — reclaim a fully-drained writer-ask vault's",
+        "USDC account. EXACT precondition: is_settled && !voided && swept > 0 &&",
+        "total_shares == 0 (the unspoofable all-drained signal — impossible to",
+        "close while a claimant is owed). Sweeps residual dust + the account rent",
+        "SOL to the treasury. Permissionless. UNGATED — inert in a feature-free",
+        "build (reverts NotAWriterAskVault, swept always 0). A mixed vault that",
+        "lands at total_shares == D > 0 floor-dust is a SAFE under-close (never",
+        "fires; no claimant harmed). Spec §8."
+      ],
+      "discriminator": [
+        108,
+        112,
+        35,
+        33,
+        64,
+        107,
+        105,
+        183
+      ],
+      "accounts": [
+        {
+          "name": "cranker",
+          "docs": [
+            "Permissionless caller (a cranker). Receives nothing — dust + rent → treasury."
+          ],
+          "signer": true
+        },
+        {
+          "name": "sharedVault",
+          "docs": [
+            "The settled, fully-drained writer-ask vault. Read-only: the SharedVault",
+            "record persists (only its USDC account is closed), so no field is mutated."
+          ]
+        },
+        {
+          "name": "vaultUsdcAccount",
+          "docs": [
+            "Vault's USDC token account — dust swept then account closed."
+          ],
+          "writable": true
+        },
+        {
+          "name": "treasury",
+          "docs": [
+            "Protocol treasury — receives the dust + the account rent SOL. Pinned via",
+            "protocol_state."
+          ],
+          "writable": true
+        },
+        {
+          "name": "protocolState",
+          "docs": [
+            "Protocol state — pins the treasury."
           ],
           "pda": {
             "seeds": [
@@ -1395,14 +1483,14 @@ export type Opta = {
     {
       "name": "createAndDeposit",
       "docs": [
-        "Exchange Phase 2 Pass C \u2014 atomic write merge (D9). Fuses create_shared_vault",
+        "Exchange Phase 2 Pass C — atomic write merge (D9). Fuses create_shared_vault",
         "+ deposit_to_vault into ONE tx via init_if_needed: the first caller for a",
         "spec creates + deposits, a subsequent caller just deposits. The heavy mint",
         "left the write path (D8/D9), so this carries no Token-2022 mint + no",
         "BS-2002. Kills the partial-flow stranded-collateral hazard structurally.",
-        "Additive \u2014 create_shared_vault + deposit_to_vault stay live. EUR",
+        "Additive — create_shared_vault + deposit_to_vault stay live. EUR",
         "byte-identical; American keeps create_shared_vault's AMERICAN_ENABLED gate.",
-        "Spec: \u00a77.3.3 / \u00a77.6."
+        "Spec: §7.3.3 / §7.6."
       ],
       "discriminator": [
         149,
@@ -1418,7 +1506,7 @@ export type Opta = {
         {
           "name": "writer",
           "docs": [
-            "The depositor \u2014 also the creator on a fresh vault. Pays all rent."
+            "The depositor — also the creator on a fresh vault. Pays all rent."
           ],
           "writable": true,
           "signer": true
@@ -1432,7 +1520,7 @@ export type Opta = {
         {
           "name": "sharedVault",
           "docs": [
-            "The SharedVault PDA \u2014 unique per (namespace/exercise_style, market,",
+            "The SharedVault PDA — unique per (namespace/exercise_style, market,",
             "strike, expiry, option_type). `init_if_needed`: created on the first",
             "caller, reused on subsequent deposits into the same spec."
           ],
@@ -1442,7 +1530,7 @@ export type Opta = {
           "name": "vaultUsdcAccount",
           "docs": [
             "The vault's USDC token account (authority = shared_vault PDA). Pinned by",
-            "its own PDA seeds \u2014 NOT by shared_vault.vault_usdc_account, which is zero",
+            "its own PDA seeds — NOT by shared_vault.vault_usdc_account, which is zero",
             "at constraint-eval time on a fresh init."
           ],
           "writable": true,
@@ -1473,13 +1561,13 @@ export type Opta = {
         {
           "name": "usdcMint",
           "docs": [
-            "USDC mint \u2014 pinned to the protocol's stored USDC mint."
+            "USDC mint — pinned to the protocol's stored USDC mint."
           ]
         },
         {
           "name": "writerPosition",
           "docs": [
-            "Writer's position \u2014 created on first deposit, accumulated thereafter."
+            "Writer's position — created on first deposit, accumulated thereafter."
           ],
           "writable": true,
           "pda": {
@@ -1518,7 +1606,7 @@ export type Opta = {
         {
           "name": "writerUsdcAccount",
           "docs": [
-            "Writer's USDC account \u2014 source of collateral. Pinned to `usdc_mint`",
+            "Writer's USDC account — source of collateral. Pinned to `usdc_mint`",
             "(not the vault's stored collateral_mint, which is zero on a fresh init)."
           ],
           "writable": true
@@ -1526,7 +1614,7 @@ export type Opta = {
         {
           "name": "protocolState",
           "docs": [
-            "Protocol state \u2014 USDC mint validation."
+            "Protocol state — USDC mint validation."
           ],
           "pda": {
             "seeds": [
@@ -1552,7 +1640,7 @@ export type Opta = {
         {
           "name": "epochConfig",
           "docs": [
-            "Epoch config \u2014 required for Epoch vaults on fresh create, else optional."
+            "Epoch config — required for Epoch vaults on fresh create, else optional."
           ],
           "optional": true
         },
@@ -1648,7 +1736,7 @@ export type Opta = {
         {
           "name": "protocolState",
           "docs": [
-            "Global ProtocolState \u2014 mutated to bump total_markets on first init."
+            "Global ProtocolState — mutated to bump total_markets on first init."
           ],
           "writable": true,
           "pda": {
@@ -1678,10 +1766,10 @@ export type Opta = {
             "Fresh PriceUpdateV2 from the Pyth Receiver program. The handler",
             "verifies `verification_level == Full` and",
             "`price_message.feed_id == pyth_feed_id` to prove the caller-supplied",
-            "feed_id corresponds to a real Pyth feed. Read-only \u2014 never mutated.",
+            "feed_id corresponds to a real Pyth feed. Read-only — never mutated.",
             "",
             "Stage 3 1c-i-B: now `Option`. REQUIRED (present) for a Pyth create",
-            "(oracle_source=0) \u2014 a present account is wire-identical to the prior",
+            "(oracle_source=0) — a present account is wire-identical to the prior",
             "required form, so existing Pyth creates are unaffected. Passed None for",
             "a Switchboard create (oracle_source=1): the SB feed-existence proof runs",
             "against the trailing SB accounts instead. Pyth arm errors",
@@ -1768,9 +1856,9 @@ export type Opta = {
     {
       "name": "createSeries",
       "docs": [
-        "Exchange Phase 2 Pass A \u2014 create the canonical per-spec series mint.",
+        "Exchange Phase 2 Pass A — create the canonical per-spec series mint.",
         "Permissionless, once-per-spec (series-record `init` enforces it). American",
-        "only (D12). Inert until Pass B mints against it. Spec: \u00a77.3.1."
+        "only (D12). Inert until Pass B mints against it. Spec: §7.3.1."
       ],
       "discriminator": [
         181,
@@ -1786,7 +1874,7 @@ export type Opta = {
         {
           "name": "caller",
           "docs": [
-            "Permissionless caller \u2014 pays the mint + record + hook-state rent."
+            "Permissionless caller — pays the mint + record + hook-state rent."
           ],
           "writable": true,
           "signer": true
@@ -1801,7 +1889,7 @@ export type Opta = {
         {
           "name": "protocolState",
           "docs": [
-            "Protocol state \u2014 mint authority + permanent delegate for Token-2022."
+            "Protocol state — mint authority + permanent delegate for Token-2022."
           ],
           "pda": {
             "seeds": [
@@ -1827,7 +1915,7 @@ export type Opta = {
         {
           "name": "optionMint",
           "docs": [
-            "The canonical series mint \u2014 created via CPI. PDA seeds are SPEC-ONLY",
+            "The canonical series mint — created via CPI. PDA seeds are SPEC-ONLY",
             "(no writer, no timestamp). Idempotency comes from the series record",
             "`init` below (a second create_series reverts \"already in use\")."
           ],
@@ -1836,8 +1924,8 @@ export type Opta = {
         {
           "name": "vaultMintRecord",
           "docs": [
-            "The series record \u2014 `init` enforces once-per-spec. Reuses the VaultMint",
-            "shape so the Phase 1 book's mint\u2194vault proof needs zero changes (D5);",
+            "The series record — `init` enforces once-per-spec. Reuses the VaultMint",
+            "shape so the Phase 1 book's mint↔vault proof needs zero changes (D5);",
             "per-writer fields are sentineled (see handler)."
           ],
           "writable": true,
@@ -1875,20 +1963,20 @@ export type Opta = {
         {
           "name": "transferHookProgram",
           "docs": [
-            "Transfer hook program \u2014 pinned to the known opta-transfer-hook ID."
+            "Transfer hook program — pinned to the known opta-transfer-hook ID."
           ]
         },
         {
           "name": "extraAccountMetaList",
           "docs": [
-            "ExtraAccountMetaList PDA \u2014 created by the hook program during CPI."
+            "ExtraAccountMetaList PDA — created by the hook program during CPI."
           ],
           "writable": true
         },
         {
           "name": "hookState",
           "docs": [
-            "HookState PDA \u2014 created by the hook program during CPI."
+            "HookState PDA — created by the hook program during CPI."
           ],
           "writable": true
         },
@@ -1965,7 +2053,7 @@ export type Opta = {
         {
           "name": "sharedVault",
           "docs": [
-            "The SharedVault PDA \u2014 unique per (market, strike, expiry, option_type,",
+            "The SharedVault PDA — unique per (market, strike, expiry, option_type,",
             "exercise_style). EUR and AMER use separate seed prefixes",
             "(`b\"shared_vault\"` vs `b\"shared_vault_american\"`) so both can coexist",
             "at the same numeric tuple."
@@ -2006,13 +2094,13 @@ export type Opta = {
         {
           "name": "usdcMint",
           "docs": [
-            "USDC mint \u2014 validated against the protocol's stored USDC mint."
+            "USDC mint — validated against the protocol's stored USDC mint."
           ]
         },
         {
           "name": "protocolState",
           "docs": [
-            "Protocol state \u2014 for USDC mint validation."
+            "Protocol state — for USDC mint validation."
           ],
           "pda": {
             "seeds": [
@@ -2038,7 +2126,7 @@ export type Opta = {
         {
           "name": "epochConfig",
           "docs": [
-            "Epoch config \u2014 required for Epoch vaults, optional for Custom.",
+            "Epoch config — required for Epoch vaults, optional for Custom.",
             "When present, used to validate the expiry aligns with the epoch schedule."
           ],
           "optional": true
@@ -2046,7 +2134,7 @@ export type Opta = {
         {
           "name": "tokenProgram",
           "docs": [
-            "Standard SPL Token program \u2014 for the USDC token account."
+            "Standard SPL Token program — for the USDC token account."
           ],
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
@@ -2171,21 +2259,21 @@ export type Opta = {
         {
           "name": "writerUsdcAccount",
           "docs": [
-            "Writer's USDC token account \u2014 source of collateral."
+            "Writer's USDC token account — source of collateral."
           ],
           "writable": true
         },
         {
           "name": "vaultUsdcAccount",
           "docs": [
-            "Vault's USDC token account \u2014 destination for collateral."
+            "Vault's USDC token account — destination for collateral."
           ],
           "writable": true
         },
         {
           "name": "protocolState",
           "docs": [
-            "Protocol state \u2014 for USDC mint validation."
+            "Protocol state — for USDC mint validation."
           ],
           "pda": {
             "seeds": [
@@ -2211,7 +2299,7 @@ export type Opta = {
         {
           "name": "tokenProgram",
           "docs": [
-            "Standard SPL Token program \u2014 for USDC transfers."
+            "Standard SPL Token program — for USDC transfers."
           ],
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
@@ -2233,11 +2321,11 @@ export type Opta = {
         "Keeper fires a trigger. Flag-gated (6052 while AMERICAN_ENABLED=false).",
         "Re-reads a FRESH Pyth EMA in-tx (60s/200bps, mirrors exercise_american),",
         "re-checks the stored comparator (6059), then routes to the shared cores:",
-        "StopEntryBuy \u2192 vault_peg_fill_core (escrow pays, mints to owner);",
-        "TakeProfitSell \u2192 american_exercise_core (delegate burns, vault pays owner)",
+        "StopEntryBuy → vault_peg_fill_core (escrow pays, mints to owner);",
+        "TakeProfitSell → american_exercise_core (delegate burns, vault pays owner)",
         "with a fire-time owner/mint re-verification (6060) + partial-fire support.",
         "CALLERS MUST prepend ComputeBudgetProgram.setComputeUnitLimit(~400_000)",
-        "(the BUY path runs BS-2002). Spec v1 \u00a7execute."
+        "(the BUY path runs BS-2002). Spec v1 §execute."
       ],
       "discriminator": [
         158,
@@ -2253,7 +2341,7 @@ export type Opta = {
         {
           "name": "caller",
           "docs": [
-            "Permissionless keeper \u2014 pays the tx fee. NOT the trigger owner."
+            "Permissionless keeper — pays the tx fee. NOT the trigger owner."
           ],
           "writable": true,
           "signer": true
@@ -2262,7 +2350,7 @@ export type Opta = {
           "name": "triggerOrder",
           "docs": [
             "The trigger being executed. Self-referential seeds (owner+mint+nonce are",
-            "stored fields) so the keeper \u2014 not the owner \u2014 can derive it. Conditionally",
+            "stored fields) so the keeper — not the owner — can derive it. Conditionally",
             "closed in-handler (BUY always; SELL only when fully filled)."
           ],
           "writable": true,
@@ -2307,21 +2395,21 @@ export type Opta = {
         {
           "name": "market",
           "docs": [
-            "Market \u2014 pinned to vault + trigger; provides pyth_feed_id for the EMA",
+            "Market — pinned to vault + trigger; provides pyth_feed_id for the EMA",
             "re-check + the vol_oracle seed."
           ]
         },
         {
           "name": "sharedVault",
           "docs": [
-            "The vault \u2014 peg-fill source (BUY) / exercise-payout source (SELL)."
+            "The vault — peg-fill source (BUY) / exercise-payout source (SELL)."
           ],
           "writable": true
         },
         {
           "name": "vaultMintRecord",
           "docs": [
-            "Series/VaultMint record \u2014 the peg core bumps its supply counters (BUY);",
+            "Series/VaultMint record — the peg core bumps its supply counters (BUY);",
             "validated but untouched on SELL."
           ],
           "writable": true
@@ -2329,7 +2417,7 @@ export type Opta = {
         {
           "name": "optionMint",
           "docs": [
-            "The series option mint \u2014 peg mint_to target (BUY) / burn target (SELL)."
+            "The series option mint — peg mint_to target (BUY) / burn target (SELL)."
           ],
           "writable": true
         },
@@ -2340,7 +2428,7 @@ export type Opta = {
             "comparator re-check (BUY+SELL) AND the intrinsic spot (SELL).",
             "",
             "Stage 3 (1a-ii): now `Option`, position unchanged. REQUIRED (present) for",
-            "a Pyth market \u2014 a present price_update is wire-identical to before. A",
+            "a Pyth market — a present price_update is wire-identical to before. A",
             "Switchboard market passes None (sentinel) and uses the trailing SB",
             "accounts. The Pyth arm errors `PriceUpdateMissing` if absent on a Pyth market."
           ],
@@ -2349,7 +2437,7 @@ export type Opta = {
         {
           "name": "volOracle",
           "docs": [
-            "VolOracle for the market's feed \u2014 the BUY peg's BS-2002 input. Validated",
+            "VolOracle for the market's feed — the BUY peg's BS-2002 input. Validated",
             "on SELL but unused."
           ],
           "pda": {
@@ -2380,7 +2468,7 @@ export type Opta = {
         {
           "name": "protocolState",
           "docs": [
-            "Protocol state \u2014 fee_bps + total_volume + mint authority (BUY), escrow",
+            "Protocol state — fee_bps + total_volume + mint authority (BUY), escrow",
             "authority (BUY refund/debit + close), and the PermanentDelegate burn",
             "authority (SELL)."
           ],
@@ -2409,7 +2497,7 @@ export type Opta = {
         {
           "name": "treasury",
           "docs": [
-            "Treasury \u2014 BUY fee destination. Validated but unused on SELL."
+            "Treasury — BUY fee destination. Validated but unused on SELL."
           ],
           "writable": true,
           "pda": {
@@ -2480,7 +2568,7 @@ export type Opta = {
         {
           "name": "ownerUsdcAccount",
           "docs": [
-            "Owner's USDC account \u2014 BUY: unspent-escrow refund dest; SELL: payout dest.",
+            "Owner's USDC account — BUY: unspent-escrow refund dest; SELL: payout dest.",
             "Pinned to the trigger owner + USDC mint so a keeper can't redirect proceeds."
           ],
           "writable": true
@@ -2488,14 +2576,14 @@ export type Opta = {
         {
           "name": "ownerWallet",
           "docs": [
-            "Owner's wallet \u2014 rent destination on close (escrow + trigger_order)."
+            "Owner's wallet — rent destination on close (escrow + trigger_order)."
           ],
           "writable": true
         },
         {
           "name": "vaultUsdcAccount",
           "docs": [
-            "Vault's USDC account \u2014 BUY vault_share destination / SELL payout source."
+            "Vault's USDC account — BUY vault_share destination / SELL payout source."
           ],
           "writable": true
         },
@@ -2540,7 +2628,7 @@ export type Opta = {
       "docs": [
         "Early (pre-expiry) American exercise. The holder burns `quantity`",
         "tokens and receives cash-settled capped intrinsic in USDC from the",
-        "vault (CALL/PUT capped at 1\u00d7 collateral per contract). American-only",
+        "vault (CALL/PUT capped at 1× collateral per contract). American-only",
         "and gated off via AMERICAN_ENABLED until Stage I. Spot is read from a",
         "fresh PriceUpdateV2 the exerciser supplies. Increments the vault's",
         "early-exercise counters only; settlement nets them in Stage G."
@@ -2574,7 +2662,7 @@ export type Opta = {
         {
           "name": "market",
           "docs": [
-            "The vault's market \u2014 provides the canonical `pyth_feed_id` the supplied",
+            "The vault's market — provides the canonical `pyth_feed_id` the supplied",
             "price update is validated against."
           ]
         },
@@ -2585,7 +2673,7 @@ export type Opta = {
             "same tx). Validated for Full verification + feed_id + confidence +",
             "freshness in the handler.",
             "",
-            "Stage 3: now `Option`. REQUIRED (present) for a Pyth market \u2014 its position",
+            "Stage 3: now `Option`. REQUIRED (present) for a Pyth market — its position",
             "is unchanged (4), so a present price_update is wire-identical to before.",
             "A Switchboard market passes None (program-id sentinel) and uses the",
             "trailing SB accounts instead. The Pyth arm errors `PriceUpdateMissing` if",
@@ -2617,28 +2705,28 @@ export type Opta = {
         {
           "name": "vaultUsdcAccount",
           "docs": [
-            "Vault's USDC account \u2014 payout source."
+            "Vault's USDC account — payout source."
           ],
           "writable": true
         },
         {
           "name": "holderUsdcAccount",
           "docs": [
-            "Holder's USDC account \u2014 receives the cash-settled payout."
+            "Holder's USDC account — receives the cash-settled payout."
           ],
           "writable": true
         },
         {
           "name": "token2022Program",
           "docs": [
-            "Token-2022 program \u2014 for burning option tokens."
+            "Token-2022 program — for burning option tokens."
           ],
           "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         },
         {
           "name": "tokenProgram",
           "docs": [
-            "Standard SPL Token program \u2014 for the USDC transfer."
+            "Standard SPL Token program — for the USDC transfer."
           ],
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
@@ -2705,7 +2793,7 @@ export type Opta = {
         {
           "name": "market",
           "docs": [
-            "The market \u2014 for settlement verification."
+            "The market — for settlement verification."
           ]
         },
         {
@@ -2728,21 +2816,21 @@ export type Opta = {
         {
           "name": "vaultUsdcAccount",
           "docs": [
-            "Vault's USDC account \u2014 payout source."
+            "Vault's USDC account — payout source."
           ],
           "writable": true
         },
         {
           "name": "holderUsdcAccount",
           "docs": [
-            "Holder's USDC account \u2014 receives payout."
+            "Holder's USDC account — receives payout."
           ],
           "writable": true
         },
         {
           "name": "protocolState",
           "docs": [
-            "Protocol state \u2014 for USDC mint validation."
+            "Protocol state — for USDC mint validation."
           ],
           "pda": {
             "seeds": [
@@ -2768,14 +2856,14 @@ export type Opta = {
         {
           "name": "token2022Program",
           "docs": [
-            "Token-2022 program \u2014 for burning option tokens."
+            "Token-2022 program — for burning option tokens."
           ],
           "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         },
         {
           "name": "tokenProgram",
           "docs": [
-            "Standard SPL Token program \u2014 for USDC transfers."
+            "Standard SPL Token program — for USDC transfers."
           ],
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         }
@@ -2790,8 +2878,8 @@ export type Opta = {
     {
       "name": "fillOrder",
       "docs": [
-        "Exchange book \u2014 taker fills a named resting order (partial fills first-class).",
-        "Spec: exchange-spec \u00a76.3 (Step 3)."
+        "Exchange book — taker fills a named resting order (partial fills first-class).",
+        "Spec: exchange-spec §6.3 (Step 3)."
       ],
       "discriminator": [
         232,
@@ -2807,7 +2895,7 @@ export type Opta = {
         {
           "name": "taker",
           "docs": [
-            "Taker \u2014 pays/receives USDC, delivers/receives option tokens."
+            "Taker — pays/receives USDC, delivers/receives option tokens."
           ],
           "writable": true,
           "signer": true
@@ -2815,7 +2903,7 @@ export type Opta = {
         {
           "name": "optionMint",
           "docs": [
-            "Token-2022 option mint. Part of the order PDA seed (binds mint\u2194order)."
+            "Token-2022 option mint. Part of the order PDA seed (binds mint↔order)."
           ],
           "writable": true
         },
@@ -2867,7 +2955,7 @@ export type Opta = {
         {
           "name": "maker",
           "docs": [
-            "Maker wallet \u2014 order owner. Rent destination on close, USDC recipient on",
+            "Maker wallet — order owner. Rent destination on close, USDC recipient on",
             "a resale fill. Pinned to order.owner so no third party redirects rent."
           ],
           "writable": true
@@ -2875,7 +2963,7 @@ export type Opta = {
         {
           "name": "sharedVault",
           "docs": [
-            "Vault \u2014 read for the expiry guard."
+            "Vault — read for the expiry guard."
           ]
         },
         {
@@ -2921,7 +3009,7 @@ export type Opta = {
         {
           "name": "protocolState",
           "docs": [
-            "Protocol state \u2014 fee_bps + escrow signer authority."
+            "Protocol state — fee_bps + escrow signer authority."
           ],
           "pda": {
             "seeds": [
@@ -2947,7 +3035,7 @@ export type Opta = {
         {
           "name": "treasury",
           "docs": [
-            "Treasury \u2014 receives the protocol fee."
+            "Treasury — receives the protocol fee."
           ],
           "writable": true,
           "pda": {
@@ -2974,14 +3062,14 @@ export type Opta = {
         {
           "name": "takerUsdcAccount",
           "docs": [
-            "Taker's USDC ATA \u2014 source on resale fill, destination on bid fill."
+            "Taker's USDC ATA — source on resale fill, destination on bid fill."
           ],
           "writable": true
         },
         {
           "name": "makerUsdcAccount",
           "docs": [
-            "Maker's USDC ATA \u2014 destination on resale fill (unused on bid fill, but",
+            "Maker's USDC ATA — destination on resale fill (unused on bid fill, but",
             "passed for uniform context). Pinned to order.owner + USDC mint."
           ],
           "writable": true
@@ -2989,14 +3077,14 @@ export type Opta = {
         {
           "name": "takerOptionAccount",
           "docs": [
-            "Taker's option ATA \u2014 destination on resale fill, source on bid fill."
+            "Taker's option ATA — destination on resale fill, source on bid fill."
           ],
           "writable": true
         },
         {
           "name": "makerOptionAccount",
           "docs": [
-            "Maker's option ATA \u2014 destination on bid fill (unused on resale fill)."
+            "Maker's option ATA — destination on bid fill (unused on resale fill)."
           ],
           "writable": true
         },
@@ -3041,12 +3129,12 @@ export type Opta = {
     {
       "name": "fillVaultPeg",
       "docs": [
-        "Exchange Phase 2 Pass B \u2014 fill the standing vault peg: price an American",
+        "Exchange Phase 2 Pass B — fill the standing vault peg: price an American",
         "series at fill time (BS-2002 + spread_bps via the shared price_american",
         "helper), take USDC (pool premium + fee), and mint `quantity` contracts",
         "to the taker from pooled vault collateral. `max_premium` is the taker's",
         "fee-inclusive slippage ceiling. Dark behind AMERICAN_ENABLED until the",
-        "Stage-I flip. Spec: \u00a77.3.2 (D3/D5/D6/D7)."
+        "Stage-I flip. Spec: §7.3.2 (D3/D5/D6/D7)."
       ],
       "discriminator": [
         165,
@@ -3062,7 +3150,7 @@ export type Opta = {
         {
           "name": "taker",
           "docs": [
-            "The taker \u2014 pays USDC, receives freshly-minted series contracts."
+            "The taker — pays USDC, receives freshly-minted series contracts."
           ],
           "writable": true,
           "signer": true
@@ -3070,7 +3158,7 @@ export type Opta = {
         {
           "name": "sharedVault",
           "docs": [
-            "The series' shared vault \u2014 collateral pot + commitment counters + the",
+            "The series' shared vault — collateral pot + commitment counters + the",
             "spread_bps / voided / exercise_style fields. Mutated."
           ],
           "writable": true
@@ -3078,8 +3166,8 @@ export type Opta = {
         {
           "name": "vaultMintRecord",
           "docs": [
-            "The series record (Pass A) \u2014 the standing ask. Pins option_mint\u2194vault",
-            "(mint\u2194vault proof) and carries the series supply counters."
+            "The series record (Pass A) — the standing ask. Pins option_mint↔vault",
+            "(mint↔vault proof) and carries the series supply counters."
           ],
           "writable": true,
           "pda": {
@@ -3116,13 +3204,13 @@ export type Opta = {
         {
           "name": "market",
           "docs": [
-            "Market \u2014 provides pyth_feed_id for the VolOracle seed; pinned to the vault."
+            "Market — provides pyth_feed_id for the VolOracle seed; pinned to the vault."
           ]
         },
         {
           "name": "volOracle",
           "docs": [
-            "VolOracle PDA for the market's Pyth feed \u2014 the pricing input. Read-only."
+            "VolOracle PDA for the market's Pyth feed — the pricing input. Read-only."
           ],
           "pda": {
             "seeds": [
@@ -3152,7 +3240,7 @@ export type Opta = {
         {
           "name": "protocolState",
           "docs": [
-            "Protocol state \u2014 fee_bps, volume, and the option mint's authority",
+            "Protocol state — fee_bps, volume, and the option mint's authority",
             "(signs mint_to with PROTOCOL_SEED). Mutated (total_volume)."
           ],
           "writable": true,
@@ -3180,7 +3268,7 @@ export type Opta = {
         {
           "name": "optionMint",
           "docs": [
-            "The canonical series mint (Token-2022) \u2014 mint_to target. Authority =",
+            "The canonical series mint (Token-2022) — mint_to target. Authority =",
             "protocol_state (create_series.rs:185). Pinned to the series record."
           ],
           "writable": true
@@ -3188,7 +3276,7 @@ export type Opta = {
         {
           "name": "takerOptionAccount",
           "docs": [
-            "Taker's option ATA on the series mint \u2014 mint_to destination. The client",
+            "Taker's option ATA on the series mint — mint_to destination. The client",
             "pre-creates it idempotently (no hook runs on a mint)."
           ],
           "writable": true
@@ -3196,21 +3284,21 @@ export type Opta = {
         {
           "name": "takerUsdcAccount",
           "docs": [
-            "Taker's USDC account \u2014 premium source."
+            "Taker's USDC account — premium source."
           ],
           "writable": true
         },
         {
           "name": "vaultUsdcAccount",
           "docs": [
-            "Vault's USDC account \u2014 receives the vault's share of premium (pool \u2014 D7)."
+            "Vault's USDC account — receives the vault's share of premium (pool — D7)."
           ],
           "writable": true
         },
         {
           "name": "treasury",
           "docs": [
-            "Treasury \u2014 receives the protocol fee."
+            "Treasury — receives the protocol fee."
           ],
           "writable": true,
           "pda": {
@@ -3237,14 +3325,14 @@ export type Opta = {
         {
           "name": "tokenProgram",
           "docs": [
-            "Standard SPL Token program \u2014 for USDC transfers."
+            "Standard SPL Token program — for USDC transfers."
           ],
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
         {
           "name": "token2022Program",
           "docs": [
-            "Token-2022 program \u2014 for the option mint_to."
+            "Token-2022 program — for the option mint_to."
           ],
           "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         }
@@ -3261,12 +3349,400 @@ export type Opta = {
       ]
     },
     {
+      "name": "fillWriterAsk",
+      "docs": [
+        "Exchange Phase 3 Slice B — fill a writer's limit ask. Mint-on-fill from",
+        "the writer's PERSONAL collateral (Slice A's per-order escrow): premium",
+        "(maker-set price) taker→writer, fee→treasury, mint `fill_quantity` series",
+        "contracts to the taker, move cpt×fill_quantity escrow→WriterAskPot. Bumps",
+        "only the pot + position — never the vault counters. Dark behind",
+        "WRITER_ASKS_ENABLED + AMERICAN_ENABLED. Settlement of these contracts is",
+        "Slice D. Spec: §8 (P3/D7)."
+      ],
+      "discriminator": [
+        41,
+        218,
+        166,
+        1,
+        94,
+        165,
+        145,
+        8
+      ],
+      "accounts": [
+        {
+          "name": "taker",
+          "docs": [
+            "Taker — pays USDC premium, receives minted contracts, pays init rent."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "optionMint",
+          "docs": [
+            "Series Token-2022 mint (authority = protocol_state). Order PDA seed."
+          ],
+          "writable": true
+        },
+        {
+          "name": "order",
+          "docs": [
+            "The WriterAsk order. Closed (manual) on full fill."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  115,
+                  116,
+                  105,
+                  110,
+                  103,
+                  95,
+                  111,
+                  114,
+                  100,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "optionMint"
+              },
+              {
+                "kind": "account",
+                "path": "order.owner",
+                "account": "restingOrder"
+              },
+              {
+                "kind": "account",
+                "path": "order.nonce",
+                "account": "restingOrder"
+              }
+            ]
+          }
+        },
+        {
+          "name": "maker",
+          "docs": [
+            "Maker = writer = order.owner. Premium recipient + rent dest on close."
+          ],
+          "writable": true
+        },
+        {
+          "name": "sharedVault",
+          "docs": [
+            "Vault — READ-ONLY (Slice B touches no vault counter). Pinned to order.vault."
+          ]
+        },
+        {
+          "name": "vaultMintRecord",
+          "docs": [
+            "Series record — mint↔vault proof (read-only)."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116,
+                  95,
+                  109,
+                  105,
+                  110,
+                  116,
+                  95,
+                  114,
+                  101,
+                  99,
+                  111,
+                  114,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "optionMint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "escrow",
+          "docs": [
+            "Per-order USDC escrow (Slice A). Debit source; closed on full fill."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  115,
+                  116,
+                  105,
+                  110,
+                  103,
+                  95,
+                  111,
+                  114,
+                  100,
+                  101,
+                  114,
+                  95,
+                  101,
+                  115,
+                  99,
+                  114,
+                  111,
+                  119
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "order"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocolState",
+          "docs": [
+            "Protocol state — escrow signer + mint authority + fee_bps + usdc/treasury pins."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasury",
+          "docs": [
+            "Treasury — fee recipient."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "takerUsdcAccount",
+          "docs": [
+            "Taker USDC — pays premium."
+          ],
+          "writable": true
+        },
+        {
+          "name": "makerUsdcAccount",
+          "docs": [
+            "Maker (writer) USDC — receives premium − fee."
+          ],
+          "writable": true
+        },
+        {
+          "name": "takerOptionAccount",
+          "docs": [
+            "Taker's series ATA — mint destination (client pre-creates idempotently)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "writerAskPot",
+          "docs": [
+            "WriterAskPot record — init on first fill (taker pays)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  119,
+                  114,
+                  105,
+                  116,
+                  101,
+                  114,
+                  95,
+                  97,
+                  115,
+                  107,
+                  95,
+                  112,
+                  111,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "optionMint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "writerAskPotUsdc",
+          "docs": [
+            "WriterAskPot USDC account — init on first fill; authority = protocol_state",
+            "(matches the per-order escrow authority → enables Slice D's pot sweep)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  119,
+                  114,
+                  105,
+                  116,
+                  101,
+                  114,
+                  95,
+                  97,
+                  115,
+                  107,
+                  95,
+                  112,
+                  111,
+                  116,
+                  95,
+                  117,
+                  115,
+                  100,
+                  99
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "optionMint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "writerAskPosition",
+          "docs": [
+            "Per-(series, backer) position — init on first fill (taker pays).",
+            "backer = order.owner (the writer, NOT the taker)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  119,
+                  114,
+                  105,
+                  116,
+                  101,
+                  114,
+                  95,
+                  97,
+                  115,
+                  107,
+                  95,
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "optionMint"
+              },
+              {
+                "kind": "account",
+                "path": "order.owner",
+                "account": "restingOrder"
+              }
+            ]
+          }
+        },
+        {
+          "name": "usdcMint",
+          "docs": [
+            "USDC mint — pinned; used to init the pot USDC account."
+          ]
+        },
+        {
+          "name": "tokenProgram",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "token2022Program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "fillQuantity",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "getOptionPrice",
       "docs": [
         "AMER-only BS-2002 pricing view. Read-only; CPI-callable.",
         "Returns OptionPriceQuote (premium + vol/spot snapshot + ts) for the",
         "supplied hypothetical option against a live VolOracle. European",
-        "reverts with ViewNotSupportedForEuropean \u2014 use the off-chain BS",
+        "reverts with ViewNotSupportedForEuropean — use the off-chain BS",
         "pricer (app/src/utils/blackScholes.ts) for EUR quotes. Shares the",
         "`price_american` helper with mint_from_vault, so same-block quotes",
         "match what a mint would charge."
@@ -3285,7 +3761,7 @@ export type Opta = {
         {
           "name": "market",
           "docs": [
-            "The OptionsMarket \u2014 provides `pyth_feed_id` used as the VolOracle",
+            "The OptionsMarket — provides `pyth_feed_id` used as the VolOracle",
             "PDA seed. Read-only."
           ]
         },
@@ -3378,7 +3854,7 @@ export type Opta = {
         {
           "name": "admin",
           "docs": [
-            "Protocol admin \u2014 must match protocol_state.admin."
+            "Protocol admin — must match protocol_state.admin."
           ],
           "writable": true,
           "signer": true
@@ -3386,7 +3862,7 @@ export type Opta = {
         {
           "name": "protocolState",
           "docs": [
-            "Protocol state \u2014 used to verify the admin."
+            "Protocol state — used to verify the admin."
           ],
           "pda": {
             "seeds": [
@@ -3412,7 +3888,7 @@ export type Opta = {
         {
           "name": "epochConfig",
           "docs": [
-            "The epoch config PDA \u2014 created once, never recreated."
+            "The epoch config PDA — created once, never recreated."
           ],
           "writable": true,
           "pda": {
@@ -3482,7 +3958,7 @@ export type Opta = {
         {
           "name": "protocolState",
           "docs": [
-            "ProtocolState PDA \u2014 the global config singleton.",
+            "ProtocolState PDA — the global config singleton.",
             "`init` means Anchor will create this account. If it already exists,",
             "the transaction fails (preventing double-initialization)."
           ],
@@ -3511,7 +3987,7 @@ export type Opta = {
         {
           "name": "treasury",
           "docs": [
-            "Treasury \u2014 a USDC token account owned by the protocol PDA.",
+            "Treasury — a USDC token account owned by the protocol PDA.",
             "This is where protocol fees accumulate."
           ],
           "writable": true,
@@ -3556,6 +4032,156 @@ export type Opta = {
         {
           "name": "rent",
           "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "initializeVoid",
+      "docs": [
+        "Phase 3 Slice D3 — atomic dead-feed void transition. The SOLE setter of",
+        "`voided`. After the 7-day grace with no SettlementRecord, derives the",
+        "canonical writer-ask pot from vault identity (un-omittable; sound via D2.5's",
+        "canonical-mint pin), sweeps it into vault_usdc (donation→treasury, closes",
+        "pot_usdc), applies the D2a shares-unification merge (total_shares +=",
+        "equiv_total, collateral_remaining = TC + swept − E), and flips voided — all",
+        "atomically. No-pot/EUR → byte-identical to the old self-void seed (swept 0).",
+        "Both reclaim paths require voided, so none can run before the merge.",
+        "Permissionless, UNGATED, once-only. Spec: §8 void path."
+      ],
+      "discriminator": [
+        249,
+        210,
+        27,
+        32,
+        196,
+        151,
+        107,
+        48
+      ],
+      "accounts": [
+        {
+          "name": "cranker",
+          "docs": [
+            "Permissionless cranker — pays the tx. Receives nothing."
+          ],
+          "signer": true
+        },
+        {
+          "name": "sharedVault",
+          "docs": [
+            "The dead-feed vault being wound down. Mutated (the void transition)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "market",
+          "docs": [
+            "The vault's market — provides asset_name for the SettlementRecord seed +",
+            "the canonical-mint derivation. Pinned to the vault."
+          ]
+        },
+        {
+          "name": "settlementRecord",
+          "docs": [
+            "The per-(asset, expiry) SettlementRecord — which MUST NOT exist (the hatch",
+            "gate). Seeds-pinned so it can't be substituted; the handler asserts empty."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  116,
+                  116,
+                  108,
+                  101,
+                  109,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.asset_name",
+                "account": "optionsMarket"
+              },
+              {
+                "kind": "account",
+                "path": "shared_vault.expiry",
+                "account": "sharedVault"
+              }
+            ]
+          }
+        },
+        {
+          "name": "optionMint",
+          "docs": [
+            "The canonical series mint — in-handler-pinned to the vault-derived address."
+          ]
+        },
+        {
+          "name": "writerAskPot",
+          "docs": [
+            "The writer-ask pot RECORD — in-handler-pinned; empty ⇒ no-pot branch."
+          ]
+        },
+        {
+          "name": "writerAskPotUsdc",
+          "docs": [
+            "The writer-ask pot USDC account — swept then closed. In-handler-pinned."
+          ],
+          "writable": true
+        },
+        {
+          "name": "vaultUsdcAccount",
+          "docs": [
+            "Vault's USDC token account — sweep destination."
+          ],
+          "writable": true
+        },
+        {
+          "name": "protocolState",
+          "docs": [
+            "Protocol state — signs the pot sweep/close (pot_usdc authority) + pins treasury."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasury",
+          "docs": [
+            "Protocol treasury — receives the donation remainder + pot_usdc rent."
+          ],
+          "writable": true
+        },
+        {
+          "name": "tokenProgram",
+          "docs": [
+            "Classic SPL Token program — for the sweep + close."
+          ],
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         }
       ],
       "args": []
@@ -3681,8 +4307,8 @@ export type Opta = {
     {
       "name": "listV2ForResale",
       "docs": [
-        "V2 secondary listing \u2014 list option tokens for resale.",
-        "Spec: docs/V2_SECONDARY_LISTING_PLAN.md \u00a72.1."
+        "V2 secondary listing — list option tokens for resale.",
+        "Spec: docs/V2_SECONDARY_LISTING_PLAN.md §2.1."
       ],
       "discriminator": [
         61,
@@ -3698,7 +4324,7 @@ export type Opta = {
         {
           "name": "seller",
           "docs": [
-            "Seller \u2014 listing creator. Pays for listing PDA + escrow rent."
+            "Seller — listing creator. Pays for listing PDA + escrow rent."
           ],
           "writable": true,
           "signer": true
@@ -3712,13 +4338,13 @@ export type Opta = {
         {
           "name": "market",
           "docs": [
-            "Market \u2014 pinned to the vault for sanity."
+            "Market — pinned to the vault for sanity."
           ]
         },
         {
           "name": "vaultMintRecord",
           "docs": [
-            "VaultMint record \u2014 pins option_mint to this vault."
+            "VaultMint record — pins option_mint to this vault."
           ]
         },
         {
@@ -3731,14 +4357,14 @@ export type Opta = {
         {
           "name": "sellerOptionAccount",
           "docs": [
-            "Seller's option ATA \u2014 source of the listing transfer."
+            "Seller's option ATA — source of the listing transfer."
           ],
           "writable": true
         },
         {
           "name": "listing",
           "docs": [
-            "Listing PDA \u2014 initialized in this instruction. One per (mint, seller)."
+            "Listing PDA — initialized in this instruction. One per (mint, seller)."
           ],
           "writable": true,
           "pda": {
@@ -3822,7 +4448,7 @@ export type Opta = {
         {
           "name": "protocolState",
           "docs": [
-            "Protocol state \u2014 escrow's owner authority."
+            "Protocol state — escrow's owner authority."
           ],
           "pda": {
             "seeds": [
@@ -3848,7 +4474,7 @@ export type Opta = {
         {
           "name": "transferHookProgram",
           "docs": [
-            "Transfer hook program \u2014 pinned to the known opta-transfer-hook ID."
+            "Transfer hook program — pinned to the known opta-transfer-hook ID."
           ]
         },
         {
@@ -3955,7 +4581,7 @@ export type Opta = {
       "docs": [
         "Rotate the Pyth Pull feed_id stored on an existing OptionsMarket.",
         "Admin-only; idempotent on same feed_id; overwrites on different.",
-        "No oracle call \u2014 only mutates registry metadata."
+        "No oracle call — only mutates registry metadata."
       ],
       "discriminator": [
         30,
@@ -3978,7 +4604,7 @@ export type Opta = {
         {
           "name": "protocolState",
           "docs": [
-            "Global ProtocolState \u2014 read-only here, used to verify the admin key."
+            "Global ProtocolState — read-only here, used to verify the admin key."
           ],
           "pda": {
             "seeds": [
@@ -4007,14 +4633,14 @@ export type Opta = {
             "Fresh PriceUpdateV2 from the Pyth Receiver program. The handler",
             "verifies `verification_level == Full` and",
             "`price_message.feed_id == new_pyth_feed_id` to prove the rotation",
-            "target corresponds to a real Pyth feed. Read-only \u2014 never mutated."
+            "target corresponds to a real Pyth feed. Read-only — never mutated."
           ]
         },
         {
           "name": "market",
           "docs": [
             "The market whose Pyth feed_id is being rotated. PDA seeds enforce",
-            "existence \u2014 passing an unknown asset_name fails seed validation",
+            "existence — passing an unknown asset_name fails seed validation",
             "(AccountNotInitialized)."
           ],
           "writable": true,
@@ -4120,7 +4746,7 @@ export type Opta = {
     {
       "name": "migrateSharedVaultExchangeFields",
       "docs": [
-        "Phase 2 Pass A \u2014 one-time SharedVault schema migration adding the trailing",
+        "Phase 2 Pass A — one-time SharedVault schema migration adding the trailing",
         "`spread_bps` (u16) + `voided` (bool) fields. Admin-only, batched via",
         "remaining_accounts (recommended batch: 20). Idempotent: vaults already at",
         "the new 260-byte size are skipped. Zero-fill on the new 3 bytes",
@@ -4306,6 +4932,132 @@ export type Opta = {
       "args": []
     },
     {
+      "name": "migrateSharedVaultResidualShares",
+      "docs": [
+        "Phase 3 Slice D2a — one-time SharedVault migration: append the trailing",
+        "`writer_ask_equiv_shares` field (260→268 INIT_SPACE; on-disk 268→276).",
+        "Admin-only, batched via remaining_accounts (recommended batch: 20).",
+        "CONSOLIDATED: grows a vault at ANY prior size (260 pre-D1 or 268 post-D1)",
+        "straight to 276, zero-filling all trailing bytes — so it SUPERSEDES the D1",
+        "268-migration at deploy (run ONLY this one). Idempotent: vaults already at",
+        "276 bytes are skipped. The 7th such append."
+      ],
+      "discriminator": [
+        33,
+        36,
+        90,
+        180,
+        138,
+        189,
+        156,
+        153
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "docs": [
+            "Admin -- must match protocol_state.admin (CRIT-3 deployer pubkey).",
+            "Pays the rent delta for any grown vaults."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocolState",
+          "docs": [
+            "Used only to assert admin == protocol_state.admin."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "migrateSharedVaultWriterAskSwept",
+      "docs": [
+        "Phase 3 Slice D1 — one-time SharedVault migration: append the trailing",
+        "`writer_ask_collateral_swept` field (252→260 INIT_SPACE; on-disk 260→268).",
+        "Admin-only, batched via remaining_accounts (recommended batch: 20).",
+        "Idempotent: vaults already at 268 bytes are skipped. Zero-fill on the new",
+        "8 bytes deserializes as writer_ask_collateral_swept=0. The 6th such append."
+      ],
+      "discriminator": [
+        104,
+        41,
+        137,
+        123,
+        13,
+        224,
+        7,
+        48
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "docs": [
+            "Admin -- must match protocol_state.admin (CRIT-3 deployer pubkey).",
+            "Pays the rent delta for any grown vaults."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocolState",
+          "docs": [
+            "Used only to assert admin == protocol_state.admin."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "mintFromVault",
       "docs": [
         "Mint Living Option Tokens from a shared vault using writer's collateral share."
@@ -4339,7 +5091,7 @@ export type Opta = {
         {
           "name": "writerPosition",
           "docs": [
-            "Writer's position in the vault \u2014 validates ownership and available collateral."
+            "Writer's position in the vault — validates ownership and available collateral."
           ],
           "writable": true,
           "pda": {
@@ -4378,7 +5130,7 @@ export type Opta = {
         {
           "name": "market",
           "docs": [
-            "The OptionsMarket \u2014 for strike price, expiry, asset info in metadata."
+            "The OptionsMarket — for strike price, expiry, asset info in metadata."
           ]
         },
         {
@@ -4387,11 +5139,11 @@ export type Opta = {
             "VolOracle PDA for the market's Pyth feed.",
             "",
             "REQUIRED on both European and American mints (uniform-context pattern",
-            "\u2014 no `Option<>`). The handler reads it only on the American branch;",
+            "— no `Option<>`). The handler reads it only on the American branch;",
             "EUR mints carry the account but never touch it. Rationale: avoids",
             "Anchor's `Option<AccountLoader>` friction and keeps the instruction",
             "signature uniform across both styles. Caveat: any market whose",
-            "VolOracle PDA hasn't been initialized yet cannot be minted from \u2014",
+            "VolOracle PDA hasn't been initialized yet cannot be minted from —",
             "Step 2's deploy sequencing must ensure all live markets have a",
             "seeded oracle (sweep before IDL update)."
           ],
@@ -4423,7 +5175,7 @@ export type Opta = {
         {
           "name": "protocolState",
           "docs": [
-            "Protocol state \u2014 mint authority and permanent delegate for Token-2022."
+            "Protocol state — mint authority and permanent delegate for Token-2022."
           ],
           "pda": {
             "seeds": [
@@ -4449,7 +5201,7 @@ export type Opta = {
         {
           "name": "optionMint",
           "docs": [
-            "Token-2022 mint for the option tokens \u2014 created manually via CPI."
+            "Token-2022 mint for the option tokens — created manually via CPI."
           ],
           "writable": true,
           "pda": {
@@ -4494,7 +5246,7 @@ export type Opta = {
         {
           "name": "purchaseEscrow",
           "docs": [
-            "Purchase escrow \u2014 holds minted tokens until buyers purchase."
+            "Purchase escrow — holds minted tokens until buyers purchase."
           ],
           "writable": true,
           "pda": {
@@ -4543,7 +5295,7 @@ export type Opta = {
         {
           "name": "vaultMintRecord",
           "docs": [
-            "VaultMint record \u2014 tracks premium, quantity, and sold count per mint."
+            "VaultMint record — tracks premium, quantity, and sold count per mint."
           ],
           "writable": true,
           "pda": {
@@ -4580,20 +5332,20 @@ export type Opta = {
         {
           "name": "transferHookProgram",
           "docs": [
-            "The transfer hook program \u2014 for initializing hook state."
+            "The transfer hook program — for initializing hook state."
           ]
         },
         {
           "name": "extraAccountMetaList",
           "docs": [
-            "ExtraAccountMetaList PDA \u2014 created by the hook program during CPI."
+            "ExtraAccountMetaList PDA — created by the hook program during CPI."
           ],
           "writable": true
         },
         {
           "name": "hookState",
           "docs": [
-            "HookState PDA \u2014 stores expiry + protocol PDA for the transfer hook."
+            "HookState PDA — stores expiry + protocol PDA for the transfer hook."
           ],
           "writable": true
         },
@@ -4604,7 +5356,7 @@ export type Opta = {
         {
           "name": "token2022Program",
           "docs": [
-            "Token-2022 program \u2014 for the option mint and token accounts."
+            "Token-2022 program — for the option mint and token accounts."
           ],
           "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         },
@@ -4633,9 +5385,9 @@ export type Opta = {
       "docs": [
         "Stage a durable trigger order. NOT flag-gated (a user can stage/cancel",
         "anytime; only the Pass-1 execute path checks AMERICAN_ENABLED).",
-        "StopEntryBuy escrows `max_premium \u00d7 quantity` USDC + pre-creates the",
+        "StopEntryBuy escrows `max_premium × quantity` USDC + pre-creates the",
         "owner's destination option ATA; TakeProfitSell escrows nothing and",
-        "sanity-checks the declared source ATA holds \u2265 quantity. Spec v1 \u00a7placement."
+        "sanity-checks the declared source ATA holds ≥ quantity. Spec v1 §placement."
       ],
       "discriminator": [
         219,
@@ -4651,7 +5403,7 @@ export type Opta = {
         {
           "name": "owner",
           "docs": [
-            "Trigger owner \u2014 pays the trigger PDA + (BUY) escrow + dest-ATA rent, and",
+            "Trigger owner — pays the trigger PDA + (BUY) escrow + dest-ATA rent, and",
             "signs the inbound USDC transfer on the BUY branch."
           ],
           "writable": true,
@@ -4660,7 +5412,7 @@ export type Opta = {
         {
           "name": "market",
           "docs": [
-            "Market \u2014 pinned to the vault; provides pyth_feed_id for the P1 re-check."
+            "Market — pinned to the vault; provides pyth_feed_id for the P1 re-check."
           ]
         },
         {
@@ -4672,7 +5424,7 @@ export type Opta = {
         {
           "name": "vaultMintRecord",
           "docs": [
-            "Series/VaultMint record \u2014 pins option_mint\u2194vault (the mint\u2194vault proof,",
+            "Series/VaultMint record — pins option_mint↔vault (the mint↔vault proof,",
             "mirrors fill_vault_peg.rs:302-308 / exercise_american.rs:220-224)."
           ]
         },
@@ -4686,7 +5438,7 @@ export type Opta = {
         {
           "name": "triggerOrder",
           "docs": [
-            "The TriggerOrder PDA \u2014 created here. One per (owner, option_mint, nonce)."
+            "The TriggerOrder PDA — created here. One per (owner, option_mint, nonce)."
           ],
           "writable": true,
           "pda": {
@@ -4763,7 +5515,7 @@ export type Opta = {
         {
           "name": "protocolState",
           "docs": [
-            "Protocol state \u2014 escrow's owner authority + canonical USDC mint pin."
+            "Protocol state — escrow's owner authority + canonical USDC mint pin."
           ],
           "pda": {
             "seeds": [
@@ -4789,13 +5541,13 @@ export type Opta = {
         {
           "name": "usdcMint",
           "docs": [
-            "Canonical USDC mint \u2014 used to init the BUY escrow; pinned to protocol_state."
+            "Canonical USDC mint — used to init the BUY escrow; pinned to protocol_state."
           ]
         },
         {
           "name": "ownerUsdcAccount",
           "docs": [
-            "Owner's USDC account \u2014 BUY escrow source (unused on the SELL branch).",
+            "Owner's USDC account — BUY escrow source (unused on the SELL branch).",
             "owner by the owner signature."
           ],
           "writable": true
@@ -4804,8 +5556,8 @@ export type Opta = {
           "name": "ownerOptionAta",
           "docs": [
             "Owner's option ATA on `option_mint`.",
-            "BUY : the mint destination \u2014 pre-created idempotently here.",
-            "SELL: the existing source to delegate-burn at fire \u2014 read for sanity.",
+            "BUY : the mint destination — pre-created idempotently here.",
+            "SELL: the existing source to delegate-burn at fire — read for sanity.",
             "mint/owner/balance validated from raw bytes in the handler."
           ],
           "writable": true
@@ -4813,21 +5565,21 @@ export type Opta = {
         {
           "name": "tokenProgram",
           "docs": [
-            "Classic SPL Token program \u2014 BUY escrow create/init + USDC transfer."
+            "Classic SPL Token program — BUY escrow create/init + USDC transfer."
           ],
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
         {
           "name": "token2022Program",
           "docs": [
-            "Token-2022 program \u2014 destination ATA creation (BUY)."
+            "Token-2022 program — destination ATA creation (BUY)."
           ],
           "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         },
         {
           "name": "associatedTokenProgram",
           "docs": [
-            "Associated-token program \u2014 idempotent dest-ATA create (BUY)."
+            "Associated-token program — idempotent dest-ATA create (BUY)."
           ],
           "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
         },
@@ -4878,8 +5630,8 @@ export type Opta = {
     {
       "name": "postOrder",
       "docs": [
-        "Exchange book \u2014 post a resting bid or ask (collateral escrowed per-order).",
-        "Spec: exchange-spec \u00a76.3 (Step 2)."
+        "Exchange book — post a resting bid or ask (collateral escrowed per-order).",
+        "Spec: exchange-spec §6.3 (Step 2)."
       ],
       "discriminator": [
         241,
@@ -4895,7 +5647,7 @@ export type Opta = {
         {
           "name": "owner",
           "docs": [
-            "Order owner \u2014 pays for the order PDA + escrow rent, signs the inbound",
+            "Order owner — pays for the order PDA + escrow rent, signs the inbound",
             "collateral transfer."
           ],
           "writable": true,
@@ -4910,13 +5662,13 @@ export type Opta = {
         {
           "name": "market",
           "docs": [
-            "Market \u2014 pinned to the vault for sanity."
+            "Market — pinned to the vault for sanity."
           ]
         },
         {
           "name": "vaultMintRecord",
           "docs": [
-            "VaultMint record \u2014 pins option_mint to this vault (mint\u2194vault proof,",
+            "VaultMint record — pins option_mint to this vault (mint↔vault proof,",
             "same constraint set as buy_v2_resale.rs:208-215)."
           ]
         },
@@ -4930,7 +5682,7 @@ export type Opta = {
         {
           "name": "order",
           "docs": [
-            "The RestingOrder PDA \u2014 created here. One per (option_mint, owner, nonce)."
+            "The RestingOrder PDA — created here. One per (option_mint, owner, nonce)."
           ],
           "writable": true,
           "pda": {
@@ -4972,7 +5724,7 @@ export type Opta = {
           "name": "escrow",
           "docs": [
             "Per-order escrow PDA, owner = protocol_state. Token-2022 for asks, classic",
-            "USDC for bids \u2014 created in-handler via raw CPI."
+            "USDC for bids — created in-handler via raw CPI."
           ],
           "writable": true,
           "pda": {
@@ -5012,7 +5764,7 @@ export type Opta = {
         {
           "name": "protocolState",
           "docs": [
-            "Protocol state \u2014 escrow's owner authority + canonical USDC mint pin."
+            "Protocol state — escrow's owner authority + canonical USDC mint pin."
           ],
           "pda": {
             "seeds": [
@@ -5038,14 +5790,14 @@ export type Opta = {
         {
           "name": "ownerOptionAccount",
           "docs": [
-            "Owner's option ATA \u2014 source on the ResaleAsk branch (unused for Bid)."
+            "Owner's option ATA — source on the ResaleAsk branch (unused for Bid)."
           ],
           "writable": true
         },
         {
           "name": "ownerUsdcAccount",
           "docs": [
-            "Owner's USDC account \u2014 source on the Bid branch (unused for ResaleAsk).",
+            "Owner's USDC account — source on the Bid branch (unused for ResaleAsk).",
             "the owner signature."
           ],
           "writable": true
@@ -5053,13 +5805,13 @@ export type Opta = {
         {
           "name": "usdcMint",
           "docs": [
-            "Canonical USDC mint \u2014 used to init the Bid escrow; pinned to protocol_state."
+            "Canonical USDC mint — used to init the Bid escrow; pinned to protocol_state."
           ]
         },
         {
           "name": "transferHookProgram",
           "docs": [
-            "Transfer hook program \u2014 pinned to the known opta-transfer-hook ID."
+            "Transfer hook program — pinned to the known opta-transfer-hook ID."
           ]
         },
         {
@@ -5148,7 +5900,7 @@ export type Opta = {
         {
           "name": "writerPosition",
           "docs": [
-            "The writer's position \u2014 for tracking options_sold."
+            "The writer's position — for tracking options_sold."
           ],
           "writable": true,
           "pda": {
@@ -5188,14 +5940,14 @@ export type Opta = {
         {
           "name": "vaultMintRecord",
           "docs": [
-            "VaultMint record \u2014 holds premium_per_contract and quantity tracking."
+            "VaultMint record — holds premium_per_contract and quantity tracking."
           ],
           "writable": true
         },
         {
           "name": "protocolState",
           "docs": [
-            "Protocol state \u2014 for fee_bps, volume tracking, and token transfer signing."
+            "Protocol state — for fee_bps, volume tracking, and token transfer signing."
           ],
           "writable": true,
           "pda": {
@@ -5222,7 +5974,7 @@ export type Opta = {
         {
           "name": "market",
           "docs": [
-            "The OptionsMarket \u2014 for expiry validation."
+            "The OptionsMarket — for expiry validation."
           ]
         },
         {
@@ -5292,21 +6044,21 @@ export type Opta = {
         {
           "name": "buyerUsdcAccount",
           "docs": [
-            "Buyer's USDC account \u2014 pays premium from here."
+            "Buyer's USDC account — pays premium from here."
           ],
           "writable": true
         },
         {
           "name": "vaultUsdcAccount",
           "docs": [
-            "Vault's USDC account \u2014 receives writer's share of premium."
+            "Vault's USDC account — receives writer's share of premium."
           ],
           "writable": true
         },
         {
           "name": "treasury",
           "docs": [
-            "Treasury \u2014 receives protocol fee."
+            "Treasury — receives protocol fee."
           ],
           "writable": true,
           "pda": {
@@ -5333,14 +6085,14 @@ export type Opta = {
         {
           "name": "tokenProgram",
           "docs": [
-            "Standard SPL Token program \u2014 for USDC transfers."
+            "Standard SPL Token program — for USDC transfers."
           ],
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
         {
           "name": "token2022Program",
           "docs": [
-            "Token-2022 program \u2014 for option token transfers."
+            "Token-2022 program — for option token transfers."
           ],
           "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         },
@@ -5484,14 +6236,13 @@ export type Opta = {
     {
       "name": "reclaimUnsettled",
       "docs": [
-        "Phase 2 Pass D \u2014 dead-feed safety hatch. Permissionless. Lets writers",
-        "reclaim pooled collateral pro-rata from a vault whose settlement price",
-        "NEVER landed (no SettlementRecord for its (asset, expiry)) once the 7-day",
-        "GRACE_WINDOW past expiry has elapsed. Per-writer claim (one WriterPosition",
-        "per call; cranker may call on a writer's behalf). Sets `voided = true` on",
-        "the first call; NEVER sets `is_settled` and NEVER writes a SettlementRecord",
-        "(invariant #6 \u2014 a voided vault pays holders nothing). NOT gated by",
-        "AMERICAN_ENABLED: the exit path stays open regardless of the flag."
+        "Phase 2 Pass D — dead-feed safety hatch (pool-writer side). Permissionless,",
+        "per-writer pro-rata reclaim from a voided vault. Phase 3 D3: now REQUIRES",
+        "`voided == true` (set atomically by `initialize_void`, the sole voider) —",
+        "it no longer self-voids and no longer takes the market/settlement_record",
+        "accounts (CRANK: drop those two before redeploy). The pro-rata payout is",
+        "byte-identical (auto-scales on the bumped total_shares + merged",
+        "collateral_remaining). NOT gated by AMERICAN_ENABLED."
       ],
       "discriminator": [
         197,
@@ -5507,7 +6258,7 @@ export type Opta = {
         {
           "name": "cranker",
           "docs": [
-            "Permissionless cranker \u2014 pays the transaction. May reclaim on any",
+            "Permissionless cranker — pays the transaction. May reclaim on any",
             "writer's behalf; the payout always lands in the writer's USDC ATA."
           ],
           "writable": true,
@@ -5516,7 +6267,7 @@ export type Opta = {
         {
           "name": "writer",
           "docs": [
-            "The writer whose collateral is being reclaimed. NOT a signer \u2014 bound by",
+            "The writer whose collateral is being reclaimed. NOT a signer — bound by",
             "the writer_position seed + the writer_usdc owner constraint.",
             "written, never required to sign."
           ]
@@ -5568,46 +6319,107 @@ export type Opta = {
           }
         },
         {
-          "name": "market",
+          "name": "vaultUsdcAccount",
           "docs": [
-            "The vault's market \u2014 needed to derive the SettlementRecord PDA from",
-            "`market.asset_name`. Pinned to the vault's recorded market."
-          ]
+            "Vault's USDC token account — source of the pro-rata payout."
+          ],
+          "writable": true
         },
         {
-          "name": "settlementRecord",
+          "name": "writerUsdcAccount",
           "docs": [
-            "The per-(asset, expiry) SettlementRecord \u2014 which MUST NOT exist for the",
-            "hatch to open. Seeds-constrained so the caller cannot substitute an",
-            "arbitrary empty account; the handler asserts it is empty.",
-            "derived PDA; the handler requires `data_is_empty()`."
+            "Writer's USDC token account — destination. Must be owned by the writer."
           ],
+          "writable": true
+        },
+        {
+          "name": "tokenProgram",
+          "docs": [
+            "Standard SPL Token program."
+          ],
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "reclaimWriterAskResidual",
+      "docs": [
+        "Phase 3 Slice D3 — writer-ask backer's VOID-path residual claim (the void",
+        "twin of withdraw_writer_ask_residual; shares the same pure core). Gates on",
+        "`voided` (not is_settled), no holders-first window (voided holders get",
+        "nothing). Pays the backer their pro-rata of the merged residual from",
+        "vault_usdc. Permissionless, backer-pinned, double-claim guarded. Spec: §8."
+      ],
+      "discriminator": [
+        88,
+        208,
+        249,
+        233,
+        83,
+        35,
+        160,
+        228
+      ],
+      "accounts": [
+        {
+          "name": "cranker",
+          "docs": [
+            "Permissionless caller (a cranker, or the backer). Payout is pinned to the",
+            "backer's USDC account below."
+          ],
+          "signer": true
+        },
+        {
+          "name": "sharedVault",
+          "docs": [
+            "The voided writer-ask vault."
+          ],
+          "writable": true
+        },
+        {
+          "name": "writerAskPosition",
+          "docs": [
+            "The backer's writer-ask position — zeroed (not closed) after the claim.",
+            "Self-referential seeds pin it to its own (option_mint, backer); the vault",
+            "constraint pins it to THIS vault."
+          ],
+          "writable": true,
           "pda": {
             "seeds": [
               {
                 "kind": "const",
                 "value": [
+                  119,
+                  114,
+                  105,
+                  116,
+                  101,
+                  114,
+                  95,
+                  97,
                   115,
-                  101,
+                  107,
+                  95,
+                  112,
+                  111,
+                  115,
+                  105,
                   116,
-                  116,
-                  108,
-                  101,
-                  109,
-                  101,
-                  110,
-                  116
+                  105,
+                  111,
+                  110
                 ]
               },
               {
                 "kind": "account",
-                "path": "market.asset_name",
-                "account": "optionsMarket"
+                "path": "writer_ask_position.option_mint",
+                "account": "writerAskPosition"
               },
               {
                 "kind": "account",
-                "path": "shared_vault.expiry",
-                "account": "sharedVault"
+                "path": "writer_ask_position.backer",
+                "account": "writerAskPosition"
               }
             ]
           }
@@ -5615,14 +6427,15 @@ export type Opta = {
         {
           "name": "vaultUsdcAccount",
           "docs": [
-            "Vault's USDC token account \u2014 source of the pro-rata payout."
+            "Vault's USDC token account — payout source (the pot was swept in at init)."
           ],
           "writable": true
         },
         {
           "name": "writerUsdcAccount",
           "docs": [
-            "Writer's USDC token account \u2014 destination. Must be owned by the writer."
+            "Backer's USDC token account — payout destination. Owner PINNED to the",
+            "backer: a cranker cannot redirect the residual to itself."
           ],
           "writable": true
         },
@@ -5737,7 +6550,7 @@ export type Opta = {
       "name": "settleExpiry",
       "docs": [
         "Record the canonical settlement price for an (asset, expiry) tuple",
-        "from a Pyth Pull `PriceUpdateV2` account. Permissionless \u2014 anyone",
+        "from a Pyth Pull `PriceUpdateV2` account. Permissionless — anyone",
         "can call once the (asset, expiry) is past expiry and a fresh Pyth",
         "update is on-chain."
       ],
@@ -5763,7 +6576,7 @@ export type Opta = {
         {
           "name": "market",
           "docs": [
-            "OptionsMarket \u2014 provides the canonical feed_id for this asset."
+            "OptionsMarket — provides the canonical feed_id for this asset."
           ],
           "pda": {
             "seeds": [
@@ -5793,7 +6606,7 @@ export type Opta = {
             "match and staleness.",
             "",
             "Stage 3 (1b): now `Option`, position unchanged. REQUIRED (present) for a",
-            "Pyth market \u2014 a present price_update is wire-identical to before. A",
+            "Pyth market — a present price_update is wire-identical to before. A",
             "Switchboard market passes None (sentinel) and uses the trailing SB",
             "accounts. The Pyth arm errors `PriceUpdateMissing` if absent on a Pyth market."
           ],
@@ -5802,7 +6615,7 @@ export type Opta = {
         {
           "name": "settlementRecord",
           "docs": [
-            "The SettlementRecord PDA. Plain `init` \u2014 second call for the same",
+            "The SettlementRecord PDA. Plain `init` — second call for the same",
             "(asset, expiry) reverts."
           ],
           "writable": true,
@@ -5874,7 +6687,7 @@ export type Opta = {
     {
       "name": "settleVault",
       "docs": [
-        "Settle a shared vault. Permissionless \u2014 reads the canonical price",
+        "Settle a shared vault. Permissionless — reads the canonical price",
         "from a SettlementRecord PDA written earlier by `settle_expiry`."
       ],
       "discriminator": [
@@ -5891,7 +6704,7 @@ export type Opta = {
         {
           "name": "authority",
           "docs": [
-            "Permissionless \u2014 anyone can settle a vault once the SettlementRecord",
+            "Permissionless — anyone can settle a vault once the SettlementRecord",
             "for its (asset, expiry) exists."
           ],
           "signer": true
@@ -5906,7 +6719,7 @@ export type Opta = {
         {
           "name": "market",
           "docs": [
-            "The vault's market \u2014 needed to derive the SettlementRecord PDA from",
+            "The vault's market — needed to derive the SettlementRecord PDA from",
             "`market.asset_name`. Constraint pins it to the vault's recorded market."
           ]
         },
@@ -5946,6 +6759,66 @@ export type Opta = {
               }
             ]
           }
+        },
+        {
+          "name": "vaultUsdcAccount",
+          "docs": [
+            "Vault USDC — sweep destination. Required."
+          ],
+          "writable": true
+        },
+        {
+          "name": "optionMint",
+          "docs": [
+            "Canonical series mint — in-handler-pinned to the vault-derived address."
+          ]
+        },
+        {
+          "name": "writerAskPot",
+          "docs": [
+            "The series' WriterAskPot record — in-handler-pinned; empty ⇒ no-pot branch."
+          ]
+        },
+        {
+          "name": "writerAskPotUsdc",
+          "docs": [
+            "The pot's USDC account — sweep source (authority = protocol_state).",
+            "In-handler-pinned. CHECK: pinned via require_keys_eq; balance read raw."
+          ],
+          "writable": true
+        },
+        {
+          "name": "protocolState",
+          "docs": [
+            "Protocol state — signs the pot→vault USDC transfer. Required."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "tokenProgram",
+          "docs": [
+            "Classic SPL Token program — for the USDC sweep transfer. Required."
+          ],
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         }
       ],
       "args": []
@@ -5953,9 +6826,9 @@ export type Opta = {
     {
       "name": "sweepExpiredOrders",
       "docs": [
-        "Exchange book \u2014 permissionless post-expiry sweep of resting orders.",
+        "Exchange book — permissionless post-expiry sweep of resting orders.",
         "Returns each order's escrow to its owner and closes the PDAs. Crank",
-        "runs this BEFORE auto_finalize_holders. Spec: exchange-spec \u00a76.3 (Step 5).",
+        "runs this BEFORE auto_finalize_holders. Spec: exchange-spec §6.3 (Step 5).",
         "remaining_accounts: 4-tuples (order, escrow, owner_asset_account, owner_wallet)."
       ],
       "discriminator": [
@@ -5972,7 +6845,7 @@ export type Opta = {
         {
           "name": "caller",
           "docs": [
-            "Permissionless caller \u2014 pays the tx fee."
+            "Permissionless caller — pays the tx fee."
           ],
           "signer": true
         },
@@ -5985,13 +6858,13 @@ export type Opta = {
         {
           "name": "market",
           "docs": [
-            "Market \u2014 pinned to the vault."
+            "Market — pinned to the vault."
           ]
         },
         {
           "name": "vaultMintRecord",
           "docs": [
-            "VaultMint record \u2014 pins option_mint to this vault."
+            "VaultMint record — pins option_mint to this vault."
           ]
         },
         {
@@ -6004,7 +6877,7 @@ export type Opta = {
         {
           "name": "protocolState",
           "docs": [
-            "Protocol state \u2014 signs the escrow-source transfers + closes."
+            "Protocol state — signs the escrow-source transfers + closes."
           ],
           "pda": {
             "seeds": [
@@ -6030,7 +6903,7 @@ export type Opta = {
         {
           "name": "transferHookProgram",
           "docs": [
-            "Transfer hook program \u2014 used only by ResaleAsk tuples."
+            "Transfer hook program — used only by ResaleAsk tuples."
           ]
         },
         {
@@ -6059,6 +6932,69 @@ export type Opta = {
         }
       ],
       "args": []
+    },
+    {
+      "name": "synthWarmVolOracle",
+      "docs": [
+        "Plant warmed VolOracle state (sample_count=720, fresh last_sample_ts,",
+        "V2-reference accumulators, caller-supplied spot) so American pricing",
+        "reads Ok past warmup/stale/math gates without 168 rate-limited pushes.",
+        "Gated by `test-synth-vol`. NEVER deploy a test-synth-vol build — it",
+        "lets anyone overwrite an oracle's vol state. Test-only."
+      ],
+      "discriminator": [
+        191,
+        90,
+        138,
+        28,
+        3,
+        150,
+        141,
+        216
+      ],
+      "accounts": [
+        {
+          "name": "signer",
+          "signer": true
+        },
+        {
+          "name": "volOracle",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  111,
+                  108,
+                  95,
+                  111,
+                  114,
+                  97,
+                  99,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "volOracle"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "spotPriceScaled",
+          "type": "i64"
+        },
+        {
+          "name": "lastSampleTs",
+          "type": "i64"
+        }
+      ]
     },
     {
       "name": "withdrawFromVault",
@@ -6133,21 +7069,21 @@ export type Opta = {
         {
           "name": "vaultUsdcAccount",
           "docs": [
-            "Vault's USDC token account \u2014 source of withdrawal."
+            "Vault's USDC token account — source of withdrawal."
           ],
           "writable": true
         },
         {
           "name": "writerUsdcAccount",
           "docs": [
-            "Writer's USDC token account \u2014 destination."
+            "Writer's USDC token account — destination."
           ],
           "writable": true
         },
         {
           "name": "protocolState",
           "docs": [
-            "Protocol state \u2014 for USDC mint validation."
+            "Protocol state — for USDC mint validation."
           ],
           "pda": {
             "seeds": [
@@ -6219,7 +7155,7 @@ export type Opta = {
         {
           "name": "writerPosition",
           "docs": [
-            "Writer's position \u2014 will be closed after withdrawal."
+            "Writer's position — will be closed after withdrawal."
           ],
           "writable": true,
           "pda": {
@@ -6265,14 +7201,14 @@ export type Opta = {
         {
           "name": "writerUsdcAccount",
           "docs": [
-            "Writer's USDC token account \u2014 destination."
+            "Writer's USDC token account — destination."
           ],
           "writable": true
         },
         {
           "name": "protocolState",
           "docs": [
-            "Protocol state \u2014 for USDC mint validation."
+            "Protocol state — for USDC mint validation."
           ],
           "pda": {
             "seeds": [
@@ -6305,6 +7241,116 @@ export type Opta = {
         {
           "name": "systemProgram",
           "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "withdrawWriterAskResidual",
+      "docs": [
+        "Exchange Phase 3 Slice D2a — a writer-ask backer claims their",
+        "post-settlement residual: equiv_shares = committed × writer_ask_equiv_shares",
+        "/ swept, payout = equiv_shares × collateral_remaining / total_shares, both",
+        "drawn from the SAME unified (collateral_remaining, total_shares) the pool",
+        "writers use. PURE (pay → decrement → zero the position; no close logic).",
+        "Permissionless with the payout pinned to position.backer; enforces the",
+        "holders-first EXERCISE_WINDOW. UNGATED (an exit/refund path) — inert in a",
+        "feature-free build (reverts NothingToClaim, swept always 0). Spec §8."
+      ],
+      "discriminator": [
+        43,
+        81,
+        119,
+        144,
+        239,
+        111,
+        144,
+        11
+      ],
+      "accounts": [
+        {
+          "name": "cranker",
+          "docs": [
+            "Permissionless caller (a cranker, or the backer). Pays tx fee only — the",
+            "payout is pinned to the backer's USDC account below."
+          ],
+          "signer": true
+        },
+        {
+          "name": "sharedVault",
+          "docs": [
+            "The settled writer-ask vault."
+          ],
+          "writable": true
+        },
+        {
+          "name": "writerAskPosition",
+          "docs": [
+            "The backer's writer-ask position — zeroed (not closed) after the claim.",
+            "Self-referential seeds pin it to its own (option_mint, backer); the vault",
+            "constraint pins it to THIS vault."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  119,
+                  114,
+                  105,
+                  116,
+                  101,
+                  114,
+                  95,
+                  97,
+                  115,
+                  107,
+                  95,
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "writer_ask_position.option_mint",
+                "account": "writerAskPosition"
+              },
+              {
+                "kind": "account",
+                "path": "writer_ask_position.backer",
+                "account": "writerAskPosition"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vaultUsdcAccount",
+          "docs": [
+            "Vault's USDC token account — payout source."
+          ],
+          "writable": true
+        },
+        {
+          "name": "writerUsdcAccount",
+          "docs": [
+            "Backer's USDC token account — payout destination. Owner PINNED to the",
+            "backer: a cranker cannot redirect the residual to itself."
+          ],
+          "writable": true
+        },
+        {
+          "name": "tokenProgram",
+          "docs": [
+            "Standard SPL Token program."
+          ],
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         }
       ],
       "args": []
@@ -6452,6 +7498,32 @@ export type Opta = {
         70,
         119,
         72
+      ]
+    },
+    {
+      "name": "writerAskPosition",
+      "discriminator": [
+        153,
+        60,
+        106,
+        50,
+        105,
+        8,
+        111,
+        54
+      ]
+    },
+    {
+      "name": "writerAskPot",
+      "discriminator": [
+        144,
+        146,
+        126,
+        56,
+        17,
+        59,
+        177,
+        215
       ]
     },
     {
@@ -6678,6 +7750,19 @@ export type Opta = {
       ]
     },
     {
+      "name": "settledWriterAskVaultClosed",
+      "discriminator": [
+        249,
+        46,
+        165,
+        119,
+        27,
+        137,
+        37,
+        85
+      ]
+    },
+    {
       "name": "triggerCancelled",
       "discriminator": [
         158,
@@ -6899,6 +7984,19 @@ export type Opta = {
       ]
     },
     {
+      "name": "vaultVoidInitialized",
+      "discriminator": [
+        11,
+        206,
+        165,
+        122,
+        108,
+        192,
+        198,
+        146
+      ]
+    },
+    {
       "name": "vaultWithdrawn",
       "discriminator": [
         238,
@@ -6909,6 +8007,19 @@ export type Opta = {
         77,
         72,
         104
+      ]
+    },
+    {
+      "name": "writerAskResidualWithdrawn",
+      "discriminator": [
+        132,
+        41,
+        145,
+        213,
+        77,
+        115,
+        201,
+        83
       ]
     },
     {
@@ -7009,7 +8120,7 @@ export type Opta = {
     {
       "code": 6016,
       "name": "optionExpired",
-      "msg": "Option has already expired \u2014 cannot price"
+      "msg": "Option has already expired — cannot price"
     },
     {
       "code": 6017,
@@ -7094,7 +8205,7 @@ export type Opta = {
     {
       "code": 6033,
       "name": "writerWalletMismatch",
-      "msg": "writer_wallet pubkey does not match writer_position.owner \u2014 refusing to drain rent to a stranger"
+      "msg": "writer_wallet pubkey does not match writer_position.owner — refusing to drain rent to a stranger"
     },
     {
       "code": 6034,
@@ -7134,12 +8245,12 @@ export type Opta = {
     {
       "code": 6041,
       "name": "holderExerciseWindowOpen",
-      "msg": "Holder exercise window still open \u2014 writers must wait until \\\n         vault.expiry + EXERCISE_WINDOW before withdrawing"
+      "msg": "Holder exercise window still open — writers must wait until \\\n         vault.expiry + EXERCISE_WINDOW before withdrawing"
     },
     {
       "code": 6042,
       "name": "invalidPythFeedId",
-      "msg": "Pyth feed ID cannot be all zeros \u2014 register a real feed"
+      "msg": "Pyth feed ID cannot be all zeros — register a real feed"
     },
     {
       "code": 6043,
@@ -7149,17 +8260,17 @@ export type Opta = {
     {
       "code": 6044,
       "name": "volOracleWarmup",
-      "msg": "VolOracle in warmup \u2014 needs 168 samples (7 days) before reads are valid"
+      "msg": "VolOracle in warmup — needs 168 samples (7 days) before reads are valid"
     },
     {
       "code": 6045,
       "name": "volOracleStale",
-      "msg": "VolOracle stale \u2014 most recent sample is older than 6 hours"
+      "msg": "VolOracle stale — most recent sample is older than 6 hours"
     },
     {
       "code": 6046,
       "name": "volOraclePushTooSoon",
-      "msg": "VolOracle push too soon \u2014 must wait at least 55 minutes since last push"
+      "msg": "VolOracle push too soon — must wait at least 55 minutes since last push"
     },
     {
       "code": 6047,
@@ -7179,7 +8290,7 @@ export type Opta = {
     {
       "code": 6050,
       "name": "americanPricingFailed",
-      "msg": "American BS-2002 pricing failed \u2014 see tx log for raw variant"
+      "msg": "American BS-2002 pricing failed — see tx log for raw variant"
     },
     {
       "code": 6051,
@@ -7189,17 +8300,17 @@ export type Opta = {
     {
       "code": 6052,
       "name": "americanVaultsDisabled",
-      "msg": "American vaults are disabled \u2014 AMERICAN_ENABLED is false (flip at Stage I)"
+      "msg": "American vaults are disabled — AMERICAN_ENABLED is false (flip at Stage I)"
     },
     {
       "code": 6053,
       "name": "notAmericanOption",
-      "msg": "Option is not American-style \u2014 early exercise is not available"
+      "msg": "Option is not American-style — early exercise is not available"
     },
     {
       "code": 6054,
       "name": "writerAsksDisabled",
-      "msg": "Writer asks are not enabled yet \u2014 reserved for Phase 3"
+      "msg": "Writer asks are not enabled in this build (dark gate) — see WRITER_ASKS_ENABLED"
     },
     {
       "code": 6055,
@@ -7209,12 +8320,12 @@ export type Opta = {
     {
       "code": 6056,
       "name": "vaultVoided",
-      "msg": "Vault has been voided via the dead-feed hatch \u2014 no peg fills"
+      "msg": "Vault has been voided via the dead-feed hatch — no peg fills"
     },
     {
       "code": 6057,
       "name": "settlementRecordExists",
-      "msg": "Settlement record exists \u2014 vault is settleable, the dead-feed hatch is forbidden"
+      "msg": "Settlement record exists — vault is settleable, the dead-feed hatch is forbidden"
     },
     {
       "code": 6058,
@@ -7224,7 +8335,7 @@ export type Opta = {
     {
       "code": 6059,
       "name": "triggerConditionNotMet",
-      "msg": "Trigger condition not met \u2014 live price does not satisfy the stored comparator"
+      "msg": "Trigger condition not met — live price does not satisfy the stored comparator"
     },
     {
       "code": 6060,
@@ -7274,7 +8385,42 @@ export type Opta = {
     {
       "code": 6069,
       "name": "switchboardSettleWindowElapsed",
-      "msg": "Switchboard settlement window elapsed \u2014 settle within 5 min of expiry or reclaim after grace"
+      "msg": "Switchboard settlement window elapsed — settle within 5 min of expiry or reclaim after grace"
+    },
+    {
+      "code": 6070,
+      "name": "notAWriterAsk",
+      "msg": "Order is not a writer ask — fill it through fill_order"
+    },
+    {
+      "code": 6071,
+      "name": "escrowNotEmpty",
+      "msg": "Per-order escrow is not empty — collateral did not fully move to the pot"
+    },
+    {
+      "code": 6072,
+      "name": "writerAskSweepAccountsMissing",
+      "msg": "Writer-ask pot sweep accounts missing or pot USDC balance below the recorded counter"
+    },
+    {
+      "code": 6073,
+      "name": "notAWriterAskVault",
+      "msg": "Not a writer-ask vault — pool-only/EUR vaults close via the pooled last-writer path"
+    },
+    {
+      "code": 6074,
+      "name": "vaultNotFullyDrained",
+      "msg": "Vault not fully drained — total_shares must be 0 before the writer-ask vault USDC can be closed"
+    },
+    {
+      "code": 6075,
+      "name": "canonicalMintRequired",
+      "msg": "Writer asks may only be posted on a canonical create_series mint"
+    },
+    {
+      "code": 6076,
+      "name": "vaultNotVoided",
+      "msg": "Vault not voided — call initialize_void first"
     }
   ],
   "types": [
@@ -7282,7 +8428,7 @@ export type Opta = {
       "name": "comparator",
       "docs": [
         "The comparator the live EMA must satisfy against `threshold_usdc` at fire",
-        "time. Direction is EXPLICIT and stored \u2014 no implicit \"stop vs limit\"",
+        "time. Direction is EXPLICIT and stored — no implicit \"stop vs limit\"",
         "inference (spec R4).",
         "",
         "**Variant order is load-bearing** (LessOrEqual = 0, GreaterOrEqual = 1)."
@@ -7356,7 +8502,7 @@ export type Opta = {
         "Exercise style for the option contracts a vault writes.",
         "",
         "**Variant order is load-bearing.** Reordering after Pass 1 ships breaks",
-        "every existing vault on-chain \u2014 the byte that encodes this enum is a",
+        "every existing vault on-chain — the byte that encodes this enum is a",
         "single Borsh discriminator (0 or 1). Pre-Pass-1 vaults are migrated by",
         "zero-filling the new trailing byte, which deserializes as variant 0",
         "(European). Swapping the order would silently retag every legacy vault",
@@ -7684,7 +8830,7 @@ export type Opta = {
             "docs": [
               "Asset class for categorizing the underlying asset.",
               "0 = crypto, 1 = commodity, 2 = equity, 3 = forex, 4 = ETF.",
-              "Metadata-only today \u2014 no surviving on-chain or frontend pricing",
+              "Metadata-only today — no surviving on-chain or frontend pricing",
               "logic branches on this value."
             ],
             "type": "u8"
@@ -7707,14 +8853,14 @@ export type Opta = {
               "following the `carry_rate_bps` / `exercise_style` precedent on",
               "`SharedVault`: legacy 62-byte markets grow to 63 bytes via the",
               "admin-only `migrate_market_oracle_source` instruction, which",
-              "zero-fills this trailing byte (\u2192 Pyth, the no-op default). New",
+              "zero-fills this trailing byte (→ Pyth, the no-op default). New",
               "markets are born with this set to `ORACLE_SOURCE_PYTH` in",
               "`create_market`.",
               "",
               "The 32-byte `pyth_feed_id` field above is reused as the oracle id for",
               "BOTH sources (a Switchboard feedHash is also 32 bytes); only its",
               "MEANING routes by this field. INERT until Stage 3 wires the read-arm",
-              "match in `utils/price_oracle.rs` \u2014 every handler stays unconditionally",
+              "match in `utils/price_oracle.rs` — every handler stays unconditionally",
               "Pyth today, so this field is read by nothing."
             ],
             "type": "u8"
@@ -7814,7 +8960,7 @@ export type Opta = {
         "**Variant order is load-bearing.** The Borsh discriminator is a single",
         "byte encoding the variant index (Bid = 0, ResaleAsk = 1, WriterAsk = 2,",
         "VaultPeg = 3); reordering after this ships would silently retag every",
-        "existing order. Do not reorder \u2014 append new variants only."
+        "existing order. Do not reorder — append new variants only."
       ],
       "type": {
         "kind": "enum",
@@ -8173,7 +9319,7 @@ export type Opta = {
           {
             "name": "quantityInitial",
             "docs": [
-              "Contracts at post time. Never mutated \u2014 kept for fill-ratio analytics."
+              "Contracts at post time. Never mutated — kept for fill-ratio analytics."
             ],
             "type": "u64"
           },
@@ -8197,6 +9343,25 @@ export type Opta = {
               "PDA bump seed."
             ],
             "type": "u8"
+          },
+          {
+            "name": "collateralPerContract",
+            "docs": [
+              "Phase 3 Slice A — protocol-set collateral requirement per contract",
+              "(USDC, 6dp), snapshotted at post time from",
+              "`required_collateral_per_contract(vault.strike_price, vault.option_type)`.",
+              "Set ONLY on `WriterAsk` orders (the personal-collateral lock-at-post);",
+              "`0` (sentinel = N/A) on `Bid` / `ResaleAsk`. Slice B reads it to move the",
+              "filled slice into the series pot; Slice C refunds the unfilled remainder",
+              "at cancel/expiry.",
+              "",
+              "MUST be the last field — pre-Slice-A `RestingOrder` accounts were 8 bytes",
+              "shorter (146 on-disk vs the new 154). Live devnet orders are cleared by",
+              "`cancel_order` before deploy (clean cutover), so no realloc-migration path",
+              "is required — unlike the SharedVault append+migrate discipline, there are",
+              "no long-lived RestingOrder accounts to grow."
+            ],
+            "type": "u64"
           }
         ]
       }
@@ -8233,6 +9398,32 @@ export type Opta = {
           {
             "name": "exerciseStyle",
             "type": "u8"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "settledWriterAskVaultClosed",
+      "docs": [
+        "Phase 3 Slice D2a — emitted when `close_settled_writer_ask_vault` reclaims a",
+        "fully-drained (total_shares == 0) writer-ask vault's USDC account. `dust_swept`",
+        "is the residual micro-USDC moved to the treasury before the close; the account",
+        "rent SOL also goes to the treasury."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "dustSwept",
+            "type": "u64"
           },
           {
             "name": "ts",
@@ -8317,7 +9508,7 @@ export type Opta = {
           {
             "name": "optionType",
             "docs": [
-              "Call or Put \u2014 reuses the existing OptionType enum from market.rs."
+              "Call or Put — reuses the existing OptionType enum from market.rs."
             ],
             "type": {
               "defined": {
@@ -8379,7 +9570,7 @@ export type Opta = {
               "Stage 3: the mint of the collateral token. USDC-only enforced today",
               "via a runtime check in `create_shared_vault` against",
               "`protocol_state.usdc_mint`. The field exists so every vault is",
-              "self-describing \u2014 the 6 ATA-mint constraints across vault-context",
+              "self-describing — the 6 ATA-mint constraints across vault-context",
               "instructions read from here rather than from protocol_state, which",
               "keeps the door open for per-vault collateral diversification later."
             ],
@@ -8507,7 +9698,7 @@ export type Opta = {
           {
             "name": "exercisedOptions",
             "docs": [
-              "Phase 2 Stage F \u2014 early-exercise accounting (the F\u2192G handshake).",
+              "Phase 2 Stage F — early-exercise accounting (the F→G handshake).",
               "",
               "Cumulative count of option contracts exercised EARLY (pre-expiry) via",
               "`exercise_american`, and the cumulative USDC (6-dec) paid out for them.",
@@ -8519,7 +9710,7 @@ export type Opta = {
               "MUST be the last two fields. Pre-Stage-F vaults were serialized without",
               "them (16 bytes shorter than the new INIT_SPACE). The admin-only",
               "`migrate_shared_vault_exercise_tracking` grows them and zero-fills the",
-              "trailing bytes \u2014 which deserialize as 0/0, the correct default for a",
+              "trailing bytes — which deserialize as 0/0, the correct default for a",
               "vault that has had no early exercises. Same append+migrate discipline as",
               "carry_rate_bps (Stage A) and exercise_style (Stage C Pass 1)."
             ],
@@ -8532,10 +9723,10 @@ export type Opta = {
           {
             "name": "spreadBps",
             "docs": [
-              "Phase 2 Pass A (exchange) \u2014 peg spread + dead-feed void flag.",
+              "Phase 2 Pass A (exchange) — peg spread + dead-feed void flag.",
               "",
               "`spread_bps`: flat spread applied over the BS-2002 model quote on",
-              "`fill_vault_peg` (Pass B), in basis points \u2014 extra LP yield. Default 0.",
+              "`fill_vault_peg` (Pass B), in basis points — extra LP yield. Default 0.",
               "`voided`: set true ONCE by `reclaim_unsettled` (Pass D) when a vault is",
               "reclaimed after the dead-feed grace window. A voided vault pays holders",
               "NOTHING and writers exactly pro-rata; **no path may treat `voided` as",
@@ -8544,7 +9735,7 @@ export type Opta = {
               "MUST be the last two fields. Pre-Pass-A vaults were serialized without",
               "them (3 bytes shorter than the new INIT_SPACE). The admin-only",
               "`migrate_shared_vault_exchange_fields` grows them and zero-fills the",
-              "trailing bytes \u2014 which deserialize as spread_bps = 0 / voided = false,",
+              "trailing bytes — which deserialize as spread_bps = 0 / voided = false,",
               "the correct defaults. Same append+migrate discipline as carry_rate_bps",
               "(Stage A), exercise_style (Stage C Pass 1), and exercise tracking (Stage F)."
             ],
@@ -8553,6 +9744,58 @@ export type Opta = {
           {
             "name": "voided",
             "type": "bool"
+          },
+          {
+            "name": "writerAskCollateralSwept",
+            "docs": [
+              "Phase 3 Slice D1 (exchange) — writer-ask pot collateral folded into this",
+              "vault at settlement. `settle_vault` sweeps `WriterAskPot.total_collateral`",
+              "(the counter, donation-proof) from `writer_ask_pot_usdc` into the vault's",
+              "USDC and records it here, once, in the `is_settled` block. 0 for EUR /",
+              "pool-only vaults and any vault with no WriterAsk pot.",
+              "",
+              "This becomes the FROZEN residual denominator for D2/D3:",
+              "merged = total_collateral_at_settle + writer_ask_collateral_swept,",
+              "splitting the post-holder residual pool-vs-writer-ask pro-rata. The sweep",
+              "asserts `pot_usdc.balance >= total_collateral` before recording, so the",
+              "denominator never exceeds the real backing.",
+              "",
+              "MUST be the last field. Pre-D1 vaults were serialized without it (8 bytes",
+              "shorter than the new INIT_SPACE). The admin-only",
+              "`migrate_shared_vault_writer_ask_swept` grows them and zero-fills the",
+              "trailing 8 bytes — which deserialize as 0, the correct default. Same",
+              "append+migrate discipline as carry_rate_bps (Stage A), exercise_style",
+              "(Stage C Pass 1), exercise tracking (Stage F), and spread_bps/voided",
+              "(Pass A) — the 6th such append."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "writerAskEquivShares",
+            "docs": [
+              "Phase 3 Slice D2a (exchange) — writer-ask SHARE-equivalent folded into",
+              "`total_shares` at settlement (shares-unification). `settle_vault` sets",
+              "writer_ask_equiv_shares = writer_ask_collateral_swept × total_shares / total_collateral",
+              "(or = writer_ask_collateral_swept when total_collateral == 0, the pure",
+              "writer-ask vault) and ADDS it to `total_shares`, so pool-writers and",
+              "writer-ask-writers both claim the post-holder residual against ONE",
+              "jointly-decremented denominator (the conservation-preserving model). 0 for",
+              "EUR / pool-only vaults and any vault with no WriterAsk pot.",
+              "",
+              "This is the FROZEN numerator `withdraw_writer_ask_residual` reads to size",
+              "each backer's equiv_shares: `equiv_shares = committed × writer_ask_equiv_shares / swept`.",
+              "`close_settled_writer_ask_vault` keys off `total_shares == 0` (every",
+              "claimant drained) — never off this field directly.",
+              "",
+              "MUST be the last field. Pre-D2a vaults were serialized without it (8 bytes",
+              "shorter than the new INIT_SPACE). The admin-only",
+              "`migrate_shared_vault_residual_shares` grows them and zero-fills the",
+              "trailing 8 bytes — which deserialize as 0, the correct default. That one",
+              "consolidated migration grows a vault at ANY prior size (260 pre-D1 or 268",
+              "post-D1) straight to 276, so it SUPERSEDES the D1 268-migration at deploy.",
+              "The 7th such append."
+            ],
+            "type": "u64"
           }
         ]
       }
@@ -8581,7 +9824,7 @@ export type Opta = {
         "(BUY, always == quantity) or burned (SELL, = min(quantity, balance)).",
         "`premium_or_payout` is the gross USDC paid in (BUY) / capped intrinsic paid",
         "out (SELL). `remaining_quantity` is 0 for a BUY (closed) or the SELL order's",
-        "leftover after a partial fire (0 \u21d2 the order was closed)."
+        "leftover after a partial fire (0 ⇒ the order was closed)."
       ],
       "type": {
         "kind": "struct",
@@ -8627,11 +9870,11 @@ export type Opta = {
         "What the trigger does when it fires. v1 routes BOTH through the vault as the",
         "always-on counterparty (never the book, which has no guaranteed liquidity):",
         "",
-        "**Variant order is load-bearing** \u2014 the Borsh discriminator is a single byte",
+        "**Variant order is load-bearing** — the Borsh discriminator is a single byte",
         "encoding the variant index (StopEntryBuy = 0, TakeProfitSell = 1). Append",
         "new variants only; never reorder.",
         "",
-        "NOTE: exactly two variants. There is NO StopLossSell \u2014 a true stop-loss must",
+        "NOTE: exactly two variants. There is NO StopLossSell — a true stop-loss must",
         "sell an OTM long, which the vault cannot buy back (it only pays capped",
         "intrinsic, and exercise reverts OTM). Real stop-loss needs the book path and",
         "is deferred to a later phase."
@@ -8724,8 +9967,8 @@ export type Opta = {
             "name": "maxPremium",
             "docs": [
               "BUY: PER-CONTRACT escrow ceiling (USDC 6-dec). The escrowed figure is",
-              "`max_premium * quantity`. \u26a0\ufe0f UNITS: this is PER-CONTRACT; fill_vault_peg's",
-              "own `max_premium` arg (P1) is a fee-inclusive TOTAL \u2014 do not conflate.",
+              "`max_premium * quantity`. ⚠️ UNITS: this is PER-CONTRACT; fill_vault_peg's",
+              "own `max_premium` arg (P1) is a fee-inclusive TOTAL — do not conflate.",
               "SELL: stored as 0 (no escrow)."
             ],
             "type": "u64"
@@ -9223,7 +10466,7 @@ export type Opta = {
     {
       "name": "vaultReclaimed",
       "docs": [
-        "Phase 2 Pass D \u2014 emitted once per writer reclaim through the dead-feed hatch",
+        "Phase 2 Pass D — emitted once per writer reclaim through the dead-feed hatch",
         "(`reclaim_unsettled`). Distinct from VaultPostSettlementWithdraw (which has",
         "the same field shape) so off-chain indexers can tell a hatch wind-down apart",
         "from an ordinary post-settlement withdrawal: a VaultReclaimed stream means",
@@ -9326,6 +10569,25 @@ export type Opta = {
           {
             "name": "collateralRemaining",
             "type": "u64"
+          },
+          {
+            "name": "writerAskCollateralSwept",
+            "docs": [
+              "Phase 3 Slice D1 — writer-ask pot collateral folded at settle (0 if no",
+              "pot). Lets indexers reconstruct the merged-waterfall denominator.",
+              "Additive trailing field (Borsh-append-safe)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "writerAskEquivShares",
+            "docs": [
+              "Phase 3 Slice D2a — writer-ask SHARE-equivalent added to total_shares at",
+              "settle (= swept × total_shares / total_collateral, or = swept when",
+              "total_collateral == 0). 0 if no pot. Additive trailing field",
+              "(Borsh-append-safe) — lets indexers reconstruct the unified denominator."
+            ],
+            "type": "u64"
           }
         ]
       }
@@ -9343,6 +10605,38 @@ export type Opta = {
           },
           {
             "name": "custom"
+          }
+        ]
+      }
+    },
+    {
+      "name": "vaultVoidInitialized",
+      "docs": [
+        "Phase 3 Slice D3 — emitted once per vault when `initialize_void` performs the",
+        "void transition: sweeps the canonical writer-ask pot (`swept`), applies the",
+        "shares-unification merge (`equiv_total` added to total_shares), seeds the",
+        "merged `collateral_remaining`, and flips `voided`. `swept`/`equiv_total` are 0",
+        "for a pool-only / EUR voided vault (the no-pot branch). Lets indexers tell a",
+        "merged-void wind-down apart from an ordinary reclaim."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "swept",
+            "type": "u64"
+          },
+          {
+            "name": "equivTotal",
+            "type": "u64"
+          },
+          {
+            "name": "collateralRemaining",
+            "type": "u64"
           }
         ]
       }
@@ -9514,8 +10808,8 @@ export type Opta = {
               "oracle to route the spot read; mint/fill/get_option_price inherit via the",
               "cached `last_spot_price`.",
               "",
-              "CLAIMED IN PLACE from `_padding` (offset 5845) \u2014 a SIZE-PRESERVING change:",
-              "`_padding` shrank 11\u219210 so `size_of` stays exactly 5856, the leading byte",
+              "CLAIMED IN PLACE from `_padding` (offset 5845) — a SIZE-PRESERVING change:",
+              "`_padding` shrank 11→10 so `size_of` stays exactly 5856, the leading byte",
               "of the old padding was always zero (Pod zero-init / `load_init` zero-fill),",
               "so every legacy on-chain oracle reads this as `0 = Pyth` with NO migration",
               "and NO realloc. A size-GROWING change would instead panic",
@@ -9530,12 +10824,12 @@ export type Opta = {
               "on an 8-byte boundary at offset 5848. `oracle_source` ends at 5846 and",
               "i64 requires 8-byte alignment, so 2 slack bytes are mandatory. This pad",
               "is NAMED (not compiler-implicit) because `bytemuck::Pod` forbids",
-              "uninitialized gap bytes \u2014 implicit padding fails the zero_copy derive.",
+              "uninitialized gap bytes — implicit padding fails the zero_copy derive.",
               "",
               "THIS IS ALIGNMENT SLACK, NOT RESERVED FUTURE-FIELD SPACE. The old",
               "`_padding: [u8; 10]` is now fully spent: 2 bytes here + 8 bytes of",
               "`seed_vol`. There is NO free padding left. A future field cannot be",
-              "claimed in place \u2014 it would grow `size_of` past 5856 and panic",
+              "claimed in place — it would grow `size_of` past 5856 and panic",
               "`AccountLoader::load` (bytemuck length mismatch) on every legacy",
               "oracle, requiring an admin realloc migration. Do NOT repurpose these",
               "2 bytes for a new field; they exist solely to align `seed_vol`."
@@ -9550,23 +10844,169 @@ export type Opta = {
           {
             "name": "seedVol",
             "docs": [
-              "SEED volatility for the under-warmed window \u2014 annualized \u03c3 at solmath",
+              "SEED volatility for the under-warmed window — annualized σ at solmath",
               "SCALE (1e12), i64. Claimed in place from the old `_padding` (offsets",
               "5848..5856); a SIZE-PRESERVING change, same migration-free trick as",
               "`oracle_source`: every legacy on-chain oracle reads this as 0 via",
               "`load_init` zero-fill, with NO migration and NO realloc. A size-GROWING",
               "change would instead panic `AccountLoader::load` on every legacy oracle.",
               "",
-              "ZERO-SAFE SENTINEL: `seed_vol == 0` means \"no seed \u2014 behave exactly as",
+              "ZERO-SAFE SENTINEL: `seed_vol == 0` means \"no seed — behave exactly as",
               "before.\" The American pricing path (`price_american`) consults this",
               "ONLY when the oracle is under-warmed (`sample_count <",
               "VOL_ORACLE_WARMUP_SAMPLES`); a warm oracle always uses realized vol and",
               "never reads `seed_vol`. Written at birth by `initialize_vol_oracle` so a",
               "brand-new market is priceable from minute one while the realized-vol",
               "ring warms in the background and later takes over. Encode off-chain as",
-              "`round(annualized_sigma * 1e12)` (e.g. crypto 0.80 \u2192 800_000_000_000)."
+              "`round(annualized_sigma * 1e12)` (e.g. crypto 0.80 → 800_000_000_000)."
             ],
             "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "writerAskPosition",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "backer",
+            "docs": [
+              "The quoting writer (backer) who posted the WriterAsk(s)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "optionMint",
+            "docs": [
+              "The canonical Token-2022 series mint this position backs."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "vault",
+            "docs": [
+              "The series' American SharedVault (market/settlement context)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "collateralCommitted",
+            "docs": [
+              "USDC (6dp) moved from per-order escrow into the series pot at fill.",
+              "Populated in Slice B; 0 at init."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "contractsWritten",
+            "docs": [
+              "Contracts the backer is short on this series (minted-on-fill against",
+              "their committed collateral). Populated in Slice B; 0 at init."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "createdAt",
+            "docs": [
+              "When this position was first created (Slice B)."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump seed."
+            ],
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "writerAskPot",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "optionMint",
+            "docs": [
+              "The canonical Token-2022 series mint this pot collateralizes."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "vault",
+            "docs": [
+              "The series' American SharedVault."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "usdcAccount",
+            "docs": [
+              "The pot's USDC token account (PDA [\"writer_ask_pot_usdc\", option_mint],",
+              "authority = protocol_state). Created/funded in Slice B."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "totalCollateral",
+            "docs": [
+              "Total USDC (6dp) committed across all backers' filled asks. 0 at init."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "totalContracts",
+            "docs": [
+              "Total contracts written against this pot. 0 at init."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump seed."
+            ],
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "writerAskResidualWithdrawn",
+      "docs": [
+        "Phase 3 Slice D2a — emitted once per writer-ask backer's post-settlement",
+        "residual claim (`withdraw_writer_ask_residual`). `equiv_shares` is the",
+        "share-equivalent removed from the unified `total_shares` denominator;",
+        "`payout` is the USDC (6dp) paid from the merged `collateral_remaining`.",
+        "Distinct from VaultPostSettlementWithdraw (the pooled path) so indexers can",
+        "separate writer-ask residual refunds from pool-writer withdrawals."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "backer",
+            "type": "pubkey"
+          },
+          {
+            "name": "optionMint",
+            "type": "pubkey"
+          },
+          {
+            "name": "equivShares",
+            "type": "u64"
+          },
+          {
+            "name": "payout",
+            "type": "u64"
           }
         ]
       }
@@ -9602,7 +11042,7 @@ export type Opta = {
             "name": "depositedCollateral",
             "docs": [
               "Total USDC this writer has deposited into the vault.",
-              "Tracked for reference \u2014 the authoritative value is shares."
+              "Tracked for reference — the authoritative value is shares."
             ],
             "type": "u64"
           },

@@ -266,13 +266,16 @@ export interface TickConfig {
 
 const FETCHABLE = { triggerOrder: "triggerOrder", optionsMarket: "optionsMarket", sharedVault: "sharedVault" } as const;
 
-/** Crank-local getProgramAccounts + fresh-IDL coder decode (orphan-tolerant). */
+/** Crank-local getProgramAccounts + fresh-IDL coder decode (orphan-tolerant).
+ *  `extraFilters` are ANDed with the discriminator memcmp — e.g. a memcmp on a
+ *  field offset to scope the scan (WriterPosition.vault @ offset 40). */
 export async function fetchAllDecoded(
   program: anchor.Program<any>, name: string,
+  extraFilters: { memcmp: { offset: number; bytes: string } }[] = [],
 ): Promise<{ publicKey: PublicKey; account: any }[]> {
   const { bytes } = program.coder.accounts.memcmp(name);
   const raw = await program.provider.connection.getProgramAccounts(program.programId, {
-    filters: [{ memcmp: { offset: 0, bytes: bytes as string } }],
+    filters: [{ memcmp: { offset: 0, bytes: bytes as string } }, ...extraFilters],
   });
   const out: { publicKey: PublicKey; account: any }[] = [];
   for (const r of raw) {

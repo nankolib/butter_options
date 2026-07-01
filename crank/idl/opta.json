@@ -1387,6 +1387,94 @@
       "args": []
     },
     {
+      "name": "close_settled_writer_ask_vault",
+      "docs": [
+        "Exchange Phase 3 Slice D2a — reclaim a fully-drained writer-ask vault's",
+        "USDC account. EXACT precondition: is_settled && !voided && swept > 0 &&",
+        "total_shares == 0 (the unspoofable all-drained signal — impossible to",
+        "close while a claimant is owed). Sweeps residual dust + the account rent",
+        "SOL to the treasury. Permissionless. UNGATED — inert in a feature-free",
+        "build (reverts NotAWriterAskVault, swept always 0). A mixed vault that",
+        "lands at total_shares == D > 0 floor-dust is a SAFE under-close (never",
+        "fires; no claimant harmed). Spec §8."
+      ],
+      "discriminator": [
+        108,
+        112,
+        35,
+        33,
+        64,
+        107,
+        105,
+        183
+      ],
+      "accounts": [
+        {
+          "name": "cranker",
+          "docs": [
+            "Permissionless caller (a cranker). Receives nothing — dust + rent → treasury."
+          ],
+          "signer": true
+        },
+        {
+          "name": "shared_vault",
+          "docs": [
+            "The settled, fully-drained writer-ask vault. Read-only: the SharedVault",
+            "record persists (only its USDC account is closed), so no field is mutated."
+          ]
+        },
+        {
+          "name": "vault_usdc_account",
+          "docs": [
+            "Vault's USDC token account — dust swept then account closed."
+          ],
+          "writable": true
+        },
+        {
+          "name": "treasury",
+          "docs": [
+            "Protocol treasury — receives the dust + the account rent SOL. Pinned via",
+            "protocol_state."
+          ],
+          "writable": true
+        },
+        {
+          "name": "protocol_state",
+          "docs": [
+            "Protocol state — pins the treasury."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "docs": [
+            "Standard SPL Token program."
+          ],
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "create_and_deposit",
       "docs": [
         "Exchange Phase 2 Pass C — atomic write merge (D9). Fuses create_shared_vault",
@@ -1633,7 +1721,8 @@
             "Permissionless post-HIGH-5 fix (audit Run-7). Any signer pays for",
             "account creation on first init; pays nothing on idempotent re-call",
             "because `init_if_needed` short-circuits. The proof-of-feed gate is",
-            "enforced via the `price_update` account below."
+            "enforced via the `price_update` account (Pyth) or the trailing SB",
+            "accounts (Switchboard) below."
           ],
           "writable": true,
           "signer": true
@@ -1671,8 +1760,16 @@
             "Fresh PriceUpdateV2 from the Pyth Receiver program. The handler",
             "verifies `verification_level == Full` and",
             "`price_message.feed_id == pyth_feed_id` to prove the caller-supplied",
-            "feed_id corresponds to a real Pyth feed. Read-only — never mutated."
-          ]
+            "feed_id corresponds to a real Pyth feed. Read-only — never mutated.",
+            "",
+            "Stage 3 1c-i-B: now `Option`. REQUIRED (present) for a Pyth create",
+            "(oracle_source=0) — a present account is wire-identical to the prior",
+            "required form, so existing Pyth creates are unaffected. Passed None for",
+            "a Switchboard create (oracle_source=1): the SB feed-existence proof runs",
+            "against the trailing SB accounts instead. Pyth arm errors",
+            "`PriceUpdateMissing` if absent on a Pyth create."
+          ],
+          "optional": true
         },
         {
           "name": "market",
@@ -1703,6 +1800,27 @@
         {
           "name": "system_program",
           "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "sb_queue",
+          "docs": [
+            "set) in the SB arm. Not address-pinned (per-network queue)."
+          ],
+          "optional": true
+        },
+        {
+          "name": "sb_slothashes",
+          "docs": [
+            "runtime in the SB arm."
+          ],
+          "optional": true
+        },
+        {
+          "name": "sb_instructions",
+          "docs": [
+            "runtime in the SB arm, then scanned for the ed25519 ix index."
+          ],
+          "optional": true
         }
       ],
       "args": [
@@ -1721,6 +1839,10 @@
         },
         {
           "name": "asset_class",
+          "type": "u8"
+        },
+        {
+          "name": "oracle_source",
           "type": "u8"
         }
       ]
@@ -2297,8 +2419,14 @@
           "name": "price_update",
           "docs": [
             "Fresh PriceUpdateV2 the keeper posts in-tx. The live-EMA source for the",
-            "comparator re-check (BUY+SELL) AND the intrinsic spot (SELL)."
-          ]
+            "comparator re-check (BUY+SELL) AND the intrinsic spot (SELL).",
+            "",
+            "Stage 3 (1a-ii): now `Option`, position unchanged. REQUIRED (present) for",
+            "a Pyth market — a present price_update is wire-identical to before. A",
+            "Switchboard market passes None (sentinel) and uses the trailing SB",
+            "accounts. The Pyth arm errors `PriceUpdateMissing` if absent on a Pyth market."
+          ],
+          "optional": true
         },
         {
           "name": "vol_oracle",
@@ -2464,6 +2592,27 @@
         {
           "name": "system_program",
           "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "sb_queue",
+          "docs": [
+            "set) in the SB arm. Not address-pinned (per-network queue)."
+          ],
+          "optional": true
+        },
+        {
+          "name": "sb_slothashes",
+          "docs": [
+            "runtime in the SB arm."
+          ],
+          "optional": true
+        },
+        {
+          "name": "sb_instructions",
+          "docs": [
+            "runtime in the SB arm, then scanned for the ed25519 ix index."
+          ],
+          "optional": true
         }
       ],
       "args": []
@@ -2516,8 +2665,15 @@
           "docs": [
             "Fresh PriceUpdateV2 from the Pyth Receiver (exerciser posts it in the",
             "same tx). Validated for Full verification + feed_id + confidence +",
-            "freshness in the handler."
-          ]
+            "freshness in the handler.",
+            "",
+            "Stage 3: now `Option`. REQUIRED (present) for a Pyth market — its position",
+            "is unchanged (4), so a present price_update is wire-identical to before.",
+            "A Switchboard market passes None (program-id sentinel) and uses the",
+            "trailing SB accounts instead. The Pyth arm errors `PriceUpdateMissing` if",
+            "it is absent on a Pyth market."
+          ],
+          "optional": true
         },
         {
           "name": "vault_mint_record",
@@ -2567,6 +2723,27 @@
             "Standard SPL Token program — for the USDC transfer."
           ],
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "sb_queue",
+          "docs": [
+            "QuoteVerifier validates it against the quote's oracle-key set in the SB arm."
+          ],
+          "optional": true
+        },
+        {
+          "name": "sb_slothashes",
+          "docs": [
+            "runtime in the SB arm (used by QuoteVerifier for slothash freshness)."
+          ],
+          "optional": true
+        },
+        {
+          "name": "sb_instructions",
+          "docs": [
+            "runtime in the SB arm, then scanned for the ed25519 ix index."
+          ],
+          "optional": true
         }
       ],
       "args": [
@@ -3166,6 +3343,394 @@
       ]
     },
     {
+      "name": "fill_writer_ask",
+      "docs": [
+        "Exchange Phase 3 Slice B — fill a writer's limit ask. Mint-on-fill from",
+        "the writer's PERSONAL collateral (Slice A's per-order escrow): premium",
+        "(maker-set price) taker→writer, fee→treasury, mint `fill_quantity` series",
+        "contracts to the taker, move cpt×fill_quantity escrow→WriterAskPot. Bumps",
+        "only the pot + position — never the vault counters. Dark behind",
+        "WRITER_ASKS_ENABLED + AMERICAN_ENABLED. Settlement of these contracts is",
+        "Slice D. Spec: §8 (P3/D7)."
+      ],
+      "discriminator": [
+        41,
+        218,
+        166,
+        1,
+        94,
+        165,
+        145,
+        8
+      ],
+      "accounts": [
+        {
+          "name": "taker",
+          "docs": [
+            "Taker — pays USDC premium, receives minted contracts, pays init rent."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "option_mint",
+          "docs": [
+            "Series Token-2022 mint (authority = protocol_state). Order PDA seed."
+          ],
+          "writable": true
+        },
+        {
+          "name": "order",
+          "docs": [
+            "The WriterAsk order. Closed (manual) on full fill."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  115,
+                  116,
+                  105,
+                  110,
+                  103,
+                  95,
+                  111,
+                  114,
+                  100,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "option_mint"
+              },
+              {
+                "kind": "account",
+                "path": "order.owner",
+                "account": "RestingOrder"
+              },
+              {
+                "kind": "account",
+                "path": "order.nonce",
+                "account": "RestingOrder"
+              }
+            ]
+          }
+        },
+        {
+          "name": "maker",
+          "docs": [
+            "Maker = writer = order.owner. Premium recipient + rent dest on close."
+          ],
+          "writable": true
+        },
+        {
+          "name": "shared_vault",
+          "docs": [
+            "Vault — READ-ONLY (Slice B touches no vault counter). Pinned to order.vault."
+          ]
+        },
+        {
+          "name": "vault_mint_record",
+          "docs": [
+            "Series record — mint↔vault proof (read-only)."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116,
+                  95,
+                  109,
+                  105,
+                  110,
+                  116,
+                  95,
+                  114,
+                  101,
+                  99,
+                  111,
+                  114,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "option_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "escrow",
+          "docs": [
+            "Per-order USDC escrow (Slice A). Debit source; closed on full fill."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  115,
+                  116,
+                  105,
+                  110,
+                  103,
+                  95,
+                  111,
+                  114,
+                  100,
+                  101,
+                  114,
+                  95,
+                  101,
+                  115,
+                  99,
+                  114,
+                  111,
+                  119
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "order"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocol_state",
+          "docs": [
+            "Protocol state — escrow signer + mint authority + fee_bps + usdc/treasury pins."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasury",
+          "docs": [
+            "Treasury — fee recipient."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "taker_usdc_account",
+          "docs": [
+            "Taker USDC — pays premium."
+          ],
+          "writable": true
+        },
+        {
+          "name": "maker_usdc_account",
+          "docs": [
+            "Maker (writer) USDC — receives premium − fee."
+          ],
+          "writable": true
+        },
+        {
+          "name": "taker_option_account",
+          "docs": [
+            "Taker's series ATA — mint destination (client pre-creates idempotently)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "writer_ask_pot",
+          "docs": [
+            "WriterAskPot record — init on first fill (taker pays)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  119,
+                  114,
+                  105,
+                  116,
+                  101,
+                  114,
+                  95,
+                  97,
+                  115,
+                  107,
+                  95,
+                  112,
+                  111,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "option_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "writer_ask_pot_usdc",
+          "docs": [
+            "WriterAskPot USDC account — init on first fill; authority = protocol_state",
+            "(matches the per-order escrow authority → enables Slice D's pot sweep)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  119,
+                  114,
+                  105,
+                  116,
+                  101,
+                  114,
+                  95,
+                  97,
+                  115,
+                  107,
+                  95,
+                  112,
+                  111,
+                  116,
+                  95,
+                  117,
+                  115,
+                  100,
+                  99
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "option_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "writer_ask_position",
+          "docs": [
+            "Per-(series, backer) position — init on first fill (taker pays).",
+            "backer = order.owner (the writer, NOT the taker)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  119,
+                  114,
+                  105,
+                  116,
+                  101,
+                  114,
+                  95,
+                  97,
+                  115,
+                  107,
+                  95,
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "option_mint"
+              },
+              {
+                "kind": "account",
+                "path": "order.owner",
+                "account": "RestingOrder"
+              }
+            ]
+          }
+        },
+        {
+          "name": "usdc_mint",
+          "docs": [
+            "USDC mint — pinned; used to init the pot USDC account."
+          ]
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "fill_quantity",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "get_option_price",
       "docs": [
         "AMER-only BS-2002 pricing view. Read-only; CPI-callable.",
@@ -3466,6 +4031,156 @@
       "args": []
     },
     {
+      "name": "initialize_void",
+      "docs": [
+        "Phase 3 Slice D3 — atomic dead-feed void transition. The SOLE setter of",
+        "`voided`. After the 7-day grace with no SettlementRecord, derives the",
+        "canonical writer-ask pot from vault identity (un-omittable; sound via D2.5's",
+        "canonical-mint pin), sweeps it into vault_usdc (donation→treasury, closes",
+        "pot_usdc), applies the D2a shares-unification merge (total_shares +=",
+        "equiv_total, collateral_remaining = TC + swept − E), and flips voided — all",
+        "atomically. No-pot/EUR → byte-identical to the old self-void seed (swept 0).",
+        "Both reclaim paths require voided, so none can run before the merge.",
+        "Permissionless, UNGATED, once-only. Spec: §8 void path."
+      ],
+      "discriminator": [
+        249,
+        210,
+        27,
+        32,
+        196,
+        151,
+        107,
+        48
+      ],
+      "accounts": [
+        {
+          "name": "cranker",
+          "docs": [
+            "Permissionless cranker — pays the tx. Receives nothing."
+          ],
+          "signer": true
+        },
+        {
+          "name": "shared_vault",
+          "docs": [
+            "The dead-feed vault being wound down. Mutated (the void transition)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "market",
+          "docs": [
+            "The vault's market — provides asset_name for the SettlementRecord seed +",
+            "the canonical-mint derivation. Pinned to the vault."
+          ]
+        },
+        {
+          "name": "settlement_record",
+          "docs": [
+            "The per-(asset, expiry) SettlementRecord — which MUST NOT exist (the hatch",
+            "gate). Seeds-pinned so it can't be substituted; the handler asserts empty."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  116,
+                  116,
+                  108,
+                  101,
+                  109,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.asset_name",
+                "account": "OptionsMarket"
+              },
+              {
+                "kind": "account",
+                "path": "shared_vault.expiry",
+                "account": "SharedVault"
+              }
+            ]
+          }
+        },
+        {
+          "name": "option_mint",
+          "docs": [
+            "The canonical series mint — in-handler-pinned to the vault-derived address."
+          ]
+        },
+        {
+          "name": "writer_ask_pot",
+          "docs": [
+            "The writer-ask pot RECORD — in-handler-pinned; empty ⇒ no-pot branch."
+          ]
+        },
+        {
+          "name": "writer_ask_pot_usdc",
+          "docs": [
+            "The writer-ask pot USDC account — swept then closed. In-handler-pinned."
+          ],
+          "writable": true
+        },
+        {
+          "name": "vault_usdc_account",
+          "docs": [
+            "Vault's USDC token account — sweep destination."
+          ],
+          "writable": true
+        },
+        {
+          "name": "protocol_state",
+          "docs": [
+            "Protocol state — signs the pot sweep/close (pot_usdc authority) + pins treasury."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasury",
+          "docs": [
+            "Protocol treasury — receives the donation remainder + pot_usdc rent."
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "docs": [
+            "Classic SPL Token program — for the sweep + close."
+          ],
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "initialize_vol_oracle",
       "docs": [
         "Bootstrap a per-feed VolOracle PDA. Permissionless; caller supplies",
@@ -3495,11 +4210,15 @@
         {
           "name": "price_update",
           "docs": [
-            "Fresh PriceUpdateV2 from the Pyth Receiver program. The handler",
-            "verifies `verification_level == Full` and",
-            "`price_message.feed_id == feed_id` to prove the caller-supplied",
-            "feed_id corresponds to a real Pyth feed. Read-only -- never mutated."
-          ]
+            "Fresh PriceUpdateV2 from the Pyth Receiver program. REQUIRED (present)",
+            "for a Pyth oracle (oracle_source=0): the handler reads its CURRENT spot",
+            "via `pyth_current_spot_scale` to seed `last_spot_price` AND proves feed",
+            "existence (verification_level == Full + feed_id match) in the same call.",
+            "Read-only -- never mutated. Passed None for a Switchboard oracle",
+            "(oracle_source=1): spot is seeded from the SB quote instead. The Pyth arm",
+            "errors `PriceUpdateMissing` if absent on a Pyth init."
+          ],
+          "optional": true
         },
         {
           "name": "vol_oracle",
@@ -3536,6 +4255,27 @@
         {
           "name": "system_program",
           "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "sb_queue",
+          "docs": [
+            "set) in the SB arm. Not address-pinned (per-network queue)."
+          ],
+          "optional": true
+        },
+        {
+          "name": "sb_slothashes",
+          "docs": [
+            "runtime in the SB arm."
+          ],
+          "optional": true
+        },
+        {
+          "name": "sb_instructions",
+          "docs": [
+            "runtime in the SB arm, then scanned for the ed25519 ix index."
+          ],
+          "optional": true
         }
       ],
       "args": [
@@ -3547,6 +4287,14 @@
               32
             ]
           }
+        },
+        {
+          "name": "oracle_source",
+          "type": "u8"
+        },
+        {
+          "name": "seed_vol",
+          "type": "i64"
         }
       ]
     },
@@ -4133,6 +4881,132 @@
         99,
         73,
         249
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "docs": [
+            "Admin -- must match protocol_state.admin (CRIT-3 deployer pubkey).",
+            "Pays the rent delta for any grown vaults."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "docs": [
+            "Used only to assert admin == protocol_state.admin."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "migrate_shared_vault_residual_shares",
+      "docs": [
+        "Phase 3 Slice D2a — one-time SharedVault migration: append the trailing",
+        "`writer_ask_equiv_shares` field (260→268 INIT_SPACE; on-disk 268→276).",
+        "Admin-only, batched via remaining_accounts (recommended batch: 20).",
+        "CONSOLIDATED: grows a vault at ANY prior size (260 pre-D1 or 268 post-D1)",
+        "straight to 276, zero-filling all trailing bytes — so it SUPERSEDES the D1",
+        "268-migration at deploy (run ONLY this one). Idempotent: vaults already at",
+        "276 bytes are skipped. The 7th such append."
+      ],
+      "discriminator": [
+        33,
+        36,
+        90,
+        180,
+        138,
+        189,
+        156,
+        153
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "docs": [
+            "Admin -- must match protocol_state.admin (CRIT-3 deployer pubkey).",
+            "Pays the rent delta for any grown vaults."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocol_state",
+          "docs": [
+            "Used only to assert admin == protocol_state.admin."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "migrate_shared_vault_writer_ask_swept",
+      "docs": [
+        "Phase 3 Slice D1 — one-time SharedVault migration: append the trailing",
+        "`writer_ask_collateral_swept` field (252→260 INIT_SPACE; on-disk 260→268).",
+        "Admin-only, batched via remaining_accounts (recommended batch: 20).",
+        "Idempotent: vaults already at 268 bytes are skipped. Zero-fill on the new",
+        "8 bytes deserializes as writer_ask_collateral_swept=0. The 6th such append."
+      ],
+      "discriminator": [
+        104,
+        41,
+        137,
+        123,
+        13,
+        224,
+        7,
+        48
       ],
       "accounts": [
         {
@@ -5282,8 +6156,14 @@
           "name": "price_update",
           "docs": [
             "Fresh PriceUpdateV2 from the Pyth Receiver program. Validated",
-            "against the oracle's feed_id and the 60s freshness window."
-          ]
+            "against the oracle's feed_id and the 60s freshness window.",
+            "",
+            "Stage 3 (1a-iii): now `Option`, position unchanged. REQUIRED (present)",
+            "for a Pyth-sourced oracle. A Switchboard-sourced oracle passes None",
+            "(sentinel) and uses the trailing SB accounts. The Pyth arm errors",
+            "`PriceUpdateMissing` if absent on a Pyth oracle."
+          ],
+          "optional": true
         },
         {
           "name": "vol_oracle",
@@ -5322,6 +6202,27 @@
         {
           "name": "system_program",
           "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "sb_queue",
+          "docs": [
+            "set) in the SB arm. Not address-pinned (per-network queue)."
+          ],
+          "optional": true
+        },
+        {
+          "name": "sb_slothashes",
+          "docs": [
+            "runtime in the SB arm."
+          ],
+          "optional": true
+        },
+        {
+          "name": "sb_instructions",
+          "docs": [
+            "runtime in the SB arm, then scanned for the ed25519 ix index."
+          ],
+          "optional": true
         }
       ],
       "args": []
@@ -5329,14 +6230,13 @@
     {
       "name": "reclaim_unsettled",
       "docs": [
-        "Phase 2 Pass D — dead-feed safety hatch. Permissionless. Lets writers",
-        "reclaim pooled collateral pro-rata from a vault whose settlement price",
-        "NEVER landed (no SettlementRecord for its (asset, expiry)) once the 7-day",
-        "GRACE_WINDOW past expiry has elapsed. Per-writer claim (one WriterPosition",
-        "per call; cranker may call on a writer's behalf). Sets `voided = true` on",
-        "the first call; NEVER sets `is_settled` and NEVER writes a SettlementRecord",
-        "(invariant #6 — a voided vault pays holders nothing). NOT gated by",
-        "AMERICAN_ENABLED: the exit path stays open regardless of the flag."
+        "Phase 2 Pass D — dead-feed safety hatch (pool-writer side). Permissionless,",
+        "per-writer pro-rata reclaim from a voided vault. Phase 3 D3: now REQUIRES",
+        "`voided == true` (set atomically by `initialize_void`, the sole voider) —",
+        "it no longer self-voids and no longer takes the market/settlement_record",
+        "accounts (CRANK: drop those two before redeploy). The pro-rata payout is",
+        "byte-identical (auto-scales on the bumped total_shares + merged",
+        "collateral_remaining). NOT gated by AMERICAN_ENABLED."
       ],
       "discriminator": [
         197,
@@ -5413,51 +6313,6 @@
           }
         },
         {
-          "name": "market",
-          "docs": [
-            "The vault's market — needed to derive the SettlementRecord PDA from",
-            "`market.asset_name`. Pinned to the vault's recorded market."
-          ]
-        },
-        {
-          "name": "settlement_record",
-          "docs": [
-            "The per-(asset, expiry) SettlementRecord — which MUST NOT exist for the",
-            "hatch to open. Seeds-constrained so the caller cannot substitute an",
-            "arbitrary empty account; the handler asserts it is empty.",
-            "derived PDA; the handler requires `data_is_empty()`."
-          ],
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  115,
-                  101,
-                  116,
-                  116,
-                  108,
-                  101,
-                  109,
-                  101,
-                  110,
-                  116
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "market.asset_name",
-                "account": "OptionsMarket"
-              },
-              {
-                "kind": "account",
-                "path": "shared_vault.expiry",
-                "account": "SharedVault"
-              }
-            ]
-          }
-        },
-        {
           "name": "vault_usdc_account",
           "docs": [
             "Vault's USDC token account — source of the pro-rata payout."
@@ -5468,6 +6323,113 @@
           "name": "writer_usdc_account",
           "docs": [
             "Writer's USDC token account — destination. Must be owned by the writer."
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "docs": [
+            "Standard SPL Token program."
+          ],
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "reclaim_writer_ask_residual",
+      "docs": [
+        "Phase 3 Slice D3 — writer-ask backer's VOID-path residual claim (the void",
+        "twin of withdraw_writer_ask_residual; shares the same pure core). Gates on",
+        "`voided` (not is_settled), no holders-first window (voided holders get",
+        "nothing). Pays the backer their pro-rata of the merged residual from",
+        "vault_usdc. Permissionless, backer-pinned, double-claim guarded. Spec: §8."
+      ],
+      "discriminator": [
+        88,
+        208,
+        249,
+        233,
+        83,
+        35,
+        160,
+        228
+      ],
+      "accounts": [
+        {
+          "name": "cranker",
+          "docs": [
+            "Permissionless caller (a cranker, or the backer). Payout is pinned to the",
+            "backer's USDC account below."
+          ],
+          "signer": true
+        },
+        {
+          "name": "shared_vault",
+          "docs": [
+            "The voided writer-ask vault."
+          ],
+          "writable": true
+        },
+        {
+          "name": "writer_ask_position",
+          "docs": [
+            "The backer's writer-ask position — zeroed (not closed) after the claim.",
+            "Self-referential seeds pin it to its own (option_mint, backer); the vault",
+            "constraint pins it to THIS vault."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  119,
+                  114,
+                  105,
+                  116,
+                  101,
+                  114,
+                  95,
+                  97,
+                  115,
+                  107,
+                  95,
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "writer_ask_position.option_mint",
+                "account": "WriterAskPosition"
+              },
+              {
+                "kind": "account",
+                "path": "writer_ask_position.backer",
+                "account": "WriterAskPosition"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault_usdc_account",
+          "docs": [
+            "Vault's USDC token account — payout source (the pot was swept in at init)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "writer_usdc_account",
+          "docs": [
+            "Backer's USDC token account — payout destination. Owner PINNED to the",
+            "backer: a cranker cannot redirect the residual to itself."
           ],
           "writable": true
         },
@@ -5635,8 +6597,14 @@
           "docs": [
             "Fresh PriceUpdateV2 from the Pyth Receiver program. Validated by",
             "`get_price_no_older_than(.., &market.pyth_feed_id)` for both feed_id",
-            "match and staleness."
-          ]
+            "match and staleness.",
+            "",
+            "Stage 3 (1b): now `Option`, position unchanged. REQUIRED (present) for a",
+            "Pyth market — a present price_update is wire-identical to before. A",
+            "Switchboard market passes None (sentinel) and uses the trailing SB",
+            "accounts. The Pyth arm errors `PriceUpdateMissing` if absent on a Pyth market."
+          ],
+          "optional": true
         },
         {
           "name": "settlement_record",
@@ -5676,6 +6644,27 @@
         {
           "name": "system_program",
           "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "sb_queue",
+          "docs": [
+            "set) in the SB arm. Not address-pinned (per-network queue)."
+          ],
+          "optional": true
+        },
+        {
+          "name": "sb_slothashes",
+          "docs": [
+            "runtime in the SB arm."
+          ],
+          "optional": true
+        },
+        {
+          "name": "sb_instructions",
+          "docs": [
+            "runtime in the SB arm, then scanned for the ed25519 ix index."
+          ],
+          "optional": true
         }
       ],
       "args": [
@@ -5764,6 +6753,66 @@
               }
             ]
           }
+        },
+        {
+          "name": "vault_usdc_account",
+          "docs": [
+            "Vault USDC — sweep destination. Required."
+          ],
+          "writable": true
+        },
+        {
+          "name": "option_mint",
+          "docs": [
+            "Canonical series mint — in-handler-pinned to the vault-derived address."
+          ]
+        },
+        {
+          "name": "writer_ask_pot",
+          "docs": [
+            "The series' WriterAskPot record — in-handler-pinned; empty ⇒ no-pot branch."
+          ]
+        },
+        {
+          "name": "writer_ask_pot_usdc",
+          "docs": [
+            "The pot's USDC account — sweep source (authority = protocol_state).",
+            "In-handler-pinned. CHECK: pinned via require_keys_eq; balance read raw."
+          ],
+          "writable": true
+        },
+        {
+          "name": "protocol_state",
+          "docs": [
+            "Protocol state — signs the pot→vault USDC transfer. Required."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "docs": [
+            "Classic SPL Token program — for the USDC sweep transfer. Required."
+          ],
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         }
       ],
       "args": []
@@ -5877,6 +6926,69 @@
         }
       ],
       "args": []
+    },
+    {
+      "name": "synth_warm_vol_oracle",
+      "docs": [
+        "Plant warmed VolOracle state (sample_count=720, fresh last_sample_ts,",
+        "V2-reference accumulators, caller-supplied spot) so American pricing",
+        "reads Ok past warmup/stale/math gates without 168 rate-limited pushes.",
+        "Gated by `test-synth-vol`. NEVER deploy a test-synth-vol build — it",
+        "lets anyone overwrite an oracle's vol state. Test-only."
+      ],
+      "discriminator": [
+        191,
+        90,
+        138,
+        28,
+        3,
+        150,
+        141,
+        216
+      ],
+      "accounts": [
+        {
+          "name": "signer",
+          "signer": true
+        },
+        {
+          "name": "vol_oracle",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  111,
+                  108,
+                  95,
+                  111,
+                  114,
+                  97,
+                  99,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "vol_oracle"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "spot_price_scaled",
+          "type": "i64"
+        },
+        {
+          "name": "last_sample_ts",
+          "type": "i64"
+        }
+      ]
     },
     {
       "name": "withdraw_from_vault",
@@ -6126,6 +7238,116 @@
         }
       ],
       "args": []
+    },
+    {
+      "name": "withdraw_writer_ask_residual",
+      "docs": [
+        "Exchange Phase 3 Slice D2a — a writer-ask backer claims their",
+        "post-settlement residual: equiv_shares = committed × writer_ask_equiv_shares",
+        "/ swept, payout = equiv_shares × collateral_remaining / total_shares, both",
+        "drawn from the SAME unified (collateral_remaining, total_shares) the pool",
+        "writers use. PURE (pay → decrement → zero the position; no close logic).",
+        "Permissionless with the payout pinned to position.backer; enforces the",
+        "holders-first EXERCISE_WINDOW. UNGATED (an exit/refund path) — inert in a",
+        "feature-free build (reverts NothingToClaim, swept always 0). Spec §8."
+      ],
+      "discriminator": [
+        43,
+        81,
+        119,
+        144,
+        239,
+        111,
+        144,
+        11
+      ],
+      "accounts": [
+        {
+          "name": "cranker",
+          "docs": [
+            "Permissionless caller (a cranker, or the backer). Pays tx fee only — the",
+            "payout is pinned to the backer's USDC account below."
+          ],
+          "signer": true
+        },
+        {
+          "name": "shared_vault",
+          "docs": [
+            "The settled writer-ask vault."
+          ],
+          "writable": true
+        },
+        {
+          "name": "writer_ask_position",
+          "docs": [
+            "The backer's writer-ask position — zeroed (not closed) after the claim.",
+            "Self-referential seeds pin it to its own (option_mint, backer); the vault",
+            "constraint pins it to THIS vault."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  119,
+                  114,
+                  105,
+                  116,
+                  101,
+                  114,
+                  95,
+                  97,
+                  115,
+                  107,
+                  95,
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "writer_ask_position.option_mint",
+                "account": "WriterAskPosition"
+              },
+              {
+                "kind": "account",
+                "path": "writer_ask_position.backer",
+                "account": "WriterAskPosition"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault_usdc_account",
+          "docs": [
+            "Vault's USDC token account — payout source."
+          ],
+          "writable": true
+        },
+        {
+          "name": "writer_usdc_account",
+          "docs": [
+            "Backer's USDC token account — payout destination. Owner PINNED to the",
+            "backer: a cranker cannot redirect the residual to itself."
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "docs": [
+            "Standard SPL Token program."
+          ],
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
     }
   ],
   "accounts": [
@@ -6270,6 +7492,32 @@
         70,
         119,
         72
+      ]
+    },
+    {
+      "name": "WriterAskPosition",
+      "discriminator": [
+        153,
+        60,
+        106,
+        50,
+        105,
+        8,
+        111,
+        54
+      ]
+    },
+    {
+      "name": "WriterAskPot",
+      "discriminator": [
+        144,
+        146,
+        126,
+        56,
+        17,
+        59,
+        177,
+        215
       ]
     },
     {
@@ -6496,6 +7744,19 @@
       ]
     },
     {
+      "name": "SettledWriterAskVaultClosed",
+      "discriminator": [
+        249,
+        46,
+        165,
+        119,
+        27,
+        137,
+        37,
+        85
+      ]
+    },
+    {
       "name": "TriggerCancelled",
       "discriminator": [
         158,
@@ -6717,6 +7978,19 @@
       ]
     },
     {
+      "name": "VaultVoidInitialized",
+      "discriminator": [
+        11,
+        206,
+        165,
+        122,
+        108,
+        192,
+        198,
+        146
+      ]
+    },
+    {
       "name": "VaultWithdrawn",
       "discriminator": [
         238,
@@ -6727,6 +8001,19 @@
         77,
         72,
         104
+      ]
+    },
+    {
+      "name": "WriterAskResidualWithdrawn",
+      "discriminator": [
+        132,
+        41,
+        145,
+        213,
+        77,
+        115,
+        201,
+        83
       ]
     },
     {
@@ -7017,7 +8304,7 @@
     {
       "code": 6054,
       "name": "WriterAsksDisabled",
-      "msg": "Writer asks are not enabled yet — reserved for Phase 3"
+      "msg": "Writer asks are not enabled in this build (dark gate) — see WRITER_ASKS_ENABLED"
     },
     {
       "code": 6055,
@@ -7048,6 +8335,86 @@
       "code": 6060,
       "name": "TriggerSourceAtaInvalid",
       "msg": "Trigger source ATA failed fire-time re-verification (owner or mint mismatch)"
+    },
+    {
+      "code": 6061,
+      "name": "SwitchboardVerifyFailed",
+      "msg": "Switchboard quote verification failed (signature, slothash, freshness, or missing ED25519 ix)"
+    },
+    {
+      "code": 6062,
+      "name": "SwitchboardFeedNotFound",
+      "msg": "Switchboard quote does not contain the expected feed_id"
+    },
+    {
+      "code": 6063,
+      "name": "SwitchboardInsufficientSamples",
+      "msg": "Switchboard feed has fewer oracle samples than the required floor"
+    },
+    {
+      "code": 6064,
+      "name": "PriceUpdateMissing",
+      "msg": "Pyth market requires the price_update account, but it was not provided"
+    },
+    {
+      "code": 6065,
+      "name": "SwitchboardAccountsMissing",
+      "msg": "Switchboard market requires the queue + SlotHashes + Instructions accounts"
+    },
+    {
+      "code": 6066,
+      "name": "InvalidOracleSource",
+      "msg": "Unknown oracle_source value on the market"
+    },
+    {
+      "code": 6067,
+      "name": "NoEd25519Instruction",
+      "msg": "No ED25519 instruction found in the transaction for Switchboard verification"
+    },
+    {
+      "code": 6068,
+      "name": "InvalidSwitchboardSysvar",
+      "msg": "Switchboard sysvar account address mismatch (SlotHashes or Instructions)"
+    },
+    {
+      "code": 6069,
+      "name": "SwitchboardSettleWindowElapsed",
+      "msg": "Switchboard settlement window elapsed — settle within 5 min of expiry or reclaim after grace"
+    },
+    {
+      "code": 6070,
+      "name": "NotAWriterAsk",
+      "msg": "Order is not a writer ask — fill it through fill_order"
+    },
+    {
+      "code": 6071,
+      "name": "EscrowNotEmpty",
+      "msg": "Per-order escrow is not empty — collateral did not fully move to the pot"
+    },
+    {
+      "code": 6072,
+      "name": "WriterAskSweepAccountsMissing",
+      "msg": "Writer-ask pot sweep accounts missing or pot USDC balance below the recorded counter"
+    },
+    {
+      "code": 6073,
+      "name": "NotAWriterAskVault",
+      "msg": "Not a writer-ask vault — pool-only/EUR vaults close via the pooled last-writer path"
+    },
+    {
+      "code": 6074,
+      "name": "VaultNotFullyDrained",
+      "msg": "Vault not fully drained — total_shares must be 0 before the writer-ask vault USDC can be closed"
+    },
+    {
+      "code": 6075,
+      "name": "CanonicalMintRequired",
+      "msg": "Writer asks may only be posted on a canonical create_series mint"
+    },
+    {
+      "code": 6076,
+      "name": "VaultNotVoided",
+      "msg": "Vault not voided — call initialize_void first"
     }
   ],
   "types": [
@@ -7970,6 +9337,25 @@
               "PDA bump seed."
             ],
             "type": "u8"
+          },
+          {
+            "name": "collateral_per_contract",
+            "docs": [
+              "Phase 3 Slice A — protocol-set collateral requirement per contract",
+              "(USDC, 6dp), snapshotted at post time from",
+              "`required_collateral_per_contract(vault.strike_price, vault.option_type)`.",
+              "Set ONLY on `WriterAsk` orders (the personal-collateral lock-at-post);",
+              "`0` (sentinel = N/A) on `Bid` / `ResaleAsk`. Slice B reads it to move the",
+              "filled slice into the series pot; Slice C refunds the unfilled remainder",
+              "at cancel/expiry.",
+              "",
+              "MUST be the last field — pre-Slice-A `RestingOrder` accounts were 8 bytes",
+              "shorter (146 on-disk vs the new 154). Live devnet orders are cleared by",
+              "`cancel_order` before deploy (clean cutover), so no realloc-migration path",
+              "is required — unlike the SharedVault append+migrate discipline, there are",
+              "no long-lived RestingOrder accounts to grow."
+            ],
+            "type": "u64"
           }
         ]
       }
@@ -8006,6 +9392,32 @@
           {
             "name": "exercise_style",
             "type": "u8"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "SettledWriterAskVaultClosed",
+      "docs": [
+        "Phase 3 Slice D2a — emitted when `close_settled_writer_ask_vault` reclaims a",
+        "fully-drained (total_shares == 0) writer-ask vault's USDC account. `dust_swept`",
+        "is the residual micro-USDC moved to the treasury before the close; the account",
+        "rent SOL also goes to the treasury."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "dust_swept",
+            "type": "u64"
           },
           {
             "name": "ts",
@@ -8326,6 +9738,58 @@
           {
             "name": "voided",
             "type": "bool"
+          },
+          {
+            "name": "writer_ask_collateral_swept",
+            "docs": [
+              "Phase 3 Slice D1 (exchange) — writer-ask pot collateral folded into this",
+              "vault at settlement. `settle_vault` sweeps `WriterAskPot.total_collateral`",
+              "(the counter, donation-proof) from `writer_ask_pot_usdc` into the vault's",
+              "USDC and records it here, once, in the `is_settled` block. 0 for EUR /",
+              "pool-only vaults and any vault with no WriterAsk pot.",
+              "",
+              "This becomes the FROZEN residual denominator for D2/D3:",
+              "merged = total_collateral_at_settle + writer_ask_collateral_swept,",
+              "splitting the post-holder residual pool-vs-writer-ask pro-rata. The sweep",
+              "asserts `pot_usdc.balance >= total_collateral` before recording, so the",
+              "denominator never exceeds the real backing.",
+              "",
+              "MUST be the last field. Pre-D1 vaults were serialized without it (8 bytes",
+              "shorter than the new INIT_SPACE). The admin-only",
+              "`migrate_shared_vault_writer_ask_swept` grows them and zero-fills the",
+              "trailing 8 bytes — which deserialize as 0, the correct default. Same",
+              "append+migrate discipline as carry_rate_bps (Stage A), exercise_style",
+              "(Stage C Pass 1), exercise tracking (Stage F), and spread_bps/voided",
+              "(Pass A) — the 6th such append."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "writer_ask_equiv_shares",
+            "docs": [
+              "Phase 3 Slice D2a (exchange) — writer-ask SHARE-equivalent folded into",
+              "`total_shares` at settlement (shares-unification). `settle_vault` sets",
+              "writer_ask_equiv_shares = writer_ask_collateral_swept × total_shares / total_collateral",
+              "(or = writer_ask_collateral_swept when total_collateral == 0, the pure",
+              "writer-ask vault) and ADDS it to `total_shares`, so pool-writers and",
+              "writer-ask-writers both claim the post-holder residual against ONE",
+              "jointly-decremented denominator (the conservation-preserving model). 0 for",
+              "EUR / pool-only vaults and any vault with no WriterAsk pot.",
+              "",
+              "This is the FROZEN numerator `withdraw_writer_ask_residual` reads to size",
+              "each backer's equiv_shares: `equiv_shares = committed × writer_ask_equiv_shares / swept`.",
+              "`close_settled_writer_ask_vault` keys off `total_shares == 0` (every",
+              "claimant drained) — never off this field directly.",
+              "",
+              "MUST be the last field. Pre-D2a vaults were serialized without it (8 bytes",
+              "shorter than the new INIT_SPACE). The admin-only",
+              "`migrate_shared_vault_residual_shares` grows them and zero-fills the",
+              "trailing 8 bytes — which deserialize as 0, the correct default. That one",
+              "consolidated migration grows a vault at ANY prior size (260 pre-D1 or 268",
+              "post-D1) straight to 276, so it SUPERSEDES the D1 268-migration at deploy.",
+              "The 7th such append."
+            ],
+            "type": "u64"
           }
         ]
       }
@@ -9099,6 +10563,25 @@
           {
             "name": "collateral_remaining",
             "type": "u64"
+          },
+          {
+            "name": "writer_ask_collateral_swept",
+            "docs": [
+              "Phase 3 Slice D1 — writer-ask pot collateral folded at settle (0 if no",
+              "pot). Lets indexers reconstruct the merged-waterfall denominator.",
+              "Additive trailing field (Borsh-append-safe)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "writer_ask_equiv_shares",
+            "docs": [
+              "Phase 3 Slice D2a — writer-ask SHARE-equivalent added to total_shares at",
+              "settle (= swept × total_shares / total_collateral, or = swept when",
+              "total_collateral == 0). 0 if no pot. Additive trailing field",
+              "(Borsh-append-safe) — lets indexers reconstruct the unified denominator."
+            ],
+            "type": "u64"
           }
         ]
       }
@@ -9116,6 +10599,38 @@
           },
           {
             "name": "Custom"
+          }
+        ]
+      }
+    },
+    {
+      "name": "VaultVoidInitialized",
+      "docs": [
+        "Phase 3 Slice D3 — emitted once per vault when `initialize_void` performs the",
+        "void transition: sweeps the canonical writer-ask pot (`swept`), applies the",
+        "shares-unification merge (`equiv_total` added to total_shares), seeds the",
+        "merged `collateral_remaining`, and flips `voided`. `swept`/`equiv_total` are 0",
+        "for a pool-only / EUR voided vault (the no-pot branch). Lets indexers tell a",
+        "merged-void wind-down apart from an ordinary reclaim."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "swept",
+            "type": "u64"
+          },
+          {
+            "name": "equiv_total",
+            "type": "u64"
+          },
+          {
+            "name": "collateral_remaining",
+            "type": "u64"
           }
         ]
       }
@@ -9279,22 +10794,213 @@
             "type": "u8"
           },
           {
-            "name": "_padding",
+            "name": "oracle_source",
             "docs": [
-              "MANDATORY Pod alignment padding -- NOT reserved future-field space.",
-              "`bytemuck::Pod` requires zero uninitialized bytes; this pads the",
-              "struct to a 16-byte boundary (i128 alignment). Future fields must",
-              "be appended AFTER `bump` and BEFORE this padding, reducing",
-              "`_padding` correspondingly. Any schema change still requires an",
-              "explicit admin migration instruction (same pattern as Stage A",
-              "`migrate_shared_vault_carry_rate`)."
+              "Oracle backing this feed's spot price (Stage 3, wiring 1a-iii).",
+              "`0` = Pyth (pull), `1` = Switchboard (On-Demand). See `ORACLE_SOURCE_*`",
+              "in `state/market.rs`. push_vol_sample reads this from the already-loaded",
+              "oracle to route the spot read; mint/fill/get_option_price inherit via the",
+              "cached `last_spot_price`.",
+              "",
+              "CLAIMED IN PLACE from `_padding` (offset 5845) — a SIZE-PRESERVING change:",
+              "`_padding` shrank 11→10 so `size_of` stays exactly 5856, the leading byte",
+              "of the old padding was always zero (Pod zero-init / `load_init` zero-fill),",
+              "so every legacy on-chain oracle reads this as `0 = Pyth` with NO migration",
+              "and NO realloc. A size-GROWING change would instead panic",
+              "`AccountLoader::load` (bytemuck length mismatch) on every legacy oracle."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "_pad_align",
+            "docs": [
+              "Explicit alignment slack (offsets 5846..5848) so `seed_vol` below lands",
+              "on an 8-byte boundary at offset 5848. `oracle_source` ends at 5846 and",
+              "i64 requires 8-byte alignment, so 2 slack bytes are mandatory. This pad",
+              "is NAMED (not compiler-implicit) because `bytemuck::Pod` forbids",
+              "uninitialized gap bytes — implicit padding fails the zero_copy derive.",
+              "",
+              "THIS IS ALIGNMENT SLACK, NOT RESERVED FUTURE-FIELD SPACE. The old",
+              "`_padding: [u8; 10]` is now fully spent: 2 bytes here + 8 bytes of",
+              "`seed_vol`. There is NO free padding left. A future field cannot be",
+              "claimed in place — it would grow `size_of` past 5856 and panic",
+              "`AccountLoader::load` (bytemuck length mismatch) on every legacy",
+              "oracle, requiring an admin realloc migration. Do NOT repurpose these",
+              "2 bytes for a new field; they exist solely to align `seed_vol`."
             ],
             "type": {
               "array": [
                 "u8",
-                11
+                2
               ]
             }
+          },
+          {
+            "name": "seed_vol",
+            "docs": [
+              "SEED volatility for the under-warmed window — annualized σ at solmath",
+              "SCALE (1e12), i64. Claimed in place from the old `_padding` (offsets",
+              "5848..5856); a SIZE-PRESERVING change, same migration-free trick as",
+              "`oracle_source`: every legacy on-chain oracle reads this as 0 via",
+              "`load_init` zero-fill, with NO migration and NO realloc. A size-GROWING",
+              "change would instead panic `AccountLoader::load` on every legacy oracle.",
+              "",
+              "ZERO-SAFE SENTINEL: `seed_vol == 0` means \"no seed — behave exactly as",
+              "before.\" The American pricing path (`price_american`) consults this",
+              "ONLY when the oracle is under-warmed (`sample_count <",
+              "VOL_ORACLE_WARMUP_SAMPLES`); a warm oracle always uses realized vol and",
+              "never reads `seed_vol`. Written at birth by `initialize_vol_oracle` so a",
+              "brand-new market is priceable from minute one while the realized-vol",
+              "ring warms in the background and later takes over. Encode off-chain as",
+              "`round(annualized_sigma * 1e12)` (e.g. crypto 0.80 → 800_000_000_000)."
+            ],
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "WriterAskPosition",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "backer",
+            "docs": [
+              "The quoting writer (backer) who posted the WriterAsk(s)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "option_mint",
+            "docs": [
+              "The canonical Token-2022 series mint this position backs."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "vault",
+            "docs": [
+              "The series' American SharedVault (market/settlement context)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "collateral_committed",
+            "docs": [
+              "USDC (6dp) moved from per-order escrow into the series pot at fill.",
+              "Populated in Slice B; 0 at init."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "contracts_written",
+            "docs": [
+              "Contracts the backer is short on this series (minted-on-fill against",
+              "their committed collateral). Populated in Slice B; 0 at init."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "created_at",
+            "docs": [
+              "When this position was first created (Slice B)."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump seed."
+            ],
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "WriterAskPot",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "option_mint",
+            "docs": [
+              "The canonical Token-2022 series mint this pot collateralizes."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "vault",
+            "docs": [
+              "The series' American SharedVault."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "usdc_account",
+            "docs": [
+              "The pot's USDC token account (PDA [\"writer_ask_pot_usdc\", option_mint],",
+              "authority = protocol_state). Created/funded in Slice B."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "total_collateral",
+            "docs": [
+              "Total USDC (6dp) committed across all backers' filled asks. 0 at init."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "total_contracts",
+            "docs": [
+              "Total contracts written against this pot. 0 at init."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump seed."
+            ],
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "WriterAskResidualWithdrawn",
+      "docs": [
+        "Phase 3 Slice D2a — emitted once per writer-ask backer's post-settlement",
+        "residual claim (`withdraw_writer_ask_residual`). `equiv_shares` is the",
+        "share-equivalent removed from the unified `total_shares` denominator;",
+        "`payout` is the USDC (6dp) paid from the merged `collateral_remaining`.",
+        "Distinct from VaultPostSettlementWithdraw (the pooled path) so indexers can",
+        "separate writer-ask residual refunds from pool-writer withdrawals."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "backer",
+            "type": "pubkey"
+          },
+          {
+            "name": "option_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "equiv_shares",
+            "type": "u64"
+          },
+          {
+            "name": "payout",
+            "type": "u64"
           }
         ]
       }

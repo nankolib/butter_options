@@ -51,7 +51,7 @@ pub const AMERICAN_ENABLED: bool = true;
 pub const WRITER_ASKS_ENABLED: bool = true;
 
 #[cfg(not(feature = "testing"))]
-pub const WRITER_ASKS_ENABLED: bool = false;
+pub const WRITER_ASKS_ENABLED: bool = true;
 
 #[cfg(test)]
 mod tests {

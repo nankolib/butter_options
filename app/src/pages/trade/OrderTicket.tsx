@@ -2,6 +2,7 @@ import type { FC, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { PublicKey } from "@solana/web3.js";
+import posthog from "posthog-js";
 import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { useProgram } from "../../hooks/useProgram";
 import { useBook } from "../../hooks/useBook";
@@ -176,6 +177,7 @@ export const OrderTicket: FC<{
     setBusy(true);
     try {
       let sig: string | null = null;
+      let phRoute: string | undefined; // buy·market dispatch route for analytics
       const ref = { asset: row.asset, vault: row.vault, optionMint: row.optionMint! };
       if (!isSeries) {
         if (side === "buy") { onLegacyBuy(row); setBusy(false); return; }
@@ -207,10 +209,12 @@ export const OrderTicket: FC<{
           }
           // Kind-aware: WriterAsks mint-on-fill via fill_writer_ask (distinct
           // account set); resaleAsks take contracts via fill_order.
+          phRoute = asks[0].kind === "writerAsk" ? "writerAsk" : "fillOrder";
           sig = asks[0].kind === "writerAsk"
             ? await fillWA.submit(asks[0], qty)
             : await fill.submit(asks[0], qty);
         } else {
+          phRoute = "peg";
           const maxPremium = (estPrice ?? mark?.premium ?? 0) * (1 + slippagePct / 100);
           sig = await peg.submit(ref, qty, maxPremium > 0 ? maxPremium : 1_000_000);
         }
@@ -226,7 +230,18 @@ export const OrderTicket: FC<{
         if (sellNoBalance) { setBusy(false); return; }
         sig = await post.submit(ref, "resaleAsk", limitPrice, qty, Math.floor(Date.now() / 1000));
       }
-      if (sig) { setStatus({ kind: "ok", msg: `Submitted · ${sig.slice(0, 8)}…` }); void refetchBook(); onDone(); }
+      if (sig) {
+        setStatus({ kind: "ok", msg: `Submitted · ${sig.slice(0, 8)}…` });
+        const ev = side === "write" ? "trade_write_ask"
+          : side === "buy" ? (type === "market" ? "trade_buy_market" : "trade_buy_limit")
+          : (type === "market" ? "trade_sell_market" : "trade_sell_limit");
+        posthog.capture(ev, {
+          asset: row.asset, strike: row.strike, optionType: row.optionType, qty,
+          price: type === "market" ? undefined : limitPrice, route: phRoute, sig,
+        });
+        void refetchBook();
+        onDone();
+      }
     } catch (e: any) {
       setStatus({ kind: "err", msg: (e?.message ?? String(e)).slice(0, 140) });
     } finally {
@@ -317,7 +332,7 @@ export const OrderTicket: FC<{
       {isWrite && (
         <div className="grid grid-cols-2 gap-px bg-rule border border-rule rounded-md overflow-hidden my-3">
           <Stat label="Collateral to lock" value={fmt(writeNeed)} sub="strike × qty" />
-          <Stat label="Your USDC" value={usdcBalance != null ? fmt(usdcBalance) : "…"} />
+          <Stat label="Your USDC" value={<span data-ph-mask>{usdcBalance != null ? fmt(usdcBalance) : "…"}</span>} />
         </div>
       )}
 

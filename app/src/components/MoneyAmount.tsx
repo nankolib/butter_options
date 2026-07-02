@@ -38,7 +38,9 @@ export const MoneyAmount: FC<MoneyAmountProps> = ({ value, showSign = false, cla
   else if (isPositive && showSign) prefix = "+";
 
   return (
-    <span className={className}>
+    // data-ph-mask: keep users' dollar figures (portfolio balances, PnL, position
+    // values, $ previews) out of PostHog session replay.
+    <span data-ph-mask className={className}>
       {prefix}${integerFormatted}
       <span className="opacity-50">.{fractional}</span>
     </span>

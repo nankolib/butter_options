@@ -1,4 +1,7 @@
+import { useEffect, useRef } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { useWallet } from "@solana/wallet-adapter-react";
+import posthog from "posthog-js";
 import { Header } from "./components/Header";
 import { ToastContainer } from "./components/Toast";
 import { useVersionCheck } from "./hooks/useVersionCheck";
@@ -51,6 +54,22 @@ function AppShell() {
   const location = useLocation();
   useVersionCheck();
   const showHeader = !matchesAny(location.pathname, HEADER_HIDDEN_PATHS);
+
+  // PostHog wallet analytics — identify by pubkey (public) on connect, reset on
+  // disconnect. Ref guard avoids a false "disconnected" on the initial null.
+  const { publicKey, wallet } = useWallet();
+  const prevWalletKey = useRef<string | null>(null);
+  useEffect(() => {
+    const key = publicKey?.toBase58() ?? null;
+    if (key && key !== prevWalletKey.current) {
+      posthog.identify(key);
+      posthog.capture("wallet_connected", { walletName: wallet?.adapter?.name });
+    } else if (!key && prevWalletKey.current) {
+      posthog.capture("wallet_disconnected");
+      posthog.reset();
+    }
+    prevWalletKey.current = key;
+  }, [publicKey, wallet]);
 
   return (
     <div className="min-h-screen bg-bg-primary text-text-primary">

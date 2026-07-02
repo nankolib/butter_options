@@ -40,6 +40,7 @@ import {
 } from "../../utils/constants";
 import { toUsdcBN } from "../../utils/format";
 import { decodeError, isWalletReplay } from "../../utils/errorDecoder";
+import posthog from "posthog-js";
 
 // Single compute-budget for the whole atomic bundle (one cell). Measured worst
 // case ~435K CU; 600K leaves headroom. One per cell — each cell is its own tx.
@@ -204,6 +205,13 @@ export function useWriteSubmit(): UseWriteSubmit {
             });
             // DO NOT abort — continue to the next tenor.
           }
+        }
+        const landed = results.filter((r) => r.status === "landed").length;
+        if (landed > 0) {
+          posthog.capture(input.vaultType === "epoch" ? "epoch_write" : "custom_write", {
+            asset, side: input.side, strike: input.strike, exerciseStyle: input.exerciseStyle,
+            cells: input.cells.length, cellsLanded: landed, ladder: input.cells.length > 1,
+          });
         }
         return results;
       } finally {

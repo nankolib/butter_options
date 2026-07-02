@@ -74,7 +74,7 @@ export const AppNav: FC = () => {
         </button>
         {connected && publicKey ? (
           <>
-            <span className="hidden sm:inline-flex items-center gap-2 text-ink opacity-85">
+            <span data-ph-mask className="hidden sm:inline-flex items-center gap-2 text-ink opacity-85">
               <span aria-hidden="true" className="inline-block h-[6px] w-[6px] rounded-full bg-crimson" />
               {truncatePubkey(publicKey.toBase58())}
             </span>

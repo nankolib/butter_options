@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useBook, type BookOrder } from "../../hooks/useBook";
 import { useCancelOrder } from "../../hooks/useOrderFlows";
+import posthog from "posthog-js";
 
 /**
  * OpenOrders — the connected wallet's resting orders + one-click cancel.
@@ -32,7 +33,7 @@ export const OpenOrders: FC<{ optionMint?: string | null }> = ({ optionMint = nu
     setErr(null); setBusy(o.pubkey);
     try {
       const sig = await cancel.submit(o);
-      if (sig) await refetch();
+      if (sig) { posthog.capture("trade_cancel", { kind: o.kind, sig }); await refetch(); }
     } catch (e: any) {
       setErr((e?.message ?? String(e)).slice(0, 120));
     } finally { setBusy(null); }

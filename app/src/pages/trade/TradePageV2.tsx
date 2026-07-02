@@ -119,6 +119,17 @@ export const TradePageV2: FC = () => {
     [chain.rows, td.selectedAsset, td.selectedExpiry],
   );
 
+  // Invalidate a stale focus when the asset/expiry selection changes — otherwise
+  // the CHART (symbol + candles), ticket, ladder, and open-orders keep rendering
+  // the PRIOR asset's contract (CHART has no chain row to re-click). Clearing to
+  // null lets the default-focus effect below auto-repoint to the new selection's
+  // series row. Covers both asset-switch and expiry-switch staleness.
+  useEffect(() => {
+    if (focused && (focused.asset !== td.selectedAsset || day(focused.expiry) !== day(td.selectedExpiry))) {
+      setFocused(null);
+    }
+  }, [focused, td.selectedAsset, td.selectedExpiry]);
+
   // Pro default focus → the SERIES row (the seeded $75) on load, not the legacy.
   useEffect(() => {
     if (focused || persona !== "pro" || !visibleRows.length) return;

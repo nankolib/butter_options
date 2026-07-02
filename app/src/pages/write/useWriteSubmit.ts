@@ -4,6 +4,8 @@ import {
   SystemProgram,
   ComputeBudgetProgram,
   SYSVAR_RENT_PUBKEY,
+  Transaction,
+  type TransactionInstruction,
 } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
@@ -20,11 +22,19 @@ import {
   deriveVaultPurchaseEscrow,
   deriveVaultMintRecord,
   deriveEpochConfig,
+  deriveCanonicalSeriesMint,
 } from "../../hooks/useAccounts";
+import {
+  buildCreateSeriesIx,
+  buildCreateSharedVaultIx,
+  postSeriesOrder,
+  type SeriesRef,
+} from "../trade/orderFlows";
 import {
   TOKEN_2022_PROGRAM_ID,
   TRANSFER_HOOK_PROGRAM_ID,
   VOL_ORACLE_SEED,
+  RESTING_ORDER_SEED,
   deriveExtraAccountMetaListPda,
   deriveHookStatePda,
 } from "../../utils/constants";
@@ -223,6 +233,13 @@ async function sendCell(
   optTypeIndex: number,
   isAmerican: boolean,
 ): Promise<{ txSignature: string; vaultPda: PublicKey; optionMint: PublicKey }> {
+  // Epoch + American → canonical fungible SERIES path (create_series + 0-pool
+  // vault + WriterAsk). Custom vaults AND European-epoch stay on the legacy
+  // per-writer create_and_deposit + mint_from_vault path below.
+  if (input.vaultType === "epoch" && isAmerican) {
+    return sendEpochSeriesCell(program, publicKey, input, cell, shared, optTypeIndex);
+  }
+
   const optTypeEnum = input.side === "call" ? { call: {} } : { put: {} };
   const exerciseStyleEnum = isAmerican ? { american: {} } : { european: {} };
   const vaultTypeEnum = input.vaultType === "epoch" ? { epoch: {} } : { custom: {} };
@@ -320,4 +337,84 @@ async function sendCell(
   }
 
   return { txSignature, vaultPda: sharedVaultPda, optionMint: optionMintPda };
+}
+
+/**
+ * Epoch + American cell → canonical fungible SERIES via already-deployed rails.
+ * Sequence (≤2 txs, idempotent skip-if-exists):
+ *   1. ensure infra (ONE tx, only the missing ixs): create_series (if the series
+ *      record is absent) + create_shared_vault 0-pool (if the vault is absent).
+ *   2. post_order(WriterAsk) at the writer's premium — escrows strike×qty into a
+ *      per-order, cancellable escrow; buyers mint the fungible series on fill.
+ * Steady state (series+vault already exist): a single WriterAsk tx.
+ * Replaces the per-writer mint_from_vault path for epoch American writes.
+ */
+async function sendEpochSeriesCell(
+  program: any,
+  publicKey: PublicKey,
+  input: WriteSubmitInput,
+  cell: WriteCell,
+  shared: SharedCtx,
+  optTypeIndex: number,
+): Promise<{ txSignature: string; vaultPda: PublicKey; optionMint: PublicKey }> {
+  const strikeBN = toUsdcBN(input.strike);
+  const expiryBN = new BN(cell.expiryTs);
+  const optTypeEnum = input.side === "call" ? { call: {} } : { put: {} };
+  const asset = input.market.account.assetName as string;
+
+  const [vaultPda] = deriveSharedVault(shared.marketPda, strikeBN, expiryBN, optTypeIndex, "american");
+  const [seriesMint] = deriveCanonicalSeriesMint(shared.marketPda, strikeBN, expiryBN, optTypeIndex);
+  const [recordPda] = deriveVaultMintRecord(seriesMint);
+  const conn = program.provider.connection;
+
+  // ---- 1. Ensure infra (only the missing pieces) — ONE tx if anything's absent ----
+  const [recordInfo, vaultInfo] = await Promise.all([
+    conn.getAccountInfo(recordPda),
+    conn.getAccountInfo(vaultPda),
+  ]);
+  const infraIxs: TransactionInstruction[] = [];
+  if (!recordInfo) {
+    infraIxs.push(await buildCreateSeriesIx(
+      program, publicKey, shared.marketPda, shared.protocolStatePda, seriesMint, recordPda,
+      strikeBN, expiryBN, optTypeEnum));
+  }
+  if (!vaultInfo) {
+    infraIxs.push(await buildCreateSharedVaultIx(
+      program, publicKey, shared.marketPda, shared.protocolStatePda, vaultPda, shared.usdcMint,
+      shared.epochConfigPda, strikeBN, expiryBN, optTypeEnum));
+  }
+  if (infraIxs.length > 0) {
+    try {
+      await program.provider.sendAndConfirm(
+        new Transaction().add(EXTRA_CU_600K, ...infraIxs), [], { commitment: "confirmed" });
+    } catch (err: any) {
+      // Idempotent: a concurrent write (or a wallet-replay) may have created them.
+      // Re-check both before failing; only rethrow if still missing.
+      if (!isWalletReplay(err)) {
+        const [r2, v2] = await Promise.all([conn.getAccountInfo(recordPda), conn.getAccountInfo(vaultPda)]);
+        if (!r2 || !v2) throw err;
+      }
+    }
+  }
+
+  // ---- 2. Post the WriterAsk at the writer's premium (reuses T2) ----
+  const ref: SeriesRef = { asset, vault: vaultPda.toBase58(), optionMint: seriesMint.toBase58() };
+  const nonce = new BN(Math.floor(Date.now() / 1000));
+  let txSignature: string;
+  try {
+    txSignature = await postSeriesOrder(
+      program, ref, "writerAsk", toUsdcBN(cell.premiumPerContract), cell.contracts, nonce);
+  } catch (err: any) {
+    if (!isWalletReplay(err)) throw err;
+    // Replay → the order likely landed; confirm via the order PDA before deciding
+    // (never re-post: a fresh nonce would create a DUPLICATE ask).
+    const [order] = PublicKey.findProgramAddressSync(
+      [Buffer.from(RESTING_ORDER_SEED), seriesMint.toBuffer(), publicKey.toBuffer(), nonce.toArrayLike(Buffer, "le", 8)],
+      program.programId);
+    const landed = await conn.getAccountInfo(order);
+    if (!landed) throw new Error("Write did not confirm — please retry.");
+    txSignature = err?.signature ?? err?.txid ?? "";
+  }
+
+  return { txSignature, vaultPda, optionMint: seriesMint };
 }

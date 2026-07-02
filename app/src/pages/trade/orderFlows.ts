@@ -16,7 +16,7 @@
 
 import { Program, BN } from "@coral-xyz/anchor";
 import {
-  PublicKey, SystemProgram, ComputeBudgetProgram, SYSVAR_RENT_PUBKEY,
+  PublicKey, SystemProgram, ComputeBudgetProgram, SYSVAR_RENT_PUBKEY, type TransactionInstruction,
 } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -214,6 +214,47 @@ export async function fillWriterAsk(
     writerAskPot, writerAskPotUsdc, writerAskPosition, usdcMint: c.usdcMint,
     tokenProgram: TOKEN_PROGRAM_ID, token2022Program: TOKEN_2022_PROGRAM_ID, systemProgram: SystemProgram.programId,
   }).preInstructions([CU(400_000), takerOptIx, takerUsdcIx, makerUsdcIx]).rpc();
+}
+
+// =============================================================================
+// Epoch-write → series infra builders (return instructions, so the write flow
+// can bundle create_series + create_shared_vault in ONE tx and skip whichever
+// already exists). Both target the CANONICAL series (spec-only seeds) — the
+// fungible path that retires the per-writer mint_from_vault for epoch writes.
+// =============================================================================
+
+/** create_series — the canonical fungible mint for (market, strike, expiry, type,
+ *  American). Permissionless, idempotent (record init reverts if it already
+ *  exists — caller should skip when the record is present). ~0.0135 SOL rent. */
+export async function buildCreateSeriesIx(
+  program: Program<any>, caller: PublicKey, market: PublicKey, protocolState: PublicKey,
+  seriesMint: PublicKey, record: PublicKey, strikeMicro: BN, expiry: BN,
+  optionType: { call: {} } | { put: {} },
+): Promise<TransactionInstruction> {
+  return program.methods.createSeries(strikeMicro, expiry, optionType as any, { american: {} }).accountsStrict({
+    caller, market, protocolState, optionMint: seriesMint, vaultMintRecord: record,
+    transferHookProgram: TRANSFER_HOOK_PROGRAM_ID,
+    extraAccountMetaList: deriveExtraAccountMetaListPda(seriesMint)[0],
+    hookState: deriveHookStatePda(seriesMint)[0],
+    systemProgram: SystemProgram.programId, token2022Program: TOKEN_2022_PROGRAM_ID, rent: SYSVAR_RENT_PUBKEY,
+  }).instruction();
+}
+
+/** create_shared_vault — a ZERO-POOL American epoch vault (no deposit). Only
+ *  needed so post_order(WriterAsk) can read Account<SharedVault>; the WriterAsk
+ *  escrows its own collateral per-order, so the pool stays empty. ~0.0066 SOL rent. */
+export async function buildCreateSharedVaultIx(
+  program: Program<any>, writer: PublicKey, market: PublicKey, protocolState: PublicKey,
+  vault: PublicKey, usdcMint: PublicKey, epochConfig: PublicKey, strikeMicro: BN, expiry: BN,
+  optionType: { call: {} } | { put: {} },
+): Promise<TransactionInstruction> {
+  const vaultUsdc = pda([Buffer.from(VAULT_USDC_SEED), vault.toBuffer()]);
+  return program.methods
+    .createSharedVault(strikeMicro, expiry, optionType as any, { epoch: {} }, usdcMint, 0, { american: {} })
+    .accountsStrict({
+      creator: writer, market, sharedVault: vault, vaultUsdcAccount: vaultUsdc, usdcMint,
+      protocolState, epochConfig, tokenProgram: TOKEN_PROGRAM_ID, systemProgram: SystemProgram.programId,
+    }).instruction();
 }
 
 /**

@@ -307,9 +307,16 @@ export const EpochVaultSection: FC<EpochVaultSectionProps> = ({
               </div>
             ))}
             <div className="flex items-baseline justify-between border-t border-rule-soft pt-1 mt-1 font-mono text-[11.5px] text-ink">
-              <span className="text-ink-muted">Total collateral</span>
+              <span className="text-ink-muted">Collateral locked as your ask</span>
               <span>${totalCollateral.toLocaleString()}</span>
             </div>
+            {values.exerciseStyle === "american" && (
+              <p className="font-sans italic font-normal leading-[1.5] opacity-70 text-[11px] pt-1">
+                Posts as a resting sell on the shared series — refunded in full if you cancel (Open Orders
+                on the Trade page), released when a buyer fills. First write per strike/expiry also pays a
+                one-time ~0.02 SOL rent to create the series.
+              </p>
+            )}
             {cells.length > 1 && (
               <div className="font-mono font-medium text-[10px] uppercase tracking-[0.18em] text-crimson pt-0.5">
                 {cells.length} wallet approvals · one per tenor

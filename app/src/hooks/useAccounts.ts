@@ -168,6 +168,33 @@ export function deriveVaultOptionMint(
   );
 }
 
+/**
+ * CANONICAL series mint — SPEC-ONLY seeds (no writer, no timestamp) so every
+ * writer on the same (market, strike, expiry, type) mints ONE fungible CA.
+ * Seeds: ["vault_option_mint", market, strike(8 LE), expiry(8 LE), [type], [style]].
+ * style byte: 1 = American (series are American-only). Distinct from the
+ * per-writer deriveVaultOptionMint above.
+ */
+export function deriveCanonicalSeriesMint(
+  market: PublicKey,
+  strike: BN,
+  expiry: BN,
+  optionTypeIndex: number, // 0 = call, 1 = put
+  programId: PublicKey = PROGRAM_ID,
+): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [
+      Buffer.from(VAULT_OPTION_MINT_SEED),
+      market.toBuffer(),
+      strike.toArrayLike(Buffer, "le", 8),
+      expiry.toArrayLike(Buffer, "le", 8),
+      Buffer.from([optionTypeIndex]),
+      Buffer.from([1]), // ExerciseStyle::American
+    ],
+    programId,
+  );
+}
+
 /** Seeds: ["vault_purchase_escrow", shared_vault, writer, created_at(8 LE)] */
 export function deriveVaultPurchaseEscrow(
   sharedVault: PublicKey,

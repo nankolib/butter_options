@@ -418,6 +418,12 @@ export function useTradeData(): UseTradeData {
 
         if (unsold <= 0) continue;
         const price = usdcToNumber(vm.account.premiumPerContract);
+        // premium_per_contract == 0 is the American series SENTINEL (priced
+        // dynamically via peg/book), NOT a real $0 ask. Never surface it as a
+        // legacy buyable vault offering — purchase_from_vault has no >0 guard and
+        // would hand out a real, collateral-backed option for $0. Those trade via
+        // the peg/book flow instead. (On-chain guard parked to the protocol backlog.)
+        if (price <= 0) continue;
 
         // Vault Offering for the unified panel — pushed only when there's
         // actual unsold inventory. The cheapest vault offering is also

@@ -37,6 +37,7 @@ const FRIENDLY_OVERRIDES: Record<string, string> = {
   NotResaleSeller: "Only the listing's seller can cancel it.",
   InvalidListingEscrow: "Listing data mismatch — please refresh and try again.",
   ListingMismatch: "Listing data mismatch — please refresh and try again.",
+  InvalidEpochExpiry: "This tenor is too soon — pick a later expiry.",
 };
 
 // Build code→message map at module load by walking idl.errors[]. The

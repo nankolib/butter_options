@@ -11,6 +11,7 @@ import { TOKEN_2022_PROGRAM_ID, MARKET_SEED, PROGRAM_ID } from "../../utils/cons
 import { fetchOptionPriceQuote, type OptionPriceQuote } from "../../utils/optionPriceQuote";
 import { OrderTicket } from "./OrderTicket";
 import { OrderBookLadder } from "./OrderBookLadder";
+import { OpenOrders } from "./OpenOrders";
 import type { UnifiedChainRow } from "../../hooks/useUnifiedChain";
 
 /**
@@ -202,6 +203,8 @@ export const ContractDetailModal: FC<{
               ? <OrderBookLadder optionMint={row.optionMint} pegPrice={rfq?.premiumPerContract ?? null} />
               : <Empty>No {side} market yet at this strike / expiry.</Empty>}
             <p className="font-mono text-[9.5px] text-ink-muted/70 mt-1">{rfqStatus}</p>
+
+            <div className="mt-6"><OpenOrders optionMint={row?.optionMint ?? null} /></div>
           </div>
 
           {/* RIGHT: Your position → the unified ticket */}

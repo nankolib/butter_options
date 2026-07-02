@@ -10,6 +10,7 @@ import { TradeFooter } from "./TradeFooter";
 import { TradeChainV2, type FocusedContract, type DetailTarget } from "./TradeChainV2";
 import { OrderTicket } from "./OrderTicket";
 import { OrderBookLadder } from "./OrderBookLadder";
+import { OpenOrders } from "./OpenOrders";
 import { BuyModal } from "./BuyModal";
 import { calculateCallPremium, calculatePutPremium, getDefaultVolatility, applyVolSmile } from "../../utils/blackScholes";
 
@@ -229,13 +230,16 @@ export const TradePageV2: FC = () => {
                   onShowDetails={setDetailTarget}
                 />
                 {focused && (
-                  <div className="lg:sticky lg:top-[120px]">
+                  <div className="lg:sticky lg:top-[120px] space-y-6">
                     <OrderTicket
                       row={focused}
                       spot={td.spot}
                       onDone={() => { chain.refetch(); td.refetch(); }}
                       onLegacyBuy={onLegacyBuy}
                     />
+                    <div className="border border-rule rounded-md p-5 bg-paper">
+                      <OpenOrders optionMint={focused.optionMint} />
+                    </div>
                   </div>
                 )}
               </div>
@@ -258,6 +262,9 @@ export const TradePageV2: FC = () => {
                 <div className="border border-rule rounded-md p-5 mt-6 lg:mr-[392px]">
                   <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-ink-muted mb-3">Order book</div>
                   <OrderBookLadder optionMint={focused.optionMint} pegPrice={focusedMark} />
+                </div>
+                <div className="border border-rule rounded-md p-5 mt-6 lg:mr-[392px]">
+                  <OpenOrders optionMint={focused.optionMint} />
                 </div>
               </>
             ) : (

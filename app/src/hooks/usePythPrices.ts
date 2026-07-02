@@ -69,7 +69,11 @@ function parsePriceResponse(json: unknown): Map<string, number> {
 async function fetchPrices(feedIds: string[]): Promise<Map<string, number>> {
   if (feedIds.length === 0) return new Map();
   const params = feedIds.map((id) => `ids[]=${encodeURIComponent(id)}`).join("&");
-  const url = `${getHermesBase()}${PRICE_PATH}?${params}&parsed=true`;
+  // ignore_invalid_price_ids=true: Hermes otherwise 404s the ENTIRE batch when a
+  // single id is unknown/unavailable (e.g. an off-hours equity or SB/corrupt
+  // feed), which used to blank spot/mark for every asset. With this flag it
+  // returns 200 with the resolvable ids and silently drops the bad ones.
+  const url = `${getHermesBase()}${PRICE_PATH}?${params}&parsed=true&ignore_invalid_price_ids=true`;
 
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), FETCH_TIMEOUT_MS);
@@ -79,7 +83,15 @@ async function fetchPrices(feedIds: string[]): Promise<Map<string, number>> {
       throw new Error(`Hermes price HTTP ${resp.status}`);
     }
     const json = await resp.json();
-    return parsePriceResponse(json);
+    const out = parsePriceResponse(json);
+    // Surface (don't silently swallow) any feed ids Hermes couldn't resolve.
+    const missing = feedIds.filter((id) => !out.has(id.toLowerCase().replace(/^0x/, "")));
+    if (missing.length) {
+      console.warn(
+        `[usePythPrices] Hermes returned no price for ${missing.length} feed id(s) (dropped, batch preserved): ${missing.map((m) => m.slice(0, 10) + "…").join(", ")}`,
+      );
+    }
+    return out;
   } finally {
     clearTimeout(timer);
   }

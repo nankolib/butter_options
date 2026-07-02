@@ -2,12 +2,12 @@ import type { FC, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { PublicKey } from "@solana/web3.js";
-import { getAssociatedTokenAddressSync } from "@solana/spl-token";
+import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { useProgram } from "../../hooks/useProgram";
 import { useBook } from "../../hooks/useBook";
 import { usePegFill, usePostOrder, useFillOrder, useFillWriterAsk } from "../../hooks/useOrderFlows";
 import { calculateCallGreeks, calculatePutGreeks, getDefaultVolatility, applyVolSmile } from "../../utils/blackScholes";
-import { TOKEN_2022_PROGRAM_ID, MARKET_SEED, PROGRAM_ID } from "../../utils/constants";
+import { TOKEN_2022_PROGRAM_ID, MARKET_SEED, PROGRAM_ID, DEVNET_USDC_MINT } from "../../utils/constants";
 import {
   fetchOptionPriceQuote, describeOptionPriceQuoteStatus,
   OptionPriceQuoteFailure, type OptionPriceQuote,
@@ -36,7 +36,7 @@ const rfqCache = new Map<string, { q: OptionPriceQuote; at: number }>();
  * RFQ: "Request quote" renders but is NOT wired to the on-chain get_option_price
  * view this pass — that quote-on-demand + caching is Pass 4 (T5/T6).
  */
-type Side = "buy" | "sell";
+type Side = "buy" | "sell" | "write";
 type OrderType = "market" | "limit" | "stop" | "tpsl";
 const LIVE_TYPES: OrderType[] = ["market", "limit"];
 
@@ -51,7 +51,7 @@ export const OrderTicket: FC<{
 }> = ({ row, spot, onDone, onLegacyBuy, seedQuote = null }) => {
   const { publicKey } = useWallet();
   const { program } = useProgram();
-  const { orders } = useBook();
+  const { orders, refetch: refetchBook } = useBook();
   const peg = usePegFill();
   const post = usePostOrder();
   const fill = useFillOrder();
@@ -63,6 +63,7 @@ export const OrderTicket: FC<{
   const [limitPrice, setLimitPrice] = useState<number>(0);
   const [slippagePct, setSlippagePct] = useState(5);
   const [held, setHeld] = useState<number | null>(null);
+  const [usdcBalance, setUsdcBalance] = useState<number | null>(null); // dollars; for the Write collateral gate
   const [status, setStatus] = useState<{ kind: "ok" | "err"; msg: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -72,6 +73,7 @@ export const OrderTicket: FC<{
   const [rfqError, setRfqError] = useState<OptionPriceQuoteFailure | null>(null);
 
   const isSeries = row.provenance === "series";
+  const isWrite = side === "write";
   // Pricing axis — American contracts (legacy OR series) price via the on-chain
   // get_option_price view. Routing (below) stays on `isSeries` (provenance).
   const useOnChainQuote = row.exerciseStyle === "american";
@@ -118,6 +120,20 @@ export const OrderTicket: FC<{
     })();
     return () => { live = false; };
   }, [isSeries, row.optionMint, publicKey, program]);
+
+  // USDC balance (dollars) — only needed for the Write collateral gate.
+  useEffect(() => {
+    let live = true;
+    if (side !== "write" || !publicKey || !program) return;
+    (async () => {
+      try {
+        const ata = getAssociatedTokenAddressSync(DEVNET_USDC_MINT, publicKey, false, TOKEN_PROGRAM_ID);
+        const bal = await program.provider.connection.getTokenAccountBalance(ata);
+        if (live) setUsdcBalance(Number(bal.value.uiAmount ?? 0));
+      } catch { if (live) setUsdcBalance(0); }
+    })();
+    return () => { live = false; };
+  }, [side, publicKey, program]);
 
   // est. reference price off the cheap aggregate (Pass-0): ask for buy, bid for sell.
   const refPrice = side === "buy" ? row.bestAsk : row.bestBid;
@@ -166,13 +182,29 @@ export const OrderTicket: FC<{
         setStatus({ kind: "err", msg: "Legacy listings are managed in Portfolio." });
         setBusy(false); return;
       }
-      if (side === "buy" && type === "market") {
+      if (side === "write") {
+        // Write = mint-on-fill sell side: post a WriterAsk (escrows strike×qty USDC).
+        sig = await post.submit(ref, "writerAsk", limitPrice, qty, Math.floor(Date.now() / 1000));
+      } else if (side === "buy" && type === "market") {
         // Best ask: a resting ask ≤ peg → take it; else fill the vault peg.
         const asks = orders
           .filter((o) => o.optionMint === row.optionMint && o.kind !== "bid")
           .sort((a, b) => a.price - b.price);
         const pegRef = mark?.premium ?? Infinity;
         if (asks.length && asks[0].price <= pegRef) {
+          // Belt-and-suspenders on top of the shared book store: re-verify the
+          // target order still exists on-chain before dispatch. A concurrent
+          // cancel/fill could have closed it (→ 3012 AccountNotInitialized);
+          // if so, refresh the shared book and ask the user to retry.
+          const live = program
+            ? await program.provider.connection.getAccountInfo(new PublicKey(asks[0].pubkey))
+            : null;
+          if (!live) {
+            await refetchBook();
+            setStatus({ kind: "err", msg: "That order just changed — book refreshed, please retry." });
+            setBusy(false);
+            return;
+          }
           // Kind-aware: WriterAsks mint-on-fill via fill_writer_ask (distinct
           // account set); resaleAsks take contracts via fill_order.
           sig = asks[0].kind === "writerAsk"
@@ -194,7 +226,7 @@ export const OrderTicket: FC<{
         if (sellNoBalance) { setBusy(false); return; }
         sig = await post.submit(ref, "resaleAsk", limitPrice, qty, Math.floor(Date.now() / 1000));
       }
-      if (sig) { setStatus({ kind: "ok", msg: `Submitted · ${sig.slice(0, 8)}…` }); onDone(); }
+      if (sig) { setStatus({ kind: "ok", msg: `Submitted · ${sig.slice(0, 8)}…` }); void refetchBook(); onDone(); }
     } catch (e: any) {
       setStatus({ kind: "err", msg: (e?.message ?? String(e)).slice(0, 140) });
     } finally {
@@ -204,6 +236,20 @@ export const OrderTicket: FC<{
 
   const submitting = busy || peg.submitting || post.submitting || fill.submitting || fillWA.submitting;
   const fmt = (n: number) => `$${n.toFixed(n < 100 ? 4 : 2)}`;
+
+  // Write (WriterAsk) collateral gate — series+American only; collateral = strike × qty
+  // (== collateral_per_contract on-chain). row.strike is the parsed vault strike, so no fetch.
+  const writeNeed = row.strike * qty;
+  const writeGate = !isWrite ? null
+    : !isSeries ? "Write is series-only"
+    : row.exerciseStyle !== "american" ? "Writer-asks are American-only"
+    : (usdcBalance != null && usdcBalance < writeNeed) ? `Insufficient USDC · need ${fmt(writeNeed)}`
+    : !(limitPrice > 0) ? "Set an ask price"
+    : null;
+
+  // Buy·Limit / Sell·Limit require a positive price — chain reverts (InvalidContractSize)
+  // on price 0. Mirror the Write-mode gate rather than letting the tx fail.
+  const limitGate = (!isWrite && type === "limit" && !(limitPrice > 0)) ? "Set a limit price" : null;
 
   return (
     <div className="border border-rule rounded-md p-5 bg-paper">
@@ -218,9 +264,10 @@ export const OrderTicket: FC<{
       </div>
 
       {/* Side */}
-      <Segment options={[["buy", "Buy"], ["sell", "Sell"]]} value={side} onChange={(v) => setSide(v as Side)} />
+      <Segment options={[["buy", "Buy"], ["sell", "Sell"], ["write", "Write"]]} value={side} onChange={(v) => setSide(v as Side)} />
 
-      {/* Type — Market/Limit live, Stop/TP-SL greyed */}
+      {/* Type — Market/Limit live, Stop/TP-SL greyed. Hidden for Write (always a limit post). */}
+      {!isWrite && (<>
       <div className="flex gap-px bg-rule border border-rule rounded-md overflow-hidden my-3">
         {(["market", "limit", "stop", "tpsl"] as OrderType[]).map((t) => {
           const live = LIVE_TYPES.includes(t);
@@ -242,8 +289,8 @@ export const OrderTicket: FC<{
           );
         })}
       </div>
-      {!LIVE_TYPES.includes(type) ? null : null}
       <p className="font-mono text-[9.5px] text-ink-muted/70 mb-3 -mt-1">Stop · TP/SL — Phase 4 keeper triggers (coming soon)</p>
+      </>)}
 
       {/* Qty + price */}
       <Field label="Quantity">
@@ -251,19 +298,28 @@ export const OrderTicket: FC<{
           className="w-full bg-transparent border border-rule rounded px-3 py-2 font-mono text-[14px] text-ink outline-none focus:border-ink" />
       </Field>
 
-      {type === "limit" && (
-        <Field label="Limit price (USDC / contract)">
+      {(type === "limit" || isWrite) && (
+        <Field label={isWrite ? "Ask price (USDC / contract)" : "Limit price (USDC / contract)"}>
           <input type="number" min={0} step="0.0001" value={limitPrice} onChange={(e) => setLimitPrice(Math.max(0, Number(e.target.value) || 0))}
             className="w-full bg-transparent border border-rule rounded px-3 py-2 font-mono text-[14px] text-ink outline-none focus:border-ink" />
         </Field>
       )}
-      {type === "market" && (
+      {type === "market" && !isWrite && (
         <Field label="Max slippage %">
           <input type="number" min={0} step="0.5" value={slippagePct} onChange={(e) => setSlippagePct(Math.max(0, Number(e.target.value) || 0))}
             className="w-full bg-transparent border border-rule rounded px-3 py-2 font-mono text-[14px] text-ink outline-none focus:border-ink" />
         </Field>
       )}
 
+      {/* Write — collateral to lock (strike × qty) + wallet USDC */}
+      {isWrite && (
+        <div className="grid grid-cols-2 gap-px bg-rule border border-rule rounded-md overflow-hidden my-3">
+          <Stat label="Collateral to lock" value={fmt(writeNeed)} sub="strike × qty" />
+          <Stat label="Your USDC" value={usdcBalance != null ? fmt(usdcBalance) : "…"} />
+        </div>
+      )}
+
+      {!isWrite && (<>
       {/* Est price / total */}
       <div className="grid grid-cols-2 gap-px bg-rule border border-rule rounded-md overflow-hidden my-3">
         <Stat label={side === "buy" ? "Est. ask" : "Est. bid"} value={estPrice != null ? fmt(estPrice) : "—"} />
@@ -303,16 +359,19 @@ export const OrderTicket: FC<{
           Request quote · model price (EUR)
         </button>
       )}
+      </>)}
 
       {/* Submit */}
-      <button type="button" disabled={submitting || sellNoBalance || !publicKey}
+      <button type="button" disabled={submitting || sellNoBalance || !publicKey || (isWrite && !!writeGate) || !!limitGate}
         onClick={submit}
         className={`w-full font-mono text-[12px] uppercase tracking-[0.2em] rounded-md py-3 transition-colors ${
-          submitting || sellNoBalance || !publicKey ? "bg-paper-2 text-ink-muted cursor-not-allowed" : "bg-ink text-paper hover:opacity-90"
+          submitting || sellNoBalance || !publicKey || (isWrite && !!writeGate) || !!limitGate ? "bg-paper-2 text-ink-muted cursor-not-allowed" : "bg-ink text-paper hover:opacity-90"
         }`}>
         {!publicKey ? "Connect wallet"
-          : sellNoBalance ? "No contracts held to sell"
           : submitting ? "Submitting…"
+          : isWrite ? (writeGate ?? `Write ${qty} · ask ${fmt(limitPrice)}`)
+          : limitGate ? limitGate
+          : sellNoBalance ? "No contracts held to sell"
           : `${side === "buy" ? "Buy" : "Sell"} ${qty} · ${type === "market" ? "Market" : "Limit"}`}
       </button>
 

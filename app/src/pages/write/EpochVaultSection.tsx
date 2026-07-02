@@ -1,7 +1,9 @@
 import type { FC } from "react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
+import { useProgram } from "../../hooks/useProgram";
+import { deriveEpochConfig } from "../../hooks/useAccounts";
 import { SectionNumber } from "../../components/layout";
 import { showToast } from "../../components/Toast";
 import { WriterForm, type WriterFormValues, type AssetOption } from "./WriterForm";
@@ -59,7 +61,29 @@ export const EpochVaultSection: FC<EpochVaultSectionProps> = ({
 }) => {
   const { connected } = useWallet();
   const { setVisible } = useWalletModal();
+  const { program } = useProgram();
   const { submitting, stageLabel, submit, retry } = useWriteSubmit();
+
+  // Live epoch min-duration window (EpochConfig.min_epoch_duration_days). Slots
+  // inside `now + minLeadSecs` are rejected on-chain (6021 InvalidEpochExpiry),
+  // so the tenor math rolls forward past it. 1-day fallback while loading (the
+  // on-chain default) so we never briefly offer a too-soon slot.
+  const [minEpochDays, setMinEpochDays] = useState<number | null>(null);
+  useEffect(() => {
+    if (!program) return;
+    let live = true;
+    (async () => {
+      try {
+        const [epochConfigPda] = deriveEpochConfig();
+        const ec: any = await (program.account as any).epochConfig.fetch(epochConfigPda);
+        if (live) setMinEpochDays(Number(ec.minEpochDurationDays));
+      } catch {
+        /* leave null → conservative 1-day fallback below */
+      }
+    })();
+    return () => { live = false; };
+  }, [program]);
+  const minLeadSecs = (minEpochDays ?? 1) * 86400;
 
   const contractsNum = parseInt(values.contracts || "0", 10) || 0;
   const strikeNum = parseFloat(values.strike) || 0;
@@ -86,14 +110,14 @@ export const EpochVaultSection: FC<EpochVaultSectionProps> = ({
     const now = Date.now();
     const tenors =
       tenorMode === "single"
-        ? [{ label: singleTenor, pct: 100, expiryTs: tenorExpiry(singleTenor, now) }]
+        ? [{ label: singleTenor, pct: 100, expiryTs: tenorExpiry(singleTenor, now, minLeadSecs) }]
         : ALL_TENORS.filter((t) => split[t] > 0).map((t) => ({
             label: t,
             pct: split[t],
-            expiryTs: tenorExpiry(t, now),
+            expiryTs: tenorExpiry(t, now, minLeadSecs),
           }));
     return snapLadder(contractsNum, tenors, collateralPerContract);
-  }, [tenorMode, singleTenor, split, contractsNum, collateralPerContract]);
+  }, [tenorMode, singleTenor, split, contractsNum, collateralPerContract, minLeadSecs]);
 
   const cells = ladderResult.cells ?? [];
   const ladderError =
@@ -104,10 +128,10 @@ export const EpochVaultSection: FC<EpochVaultSectionProps> = ({
   // Front (earliest) resolved expiry — drives the market-hours gate + LiveQuoteCard.
   const frontExpiryTs = useMemo(() => {
     const now = Date.now();
-    if (tenorMode === "single") return tenorExpiry(singleTenor, now);
-    const sel = ALL_TENORS.filter((t) => split[t] > 0).map((t) => tenorExpiry(t, now));
-    return sel.length ? Math.min(...sel) : tenorExpiry("Weekly", now);
-  }, [tenorMode, singleTenor, split]);
+    if (tenorMode === "single") return tenorExpiry(singleTenor, now, minLeadSecs);
+    const sel = ALL_TENORS.filter((t) => split[t] > 0).map((t) => tenorExpiry(t, now, minLeadSecs));
+    return sel.length ? Math.min(...sel) : tenorExpiry("Weekly", now, minLeadSecs);
+  }, [tenorMode, singleTenor, split, minLeadSecs]);
 
   // W3 market-hours gate. Epoch expiries are Friday 08:00 UTC — always before
   // NYSE opens — so equity/ETF Epoch vaults are structurally un-settleable. All

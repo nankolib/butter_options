@@ -17,24 +17,32 @@ function lastFridayUtc8(year: number, month0: number): number {
   return Math.floor(d.getTime() / 1000);
 }
 
-/** Next Friday 08:00 UTC (rolls a week if today is Friday past 08:00). */
-export function weeklyExpiry(now: number = Date.now()): number {
+// `minLeadSecs` is the on-chain epoch min-duration window (EpochConfig
+// .min_epoch_duration_days × 86400, read live — never hardcoded). A slot at or
+// inside `now + minLeadSecs` is rejected on-chain (InvalidEpochExpiry / 6021),
+// so these helpers ROLL FORWARD to the next valid slot instead of offering a
+// too-soon one. Default 0 preserves the legacy "roll only if already passed".
+
+/** Next Friday 08:00 UTC that is more than `minLeadSecs` away. */
+export function weeklyExpiry(now: number = Date.now(), minLeadSecs = 0): number {
+  const threshold = Math.floor(now / 1000) + minLeadSecs;
   const d = new Date(now);
   d.setUTCHours(8, 0, 0, 0);
-  let delta = (5 - d.getUTCDay() + 7) % 7;
-  if (delta === 0 && d.getTime() <= now) delta = 7;
+  const delta = (5 - d.getUTCDay() + 7) % 7; // to the coming Friday
   d.setUTCDate(d.getUTCDate() + delta);
-  return Math.floor(d.getTime() / 1000);
+  let ts = Math.floor(d.getTime() / 1000);
+  while (ts <= threshold) ts += 7 * 86400; // roll a week until outside the min window
+  return ts;
 }
 
-/** Last Friday of this month 08:00 UTC; if already passed, last Friday of next month. */
-export function monthlyExpiry(now: number = Date.now()): number {
-  const nowSec = Math.floor(now / 1000);
+/** Last Friday of a month 08:00 UTC, rolling to later months until > `now + minLeadSecs`. */
+export function monthlyExpiry(now: number = Date.now(), minLeadSecs = 0): number {
+  const threshold = Math.floor(now / 1000) + minLeadSecs;
   const d = new Date(now);
   let y = d.getUTCFullYear();
   let m = d.getUTCMonth();
   let ts = lastFridayUtc8(y, m);
-  if (ts <= nowSec) {
+  while (ts <= threshold) {
     m += 1;
     if (m > 11) {
       m = 0;
@@ -48,9 +56,9 @@ export function monthlyExpiry(now: number = Date.now()): number {
 /** Quarter-end months (0-indexed): Mar, Jun, Sep, Dec. */
 const QUARTER_END_MONTHS = [2, 5, 8, 11];
 
-/** Last Friday of this quarter-end month 08:00 UTC; if passed, next quarter-end's. */
-export function quarterlyExpiry(now: number = Date.now()): number {
-  const nowSec = Math.floor(now / 1000);
+/** Last Friday of a quarter-end month 08:00 UTC, rolling until > `now + minLeadSecs`. */
+export function quarterlyExpiry(now: number = Date.now(), minLeadSecs = 0): number {
+  const threshold = Math.floor(now / 1000) + minLeadSecs;
   const d = new Date(now);
   let y = d.getUTCFullYear();
   const m = d.getUTCMonth();
@@ -60,7 +68,7 @@ export function quarterlyExpiry(now: number = Date.now()): number {
     y += 1;
   } // only if past Dec (unreachable: Dec=11 covers m<=11)
   let ts = lastFridayUtc8(y, QUARTER_END_MONTHS[qi]);
-  if (ts <= nowSec) {
+  while (ts <= threshold) {
     qi += 1;
     if (qi > 3) {
       qi = 0;
@@ -71,14 +79,14 @@ export function quarterlyExpiry(now: number = Date.now()): number {
   return ts;
 }
 
-export function tenorExpiry(label: TenorLabel, now: number = Date.now()): number {
+export function tenorExpiry(label: TenorLabel, now: number = Date.now(), minLeadSecs = 0): number {
   switch (label) {
     case "Weekly":
-      return weeklyExpiry(now);
+      return weeklyExpiry(now, minLeadSecs);
     case "Monthly":
-      return monthlyExpiry(now);
+      return monthlyExpiry(now, minLeadSecs);
     case "Quarterly":
-      return quarterlyExpiry(now);
+      return quarterlyExpiry(now, minLeadSecs);
   }
 }
 

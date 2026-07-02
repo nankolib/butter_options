@@ -4,7 +4,7 @@ import { useCallback, useState } from "react";
 import { BN } from "@coral-xyz/anchor";
 import { useProgram } from "./useProgram";
 import {
-  pegFill, postSeriesOrder, fillSeriesOrder,
+  pegFill, postSeriesOrder, fillSeriesOrder, fillWriterAsk, cancelOrder,
   type SeriesRef, type FillableOrder,
 } from "../pages/trade/orderFlows";
 
@@ -33,7 +33,7 @@ export function usePostOrder() {
   const [submitting, setSubmitting] = useState(false);
   const submit = useCallback(
     async (
-      ref: SeriesRef, kind: "bid" | "resaleAsk", priceUsd: number, quantity: number, nonce: number,
+      ref: SeriesRef, kind: "bid" | "resaleAsk" | "writerAsk", priceUsd: number, quantity: number, nonce: number,
     ): Promise<string | null> => {
       if (!program?.provider.publicKey) return null;
       setSubmitting(true);
@@ -57,6 +57,42 @@ export function useFillOrder() {
       setSubmitting(true);
       try {
         return await fillSeriesOrder(program, order, quantity);
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [program],
+  );
+  return { submitting, submit };
+}
+
+export function useFillWriterAsk() {
+  const { program } = useProgram();
+  const [submitting, setSubmitting] = useState(false);
+  const submit = useCallback(
+    async (order: FillableOrder, quantity: number): Promise<string | null> => {
+      if (!program?.provider.publicKey) return null;
+      setSubmitting(true);
+      try {
+        return await fillWriterAsk(program, order, quantity);
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [program],
+  );
+  return { submitting, submit };
+}
+
+export function useCancelOrder() {
+  const { program } = useProgram();
+  const [submitting, setSubmitting] = useState(false);
+  const submit = useCallback(
+    async (order: FillableOrder): Promise<string | null> => {
+      if (!program?.provider.publicKey) return null;
+      setSubmitting(true);
+      try {
+        return await cancelOrder(program, order);
       } finally {
         setSubmitting(false);
       }

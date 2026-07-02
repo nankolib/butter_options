@@ -66,6 +66,7 @@ export interface BookOrder {
   qtyInitial: number;
   nonce: string;
   createdAt: number;      // unix seconds
+  collateralPerContract: number; // USDC; WriterAsk only (Slice-A append @146..154). 0 for Bid/ResaleAsk & legacy 146-byte orders.
 }
 
 /** Parse one RestingOrder account (8 disc + struct). */
@@ -82,6 +83,10 @@ export function parseRestingOrder(pubkey: PublicKey, d: Buffer): BookOrder | nul
     qtyInitial: Number(u64(d, 121)),
     createdAt: Number(i64(d, 129)),
     nonce: u64(d, 137).toString(),
+    // bump @145 (skipped); collateral_per_contract u64 @146..154 — the Slice-A
+    // tail append. Only meaningful on 154-byte WriterAsk orders; the u64 helper
+    // returns 0 for legacy 146-byte accounts, so the < 146 floor still admits both.
+    collateralPerContract: usd(u64(d, 146)),
   };
 }
 

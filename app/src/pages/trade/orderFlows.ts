@@ -33,6 +33,13 @@ const CU = (u: number) => ComputeBudgetProgram.setComputeUnitLimit({ units: u })
 const pda = (seeds: (Buffer | Uint8Array)[], pid: PublicKey = PROGRAM_ID) =>
   PublicKey.findProgramAddressSync(seeds, pid)[0];
 
+// Writer-ask PDA seeds — mirror programs/opta/src/state/writer_ask_{pot,position}.rs
+// (verified literals). Defined locally rather than in constants.ts to keep this
+// slice to the four FE files (the flip/CSP edits to constants.ts are separate).
+const WRITER_ASK_POT_SEED = "writer_ask_pot";
+const WRITER_ASK_POT_USDC_SEED = "writer_ask_pot_usdc";
+const WRITER_ASK_POSITION_SEED = "writer_ask_position";
+
 /** A focused series contract, as resolved from the unified chain. */
 export interface SeriesRef {
   asset: string;
@@ -90,13 +97,19 @@ export async function pegFill(
 }
 
 /**
- * Post a resting series order.
- *   - "bid"       → Buy·Limit: escrows USDC (price × qty).
- *   - "resaleAsk" → Sell·Limit on HELD tokens: escrows `quantity` contracts.
- * Caller must guarantee a held balance for resaleAsk.
+ * Post a resting series order. The account block is identical across all kinds —
+ * the escrow SOURCE differs by kind (protocol pulls from the right account):
+ *   - "bid"       → Buy·Limit: escrows USDC (price × qty) from ownerUsdcAccount.
+ *   - "resaleAsk" → Sell·Limit on HELD tokens: escrows `quantity` contracts
+ *                   from ownerOptionAccount. Caller must guarantee a held balance.
+ *   - "writerAsk" → Sell·Limit by WRITING new contracts: escrows USDC collateral
+ *                   (collateral_per_contract × qty, protocol-set = vault strike)
+ *                   from ownerUsdcAccount. American, canonical-mint series only;
+ *                   collateral is derived on-chain (NOT the priceMicro arg, which
+ *                   is the maker's ask premium). Caller must hold strike × qty USDC.
  */
 export async function postSeriesOrder(
-  program: Program<any>, ref: SeriesRef, kind: "bid" | "resaleAsk",
+  program: Program<any>, ref: SeriesRef, kind: "bid" | "resaleAsk" | "writerAsk",
   priceMicro: BN, quantity: number, nonce: BN, ctx?: OrderCtx,
 ): Promise<string> {
   const c = ctx ?? (await loadOrderCtx(program));
@@ -106,7 +119,7 @@ export async function postSeriesOrder(
   const escrow = pda([Buffer.from(RESTING_ORDER_ESCROW_SEED), order.toBuffer()]);
   const ownerOption = getAssociatedTokenAddressSync(a.optionMint, owner, false, TOKEN_2022_PROGRAM_ID);
   const ownerUsdc = getAssociatedTokenAddressSync(c.usdcMint, owner, false, TOKEN_PROGRAM_ID);
-  const kindArg = kind === "bid" ? { bid: {} } : { resaleAsk: {} };
+  const kindArg = kind === "bid" ? { bid: {} } : kind === "resaleAsk" ? { resaleAsk: {} } : { writerAsk: {} };
   return program.methods.postOrder(kindArg, priceMicro, new BN(quantity), nonce).accountsStrict({
     owner, sharedVault: a.vault, market: a.market, vaultMintRecord: a.record, optionMint: a.optionMint,
     order, escrow, protocolState: c.protocolState, ownerOptionAccount: ownerOption, ownerUsdcAccount: ownerUsdc,
@@ -157,4 +170,78 @@ export async function fillSeriesOrder(
     transferHookProgram: TRANSFER_HOOK_PROGRAM_ID, extraAccountMetaList: eaml, hookState,
     tokenProgram: TOKEN_PROGRAM_ID, token2022Program: TOKEN_2022_PROGRAM_ID, systemProgram: SystemProgram.programId,
   }).preInstructions([CU(400_000), ataIx]).rpc();
+}
+
+/**
+ * Take a WriterAsk resting order: fill_writer_ask. Distinct from fill_order —
+ * the writer's contracts are MINTED on fill (mint-on-fill from the writer's
+ * personal collateral), so the account set differs (writer-ask pot + position,
+ * no maker option account, no transfer-hook accounts — mint_to does not fire the
+ * hook). Account ORDER mirrors scripts/_smoke_writer_ask_devnet.ts (live 13/13).
+ *   - premium = order.price_per_contract × quantity (deterministic; no slippage arg)
+ *   - taker pays USDC, receives freshly-minted contracts.
+ */
+export async function fillWriterAsk(
+  program: Program<any>, order: FillableOrder, quantity: number, ctx?: OrderCtx,
+): Promise<string> {
+  const c = ctx ?? (await loadOrderCtx(program));
+  const taker = program.provider.publicKey!;
+  const maker = new PublicKey(order.owner);
+  const optionMint = new PublicKey(order.optionMint);
+  const vault = new PublicKey(order.vault);
+  const orderPk = new PublicKey(order.pubkey);
+  const takerUsdc = getAssociatedTokenAddressSync(c.usdcMint, taker, false, TOKEN_PROGRAM_ID);
+  const makerUsdc = getAssociatedTokenAddressSync(c.usdcMint, maker, false, TOKEN_PROGRAM_ID);
+  const takerOption = getAssociatedTokenAddressSync(optionMint, taker, false, TOKEN_2022_PROGRAM_ID);
+  const record = pda([Buffer.from(VAULT_MINT_RECORD_SEED), optionMint.toBuffer()]);
+  const escrow = pda([Buffer.from(RESTING_ORDER_ESCROW_SEED), orderPk.toBuffer()]);
+  const writerAskPot = pda([Buffer.from(WRITER_ASK_POT_SEED), optionMint.toBuffer()]);
+  const writerAskPotUsdc = pda([Buffer.from(WRITER_ASK_POT_USDC_SEED), optionMint.toBuffer()]);
+  const writerAskPosition = pda([Buffer.from(WRITER_ASK_POSITION_SEED), optionMint.toBuffer(), maker.toBuffer()]);
+  // Taker's Token-2022 option ATA (mint-on-fill destination) + USDC ATA created
+  // idempotently; maker USDC ATA created defensively (the writer normally already
+  // has one from posting the ask, but guard against a closed account).
+  const takerOptIx = createAssociatedTokenAccountIdempotentInstruction(
+    taker, takerOption, taker, optionMint, TOKEN_2022_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID);
+  const takerUsdcIx = createAssociatedTokenAccountIdempotentInstruction(
+    taker, takerUsdc, taker, c.usdcMint, TOKEN_PROGRAM_ID);
+  const makerUsdcIx = createAssociatedTokenAccountIdempotentInstruction(
+    taker, makerUsdc, maker, c.usdcMint, TOKEN_PROGRAM_ID);
+  return program.methods.fillWriterAsk(new BN(quantity)).accountsStrict({
+    taker, optionMint, order: orderPk, maker, sharedVault: vault,
+    vaultMintRecord: record, escrow, protocolState: c.protocolState, treasury: c.treasury,
+    takerUsdcAccount: takerUsdc, makerUsdcAccount: makerUsdc, takerOptionAccount: takerOption,
+    writerAskPot, writerAskPotUsdc, writerAskPosition, usdcMint: c.usdcMint,
+    tokenProgram: TOKEN_PROGRAM_ID, token2022Program: TOKEN_2022_PROGRAM_ID, systemProgram: SystemProgram.programId,
+  }).preInstructions([CU(400_000), takerOptIx, takerUsdcIx, makerUsdcIx]).rpc();
+}
+
+/**
+ * Cancel a resting order (owner-only): cancel_order. Refunds the unfilled escrow
+ * to the owner per kind — Bid/WriterAsk → USDC (ownerUsdcAccount); ResaleAsk →
+ * contracts (ownerOptionAccount, Token-2022 + transfer hook). Owner-safe by
+ * construction: the order PDA seed embeds owner.key() and closes to owner, so a
+ * third party cannot derive/redirect it (the Slice-C refund-theft vector lived in
+ * the permissionless sweep, not here). All 13 accounts are required every call
+ * regardless of kind; the unused destination/hook accounts are still deserialized.
+ * No instruction args (the nonce is read from the on-chain order).
+ */
+export async function cancelOrder(
+  program: Program<any>, order: FillableOrder, ctx?: OrderCtx,
+): Promise<string> {
+  const c = ctx ?? (await loadOrderCtx(program));
+  const owner = program.provider.publicKey!;
+  const optionMint = new PublicKey(order.optionMint);
+  const orderPk = new PublicKey(order.pubkey);
+  const ownerOption = getAssociatedTokenAddressSync(optionMint, owner, false, TOKEN_2022_PROGRAM_ID);
+  const ownerUsdc = getAssociatedTokenAddressSync(c.usdcMint, owner, false, TOKEN_PROGRAM_ID);
+  return program.methods.cancelOrder().accountsStrict({
+    owner, optionMint, order: orderPk,
+    escrow: pda([Buffer.from(RESTING_ORDER_ESCROW_SEED), orderPk.toBuffer()]),
+    protocolState: c.protocolState, ownerOptionAccount: ownerOption, ownerUsdcAccount: ownerUsdc,
+    transferHookProgram: TRANSFER_HOOK_PROGRAM_ID,
+    extraAccountMetaList: deriveExtraAccountMetaListPda(optionMint)[0],
+    hookState: deriveHookStatePda(optionMint)[0],
+    tokenProgram: TOKEN_PROGRAM_ID, token2022Program: TOKEN_2022_PROGRAM_ID, systemProgram: SystemProgram.programId,
+  }).preInstructions([CU(400_000)]).rpc();
 }

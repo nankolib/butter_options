@@ -5,7 +5,7 @@ import { PublicKey } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { useProgram } from "../../hooks/useProgram";
 import { useBook } from "../../hooks/useBook";
-import { usePegFill, usePostOrder, useFillOrder } from "../../hooks/useOrderFlows";
+import { usePegFill, usePostOrder, useFillOrder, useFillWriterAsk } from "../../hooks/useOrderFlows";
 import { calculateCallGreeks, calculatePutGreeks, getDefaultVolatility, applyVolSmile } from "../../utils/blackScholes";
 import { TOKEN_2022_PROGRAM_ID, MARKET_SEED, PROGRAM_ID } from "../../utils/constants";
 import {
@@ -55,6 +55,7 @@ export const OrderTicket: FC<{
   const peg = usePegFill();
   const post = usePostOrder();
   const fill = useFillOrder();
+  const fillWA = useFillWriterAsk();
 
   const [side, setSide] = useState<Side>("buy");
   const [type, setType] = useState<OrderType>("market");
@@ -172,7 +173,11 @@ export const OrderTicket: FC<{
           .sort((a, b) => a.price - b.price);
         const pegRef = mark?.premium ?? Infinity;
         if (asks.length && asks[0].price <= pegRef) {
-          sig = await fill.submit(asks[0], qty);
+          // Kind-aware: WriterAsks mint-on-fill via fill_writer_ask (distinct
+          // account set); resaleAsks take contracts via fill_order.
+          sig = asks[0].kind === "writerAsk"
+            ? await fillWA.submit(asks[0], qty)
+            : await fill.submit(asks[0], qty);
         } else {
           const maxPremium = (estPrice ?? mark?.premium ?? 0) * (1 + slippagePct / 100);
           sig = await peg.submit(ref, qty, maxPremium > 0 ? maxPremium : 1_000_000);
@@ -197,7 +202,7 @@ export const OrderTicket: FC<{
     }
   }
 
-  const submitting = busy || peg.submitting || post.submitting || fill.submitting;
+  const submitting = busy || peg.submitting || post.submitting || fill.submitting || fillWA.submitting;
   const fmt = (n: number) => `$${n.toFixed(n < 100 ? 4 : 2)}`;
 
   return (

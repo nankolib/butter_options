@@ -133,7 +133,7 @@ export const ContractDetailModal: FC<{
               {base.asset} ${base.strike} {side === "call" ? "Call" : "Put"}
             </div>
             <div className="flex items-center gap-2 mt-2">
-              <Badge tone={isSeries ? "crimson" : "muted"}>{row?.provenance ?? "no market"}</Badge>
+              <Badge tone={row?.provenance === "series" ? "crimson" : row?.provenance === "epoch" ? "ink" : "muted"}>{row?.provenance ?? "no market"}</Badge>
               {base.exerciseStyle === "american" && <Badge tone="muted">american</Badge>}
               <span className="font-mono text-[10.5px] uppercase tracking-[0.18em] text-ink-muted">
                 {new Date(base.expiry * 1000).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })} · {dte}d
@@ -280,6 +280,6 @@ const SectionLabel: FC<{ children: ReactNode; className?: string }> = ({ childre
 const Empty: FC<{ children: ReactNode }> = ({ children }) => (
   <div className="font-mono text-[11px] text-ink-muted py-4">{children}</div>
 );
-const Badge: FC<{ children: ReactNode; tone: "crimson" | "muted" }> = ({ children, tone }) => (
-  <span className={`font-mono text-[8.5px] uppercase tracking-[0.18em] px-2 py-0.5 rounded-full border ${tone === "crimson" ? "text-crimson border-crimson/40" : "text-ink-muted border-rule"}`}>{children}</span>
+const Badge: FC<{ children: ReactNode; tone: "crimson" | "muted" | "ink" }> = ({ children, tone }) => (
+  <span className={`font-mono text-[8.5px] uppercase tracking-[0.18em] px-2 py-0.5 rounded-full border ${tone === "crimson" ? "text-crimson border-crimson/40" : tone === "ink" ? "text-ink border-ink/40" : "text-ink-muted border-rule"}`}>{children}</span>
 );

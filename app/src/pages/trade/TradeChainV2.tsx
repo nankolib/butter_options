@@ -121,10 +121,12 @@ const GridRowEl: FC<{
   onSelect: (c: FocusedContract) => void;
   onShowDetails: (t: DetailTarget) => void;
 }> = ({ g, spot, isAtm, focused, onSelect, onShowDetails }) => {
-  const provs = [g.call?.provenance, g.put?.provenance].filter(Boolean) as ("series" | "legacy")[];
+  const provs = [g.call?.provenance, g.put?.provenance].filter(Boolean) as ("series" | "epoch" | "legacy")[];
   const badge = provs.includes("series")
-    ? provs.includes("legacy") ? "SER·LEG" : "SERIES"
-    : provs.length ? "LEGACY" : "";
+    ? provs.some((p) => p !== "series") ? "SER·MIX" : "SERIES"
+    : provs.includes("epoch")
+      ? "EPOCH"
+      : provs.length ? "LEGACY" : "";
   // Strike-cell ⤢ opens the detail modal (both sides; Call default if both exist).
   const hasAny = !!(g.call || g.put);
 
@@ -146,7 +148,7 @@ const GridRowEl: FC<{
         </button>
         {badge && (
           <div className={`font-mono text-[8.5px] uppercase tracking-[0.18em] mt-1 ${
-            badge === "LEGACY" ? "text-ink-muted" : "text-crimson"
+            badge === "LEGACY" ? "text-ink-muted" : badge === "EPOCH" ? "text-ink" : "text-crimson"
           }`}>
             {badge}
           </div>

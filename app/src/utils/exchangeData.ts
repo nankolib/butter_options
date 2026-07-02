@@ -151,9 +151,11 @@ export async function fetchSeries(connection: Connection, programId: PublicKey):
 export type OptionType = "call" | "put";
 export type ExerciseStyle = "american" | "european";
 
+export type Provenance = "series" | "epoch" | "legacy";
+
 export interface UnifiedChainRow {
   key: string;                        // asset|strike|expiry|type
-  provenance: "series" | "legacy";
+  provenance: Provenance;             // series (book/peg) | epoch (scheduled per-writer) | legacy (custom per-writer)
   asset: string;
   strike: number;
   expiry: number;                     // unix seconds
@@ -176,6 +178,7 @@ interface SharedVaultLite {
   optionType: OptionType;
   strike: number;
   expiry: number;
+  vaultType: "epoch" | "custom";
   exerciseStyle: ExerciseStyle;
   totalOptionsSold: number;
   isSettled: boolean;
@@ -190,6 +193,8 @@ function parseSharedVault(pubkey: PublicKey, d: Buffer): SharedVaultLite | null 
     optionType: d[40] === 0 ? "call" : "put",
     strike: usd(u64(d, 41)),
     expiry: Number(i64(d, 49)),
+    // vault_type u8 @57 (after expiry i64 @49..57): 0 = Epoch, 1 = Custom.
+    vaultType: d[57] === 0 ? "epoch" : "custom",
     totalOptionsSold: Number(u64(d, 146)),
     isSettled: d[178] === 1,
     exerciseStyle: d[240] === 1 ? "american" : "european",
@@ -240,7 +245,9 @@ export async function fetchUnifiedChain(connection: Connection, programId: Publi
     const bestAsk = side && side.asks.length ? side.asks[0].price : null;
     rows.push({
       key: `${assetMap.get(v.market) ?? "?"}|${v.strike}|${v.expiry}|${v.optionType}`,
-      provenance: ser ? "series" : "legacy",
+      // series = canonical book/peg mint; epoch/custom per-writer vaults both
+      // trade the classic path (routing keys on "series" only) — label-only split.
+      provenance: ser ? "series" : v.vaultType === "epoch" ? "epoch" : "legacy",
       asset: assetMap.get(v.market) ?? "?",
       strike: v.strike,
       expiry: v.expiry,

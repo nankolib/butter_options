@@ -258,7 +258,9 @@ export const OrderTicket: FC<{
         <div className="font-fraunces-text italic font-light text-ink text-[20px]">
           {row.asset} ${row.strike} {row.optionType === "call" ? "Call" : "Put"}
         </div>
-        <div className={`font-mono text-[9px] uppercase tracking-[0.18em] ${isSeries ? "text-crimson" : "text-ink-muted"}`}>
+        <div className={`font-mono text-[9px] uppercase tracking-[0.18em] ${
+          row.provenance === "series" ? "text-crimson" : row.provenance === "epoch" ? "text-ink" : "text-ink-muted"
+        }`}>
           {row.provenance}
         </div>
       </div>

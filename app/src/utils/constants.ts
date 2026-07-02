@@ -142,7 +142,7 @@ export const AMERICAN_ENABLED_UI = true;
 // when true, it renders the new TradePageV2. Flip to true at Pass 5, once the
 // page is complete — prevents Vercel (auto-deploys main) shipping a half-built
 // page mid-arc. Mirrors the AMERICAN_ENABLED_UI dark-launch pattern.
-export const TRADE_V2_UI = false;
+export const TRADE_V2_UI = true;
 
 // ============================================================================
 // Phase 2 demo cutoff

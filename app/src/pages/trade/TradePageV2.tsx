@@ -119,11 +119,28 @@ export const TradePageV2: FC = () => {
     [chain.rows, td.selectedAsset, td.selectedExpiry],
   );
 
-  // Pro default focus → the SERIES row (the seeded $75) on load, not the legacy.
+  // Invalidate a stale focus when the asset/expiry selection changes — otherwise
+  // the CHART (symbol + candles), ticket, ladder, and open-orders keep rendering
+  // the PRIOR asset's contract (CHART has no chain row to re-click). Clearing to
+  // null lets the default-focus effect below auto-repoint to the new selection's
+  // series row. Covers both asset-switch and expiry-switch staleness.
+  useEffect(() => {
+    if (focused && (focused.asset !== td.selectedAsset || day(focused.expiry) !== day(td.selectedExpiry))) {
+      setFocused(null);
+    }
+  }, [focused, td.selectedAsset, td.selectedExpiry]);
+
+  // Pro default focus → prefer a SERIES row (book-backed), else fall back
+  // epoch → legacy → first row, so assets with only legacy/epoch inventory
+  // (e.g. BTC, no series yet) still auto-focus a contract instead of leaving
+  // the ticket/chart empty.
   useEffect(() => {
     if (focused || persona !== "pro" || !visibleRows.length) return;
-    const series = visibleRows.find((r) => r.provenance === "series");
-    if (series) setFocused(series);
+    const pick =
+      visibleRows.find((r) => r.provenance === "series") ??
+      visibleRows.find((r) => r.provenance === "epoch") ??
+      visibleRows[0];
+    if (pick) setFocused(pick);
   }, [visibleRows, persona, focused]);
 
   const seriesCount = visibleRows.filter((r) => r.provenance === "series").length;

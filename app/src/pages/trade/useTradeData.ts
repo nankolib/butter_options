@@ -230,6 +230,7 @@ export function useTradeData(): UseTradeData {
   // Available expiries for the selected asset (day-rounded so timestamps
   // seconds apart collapse into one tab).
   const availableExpiries = useMemo(() => {
+    const nowSec = Math.floor(Date.now() / 1000);
     const dayMap = new Map<number, number>();
     for (const v of vaults) {
       if (v.account.isSettled) continue;
@@ -237,6 +238,9 @@ export function useTradeData(): UseTradeData {
       if (!mkt || mkt.account.assetName !== selectedAsset) continue;
       const t =
         typeof v.account.expiry === "number" ? v.account.expiry : v.account.expiry.toNumber();
+      // Exclude PAST expiries — a non-settled-but-expired vault must not become the
+      // default tab (it sorts earliest and shows dead/empty contracts, e.g. BTC).
+      if (t <= nowSec) continue;
       const rounded = roundToDay(t);
       if (!dayMap.has(rounded)) dayMap.set(rounded, t);
     }

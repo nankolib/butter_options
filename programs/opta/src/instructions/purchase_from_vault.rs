@@ -42,6 +42,11 @@ pub fn handle_purchase_from_vault(
         OptaError::CannotBuyOwnOption
     );
 
+    // Reject the American series sentinel (premium_per_contract == 0): those price
+    // dynamically via peg/book and must never be bought at $0 through this path.
+    // Mirrors the mint_from_vault premium>0 guard; reuses InvalidPremium (6012).
+    require!(vault_mint.premium_per_contract > 0, OptaError::InvalidPremium);
+
     // Check enough tokens are available in the purchase escrow
     let escrow_data = ctx.accounts.purchase_escrow.try_borrow_data()?;
     let available = u64::from_le_bytes(

@@ -81,8 +81,9 @@ describe("zzz-vol-oracle (Stage B Step 2)", () => {
     // the SOL oracle (EUR mints don't), so sample_count stays 0.
     try {
       await program.methods
-        .initializeVolOracle(SOL_FEED_ID, 0)
+        .initializeVolOracle(SOL_FEED_ID, 0, new anchor.BN(0))
         .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
           initializer: wallet.publicKey,
           priceUpdate: SOL_FIXTURE,
           volOracle: oraclePda,
@@ -116,8 +117,9 @@ describe("zzz-vol-oracle (Stage B Step 2)", () => {
 
     try {
       await program.methods
-        .initializeVolOracle(BTC_FEED_ID, 0)  // BTC arg
+        .initializeVolOracle(BTC_FEED_ID, 0, new anchor.BN(0))  // BTC arg
         .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
           initializer: wallet.publicKey,
           priceUpdate: SOL_FIXTURE,  // SOL fixture -- mismatch
           volOracle: oraclePda,
@@ -140,8 +142,9 @@ describe("zzz-vol-oracle (Stage B Step 2)", () => {
 
     try {
       await program.methods
-        .initializeVolOracle(ZERO_FEED_ID, 0)
+        .initializeVolOracle(ZERO_FEED_ID, 0, new anchor.BN(0))
         .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
           initializer: wallet.publicKey,
           priceUpdate: SOL_FIXTURE,
           volOracle: oraclePda,
@@ -164,8 +167,9 @@ describe("zzz-vol-oracle (Stage B Step 2)", () => {
 
     try {
       await program.methods
-        .initializeVolOracle(SOL_FEED_ID, 0)
+        .initializeVolOracle(SOL_FEED_ID, 0, new anchor.BN(0))
         .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
           initializer: wallet.publicKey,
           priceUpdate: SOL_FIXTURE,
           volOracle: oraclePda,
@@ -204,8 +208,9 @@ describe("zzz-vol-oracle (Stage B Step 2)", () => {
   ): Promise<PublicKey> {
     const [oraclePda] = deriveVolOracle(program.programId, feedId);
     await program.methods
-      .initializeVolOracle(feedId, 0)
+      .initializeVolOracle(feedId, 0, new anchor.BN(0))
       .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
         initializer: wallet.publicKey,
         priceUpdate: fixture,
         volOracle: oraclePda,
@@ -215,6 +220,7 @@ describe("zzz-vol-oracle (Stage B Step 2)", () => {
     await program.methods
       .pushVolSample()
       .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
         signer: wallet.publicKey,
         priceUpdate: fixture,
         volOracle: oraclePda,
@@ -227,8 +233,9 @@ describe("zzz-vol-oracle (Stage B Step 2)", () => {
   it("seed-push: first push to fresh oracle sets last_spot+ts only", async () => {
     const [oraclePda] = deriveVolOracle(program.programId, VOL_FEED.T1);
     await program.methods
-      .initializeVolOracle(VOL_FEED.T1, 0)
+      .initializeVolOracle(VOL_FEED.T1, 0, new anchor.BN(0))
       .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
         initializer: wallet.publicKey,
         priceUpdate: VOL_FIXTURE.T1,
         volOracle: oraclePda,
@@ -239,6 +246,7 @@ describe("zzz-vol-oracle (Stage B Step 2)", () => {
     await program.methods
       .pushVolSample()
       .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
         signer: wallet.publicKey,
         priceUpdate: VOL_FIXTURE.T1,
         volOracle: oraclePda,
@@ -270,6 +278,7 @@ describe("zzz-vol-oracle (Stage B Step 2)", () => {
       await program.methods
         .pushVolSample()
         .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
           signer: wallet.publicKey,
           priceUpdate: VOL_FIXTURE.T2,
           volOracle: oraclePda,
@@ -295,6 +304,7 @@ describe("zzz-vol-oracle (Stage B Step 2)", () => {
     await program.methods
       .pushVolSample()
       .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
         signer: wallet.publicKey,
         priceUpdate: VOL_FIXTURE.T3_250,
         volOracle: oraclePda,
@@ -336,8 +346,9 @@ describe("zzz-vol-oracle (Stage B Step 2)", () => {
     // feed_id != T5). The handler's feed_id-match check reverts.
     const [oraclePda] = deriveVolOracle(program.programId, VOL_FEED.T5);
     await program.methods
-      .initializeVolOracle(VOL_FEED.T5, 0)
+      .initializeVolOracle(VOL_FEED.T5, 0, new anchor.BN(0))
       .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
         initializer: wallet.publicKey,
         priceUpdate: VOL_FIXTURE.T5_HOST,
         volOracle: oraclePda,
@@ -349,6 +360,7 @@ describe("zzz-vol-oracle (Stage B Step 2)", () => {
       await program.methods
         .pushVolSample()
         .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
           signer: wallet.publicKey,
           priceUpdate: SOL_FIXTURE,  // wrong feed
           volOracle: oraclePda,
@@ -369,8 +381,9 @@ describe("zzz-vol-oracle (Stage B Step 2)", () => {
     // past). Init accepts (it doesn't check freshness); push reverts.
     const [oraclePda] = deriveVolOracle(program.programId, VOL_FEED.T6);
     await program.methods
-      .initializeVolOracle(VOL_FEED.T6, 0)
+      .initializeVolOracle(VOL_FEED.T6, 0, new anchor.BN(0))
       .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
         initializer: wallet.publicKey,
         priceUpdate: VOL_FIXTURE.T6_STALE,
         volOracle: oraclePda,
@@ -382,6 +395,7 @@ describe("zzz-vol-oracle (Stage B Step 2)", () => {
       await program.methods
         .pushVolSample()
         .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
           signer: wallet.publicKey,
           priceUpdate: VOL_FIXTURE.T6_STALE,
           volOracle: oraclePda,
@@ -400,8 +414,9 @@ describe("zzz-vol-oracle (Stage B Step 2)", () => {
     // the spot-positivity gate.
     const [oraclePda] = deriveVolOracle(program.programId, VOL_FEED.T7);
     await program.methods
-      .initializeVolOracle(VOL_FEED.T7, 0)
+      .initializeVolOracle(VOL_FEED.T7, 0, new anchor.BN(0))
       .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
         initializer: wallet.publicKey,
         priceUpdate: VOL_FIXTURE.T7_ZERO,
         volOracle: oraclePda,
@@ -413,6 +428,7 @@ describe("zzz-vol-oracle (Stage B Step 2)", () => {
       await program.methods
         .pushVolSample()
         .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
           signer: wallet.publicKey,
           priceUpdate: VOL_FIXTURE.T7_ZERO,
           volOracle: oraclePda,
@@ -446,8 +462,9 @@ describe("zzz-vol-oracle (Stage B Step 2)", () => {
       // suite. If so, init reverts with "already in use" -- swallow that.
       try {
         await program.methods
-          .initializeVolOracle(cuFeedId, 0)
+          .initializeVolOracle(cuFeedId, 0, new anchor.BN(0))
           .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
             initializer: wallet.publicKey,
             priceUpdate: VOL_FIXTURE.T2,
             volOracle: oraclePda,
@@ -567,6 +584,7 @@ describe("zzz-vol-oracle (Stage B Step 2)", () => {
     const sig = await program.methods
       .pushVolSample()
       .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
         signer: wallet.publicKey,
         priceUpdate: VOL_FIXTURE.T3_250,
         volOracle: oraclePda,

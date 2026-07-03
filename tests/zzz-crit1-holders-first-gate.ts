@@ -265,6 +265,7 @@ describe.skip("CRIT-1 holders-first gate [ported to tests/bankrun/crit1-holders-
       await (program as any).methods
         .createMarket("SOL", SOL_ID, 0, 0)
         .accounts({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
           creator: payer.publicKey,
           protocolState: protocolStatePda,
           priceUpdate: SOL_180_FRESH_PK,
@@ -569,6 +570,7 @@ describe.skip("CRIT-1 holders-first gate [ported to tests/bankrun/crit1-holders-
     await (program as any).methods
       .settleExpiry("SOL", expiry)
       .accounts({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
         caller: payer.publicKey,
         market: marketPda,
         priceUpdate,

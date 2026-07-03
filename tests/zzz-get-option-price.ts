@@ -98,6 +98,7 @@ describe("get_option_price view (Phase 2 Stage C Pass 3)", () => {
       await (program as any).methods
         .createMarket(GOP_ASSET, GOP_FEED, 0, 0)
         .accounts({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
           creator: provider.wallet.publicKey,
           protocolState: protocolStatePda,
           priceUpdate: GOP_FIXTURE,
@@ -109,8 +110,9 @@ describe("get_option_price view (Phase 2 Stage C Pass 3)", () => {
 
     try {
       await (program as any).methods
-        .initializeVolOracle(GOP_FEED, 0)
+        .initializeVolOracle(GOP_FEED, 0, new BN(0))
         .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
           initializer: provider.wallet.publicKey,
           priceUpdate: GOP_FIXTURE,
           volOracle: oraclePda,

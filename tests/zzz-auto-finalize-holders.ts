@@ -247,6 +247,7 @@ describe.skip("auto-finalize-holders [ported to tests/bankrun/auto-finalize-hold
       await (program as any).methods
         .createMarket("SOL", SOL_ID, 0, 0)
         .accounts({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
           creator: payer.publicKey,
           protocolState: protocolStatePda,
           priceUpdate: SOL_180_FRESH_PK,
@@ -435,6 +436,7 @@ describe.skip("auto-finalize-holders [ported to tests/bankrun/auto-finalize-hold
     await (program as any).methods
       .settleExpiry("SOL", expiry)
       .accounts({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
         caller: payer.publicKey,
         market: marketPda,
         priceUpdate: pythFixture,

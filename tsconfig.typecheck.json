@@ -1,0 +1,22 @@
+{
+  "//": "Type-check-only config for the tests/ tree (drift-prevention gate).",
+  "//2": "Catches instruction-signature drift at compile time: any test using the",
+  "//3": "typed Program<Opta> methods builder fails tsc when an arg count / account",
+  "//4": "set no longer matches target/types/opta.ts. target es2020 so BigInt",
+  "//5": "literals (used throughout the suite) are not flagged. Run: npm run typecheck:tests",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "target": "es2020",
+    "lib": ["es2020"],
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "strict": false,
+    "types": ["mocha", "chai", "node", "bn.js"]
+  },
+  "include": ["tests/**/*.ts"],
+  "exclude": ["tests/bankrun/**"]
+}

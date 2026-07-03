@@ -49,8 +49,9 @@ function deriveVolOracle(programId: PublicKey, feedId: number[]): [PublicKey, nu
       // Best-effort init -- ignore if already initialized.
       try {
         await (program.methods as any)
-          .initializeVolOracle(SOL_FEED_ID, 0)
+          .initializeVolOracle(SOL_FEED_ID, 0, new anchor.BN(0))
           .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
             initializer: provider.wallet.publicKey,
             priceUpdate: SOL_FIXTURE,
             volOracle: oraclePda,

@@ -222,6 +222,7 @@ describe("zzz-exercise-american (Stage F)", function () {
     return (program.methods as any)
       .exerciseAmerican(qty)
       .accounts({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
         holder: h.buyer.kp.publicKey,
         sharedVault: h.vault,
         market: marketPda,
@@ -264,6 +265,7 @@ describe("zzz-exercise-american (Stage F)", function () {
       await (program.methods as any)
         .createMarket(TEST_ASSET, FEED_ID, 0, 0)
         .accounts({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
           creator: payer.publicKey, protocolState: protocolStatePda, market: marketPda,
           priceUpdate: FEED_FRESH, systemProgram: SystemProgram.programId,
         })
@@ -275,8 +277,9 @@ describe("zzz-exercise-american (Stage F)", function () {
     );
     if (!(await provider.connection.getAccountInfo(volOraclePda))) {
       await (program.methods as any)
-        .initializeVolOracle(FEED_ID, 0)
+        .initializeVolOracle(FEED_ID, 0, new BN(0))
         .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
           initializer: payer.publicKey, priceUpdate: FEED_FRESH,
           volOracle: volOraclePda, systemProgram: SystemProgram.programId,
         })

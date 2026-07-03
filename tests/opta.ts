@@ -279,6 +279,7 @@ describe("opta", () => {
         await program.methods
           .createMarket("SOL", BTC_ID, 0, 0)  // wrong feed for SOL
           .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
             creator: admin.publicKey,
             protocolState: protocolStatePda,
             priceUpdate: SOL_180_FRESH_PK,
@@ -485,6 +486,7 @@ describe("opta", () => {
         await program.methods
           .settleExpiry("SOL", farFuture)
           .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
             caller: admin.publicKey,
             market: marketPda,
             priceUpdate: SOL_FRESH_PK,
@@ -506,6 +508,7 @@ describe("opta", () => {
         await program.methods
           .settleExpiry("XYZ", happyExpiry)
           .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
             caller: admin.publicKey,
             market: fakeMarketPda,
             priceUpdate: SOL_FRESH_PK,
@@ -537,6 +540,7 @@ describe("opta", () => {
       await program.methods
         .settleExpiry("SOL", happyExpiry)
         .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
           caller: randomCaller.publicKey,
           market: marketPda,
           priceUpdate: SOL_FRESH_PK,
@@ -567,6 +571,7 @@ describe("opta", () => {
         await program.methods
           .settleExpiry("SOL", staleExpiry)
           .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
             caller: admin.publicKey,
             market: marketPda,
             priceUpdate: SOL_STALE_PK,
@@ -588,6 +593,7 @@ describe("opta", () => {
         await program.methods
           .settleExpiry("SOL", wrongFeedExpiry)
           .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
             caller: admin.publicKey,
             market: marketPda,
             priceUpdate: BTC_FRESH_PK,  // BTC feed_id ≠ SOL feed_id
@@ -609,6 +615,7 @@ describe("opta", () => {
       await program.methods
         .settleExpiry("SOL", doubleSettleExpiry)
         .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
           caller: admin.publicKey,
           market: marketPda,
           priceUpdate: SOL_FRESH_PK,
@@ -622,6 +629,7 @@ describe("opta", () => {
         await program.methods
           .settleExpiry("SOL", doubleSettleExpiry)
           .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
             caller: admin.publicKey,
             market: marketPda,
             priceUpdate: SOL_FRESH_PK,
@@ -690,6 +698,7 @@ describe("opta", () => {
       await program.methods
         .settleExpiry("SOL", happyExpiry)
         .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
           caller: admin.publicKey,
           market: marketPda,
           priceUpdate: D2_HAPPY_PK,
@@ -724,6 +733,7 @@ describe("opta", () => {
         await program.methods
           .settleExpiry("SOL", beforeExpiry)
           .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
             caller: admin.publicKey,
             market: marketPda,
             priceUpdate: D2_BEFORE_PK,
@@ -745,6 +755,7 @@ describe("opta", () => {
         await program.methods
           .settleExpiry("SOL", tooLateExpiry)
           .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
             caller: admin.publicKey,
             market: marketPda,
             priceUpdate: D2_TOO_LATE_PK,
@@ -801,6 +812,7 @@ describe("opta", () => {
       await program.methods
         .settleExpiry("SOL", underExpiry)
         .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
           caller: admin.publicKey,
           market: marketPda,
           priceUpdate: CONF_UNDER_PK,
@@ -818,6 +830,7 @@ describe("opta", () => {
       await program.methods
         .settleExpiry("SOL", edgeExpiry)
         .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
           caller: admin.publicKey,
           market: marketPda,
           priceUpdate: CONF_EDGE_PK,
@@ -836,6 +849,7 @@ describe("opta", () => {
         await program.methods
           .settleExpiry("SOL", overExpiry)
           .accountsStrict({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
             caller: admin.publicKey,
             market: marketPda,
             priceUpdate: CONF_OVER_PK,

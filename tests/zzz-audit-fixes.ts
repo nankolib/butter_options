@@ -338,6 +338,7 @@ describe("audit-fixes", () => {
       await (program as any).methods
         .createMarket(onChainAssetName, onChainPythFeedId, 0, 0)
         .accounts({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
           creator: payer.publicKey,
           protocolState: protocolStatePda,
           priceUpdate: SOL_180_FRESH_PK,
@@ -510,6 +511,7 @@ describe("audit-fixes", () => {
       await (program as any).methods
         .settleExpiry(ctx.assetName, ctx.expiry)
         .accounts({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
           caller: payer.publicKey,
           market: ctx.marketPda,
           priceUpdate: SOL_250_FRESH,
@@ -648,6 +650,7 @@ describe("audit-fixes", () => {
       await (program as any).methods
         .settleExpiry(ctx.assetName, ctx.expiry)
         .accounts({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
           caller: payer.publicKey,
           market: ctx.marketPda,
           priceUpdate: SOL_50_FRESH,
@@ -741,6 +744,7 @@ describe("audit-fixes", () => {
       await (program as any).methods
         .settleExpiry(ctx.assetName, ctx.expiry)
         .accounts({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
           caller: payer.publicKey,
           market: ctx.marketPda,
           priceUpdate: SOL_50_FRESH,
@@ -855,6 +859,7 @@ describe("audit-fixes", () => {
         await (program as any).methods
           .createMarket("SOL", SOL_ID, 0, 0)
           .accounts({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
             creator: payer.publicKey,
             protocolState: protocolStatePda,
             priceUpdate: SOL_180_FRESH_PK,
@@ -1111,6 +1116,7 @@ describe("audit-fixes", () => {
         await (program as any).methods
           .createMarket("SOL", SOL_ID, 0, 0)
           .accounts({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
             creator: payer.publicKey,
             protocolState: protocolStatePda,
             priceUpdate: SOL_180_FRESH_PK,
@@ -1180,6 +1186,7 @@ describe("audit-fixes", () => {
         await (program as any).methods
           .createMarket("SOL", SOL_ID, 0, 0)
           .accounts({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
             creator: payer.publicKey,
             protocolState: protocolStatePda,
             priceUpdate: SOL_180_FRESH_PK,
@@ -1500,6 +1507,7 @@ describe("audit-fixes", () => {
       await (program as any).methods
         .settleExpiry(ctx.assetName, ctx.expiry)
         .accounts({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
           caller: payer.publicKey,
           market: ctx.marketPda,
           priceUpdate: SOL_50_FRESH,
@@ -1577,6 +1585,7 @@ describe("audit-fixes", () => {
         await (program as any).methods
           .createMarket("HIGH5A", BTC_ID, 0, 0)
           .accounts({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
             creator: payer.publicKey,
             protocolState: deriveProtocolPda(),
             priceUpdate: SOL_180_FRESH_PK, // wrong feed (SOL) for arg (BTC)
@@ -1602,6 +1611,7 @@ describe("audit-fixes", () => {
       await (program as any).methods
         .createMarket("HIGH5B", SOL_ID, 0, 0)
         .accounts({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
           creator: randomUser.publicKey,
           protocolState: deriveProtocolPda(),
           priceUpdate: SOL_180_FRESH_PK,
@@ -1627,6 +1637,7 @@ describe("audit-fixes", () => {
         await (program as any).methods
           .createMarket("HIGH5C", BTC_ID, 0, 0)
           .accounts({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
             creator: payer.publicKey,
             protocolState: deriveProtocolPda(),
             priceUpdate: SOL_180_FRESH_PK,

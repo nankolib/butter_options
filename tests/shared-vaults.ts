@@ -359,6 +359,7 @@ describe("shared-vaults", () => {
       await (program as any).methods
         .createMarket("SOL", solPythFeedId, 0, 0)
         .accounts({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
           creator: payer.publicKey,
           protocolState: protocolStatePda,
           priceUpdate: SOL_180_FRESH_PK,
@@ -440,6 +441,7 @@ describe("shared-vaults", () => {
         await (program as any).methods
           .createMarket("SOL", solPythFeedId, 0, 0)
           .accounts({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
             creator: payer.publicKey,
             protocolState: protocolStatePda,
             priceUpdate: SOL_180_FRESH_PK,
@@ -485,6 +487,7 @@ describe("shared-vaults", () => {
         await (program as any).methods
           .createMarket("SOL", solPythFeedId, 0, 0)
           .accounts({
+            sbQueue: null, sbSlothashes: null, sbInstructions: null,
             creator: payer.publicKey,
             protocolState: protocolStatePda,
             priceUpdate: SOL_180_FRESH_PK,

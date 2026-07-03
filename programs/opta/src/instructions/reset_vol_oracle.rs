@@ -27,12 +27,23 @@
 use anchor_lang::prelude::*;
 
 use crate::errors::OptaError;
-use crate::state::{ProtocolState, VolOracle, PROTOCOL_SEED, VOL_ORACLE_SEED};
+use crate::state::{
+    seed_vol_in_bounds, ProtocolState, VolOracle, PROTOCOL_SEED, VOL_ORACLE_SEED,
+};
 
 pub fn handle_reset_vol_oracle(
     ctx: Context<ResetVolOracle>,
     _feed_id: [u8; 32],
+    seed_vol: i64,
 ) -> Result<()> {
+    // H-1 (Run-8) — this is ALSO the admin repair path for an already-poisoned
+    // seed_vol. `initialize_vol_oracle` is write-once and used to leave a bad seed
+    // resident (the old reset zeroed the ring but never touched seed_vol). Reset
+    // now REWRITES seed_vol to an admin-supplied, bounded value; passing 0
+    // restores the "no seed" sentinel. Same bounds as init (admin is trusted, but
+    // reject a fat-finger). See state/vol_oracle.rs.
+    require!(seed_vol_in_bounds(seed_vol), OptaError::SeedVolOutOfBounds);
+
     let mut oracle = ctx.accounts.vol_oracle.load_mut()?;
 
     // Zero the ring in place (no 5760-byte stack literal).
@@ -40,17 +51,21 @@ pub fn handle_reset_vol_oracle(
         *slot = 0;
     }
     // Zero the accumulators + counters + rolling state. feed_id and bump are
-    // preserved (PDA identity, not polluted data).
+    // preserved (PDA identity, not polluted data). seed_vol is REPAIRED to the
+    // admin-passed bounded value (H-1) — after reset the oracle re-warms from 0,
+    // and during that warmup price_american consults this corrected seed.
     oracle.sum_log_returns = 0;
     oracle.sum_log_returns_sq = 0;
     oracle.sample_count = 0;
     oracle.head = 0;
     oracle.last_spot_price = 0;
     oracle.last_sample_ts = 0;
+    oracle.seed_vol = seed_vol;
 
     msg!(
-        "VolOracle reset: pda={} (ring + accumulators + counters zeroed; next push reseeds)",
+        "VolOracle reset: pda={} seed_vol={} (ring + accumulators + counters zeroed; next push reseeds)",
         ctx.accounts.vol_oracle.key(),
+        seed_vol,
     );
     Ok(())
 }

@@ -65,7 +65,15 @@ pub fn handle_auto_finalize_writers<'info>(
     // withdraw_post_settlement.rs:29-49. Mirrored here so the crank's
     // batched writer-payout path enforces the same invariant.
     // EXERCISE_WINDOW lives in state/shared_vault.rs.
-    if ctx.accounts.shared_vault.total_options_sold > 0 {
+    //
+    // H-2 (Run-8): also gate on writer_ask_collateral_swept > 0. total_options_sold
+    // counts only pool sales (fill_writer_ask never bumps it), so a vault with
+    // writer-ask-minted ITM holders and zero pool sales would otherwise skip the
+    // window and let a pool writer front-run those holders. swept is set at settle
+    // time, before this permissionless finalize can run.
+    if ctx.accounts.shared_vault.total_options_sold > 0
+        || ctx.accounts.shared_vault.writer_ask_collateral_swept > 0
+    {
         let clock = Clock::get()?;
         let window_end = ctx
             .accounts

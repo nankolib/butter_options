@@ -28,7 +28,10 @@ describe("bankrun: reset_vol_oracle (admin-only; MED-2 clearing path)", function
     assert.notEqual(oracle.lastSpotPrice.toString(), "0", "warmed oracle has a non-zero last_spot");
 
     // --- RESET (admin-only) -------------------------------------------------
-    await e.opta.methods.resetVolOracle([...e.feedId]).accountsStrict({
+    // H-1 (Run-8): reset now REPAIRS seed_vol to an admin-passed bounded value.
+    // Pass 0.60 (600e9, in [MIN,MAX]) and assert it lands in the oracle.
+    const REPAIR_SEED = new BN("600000000000"); // 0.60 σ at SCALE
+    await e.opta.methods.resetVolOracle([...e.feedId], REPAIR_SEED).accountsStrict({
       admin: e.admin.publicKey,
       protocolState: e.protocolState,
       volOracle: e.volOracle,
@@ -41,6 +44,7 @@ describe("bankrun: reset_vol_oracle (admin-only; MED-2 clearing path)", function
     assert.equal(oracle.sumLogReturnsSq.toString(), "0", "reset zeroes sum_log_returns_sq");
     assert.equal(oracle.lastSpotPrice.toString(), "0", "reset zeroes last_spot_price (forces seed branch next)");
     assert.equal(oracle.lastSampleTs.toString(), "0", "reset zeroes last_sample_ts");
+    assert.equal(oracle.seedVol.toString(), "600000000000", "reset REPAIRS seed_vol to the admin-passed bounded value (H-1)");
 
     const pushBody = (priceUsd: number, publishTime: number) =>
       serializePriceUpdateV2({

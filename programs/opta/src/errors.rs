@@ -433,4 +433,28 @@ pub enum OptaError {
     // voided-but-unmerged vault. Error code 6076.
     #[msg("Vault not voided — call initialize_void first")]
     VaultNotVoided,
+
+    // =========================================================================
+    // Exchange fill_order theft guard (Run-8 C-1)
+    // =========================================================================
+    // fill_order's Bid arm delivers the taker's option tokens to
+    // maker_option_account and pays the taker the bidder's escrowed USDC.
+    // Token-2022 transfer_checked validates only the destination's mint/
+    // decimals, NOT its ownership — so an unpinned destination let the taker
+    // pass their OWN account (a self-transfer that keeps the tokens) while still
+    // draining the bid escrow. fill_order now reads owner(32..64)+mint(0..32)
+    // from the raw account layout and reverts this if either does not match
+    // (order.owner, order.option_mint). Error code 6077.
+    #[msg("maker_option_account failed owner/mint pin (owner != order.owner or mint != order.option_mint)")]
+    MakerOptionAccountInvalid,
+
+    // =========================================================================
+    // VolOracle seed bound (Run-8 H-1)
+    // =========================================================================
+    // initialize_vol_oracle / reset_vol_oracle reject a caller-supplied seed_vol
+    // that is neither the zero "no seed" sentinel nor within [MIN_SEED_VOL,
+    // MAX_SEED_VOL] (0.05..2.0 annualized σ at SCALE). An unbounded seed poisons
+    // American premiums for the ~7-day warmup. Error code 6078.
+    #[msg("seed_vol out of bounds — must be 0 (no seed) or within [MIN_SEED_VOL, MAX_SEED_VOL]")]
+    SeedVolOutOfBounds,
 }

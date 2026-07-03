@@ -37,7 +37,16 @@ pub fn handle_withdraw_post_settlement(ctx: Context<WithdrawPostSettlement>) -> 
     // Fast path: no buyers ever bought → no holders exist → skip the wait.
     // Slow path: 24h post-expiry guarantees holders a clean window to exit
     // via exercise_from_vault or auto_finalize_holders.
-    if vault.total_options_sold > 0 {
+    //
+    // H-2 (Run-8): total_options_sold counts ONLY pool sales — fill_writer_ask
+    // deliberately never bumps it (Slice B isolation). A vault with writer-ask-
+    // minted ITM holders but zero pool sales would skip the window entirely,
+    // letting a pool writer front-run those holders. writer_ask_collateral_swept
+    // (set at settle time, before any post-settlement withdraw) is the presence
+    // signal for writer-ask holders — gate on EITHER channel. Mirrors the same
+    // "gate on swept, not total_options_sold" reasoning in
+    // withdraw_writer_ask_residual.rs.
+    if vault.total_options_sold > 0 || vault.writer_ask_collateral_swept > 0 {
         let clock = Clock::get()?;
         let window_end = vault
             .expiry

@@ -29,9 +29,14 @@
 // Once-only via require!(!voided). Late-feed safe: a post-void SettlementRecord
 // cannot un-void (settle_vault's !voided guard blocks applying it).
 //
-// PERMISSIONLESS, UNGATED — an exit/cleanup path. Inert feature-free: no pot is
-// ever funded (fill_writer_ask reverts 6054), so the pot branch is unreachable and
-// every void takes the byte-identical no-pot path.
+// PERMISSIONLESS, UNGATED — an exit/cleanup path.
+//
+// Run-8 M-1 update: writer asks are now LIVE (WRITER_ASKS_ENABLED = true since
+// 9ab31dd), so fill_writer_ask CAN fund a pot and the POT branch (step 3) is
+// reachable in production. A vault with no writer-ask fills still has an empty
+// pot record → the no-pot branch (step 2), byte-identical to the old
+// reclaim_unsettled self-void seed. (Previously this comment claimed the pot
+// branch was unreachable feature-free; that is no longer true.)
 // =============================================================================
 
 use anchor_lang::prelude::*;

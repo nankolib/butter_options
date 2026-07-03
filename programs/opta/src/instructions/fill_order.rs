@@ -126,6 +126,33 @@ pub fn handle_fill_order(ctx: Context<FillOrder>, fill_quantity: u64) -> Result<
             )?;
         }
         OrderKind::Bid => {
+            // C-1 (Run-8) — pin maker_option_account to (order.owner,
+            // order.option_mint) BEFORE the transfer. Token-2022
+            // transfer_checked validates only the destination's mint/decimals,
+            // not its ownership; an unpinned destination let the taker pass
+            // their OWN account (a self-transfer that keeps the tokens) while
+            // still draining the bidder's escrowed USDC. Read owner(32..64) +
+            // mint(0..32) from the raw account layout — same idiom as
+            // auto_finalize_holders.rs / auto_finalize_writers.rs. The borrow is
+            // scoped so it drops before the transfer re-borrows the account.
+            {
+                let data = ctx.accounts.maker_option_account.try_borrow_data()?;
+                require!(data.len() >= 72, OptaError::MakerOptionAccountInvalid);
+                let mint_bytes: [u8; 32] = data[0..32]
+                    .try_into()
+                    .map_err(|_| OptaError::MakerOptionAccountInvalid)?;
+                let owner_bytes: [u8; 32] = data[32..64]
+                    .try_into()
+                    .map_err(|_| OptaError::MakerOptionAccountInvalid)?;
+                require!(
+                    Pubkey::new_from_array(mint_bytes) == order_mint,
+                    OptaError::MakerOptionAccountInvalid
+                );
+                require!(
+                    Pubkey::new_from_array(owner_bytes) == order_owner,
+                    OptaError::MakerOptionAccountInvalid
+                );
+            }
             // Taker delivers option tokens → maker (bidder). Taker signs.
             spl_token_2022::onchain::invoke_transfer_checked(
                 &token_2022_key,
@@ -345,7 +372,11 @@ pub struct FillOrder<'info> {
     pub taker_option_account: UncheckedAccount<'info>,
 
     /// Maker's option ATA — destination on bid fill (unused on resale fill).
-    /// CHECK: validated by the Token-2022 transfer.
+    /// CHECK: runtime-pinned in the Bid branch (C-1) — owner(32..64) must equal
+    /// order.owner and mint(0..32) must equal order.option_mint before the
+    /// transfer, so the taker cannot redirect the delivery to their own account.
+    /// A struct-level typed constraint isn't used: these are Token-2022 accounts
+    /// (owned by the Token-2022 program), which `Account<TokenAccount>` rejects.
     #[account(mut)]
     pub maker_option_account: UncheckedAccount<'info>,
 

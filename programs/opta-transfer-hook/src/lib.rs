@@ -97,14 +97,18 @@ pub mod opta_transfer_hook {
         ctx: Context<InitializeExtraAccountMetaList>,
         expiry: i64,
     ) -> Result<()> {
-        // HIGH-1 (audit Run-6): validate protocol_state is the canonical opta
-        // program's PDA. Without this, anyone can pre-init this hook with any
-        // protocol_state — frontrunners can grief mint_from_vault for predictable
-        // option_mint pubkeys (init constraint reverts on the legitimate CPI
-        // because hook_state is already populated) AND fix a malicious pubkey
-        // as the protocol-escrow recognition for that mint, allowing post-expiry
-        // transfers from the attacker's accounts to bypass the hook's
-        // expiry check. The check fires before any state mutation.
+        // HIGH-1 (audit Run-6) + A-to-Z H-01 (Run-8): validate protocol_state is
+        // the canonical opta program's PDA. `protocol_state` is ALSO a `Signer`
+        // (see the account struct), so this entrypoint can only be reached via a
+        // CPI in which the opta program signs for its protocol_state PDA
+        // (invoke_signed with PROTOCOL_SEED) — a direct user call cannot produce
+        // that signature and is rejected at deserialization. Together these close
+        // the pre-init squat: an attacker can no longer front-run create_series/
+        // mint_from_vault to init HookState for a predictable option_mint (which
+        // would permanently brick that series, since the mint address is
+        // deterministic) NOR fix a malicious pubkey as the protocol-escrow
+        // recognition for that mint. The key check fires before any state
+        // mutation; the signer check fires at account resolution.
         let (expected_protocol_state, _) =
             Pubkey::find_program_address(&[OPTA_PROTOCOL_SEED], &OPTA_PROGRAM_ID);
         require_keys_eq!(
@@ -367,10 +371,15 @@ pub struct InitializeExtraAccountMetaList<'info> {
     )]
     pub hook_state: Account<'info, HookState>,
 
-    /// The Opta protocol state PDA. Its pubkey is stored in
-    /// HookState so the hook can identify protocol escrow accounts.
-    /// CHECK: Validated by the opta program before CPI.
-    pub protocol_state: UncheckedAccount<'info>,
+    /// The Opta protocol state PDA. Its pubkey is stored in HookState so the
+    /// hook can identify protocol escrow accounts.
+    ///
+    /// A-to-Z H-01 (Run-8): declared `Signer` so the ONLY way to reach this
+    /// entrypoint is a CPI in which the opta program signs for its
+    /// protocol_state PDA (invoke_signed with PROTOCOL_SEED). A direct user call
+    /// cannot forge that signature ⇒ the pre-init squat is closed. The handler
+    /// additionally require_keys_eq's this against the canonical opta PDA.
+    pub protocol_state: Signer<'info>,
 
     pub system_program: Program<'info, System>,
 }

@@ -598,12 +598,15 @@ pub mod opta {
     /// both accumulators, sample_count, head, and last_spot/last_ts so the
     /// next push takes the seed branch (records spot, no return) and the
     /// 7-day warmup re-engages from 0. feed_id (the PDA seed + Pyth identity)
-    /// is preserved. One oracle per call.
+    /// is preserved. `seed_vol` REPAIRS the seed (H-1, Run-8): bounded to
+    /// [MIN,MAX] or 0 (no seed); the warmup after reset consults this value.
+    /// One oracle per call.
     pub fn reset_vol_oracle(
         ctx: Context<ResetVolOracle>,
         feed_id: [u8; 32],
+        seed_vol: i64,
     ) -> Result<()> {
-        instructions::reset_vol_oracle::handle_reset_vol_oracle(ctx, feed_id)
+        instructions::reset_vol_oracle::handle_reset_vol_oracle(ctx, feed_id, seed_vol)
     }
 
     /// AMER-only BS-2002 pricing view. Read-only; CPI-callable.

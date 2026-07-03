@@ -185,9 +185,10 @@ pub fn handle_post_order(
             }
         }
         OrderKind::WriterAsk => {
-            // Dark gate (Phase 3 Slice A): reachable only under the `testing`
-            // feature; a feature-free production build rejects with 6054. The
-            // top-of-handler reject moved here — no new error code.
+            // WRITER_ASKS_ENABLED is now a permanent production default (LIVE
+            // since 9ab31dd, Run-8 M-1), so this reject is unreachable in every
+            // shipped build; it remains as a fail-closed backstop should the
+            // const ever be reverted to dark. No new error code (6054 reused).
             require!(WRITER_ASKS_ENABLED, OptaError::WriterAsksDisabled);
 
             // American-only series (D12). AMERICAN_ENABLED is permanently true
@@ -210,8 +211,9 @@ pub fn handle_post_order(
             // from vault identity → unreconcilable on the void path (D3's
             // initialize_void derives the canonical pot only) → stranded
             // collateral. Pinning here makes one-canonical-pot-per-vault a hard
-            // invariant. (Dark-gate-first ordering preserved: feature-free reverts
-            // 6054 above; a European vault reverts NotAmericanOption above.)
+            // invariant. (Gate ordering preserved: the WRITER_ASKS_ENABLED
+            // backstop is checked first, then a European vault reverts
+            // NotAmericanOption above.)
             require!(
                 ctx.accounts.vault_mint_record.writer == Pubkey::default(),
                 OptaError::CanonicalMintRequired

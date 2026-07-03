@@ -76,8 +76,8 @@ use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
 use crate::errors::OptaError;
 use crate::instructions::push_vol_sample::VOL_ORACLE_MAX_CONF_BPS;
 use crate::state::{
-    VolOracle, ORACLE_SOURCE_PYTH, ORACLE_SOURCE_SWITCHBOARD, VOL_ORACLE_PYTH_MAX_AGE_SECS,
-    VOL_ORACLE_SEED,
+    seed_vol_in_bounds, VolOracle, ORACLE_SOURCE_PYTH, ORACLE_SOURCE_SWITCHBOARD,
+    VOL_ORACLE_PYTH_MAX_AGE_SECS, VOL_ORACLE_SEED,
 };
 use crate::utils::price_oracle::{
     find_ed25519_ix_index, pyth_current_spot_scale, sb_current_spot_scale, secs_to_slots,
@@ -99,6 +99,14 @@ pub fn handle_initialize_vol_oracle(
     // 1. Zero-feed defense-in-depth (BOTH sources) — cheap reject before any
     //    Pyth/SB verification work below.
     require!(feed_id != [0u8; 32], OptaError::InvalidPythFeedId);
+
+    // 1b. H-1 (Run-8) — bound the caller-supplied seed_vol. Permissionless init
+    //     means an attacker could otherwise front-run a new feed and seed a tiny
+    //     σ (underprice) or absurd σ (overprice) that price_american uses verbatim
+    //     for the ~7-day warmup. Permit only the zero "no seed" sentinel (cold +
+    //     unseeded ⇒ VolOracleWarmup, never σ=0 pricing) or [MIN_SEED_VOL,
+    //     MAX_SEED_VOL]; this also rejects negatives (L-7). See state/vol_oracle.rs.
+    require!(seed_vol_in_bounds(seed_vol), OptaError::SeedVolOutOfBounds);
 
     let clock = Clock::get()?;
     let now = clock.unix_timestamp;

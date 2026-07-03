@@ -120,6 +120,10 @@ pub fn price_american(
     } else {
         return Err(error!(OptaError::VolOracleWarmup));
     };
+    // L-7 (Run-8) — never cast a negative σ into u128 (would wrap to an enormous
+    // value). seed_vol is now bound-checked at init/reset and realized_vol is a
+    // sqrt (≥ 0), so this is defense-in-depth against any future regression.
+    require!(vol_scaled >= 0, OptaError::VolOracleMathError);
     let sigma_u128: u128 = vol_scaled as u128;
 
     // TTE: gate expiry strictly > now before the conversion.

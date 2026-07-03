@@ -239,7 +239,11 @@ pub fn handle_create_series(
     }
 
     // ---- 5. Transfer-hook state via CPI (per-mint PDAs → per-series) -------
-    let cpi_ctx = CpiContext::new(
+    // A-to-Z H-01 (Run-8): the hook now requires protocol_state as a Signer, so
+    // opta signs for its protocol_state PDA here (new_with_signer + PROTOCOL_SEED).
+    // A direct user call to the hook init cannot forge this signature ⇒ no
+    // pre-init squat of a predictable series mint.
+    let cpi_ctx = CpiContext::new_with_signer(
         ctx.accounts.transfer_hook_program.to_account_info(),
         opta_transfer_hook::cpi::accounts::InitializeExtraAccountMetaList {
             payer: ctx.accounts.caller.to_account_info(),
@@ -249,6 +253,7 @@ pub fn handle_create_series(
             protocol_state: ctx.accounts.protocol_state.to_account_info(),
             system_program: ctx.accounts.system_program.to_account_info(),
         },
+        signer_seeds,
     );
     opta_transfer_hook::cpi::initialize_extra_account_meta_list(cpi_ctx, expiry)?;
 

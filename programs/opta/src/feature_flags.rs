@@ -7,18 +7,16 @@
 // check against this const (the American code stays compiled in — this is NOT
 // cfg-exclusion — it is simply unreachable while the const is false).
 //
-// The const is flipped by the `american-enabled` Cargo feature:
-//   - feature off (default): AMERICAN_ENABLED = false → American arms revert
-//     with OptaError::AmericanVaultsDisabled.
-//   - feature on:            AMERICAN_ENABLED = true  → American arms run.
+// STATUS: LIVE. Stage I is complete — the full American lifecycle (Stages D–G)
+// plus audit shipped, and the feature-free `not(feature)` default was flipped to
+// `true` and DEPLOYED FEATURE-FREE. BOTH cfg branches are now `true`, so the flag
+// is effectively a permanent production default; the `american-enabled` Cargo
+// feature is retained only so the pre-flip test build path still compiles. The
+// European lifecycle never references this flag.
 //
-// DISCIPLINE: NEVER ship a build with `american-enabled` enabled until
-// Stage I. The European lifecycle never references this flag, so a default
-// (feature-free) build behaves exactly as today. At Stage I — after the full
-// American lifecycle (Stages D–G) plus audit are complete — flip the
-// `not(feature)` default below to `true` and DEPLOY FEATURE-FREE. Do NOT
-// deploy a `--features american-enabled` build: that path is only for running
-// the American test suite before the default flips.
+// DISCIPLINE (still live): do NOT deploy a `--features american-enabled` build —
+// prod builds MUST be feature-free (LOW-5). The two branches being identical
+// means a feature-free deploy already runs the American arms.
 // =============================================================================
 
 #[cfg(feature = "american-enabled")]
@@ -28,23 +26,26 @@ pub const AMERICAN_ENABLED: bool = true;
 pub const AMERICAN_ENABLED: bool = true;
 
 // =============================================================================
-// WRITER_ASKS_ENABLED — Phase 3 Slice A dark gate for writer limit asks
+// WRITER_ASKS_ENABLED — Phase 3 writer limit asks (LIVE production default)
 // =============================================================================
 //
-// Mirrors the ORIGINAL pre-flip AMERICAN_ENABLED pattern (cfg-branched
-// test-vs-prod, NOT the now-permanently-true form): the WriterAsk post path in
-// post_order is reachable ONLY under the `testing` feature, so bankrun/validator
-// can exercise the real escrow-at-post while a FEATURE-FREE production build
-// stays dark (LOW-5 / spec §12.4 — every new surface dark-launchable).
+// STATUS: LIVE. The full writer-ask lifecycle (Slices A–D: post / fill / cancel /
+// refund / settle pot-sweep) is complete, audited, and proven end-to-end on
+// devnet (13/13 assertions, scripts/_smoke_writer_ask_devnet.ts). The dark gate
+// was retired: commit 9ab31dd (Jul 1 2026) flipped the feature-free
+// `not(feature = "testing")` default to `true`, so BOTH cfg branches are now
+// `true` and the flag is a permanent production default. The `testing`-feature
+// branch is retained only so the split mirrors AMERICAN_ENABLED's shape.
 //
-// post_order's WriterAsk arm guards on this const with the repurposed
-// OptaError::WriterAsksDisabled (6054) — the top-of-handler reject moved into
-// the arm; no new error code. Slice B/C enable fill/cancel/refund; until then a
-// posted WriterAsk has no refund path, so the feature-free deploy MUST stay dark.
+// post_order's WriterAsk arm still guards on this const with
+// OptaError::WriterAsksDisabled (6054); with the flag permanently true that
+// revert is now unreachable in every shipped build (it remains as a fail-closed
+// backstop should the const ever be reverted).
 //
-// DISCIPLINE: NEVER deploy a build with `testing` enabled (the LOW-5 guard in
-// lib.rs already enforces this). Flip to a permanent `true` only when Slices
-// A–C are complete, audited, and the full writer-ask lifecycle ships.
+// DISCIPLINE (still live): do NOT deploy a build with `testing` enabled — prod
+// builds MUST be feature-free (the LOW-5 guard in lib.rs enforces this). The
+// two branches being identical means a feature-free deploy already runs the
+// writer-ask path.
 // =============================================================================
 
 #[cfg(feature = "testing")]
@@ -55,26 +56,22 @@ pub const WRITER_ASKS_ENABLED: bool = true;
 
 #[cfg(test)]
 mod tests {
-    // Phase 3 Slice A (iii): deterministic proof of the dark gate. A FEATURE-FREE
-    // production build MUST compile WRITER_ASKS_ENABLED = false; since the first
-    // line of post_order's WriterAsk arm is `require!(WRITER_ASKS_ENABLED,
-    // WriterAsksDisabled)`, false ⇒ every WriterAsk post reverts with 6054. The
-    // host `cargo test` (default = no features) compiles the not(testing) branch.
+    // Run-8 M-1 / M-03 reconciliation: American options and writer asks are both
+    // LIVE permanent production defaults (Stage I flip + commit 9ab31dd). This
+    // invariant asserts a feature-free `cargo test` (default = no features)
+    // compiles BOTH flags `true`, so an accidental revert to a dark default fails
+    // the build. Both consts are `true` in every cfg combination, so the test is
+    // build-agnostic (no cfg gating needed).
     #[test]
-    #[cfg(not(feature = "testing"))]
-    fn writer_asks_dark_in_feature_free_build() {
+    fn american_and_writer_asks_are_live_production_defaults() {
         assert!(
-            !super::WRITER_ASKS_ENABLED,
-            "feature-free build MUST keep WRITER_ASKS_ENABLED = false (dark) so \
-             post_order's WriterAsk arm reverts with WriterAsksDisabled (6054)"
+            super::AMERICAN_ENABLED,
+            "AMERICAN_ENABLED must be true — Stage I is live and deployed feature-free"
         );
-    }
-
-    // Under `--features testing` the test harness needs the gate OPEN so bankrun/
-    // validator can exercise the real post path.
-    #[test]
-    #[cfg(feature = "testing")]
-    fn writer_asks_open_under_testing() {
-        assert!(super::WRITER_ASKS_ENABLED);
+        assert!(
+            super::WRITER_ASKS_ENABLED,
+            "WRITER_ASKS_ENABLED must be true — writer-ask lifecycle is live (9ab31dd, \
+             proven 13/13 on devnet); a false here would revert every WriterAsk with 6054"
+        );
     }
 }

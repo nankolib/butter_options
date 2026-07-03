@@ -206,6 +206,37 @@ pub const VOL_ORACLE_MAX_SAMPLE_GAP_SECS: i64 = 7200;
 /// time-anchored to `now` rather than to a vault's expiry.
 pub const VOL_ORACLE_PYTH_MAX_AGE_SECS: i64 = 60;
 
+/// H-1 (Run-8) — global bounds on the caller-supplied `seed_vol`.
+///
+/// `initialize_vol_oracle` is permissionless (it is the keystone of permissionless
+/// American-market bootstrap), so a caller could otherwise seed an arbitrary
+/// annualized σ that `price_american` uses verbatim for the ~7-day warmup —
+/// underpricing (tiny σ) to mint cheap ITM options or overpricing to grief buyers.
+///
+/// The ONLY legitimate seeds are the per-asset-class defaults in
+/// `app/src/utils/seedVol.ts` (the single SoT): forex 0.12 → crypto 0.80, all at
+/// SCALE = 1e12. These bounds bracket that table with generous margin
+/// (~2.4× below forex, ~2.5× below the ceiling from crypto) so no legit value is
+/// ever rejected, while rejecting the ~1% underpricing seed and absurd-high griefs.
+///
+/// `seed_vol == 0` is EXEMPT from the range — it is the "no seed" sentinel
+/// (quote.rs reverts VolOracleWarmup for a cold+unseeded oracle; it never prices
+/// with σ = 0), so a zero seed cannot mishandle premiums. Validation therefore
+/// permits `seed_vol == 0 || MIN <= seed_vol <= MAX`, which also rejects negatives.
+///
+/// Bounds CAP but do not fully eliminate interim mispricing (a front-runner can
+/// still seed MIN vs. a true 0.80); the admin repair path (`reset_vol_oracle`
+/// re-seeds to a corrected bounded value) is the definitive remediation.
+pub const MIN_SEED_VOL: i64 = 50_000_000_000; // 0.05 annualized σ at SCALE
+pub const MAX_SEED_VOL: i64 = 2_000_000_000_000; // 2.00 annualized σ at SCALE
+
+/// Range check shared by `initialize_vol_oracle` and `reset_vol_oracle`.
+/// Returns true iff `seed_vol` is the zero sentinel or within [MIN, MAX].
+#[inline]
+pub fn seed_vol_in_bounds(seed_vol: i64) -> bool {
+    seed_vol == 0 || (seed_vol >= MIN_SEED_VOL && seed_vol <= MAX_SEED_VOL)
+}
+
 /// `sqrt(8760)` rounded to nearest integer at SCALE = 1e12. 8760 = hours
 /// per year (24 * 365). Pinned as a compile-time constant; verified via
 /// `scripts/gen_vol_test_vectors.py` and the

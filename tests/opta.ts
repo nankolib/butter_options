@@ -70,6 +70,37 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/// Poll the VALIDATOR's on-chain unix clock (Clock sysvar, unix_timestamp at
+/// byte offset 32) until it reaches `targetUnix`. settle_expiry gate 1 checks
+/// `clock >= expiry`, and the test-validator clock LAGS real time under load, so
+/// a Date.now()-based wait can return while the on-chain clock is still behind →
+/// spurious MarketNotExpired (6006). Capped at `capMs` so a genuine validator
+/// stall fails loudly instead of spinning forever.
+async function waitForOnChainUnix(
+  program: Program<Opta>,
+  targetUnix: number,
+  capMs = 30_000,
+): Promise<void> {
+  const deadline = Date.now() + capMs;
+  const readClock = async (): Promise<number> => {
+    const acc = await program.provider.connection.getAccountInfo(
+      anchor.web3.SYSVAR_CLOCK_PUBKEY,
+    );
+    if (!acc) throw new Error("Clock sysvar not found");
+    return Number(acc.data.readBigInt64LE(32));
+  };
+  let clk = await readClock();
+  while (clk < targetUnix) {
+    if (Date.now() > deadline) {
+      throw new Error(
+        `waitForOnChainUnix: on-chain clock ${clk} never reached ${targetUnix} within ${capMs}ms (validator clock stalled)`,
+      );
+    }
+    await sleep(500);
+    clk = await readClock();
+  }
+}
+
 function usdc(amount: number): BN {
   return new BN(amount * 1_000_000);
 }
@@ -670,25 +701,21 @@ describe("opta", () => {
       this.timeout(120_000);
       baseTime = getFixtureBaseTime();
       // Expiries paired with fixture publishTimeOffsetSec values in
-      // _pyth_fixtures.ts. Gap = publish_time - expiry:
-      //   happy:    publish_time = baseTime + 55, expiry = baseTime + 50, gap = +5  → success
-      //   before:   publish_time = baseTime + 46, expiry = baseTime + 51, gap = -5  → PriceUpdateBeforeExpiry
-      //   too-late: publish_time = baseTime + 172, expiry = baseTime + 52, gap = +120 → PriceUpdateTooFarFromExpiry
-      happyExpiry   = new BN(baseTime + 50);
-      beforeExpiry  = new BN(baseTime + 51);
-      tooLateExpiry = new BN(baseTime + 52);
+      // _pyth_fixtures.ts. Only the GAP (publish_time - expiry) matters to the
+      // window checks; the expiry OFFSET is kept SMALL (baseTime + 2..4) so
+      // settle_expiry's gate-1 `clock >= expiry` is satisfied the moment the
+      // validator starts — the test-validator clock lags/stalls under load, so
+      // large offsets (the old +50..52) raced/timed-out MarketNotExpired.
+      //   happy:    publish = baseTime + 7,   expiry = baseTime + 2, gap = +5   → success
+      //   before:   publish = baseTime - 2,   expiry = baseTime + 3, gap = -5   → PriceUpdateBeforeExpiry
+      //   too-late: publish = baseTime + 124, expiry = baseTime + 4, gap = +120 → PriceUpdateTooFarFromExpiry
+      happyExpiry   = new BN(baseTime + 2);
+      beforeExpiry  = new BN(baseTime + 3);
+      tooLateExpiry = new BN(baseTime + 4);
 
-      // Wait until the latest D2 expiry has elapsed on-chain. Tests that
-      // run later in the file have already advanced clock past baseTime,
-      // but we add an explicit wait to be robust against fast machines
-      // that finish the prior settle_expiry block before clock crosses
-      // baseTime + 52.
-      const target = baseTime + 53;
-      const nowSec = Math.floor(Date.now() / 1000);
-      const waitMs = Math.max(0, (target - nowSec) * 1000);
-      if (waitMs > 0) {
-        await sleep(waitMs);
-      }
+      // Belt-and-suspenders: ensure the on-chain clock is past the (now tiny)
+      // expiries. Returns essentially immediately since the suite is minutes in.
+      await waitForOnChainUnix(program, tooLateExpiry.toNumber() + 1);
     });
 
     it("happy-path: publish_time = expiry + 5s succeeds and records pyth_publish_time", async () => {
@@ -713,12 +740,13 @@ describe("opta", () => {
       // Fixture: ema_price=18_000_000_000, expo=-8 → $180.00 in USDC 6-dec.
       assert.equal(record.settlementPrice.toString(), "180000000");
       // Critical D2 assertion: publish_time was recorded, not just settled_at.
-      assert.equal(record.pythPublishTime.toNumber(), baseTime + 55,
-        "pyth_publish_time must equal the fixture's baseTime + 55");
+      // Matches the happy fixture's publishTimeOffsetSec (+7) in _pyth_fixtures.ts.
+      assert.equal(record.pythPublishTime.toNumber(), baseTime + 7,
+        "pyth_publish_time must equal the fixture's baseTime + 7");
       // settled_at must be a real on-chain timestamp. We can't assert
       // its relation to pyth_publish_time in this test because the
-      // synthetic fixture's publish_time is set to baseTime + 55 (in
-      // the future relative to clock at settle time) — in real Pyth,
+      // synthetic fixture's publish_time is set to baseTime + 7 (which may be
+      // slightly ahead of the on-chain clock early in the suite) — in real Pyth,
       // publish_time is always in the past relative to clock, but the
       // test fixture doesn't replicate that ordering.
       assert.isAbove(record.settledAt.toNumber(), 0,
@@ -797,13 +825,16 @@ describe("opta", () => {
     before(async function () {
       this.timeout(120_000);
       baseTime = getFixtureBaseTime();
-      underExpiry = new BN(baseTime + 100);
-      edgeExpiry  = new BN(baseTime + 101);
-      overExpiry  = new BN(baseTime + 102);
-      // Wait until past all three expiries.
-      const target = baseTime + 103;
-      const waitMs = Math.max(0, (target - Math.floor(Date.now() / 1000)) * 1000);
-      if (waitMs > 0) await sleep(waitMs);
+      // Small expiry offsets (baseTime + 5..7) so gate-1 `clock >= expiry` is
+      // satisfied immediately — the validator clock lags/stalls under load, so
+      // the old +100..102 offsets timed out here. Distinct from the D2 block's
+      // +2..4 so the settlement-record PDAs don't collide. Paired publish_time
+      // gap = +5 preserved (conf fixtures at +10..12 in _pyth_fixtures.ts).
+      underExpiry = new BN(baseTime + 5);
+      edgeExpiry  = new BN(baseTime + 6);
+      overExpiry  = new BN(baseTime + 7);
+      // Belt-and-suspenders: essentially immediate (suite is minutes in).
+      await waitForOnChainUnix(program, overExpiry.toNumber() + 1);
     });
 
     it("accepts ema_conf just under the MAX_CONF_BPS boundary", async () => {
@@ -894,7 +925,12 @@ describe("opta", () => {
         [Buffer.from("hook-state"), fakeMint.publicKey.toBuffer()],
         hookProgram.programId,
       );
-      const bogusProtocolState = Keypair.generate().publicKey;
+      // A-to-Z H-01 (Run-8): protocol_state is now a `Signer` on the hook init.
+      // Pass a SIGNED bogus keypair so the Signer gate is satisfied and the
+      // require_keys_eq key check (bogus != canonical opta PDA) is what rejects
+      // it with InvalidProtocolState — keeps the key-check coverage alive rather
+      // than tripping a bare "Signature verification failed".
+      const bogusProtocolState = Keypair.generate();
       const expiry = new BN(Math.floor(Date.now() / 1000) + 3600);
 
       try {
@@ -905,9 +941,10 @@ describe("opta", () => {
             mint: fakeMint.publicKey,
             extraAccountMetaList,
             hookState,
-            protocolState: bogusProtocolState,
+            protocolState: bogusProtocolState.publicKey,
             systemProgram: SystemProgram.programId,
           })
+          .signers([bogusProtocolState])
           .rpc();
         assert.fail("Should have thrown InvalidProtocolState");
       } catch (err: any) {

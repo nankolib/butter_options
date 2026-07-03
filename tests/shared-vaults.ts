@@ -56,6 +56,13 @@ const REGISTRY = {
 
 // HIGH-5: pre-loaded sol-180-fresh fixture for create_market proof gate.
 const SOL_180_FRESH_PK = fixturePubkey("sol-180-fresh");
+// Future-dated (+1500s) SOL fixture used ONLY to seed the cold VolOracle in
+// before(): this file's before() runs well past the -30s fixtures' 60s
+// freshness window, so initialize_vol_oracle would revert VolOraclePriceStale.
+// A future publish_time is always fresh on the wall-clock validator. Same SOL
+// feed, so the init feed-proof still matches. (EUR mints never read the oracle;
+// it only needs to EXIST + be program-owned.)
+const SOL_180_FUTURE_PK = fixturePubkey("sol-180-future");
 
 // =============================================================================
 // Helpers
@@ -376,8 +383,10 @@ describe("shared-vaults", () => {
     // Pass 2 made vol_oracle a required account on mint_from_vault's uniform
     // context. EUR mints never read it, but it must EXIST + be program-owned
     // or the mint reverts 3007. Idempotently seed a cold oracle for the SOL
-    // feed (once per validator session).
-    await ensureVolOracle(program, solPythFeedId, SOL_180_FRESH_PK, payer.publicKey);
+    // feed (once per validator session). Seed from the FUTURE-dated fixture so
+    // init's <=60s spot-freshness gate passes regardless of how late this
+    // before() runs (see SOL_180_FUTURE_PK).
+    await ensureVolOracle(program, solPythFeedId, SOL_180_FUTURE_PK, payer.publicKey);
 
     // Derive vault PDAs
     [epochVaultPda] = deriveSharedVaultPda(marketPda, strike, fridayExpiry, 0);

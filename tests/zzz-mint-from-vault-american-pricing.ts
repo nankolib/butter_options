@@ -237,7 +237,7 @@ describe("zzz-mint-from-vault-american-pricing (Stage C Pass 2 Step 2)", functio
     }
   });
 
-  it("(b) AMER mint with un-pushed oracle (last_sample_ts=0) reverts VolOracleStale", async () => {
+  it("(b) AMER mint with cold un-warmed oracle (seed_vol=0) reverts VolOracleWarmup", async () => {
     const { kp: writer, usdcAta: writerUsdc } = await setupWriter();
     const strike = usdc(100); // $100
     const expiry = new BN(Math.floor(Date.now() / 1000) + 7200);
@@ -311,16 +311,18 @@ describe("zzz-mint-from-vault-american-pricing (Stage C Pass 2 Step 2)", functio
         .preInstructions([EXTRA_CU_800K])
         .signers([writer])
         .rpc();
-      assert.fail("AMER mint should have reverted with VolOracleStale");
+      assert.fail("AMER mint should have reverted with VolOracleWarmup");
     } catch (err: any) {
-      // An un-pushed oracle has last_sample_ts=0, so price_american's 6h
-      // staleness gate (which runs BEFORE realized_vol's warmup gate) is the
-      // first to fire. The warmup gate itself is covered by the Rust unit test
-      // realized_vol_warmup_blocks_below_168 and the synth-based (a)/(c)/(d).
+      // Seed-at-birth (59aeb2e): initialize_vol_oracle now SEEDS last_spot_price
+      // + last_sample_ts at birth, so the 6h staleness gate PASSES for a freshly
+      // created oracle. A cold oracle (sample_count < 168) seeded with seed_vol=0
+      // therefore falls through to the warmup gate → VolOracleWarmup (was
+      // VolOracleStale pre-seed-at-birth, when last_sample_ts was 0). Actual
+      // staleness (last_sample_ts > 6h → VolOracleStale) is covered by (c).
       assert.include(
         String(err),
-        "VolOracleStale",
-        "expected VolOracleStale; got: " + String(err),
+        "VolOracleWarmup",
+        "expected VolOracleWarmup; got: " + String(err),
       );
     }
   });

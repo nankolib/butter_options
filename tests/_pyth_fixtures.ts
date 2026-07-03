@@ -294,6 +294,13 @@ export type FixtureSpec = {
 export const ALL_FIXTURES: FixtureSpec[] = [
   // SOL @ $180, fresh — used by opta happy/pre-expiry/unregistered/double-settle
   { name: "sol-180-fresh", feedIdHex: FEED_ID_HEX.SOL, price: BigInt("18000000000"), exponent: -8, publishTimeOffsetSec: -30 },
+  // SOL @ $180, publishTime 25 min AHEAD (offset +1500) — "always fresh" on a
+  // wall-clock validator (now - publish_time is negative, so the <=60s spot
+  // freshness gate always passes; there is no future-rejection gate). Used to
+  // seed a cold VolOracle deterministically in setups whose before() runs well
+  // past the -30s fixtures' 60s window (e.g. shared-vaults). Same trick the
+  // vol-t*-fresh fixtures use. Never used where a settle window is asserted.
+  { name: "sol-180-future", feedIdHex: FEED_ID_HEX.SOL, price: BigInt("18000000000"), exponent: -8, publishTimeOffsetSec: 1500 },
   // SOL @ $180 but stale — used by opta stale-rejection test
   { name: "sol-180-stale", feedIdHex: FEED_ID_HEX.SOL, price: BigInt("18000000000"), exponent: -8, publishTimeOffsetSec: -400 },
   // BTC fresh — used by opta wrong-feed test (asset is SOL but fixture is BTC feed)
@@ -308,23 +315,27 @@ export const ALL_FIXTURES: FixtureSpec[] = [
   // exercises. Tests compute their expiry via getFixtureBaseTime() + N to
   // match these offsets exactly.
   //
-  // sol-180-window-future-5: publish_time=baseTime+55, paired expiry=baseTime+50, gap=+5s (HAPPY)
-  { name: "sol-180-window-future-5", feedIdHex: FEED_ID_HEX.SOL, price: BigInt("18000000000"), exponent: -8, publishTimeOffsetSec: 55 },
-  // sol-180-window-before-5: publish_time=baseTime+46, paired expiry=baseTime+51, gap=-5s (PriceUpdateBeforeExpiry)
-  { name: "sol-180-window-before-5", feedIdHex: FEED_ID_HEX.SOL, price: BigInt("18000000000"), exponent: -8, publishTimeOffsetSec: 46 },
-  // sol-180-window-too-late-120: publish_time=baseTime+172, paired expiry=baseTime+52, gap=+120s (PriceUpdateTooFarFromExpiry)
-  { name: "sol-180-window-too-late-120", feedIdHex: FEED_ID_HEX.SOL, price: BigInt("18000000000"), exponent: -8, publishTimeOffsetSec: 172 },
+  // Expiry offsets kept small (baseTime + 2..4 in opta.ts) so gate-1 clock>=expiry
+  // is met immediately on the lagging validator clock; only the GAP matters here.
+  // sol-180-window-future-5: publish_time=baseTime+7,   paired expiry=baseTime+2, gap=+5s (HAPPY)
+  { name: "sol-180-window-future-5", feedIdHex: FEED_ID_HEX.SOL, price: BigInt("18000000000"), exponent: -8, publishTimeOffsetSec: 7 },
+  // sol-180-window-before-5: publish_time=baseTime-2,   paired expiry=baseTime+3, gap=-5s (PriceUpdateBeforeExpiry)
+  { name: "sol-180-window-before-5", feedIdHex: FEED_ID_HEX.SOL, price: BigInt("18000000000"), exponent: -8, publishTimeOffsetSec: -2 },
+  // sol-180-window-too-late-120: publish_time=baseTime+124, paired expiry=baseTime+4, gap=+120s (PriceUpdateTooFarFromExpiry)
+  { name: "sol-180-window-too-late-120", feedIdHex: FEED_ID_HEX.SOL, price: BigInt("18000000000"), exponent: -8, publishTimeOffsetSec: 124 },
   // -- CRIT-2 conf-gate fixtures (audit Run-6, 2026-05-03) ---------------------
   // Threshold: conf * 10_000 <= |ema_price| * MAX_CONF_BPS (=200). For
   // SOL @ 180 (ema_price scaled = 18_000_000_000), boundary is conf =
   // 360_000_000. Each fixture is paired with a distinct expiry to avoid
   // SettlementRecord PDA collision; all three use a +5s window-gate gap.
-  // sol-180-conf-just-under: emaConf=359_999_999, paired expiry=baseTime+100, gap=+5 → PASS
-  { name: "sol-180-conf-just-under", feedIdHex: FEED_ID_HEX.SOL, price: BigInt("18000000000"), exponent: -8, publishTimeOffsetSec: 105, emaConf: BigInt(359_999_999) },
-  // sol-180-conf-at-edge:    emaConf=360_000_000 (boundary inclusive), expiry=baseTime+101, gap=+5 → PASS
-  { name: "sol-180-conf-at-edge",    feedIdHex: FEED_ID_HEX.SOL, price: BigInt("18000000000"), exponent: -8, publishTimeOffsetSec: 106, emaConf: BigInt(360_000_000) },
-  // sol-180-conf-just-over:  emaConf=360_000_001, expiry=baseTime+102, gap=+5 → REVERT (PriceConfidenceTooWide)
-  { name: "sol-180-conf-just-over",  feedIdHex: FEED_ID_HEX.SOL, price: BigInt("18000000000"), exponent: -8, publishTimeOffsetSec: 107, emaConf: BigInt(360_000_001) },
+  // Small expiry offsets (baseTime + 5..7 in opta.ts, distinct from the D2 +2..4)
+  // so gate-1 passes immediately; +5s window gap preserved.
+  // sol-180-conf-just-under: emaConf=359_999_999, publish=baseTime+10, expiry=baseTime+5, gap=+5 → PASS
+  { name: "sol-180-conf-just-under", feedIdHex: FEED_ID_HEX.SOL, price: BigInt("18000000000"), exponent: -8, publishTimeOffsetSec: 10, emaConf: BigInt(359_999_999) },
+  // sol-180-conf-at-edge:    emaConf=360_000_000 (boundary inclusive), publish=baseTime+11, expiry=baseTime+6, gap=+5 → PASS
+  { name: "sol-180-conf-at-edge",    feedIdHex: FEED_ID_HEX.SOL, price: BigInt("18000000000"), exponent: -8, publishTimeOffsetSec: 11, emaConf: BigInt(360_000_000) },
+  // sol-180-conf-just-over:  emaConf=360_000_001, publish=baseTime+12, expiry=baseTime+7, gap=+5 → REVERT (PriceConfidenceTooWide)
+  { name: "sol-180-conf-just-over",  feedIdHex: FEED_ID_HEX.SOL, price: BigInt("18000000000"), exponent: -8, publishTimeOffsetSec: 12, emaConf: BigInt(360_000_001) },
   // -- CRIT-1 holders-first gate fixtures (audit Run-6, 2026-05-03) ------------
   // Two fixtures used by tests/zzz-crit1-holders-first-gate.ts. Test expiries
   // are baseTime + 60/90/120/150 (30s spacing — minimum 60s buffer for fresh

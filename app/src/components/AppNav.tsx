@@ -26,10 +26,12 @@ import { DevnetFaucetButton } from "./DevnetFaucetButton";
  * trader pages (Markets / Trade / Write / Portfolio) will use this
  * nav and the global Header (in components/Header.tsx) will retire.
  *
- * The `pointer-events-none` on the nav with
- * `[&>*]:pointer-events-auto` on direct children matches the
- * Landing/Docs nav idiom: the nav is transparent to scroll-trapping
- * while its children stay clickable.
+ * Fixed, opaque top bar: `bg-paper` (#F1ECE2) + a hairline bottom border,
+ * `z-[200]` above all page content (modals z-[300] and the grain overlay sit
+ * higher by design). Pages offset their content with `pt-[120px]`, so content
+ * scrolls UNDER the bar, never through it. The bar owns pointer events over its
+ * whole area (previously `pointer-events-none` for a transparent overlay, which
+ * let scrolled content show + click through).
  */
 export const AppNav: FC = () => {
   const { publicKey, connected, disconnect } = useWallet();
@@ -54,7 +56,7 @@ export const AppNav: FC = () => {
     <>
     <nav
       aria-label="Primary"
-      className="pointer-events-none fixed inset-x-0 top-0 z-[200] flex flex-wrap items-center justify-between font-mono text-[11.5px] uppercase tracking-[0.18em] text-ink py-[22px] px-[clamp(20px,4vw,56px)] [&>*]:pointer-events-auto"
+      className="fixed inset-x-0 top-0 z-[200] flex flex-wrap items-center justify-between font-mono text-[11.5px] uppercase tracking-[0.18em] text-ink py-[22px] px-[clamp(20px,4vw,56px)] bg-paper border-b border-rule"
     >
       <Wordmark context="light" />
 

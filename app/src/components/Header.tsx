@@ -2,16 +2,7 @@ import { FC, useState, useMemo } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
-import { Keypair, Transaction } from "@solana/web3.js";
-import {
-  TOKEN_PROGRAM_ID,
-  getAssociatedTokenAddressSync,
-  createAssociatedTokenAccountInstruction,
-  createTransferInstruction,
-  getAccount,
-} from "@solana/spl-token";
 import { showToast } from "./Toast";
-import { DEVNET_FAUCET_KEYPAIR, DEVNET_USDC_MINT } from "../utils/constants";
 import { inferClusterFromUrl } from "../utils/env";
 
 /**
@@ -26,7 +17,7 @@ import { inferClusterFromUrl } from "../utils/env";
  */
 export const Header: FC = () => {
   const location = useLocation();
-  const { publicKey, connected, sendTransaction } = useWallet();
+  const { publicKey, connected } = useWallet();
   const { connection } = useConnection();
   const [airdropping, setAirdropping] = useState(false);
   const [mintingUsdc, setMintingUsdc] = useState(false);
@@ -60,61 +51,40 @@ export const Header: FC = () => {
   };
 
   const handleUsdcFaucet = async () => {
-    if (!publicKey || !connection || !DEVNET_FAUCET_KEYPAIR || !DEVNET_USDC_MINT) {
-      showToast({ type: "error", title: "Faucet not configured", message: "Run: npx ts-node scripts/setup-faucet.ts" });
-      return;
-    }
-    // MED-2 defense-in-depth: even if the L158 isDevnet render gate ever
-    // regresses, the keypair never executes off-devnet. The keypair is
-    // publicly committed; on mainnet, signing ANY tx with it would let
-    // an attacker drain a misfunded wallet in seconds.
+    if (!publicKey || !connection) return;
+    // Defense-in-depth: even if the isDevnet render gate ever regresses, the
+    // client never triggers the faucet off-devnet. (The server route also
+    // hard-checks the devnet genesis hash before signing.)
     if (!isDevnet) {
       showToast({ type: "error", title: "Faucet disabled", message: "Devnet only." });
       return;
     }
     setMintingUsdc(true);
     try {
-      // ------------------------------------------------------------------
-      // ⚠️  Loads a PUBLICLY EXPOSED devnet keypair from constants.ts.
-      //     Must never execute on a mainnet build. If this code reaches
-      //     mainnet with the faucet button intact, any wallet funded with
-      //     this seed is drained in seconds. See DEVNET_FAUCET_KEYPAIR in
-      //     app/src/utils/constants.ts for the full pre-mainnet checklist.
-      // ------------------------------------------------------------------
-      const faucet = Keypair.fromSecretKey(DEVNET_FAUCET_KEYPAIR);
-      const faucetAta = getAssociatedTokenAddressSync(DEVNET_USDC_MINT, faucet.publicKey, false, TOKEN_PROGRAM_ID);
-      const userAta = getAssociatedTokenAddressSync(DEVNET_USDC_MINT, publicKey, false, TOKEN_PROGRAM_ID);
-      const amount = 10_000_000_000; // 10,000 USDC
-
-      const tx = new Transaction();
-
-      // Create user's ATA if it doesn't exist
-      const userAtaInfo = await connection.getAccountInfo(userAta);
-      if (!userAtaInfo) {
-        tx.add(createAssociatedTokenAccountInstruction(
-          publicKey, userAta, publicKey, DEVNET_USDC_MINT, TOKEN_PROGRAM_ID,
-        ));
+      // H-04: the faucet signing key is server-side only. The browser holds no
+      // key — it asks the serverless route to sign & send the USDC transfer.
+      const res = await fetch("/api/faucet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ wallet: publicKey.toBase58() }),
+      });
+      const data = await res.json().catch(() => ({} as any));
+      if (!res.ok) {
+        if (res.status === 503) {
+          // Env var not set (e.g. code deployed before activation) — graceful.
+          showToast({ type: "error", title: "Faucet not configured", message: data.error || "Server faucet key is not set yet." });
+        } else if (res.status === 429) {
+          showToast({ type: "error", title: "Slow down", message: data.error || "Faucet cooldown active — try again shortly." });
+        } else {
+          showToast({ type: "error", title: "USDC faucet failed", message: data.error || "Try again in a minute." });
+        }
+        return;
       }
-
-      // Transfer USDC from faucet to user
-      tx.add(createTransferInstruction(
-        faucetAta, userAta, faucet.publicKey, amount, [], TOKEN_PROGRAM_ID,
-      ));
-
-      tx.feePayer = publicKey;
-      tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-      tx.partialSign(faucet);
-
-      // Send via wallet adapter — works with any wallet (Phantom, Solflare, etc.)
-      const sig = await sendTransaction(tx, connection);
-      await connection.confirmTransaction(sig, "confirmed");
-
-      const balance = await getAccount(connection, userAta);
-      const usdcBalance = (Number(balance.amount) / 1_000_000).toLocaleString();
-      showToast({ type: "success", title: "Got 10,000 USDC!", message: `Your balance: $${usdcBalance} USDC` });
+      const usd = typeof data.balance === "number" ? `$${data.balance.toLocaleString()} USDC` : "USDC";
+      showToast({ type: "success", title: "Got test USDC!", message: `Your balance: ${usd}` });
     } catch (err: any) {
       console.error("USDC faucet error:", err);
-      showToast({ type: "error", title: "USDC faucet failed", message: err.message || "Check console for details." });
+      showToast({ type: "error", title: "USDC faucet failed", message: err?.message || "Network error." });
     } finally {
       setMintingUsdc(false);
     }

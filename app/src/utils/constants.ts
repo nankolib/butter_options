@@ -9,8 +9,8 @@
 //   app/src/contexts/WalletContext.tsx:24   →   clusterApiUrl("devnet")
 // Flipping that single line to "mainnet-beta" without also updating this
 // file will silently point the app at mainnet while still using devnet
-// addresses and a publicly-known signing key. In that state, any wallet
-// funded with DEVNET_FAUCET_KEYPAIR is drained within seconds of deploy.
+// addresses (program IDs, mock USDC mint). The devnet faucet signing key is
+// no longer bundled — it lives server-side (app/api/faucet.ts, H-04).
 //
 // RUNTIME GUARD: WalletContext.tsx asserts that the inferred cluster
 // matches `EXPECTED_CLUSTER` below. A mainnet RPC URL with this file
@@ -24,8 +24,8 @@
 //   [ ] Set EXPECTED_CLUSTER = "mainnet-beta" below.
 //   [ ] Replace DEVNET_USDC_MINT with Circle's real USDC mint
 //       (EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v).
-//   [ ] DELETE DEVNET_FAUCET_KEYPAIR entirely, then delete its only caller
-//       in app/src/components/Header.tsx (the "Get devnet USDC" button).
+//   [ ] Disable the devnet faucet: unset the FAUCET_SECRET_KEY server env
+//       var (Vercel) and remove the "Get Test USDC" button in Header.tsx.
 //   [ ] Change app/src/contexts/WalletContext.tsx:24 to mainnet-beta and
 //       swap the public RPC for a paid provider (Helius / Triton / QuickNode).
 //   [ ] Re-run the full `anchor test` suite against the mainnet deployment.
@@ -161,28 +161,12 @@ export function isPostPhase2Vault(vault: { account: any } | { createdAt: any }):
   return ts >= PHASE2_CUTOFF_TIMESTAMP;
 }
 
-// ============================================================================
-// ⚠️  CRITICAL — FULL PRIVATE KEY, DO NOT SHIP TO MAINNET
-// ============================================================================
-// This is a complete 64-byte secret key (32-byte seed + 32-byte public key).
-// Anyone who reads the public repo on GitHub or downloads the Vercel bundle
-// controls this wallet. On devnet that wallet holds faucet USDC with zero
-// monetary value — purely for "Get devnet USDC" demo convenience.
-//
-// If this constant survives into a mainnet build, any wallet funded with
-// this seed with real assets is drained by automated key-scanners within seconds.
-//
-// Before any mainnet build:
-//   [ ] Delete this constant entirely.
-//   [ ] Delete its only caller in app/src/components/Header.tsx
-//       (the handleUsdcFaucet function and its "Get devnet USDC" button).
-// ============================================================================
-export const DEVNET_FAUCET_KEYPAIR = Uint8Array.from([
-  190, 228, 179, 16, 84, 86, 220, 167, 58, 26, 230, 109, 55, 214, 31, 68,
-  44, 125, 100, 199, 2, 66, 159, 161, 128, 189, 95, 122, 246, 177, 174, 144,
-  179, 209, 250, 69, 129, 154, 48, 172, 136, 163, 58, 36, 243, 181, 200, 211,
-  13, 245, 237, 45, 41, 30, 221, 12, 131, 243, 51, 64, 92, 218, 20, 129,
-]);
+// Devnet USDC faucet — the signing key is NO LONGER bundled in the client
+// (H-04). It lives in the server-only FAUCET_SECRET_KEY env var and is used
+// exclusively by the serverless route app/api/faucet.ts; the browser calls
+// POST /api/faucet and no private key ever reaches the client bundle. A
+// prebuild gate (app/scripts/check-no-bundled-secrets.mjs) fails any build
+// that re-introduces a bundled signing key.
 
 // Mock USDC mint used for devnet testing — NOT Circle's real USDC.
 // Real mainnet USDC is at EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v.

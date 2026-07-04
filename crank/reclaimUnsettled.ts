@@ -238,8 +238,9 @@ export async function reclaimVault(
 
 // ---------------------------------------------------------------------------
 // runReclaimSweep — the crank-loop pass (Phase 3). Enumerates ALREADY-FETCHED
-// vaults + markets (no new gPA), filters to zero-premium dead-feed candidates,
-// and 2-phases each via reclaimVault. Crash-isolated per candidate. Cluster
+// vaults + markets (no new gPA), filters to dead-feed candidates (zero- AND
+// premium-bearing since H-03), and 2-phases each via reclaimVault. Crash-isolated
+// per candidate. Cluster
 // time (getBlockTime) gates the 7-day grace — NEVER the local clock (~5h skew).
 // ---------------------------------------------------------------------------
 const RECLAIM_GRACE_WINDOW_S = 604_800; // 7 days — mirrors state/shared_vault.rs::GRACE_WINDOW
@@ -283,9 +284,11 @@ export async function runReclaimSweep(
     if (acct.isSettled || acct.voided) continue;
     const expiry = typeof acct.expiry === "number" ? acct.expiry : acct.expiry.toNumber();
     if (expiry + RECLAIM_GRACE_WINDOW_S >= clusterNow) continue;
-    const ppsc = acct.premiumPerShareCumulative;
-    const ppscZero = typeof ppsc?.isZero === "function" ? ppsc.isZero() : String(ppsc) === "0";
-    if (!ppscZero) continue; // zero-premium ONLY — premium-bearing left writer-gated by design
+    // H-03 (audit R-02): premium-bearing vaults are NO LONGER skipped. Since
+    // reclaim_unsettled pays each writer's unclaimed premium + pro-rata collateral
+    // atomically (deployed 2026-07-04, opta slot 473901900), BOTH zero-premium and
+    // premium-bearing dead-feed vaults are valid candidates — the former
+    // `premium_per_share_cumulative != 0` skip is removed.
 
     const market = marketByPda.get((acct.market as PublicKey).toBase58());
     if (!market) continue;

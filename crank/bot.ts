@@ -861,9 +861,10 @@ async function tick(ctx: CrankContext): Promise<TickResult> {
 
   // ---- Phase 3: dead-feed reclaim (opt-in; moves money) -----------------
   // OFF unless OPTA_RECLAIM_CRANK_ENABLED. Reuses refreshedVaults + markets
-  // already in hand (no new gPA). Restricted to ZERO-PREMIUM dead-feed vaults
-  // so no writer's unclaimed premium is stranded (ClaimPremiumFirst is left to
-  // the writer, by design). Per-candidate crash isolation lives in the sweep.
+  // already in hand (no new gPA). Covers BOTH zero-premium and premium-bearing
+  // dead-feed vaults: since H-03 (deployed 2026-07-04, opta slot 473901900)
+  // reclaim_unsettled pays each writer's unclaimed premium + pro-rata collateral
+  // atomically, so no premium is stranded. Per-candidate crash isolation lives in the sweep.
   if (ctx.reclaimEnabled && !shutdownRequested) {
     try {
       const sweep = await runReclaimSweep(

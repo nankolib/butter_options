@@ -6,6 +6,13 @@
 // GRACE_WINDOW past expiry has elapsed. setClock makes the grace boundary
 // deterministic. Also exercises the four defensive `!voided` guards (settle_vault,
 // withdraw_from_vault, exercise_from_vault, auto_finalize_holders).
+//
+// H-03 (audit R-02): reclaim now ALSO pays the writer's unclaimed premium
+// (verbatim claim_premium math, writer as a non-signer Pubkey) atomically with
+// the pro-rata collateral in ONE transfer — so a cranker can unwind a
+// premium-bearing dead-feed vault the writer can no longer claim from (the dead
+// feed makes claim_premium's writer-Signer unsatisfiable). The zero-premium path
+// stays byte-identical (unclaimed == 0 ⇒ collateral-only transfer).
 // =============================================================================
 
 import { assert } from "chai";
@@ -240,8 +247,33 @@ describe("bankrun: reclaim_unsettled (Pass D dead-feed hatch)", function () {
     assert.isTrue(reverted && /GracePeriodNotElapsed/.test(err), "initialize_void must revert GracePeriodNotElapsed");
   });
 
-  it("revert: unclaimed premium → ClaimPremiumFirst", async () => {
-    const e = await setupEnv("RECLAIM6", "reclaim6");
+  // ---------------------------------------------------------------------------
+  // H-03 (audit R-02): premium-bearing dead-feed reclaim. reclaim_unsettled now
+  // pays unclaimed premium + pro-rata collateral atomically, so a cranker can
+  // unwind a premium-bearing vault the writer can no longer claim from.
+  // ---------------------------------------------------------------------------
+
+  /** Mirror of the on-chain unclaimed-premium math (claim_premium / reclaim). */
+  function unclaimedOf(pos: any, v: any): bigint {
+    const shares = BigInt(pos.shares.toString());
+    const ppsc = BigInt(v.premiumPerShareCumulative.toString());
+    const debt = BigInt(pos.premiumDebt.toString());
+    const claimed = BigInt(pos.premiumClaimed.toString());
+    let u = (shares * ppsc) / 1_000_000_000_000n; // SCALE = 1e12
+    u = u > debt ? u - debt : 0n;
+    u = u > claimed ? u - claimed : 0n;
+    return u;
+  }
+  /** Mirror of the pro-rata collateral math. */
+  function collateralOf(pos: any, v: any): bigint {
+    const shares = BigInt(pos.shares.toString());
+    const cr = BigInt(v.collateralRemaining.toString());
+    const ts = BigInt(v.totalShares.toString());
+    return ts === 0n ? 0n : (shares * cr) / ts;
+  }
+
+  it("H-03 premium-bearing single-writer: reclaim pays unclaimed premium + collateral atomically", async () => {
+    const e = await setupEnv("RECLAIMP1", "reclaim-p1");
     const writer = actor(e), buyer = actor(e), cranker = actor(e);
     const now = await getClockUnix(e.h.context);
     const expiry = new BN(now + 7 * 86_400);
@@ -251,12 +283,167 @@ describe("bankrun: reclaim_unsettled (Pass D dead-feed hatch)", function () {
     await purchase(e, vault, wp, m, vaultUsdc, buyer, 5); // accrues premium to the writer
 
     await setClockUnix(e.h.context, expiry.toNumber() + GRACE_WINDOW + 60);
-    await initVoid(e, vault, expiry, usdc(100), "american"); // void first; premium-claimed-first stays in reclaim
+    await initVoid(e, vault, expiry, usdc(100), "american");
+
+    // Expected legs, computed from post-void on-chain state (premium NOT claimed).
+    const vPre: any = await e.opta.account.sharedVault.fetch(vault);
+    const posPre: any = await e.opta.account.writerPosition.fetch(wp);
+    const expPremium = unclaimedOf(posPre, vPre);
+    const expCollateral = collateralOf(posPre, vPre);
+    assert.isTrue(expPremium > 0n, "sanity: premium actually accrued");
+    assert.equal(expCollateral, 2_000_000_000n, "single-writer collateral == full deposit (2000)");
+
+    const wusdc = wAta(e.usdcMint, writer.publicKey);
+    const before = await bal(e, wusdc);
+    const vaultBefore = await bal(e, vaultUsdc);
+    await reclaimUnsettled(e, vault, expiry, writer, cranker);
+    const paid = (await bal(e, wusdc)) - before;
+    const vaultDrained = vaultBefore - (await bal(e, vaultUsdc));
+
+    const v: any = await e.opta.account.sharedVault.fetch(vault);
+    const pos: any = await e.opta.account.writerPosition.fetch(wp);
+    console.log(`    H-03 single: premium=${expPremium} collateral=${expCollateral} paid=${paid} drained=${vaultDrained}`);
+    assert.equal(paid, expPremium + expCollateral, "paid == unclaimed premium + pro-rata collateral");
+    assert.equal(vaultDrained, paid, "conservation: vault_usdc drained exactly by the payout");
+    assert.equal(pos.shares.toString(), "0", "shares zeroed");
+    assert.equal(BigInt(pos.premiumClaimed.toString()), expPremium, "premium_claimed bumped by the paid premium");
+    assert.isTrue(v.voided && !v.isSettled, "voided, never settled");
+  });
+
+  it("H-03 partial-prior-claim: writer already claimed wave-1; reclaim pays only the remaining premium", async () => {
+    const e = await setupEnv("RECLAIMP2", "reclaim-p2");
+    const writer = actor(e), b1 = actor(e), b2 = actor(e), cranker = actor(e);
+    const now = await getClockUnix(e.h.context);
+    const expiry = new BN(now + 7 * 86_400);
+    const { vault, vaultUsdc } = await createVault(e, "american", usdc(100), expiry, { call: {} }, writer);
+    const wp = await deposit(e, vault, vaultUsdc, writer, 2000);
+    const m = await mint(e, vault, wp, writer, 10, now, true);
+    await purchase(e, vault, wp, m, vaultUsdc, b1, 3); // wave 1 premium
+    await claimPremium(e, vault, wp, writer);           // writer claims wave 1
+    const posMid: any = await e.opta.account.writerPosition.fetch(wp);
+    const claimedWave1 = BigInt(posMid.premiumClaimed.toString());
+    assert.isTrue(claimedWave1 > 0n, "sanity: wave-1 premium was claimed");
+    await purchase(e, vault, wp, m, vaultUsdc, b2, 2); // wave 2 premium accrues (pre-expiry)
+
+    await setClockUnix(e.h.context, expiry.toNumber() + GRACE_WINDOW + 60);
+    await initVoid(e, vault, expiry, usdc(100), "american");
+
+    const vPre: any = await e.opta.account.sharedVault.fetch(vault);
+    const posPre: any = await e.opta.account.writerPosition.fetch(wp);
+    const expPremium = unclaimedOf(posPre, vPre); // wave-2 remainder only
+    const expCollateral = collateralOf(posPre, vPre);
+    assert.isTrue(expPremium > 0n, "sanity: wave-2 premium still unclaimed");
+
+    const wusdc = wAta(e.usdcMint, writer.publicKey);
+    const before = await bal(e, wusdc);
+    await reclaimUnsettled(e, vault, expiry, writer, cranker);
+    const paid = (await bal(e, wusdc)) - before;
+    const pos: any = await e.opta.account.writerPosition.fetch(wp);
+    console.log(`    H-03 partial: wave1=${claimedWave1} wave2=${expPremium} paid=${paid} claimedFinal=${pos.premiumClaimed}`);
+    assert.equal(paid, expPremium + expCollateral, "paid == remaining premium + collateral (wave-1 NOT re-paid)");
+    assert.equal(BigInt(pos.premiumClaimed.toString()), claimedWave1 + expPremium, "checkpoint = wave1 + wave2");
+  });
+
+  it("H-03 premium-bearing multi-writer: each writer reclaims own premium + pro-rata collateral", async () => {
+    const e = await setupEnv("RECLAIMP3", "reclaim-p3");
+    const epochConfig = await initEpochConfig(e);
+    const w1 = actor(e), w2 = actor(e), buyer = actor(e), cranker = actor(e);
+    const now = await getClockUnix(e.h.context);
+    const expiry = new BN(nextFridayExpiry(now));
+    const { vault, vaultUsdc } = await createEpochVault(e, "american", usdc(100), expiry, { call: {} }, w1, epochConfig);
+    const wp1 = await deposit(e, vault, vaultUsdc, w1, 600);
+    const wp2 = await deposit(e, vault, vaultUsdc, w2, 400);
+    // Mint from w1's position and sell — premium accrues per-share across BOTH writers.
+    const mmint = await mint(e, vault, wp1, w1, 5, now, true);
+    await purchase(e, vault, wp1, mmint, vaultUsdc, buyer, 5);
+
+    await setClockUnix(e.h.context, expiry.toNumber() + GRACE_WINDOW + 60);
+    await initVoid(e, vault, expiry, usdc(100), "american");
+
+    for (const [w, wp, label] of [[w1, wp1, "w1"], [w2, wp2, "w2"]] as any[]) {
+      const vPre: any = await e.opta.account.sharedVault.fetch(vault);
+      const posPre: any = await e.opta.account.writerPosition.fetch(wp);
+      const expPremium = unclaimedOf(posPre, vPre);
+      const expCollateral = collateralOf(posPre, vPre);
+      const wusdc = wAta(e.usdcMint, w.publicKey);
+      const before = await bal(e, wusdc);
+      await reclaimUnsettled(e, vault, expiry, w, cranker);
+      const paid = (await bal(e, wusdc)) - before;
+      const pos: any = await e.opta.account.writerPosition.fetch(wp);
+      console.log(`    H-03 multi ${label}: premium=${expPremium} collateral=${expCollateral} paid=${paid}`);
+      assert.equal(paid, expPremium + expCollateral, `${label}: paid == own premium + pro-rata collateral`);
+      assert.equal(pos.shares.toString(), "0", `${label}: shares zeroed`);
+    }
+    const vEnd: any = await e.opta.account.sharedVault.fetch(vault);
+    assert.equal(vEnd.totalShares.toString(), "0", "all shares drained after both reclaims");
+  });
+
+  it("H-03 double-call same writer: 2nd reclaim reverts (shares zeroed, premium not re-paid)", async () => {
+    const e = await setupEnv("RECLAIMP4", "reclaim-p4");
+    const writer = actor(e), buyer = actor(e), cranker = actor(e), cranker2 = actor(e);
+    const now = await getClockUnix(e.h.context);
+    const expiry = new BN(now + 7 * 86_400);
+    const { vault, vaultUsdc } = await createVault(e, "american", usdc(100), expiry, { call: {} }, writer);
+    const wp = await deposit(e, vault, vaultUsdc, writer, 1000);
+    const m = await mint(e, vault, wp, writer, 10, now, true);
+    await purchase(e, vault, wp, m, vaultUsdc, buyer, 5);
+
+    await setClockUnix(e.h.context, expiry.toNumber() + GRACE_WINDOW + 60);
+    await initVoid(e, vault, expiry, usdc(100), "american");
+    await reclaimUnsettled(e, vault, expiry, writer, cranker); // pays premium + collateral, shares → 0
+    const posAfter: any = await e.opta.account.writerPosition.fetch(wp);
+    const claimedAfter = BigInt(posAfter.premiumClaimed.toString());
+
     let reverted = false, err = "";
-    try { await reclaimUnsettled(e, vault, expiry, writer, cranker); } // premium NOT claimed
+    try { await reclaimUnsettled(e, vault, expiry, writer, cranker2); }
     catch (ex: any) { reverted = true; err = String(ex); }
-    console.log(`    unclaimed-premium reverted=${reverted} (${err.slice(0, 120)})`);
-    assert.isTrue(reverted && /ClaimPremiumFirst/.test(err), "must revert ClaimPremiumFirst");
+    console.log(`    H-03 double-call reverted=${reverted} (${err.slice(0, 100)})`);
+    assert.isTrue(reverted && /InsufficientCollateral/.test(err), "2nd call reverts InsufficientCollateral (shares=0)");
+    const posFinal: any = await e.opta.account.writerPosition.fetch(wp);
+    assert.equal(BigInt(posFinal.premiumClaimed.toString()), claimedAfter, "premium_claimed unchanged by the reverted 2nd call");
+  });
+
+  it("H-03 malicious cranker: writer_usdc owned by attacker → reverts (owner pin)", async () => {
+    const e = await setupEnv("RECLAIMP5", "reclaim-p5");
+    const writer = actor(e), attacker = actor(e), cranker = actor(e);
+    const now = await getClockUnix(e.h.context);
+    const expiry = new BN(now + 7 * 86_400);
+    const { vault, vaultUsdc } = await createVault(e, "american", usdc(100), expiry, { call: {} }, writer);
+    const wp = await deposit(e, vault, vaultUsdc, writer, 1000);
+
+    await setClockUnix(e.h.context, expiry.toNumber() + GRACE_WINDOW + 60);
+    await initVoid(e, vault, expiry, usdc(100), "american");
+
+    const attackerUsdc = await usdcAta(e, attacker.publicKey); // owned by attacker, not writer
+    let reverted = false, err = "";
+    try {
+      await e.opta.methods.reclaimUnsettled().accountsStrict({
+        cranker: cranker.publicKey, writer: writer.publicKey, sharedVault: vault,
+        writerPosition: wp, vaultUsdcAccount: vaultUsdc, writerUsdcAccount: attackerUsdc,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      }).signers([cranker]).rpc();
+    } catch (ex: any) { reverted = true; err = String(ex); }
+    console.log(`    H-03 malicious-redirect reverted=${reverted} (${err.slice(0, 100)})`);
+    assert.isTrue(reverted, "cranker cannot redirect the payout to a non-writer ATA");
+    const pos: any = await e.opta.account.writerPosition.fetch(wp);
+    assert.isTrue(BigInt(pos.shares.toString()) > 0n, "writer position untouched (still claimable)");
+  });
+
+  it("H-03 revert: reclaim before initialize_void → VaultNotVoided", async () => {
+    const e = await setupEnv("RECLAIMP6", "reclaim-p6");
+    const writer = actor(e), cranker = actor(e);
+    const now = await getClockUnix(e.h.context);
+    const expiry = new BN(now + 7 * 86_400);
+    const { vault, vaultUsdc } = await createVault(e, "american", usdc(100), expiry, { call: {} }, writer);
+    await deposit(e, vault, vaultUsdc, writer, 1000);
+
+    await setClockUnix(e.h.context, expiry.toNumber() + GRACE_WINDOW + 60);
+    // NOT voided — reclaim must refuse to run ahead of initialize_void.
+    let reverted = false, err = "";
+    try { await reclaimUnsettled(e, vault, expiry, writer, cranker); }
+    catch (ex: any) { reverted = true; err = String(ex); }
+    console.log(`    H-03 not-voided reverted=${reverted} (${err.slice(0, 100)})`);
+    assert.isTrue(reverted && /VaultNotVoided/.test(err), "must revert VaultNotVoided");
   });
 
   it("revert: double-claim same writer → zero-shares (InsufficientCollateral)", async () => {

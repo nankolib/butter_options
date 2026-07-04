@@ -29,8 +29,14 @@
 //      same expression Stage G's F→G handshake uses, netting USDC already paid
 //      out to early-American exercisers. On a never-settled vault
 //      collateral_remaining is otherwise 0, which would pay everyone nothing.
-//   4. Premium-claimed-first — reuses the exact ClaimPremiumFirst precondition
-//      withdraw_from_vault enforces. Premium stays claimable via claim_premium.
+//   4. Premium PAID inline (H-03) — the writer's unclaimed premium (verbatim
+//      claim_premium math, computed with `writer` as a non-signer Pubkey) is paid
+//      out atomically alongside the pro-rata collateral in ONE transfer. This
+//      replaces the pre-H-03 `ClaimPremiumFirst` precondition, which stranded
+//      premium-bearing dead-feed vaults forever: claim_premium requires the writer
+//      to sign, which is impossible once the feed is dead and the cranker is the
+//      only mover. The ClaimPremiumFirst variant is retained (still used by
+//      withdraw_from_vault) but no longer referenced here.
 //
 // USDC flow: vault_usdc_account → writer_usdc_account (signed by vault PDA via
 // vault_namespace_seed — series vaults are American, so the American prefix).
@@ -40,7 +46,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer};
 
 use crate::errors::OptaError;
-use crate::events::VaultReclaimed;
+use crate::events::{PremiumClaimed, VaultReclaimed};
 use crate::state::*;
 
 pub fn handle_reclaim_unsettled(ctx: Context<ReclaimUnsettled>) -> Result<()> {
@@ -69,20 +75,22 @@ pub fn handle_reclaim_unsettled(ctx: Context<ReclaimUnsettled>) -> Result<()> {
     );
     require!(writer_pos.shares > 0, OptaError::InsufficientCollateral);
 
-    // ---- 4. Premium-claimed-first (reuse withdraw_from_vault's check) -------
-    let total_earned = (writer_pos.shares as u128)
+    // ---- 4a. Unclaimed premium (H-03: verbatim claim_premium math) ----------
+    // The writer's still-unclaimed premium via the reward-per-share accumulator —
+    // IDENTICAL to claim_premium (state accessed identically), computed here with
+    // `writer` as a plain Pubkey (non-signer). claim_premium's Signer bound gates
+    // nothing the seed + ATA-owner pins below don't already enforce, so a cranker
+    // may settle it on the writer's behalf. saturating_sub on both legs matches
+    // claim_premium's checked_sub(debt).unwrap_or(0) then saturating_sub(claimed).
+    let unclaimed = (writer_pos.shares as u128)
         .checked_mul(vault.premium_per_share_cumulative)
         .ok_or(OptaError::MathOverflow)?
         .checked_div(1_000_000_000_000u128) // SCALE = 1e12
-        .ok_or(OptaError::MathOverflow)?;
-    let earned_since_deposit = total_earned
-        .checked_sub(writer_pos.premium_debt)
-        .unwrap_or(0);
-    let unclaimed = earned_since_deposit
+        .ok_or(OptaError::MathOverflow)?
+        .saturating_sub(writer_pos.premium_debt)
         .saturating_sub(writer_pos.premium_claimed as u128) as u64;
-    require!(unclaimed == 0, OptaError::ClaimPremiumFirst);
 
-    // ---- 4. Per-writer pro-rata payout (withdraw_post_settlement formula) ----
+    // ---- 4b. Per-writer pro-rata collateral (withdraw_post_settlement formula) -
     // collateral_remaining + total_shares were seeded/merged by initialize_void
     // (the void transition that used to live here). Byte-identical math.
     let vault = &ctx.accounts.shared_vault;
@@ -108,7 +116,16 @@ pub fn handle_reclaim_unsettled(ctx: Context<ReclaimUnsettled>) -> Result<()> {
     ];
     let signer_seeds = &[vault_seeds];
 
-    if writer_remaining > 0 {
+    // ---- 4c. ONE atomic payout: premium + collateral ------------------------
+    // Both draw from vault_usdc (which holds total_collateral + net_premium), both
+    // signed by the vault PDA, both destined for the SAME pinned writer ATA — so a
+    // single Transfer is exact and cheaper than two CPIs. A zero-premium vault
+    // (unclaimed == 0) reduces this to the pre-H-03 collateral-only transfer,
+    // keeping that path byte-identical.
+    let total_payout = unclaimed
+        .checked_add(writer_remaining)
+        .ok_or(OptaError::MathOverflow)?;
+    if total_payout > 0 {
         let transfer_ctx = CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
             Transfer {
@@ -118,7 +135,7 @@ pub fn handle_reclaim_unsettled(ctx: Context<ReclaimUnsettled>) -> Result<()> {
             },
             signer_seeds,
         );
-        token::transfer(transfer_ctx, writer_remaining)?;
+        token::transfer(transfer_ctx, total_payout)?;
     }
 
     // ---- 7. Accounting (same decrements as withdraw_post_settlement) --------
@@ -140,17 +157,30 @@ pub fn handle_reclaim_unsettled(ctx: Context<ReclaimUnsettled>) -> Result<()> {
         .checked_sub(writer_remaining)
         .ok_or(OptaError::MathOverflow)?;
 
-    // Zero the position's shares so a second reclaim hits the shares>0 guard
-    // above (zeroed-not-closed: clean per-writer idempotency without depending
-    // on rent-refund to a non-signer position owner).
+    // Advance the premium checkpoint (so a re-call would pay 0 premium) and zero
+    // the position's shares (so a second reclaim hits the shares>0 guard above —
+    // zeroed-not-closed: clean per-writer idempotency without depending on
+    // rent-refund to a non-signer position owner).
     let writer_pos = &mut ctx.accounts.writer_position;
+    writer_pos.premium_claimed = writer_pos
+        .premium_claimed
+        .checked_add(unclaimed)
+        .ok_or(OptaError::MathOverflow)?;
     writer_pos.shares = 0;
 
     emit!(VaultReclaimed {
         vault: vault_key,
         writer: writer_key,
-        amount: writer_remaining,
+        amount: total_payout,
     });
+    // Surface the premium leg for the same analytics that watch claim_premium.
+    if unclaimed > 0 {
+        emit!(PremiumClaimed {
+            vault: vault_key,
+            writer: writer_key,
+            amount: unclaimed,
+        });
+    }
 
     Ok(())
 }

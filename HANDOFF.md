@@ -1,5 +1,45 @@
 # Opta — Engineer Handoff
 
+> **2026-07-04 (SESSION CLOSE — H-03 PREMIUM-BEARING RECLAIM ARC ✅ COMPLETE, live-proven). ▶ RESUME HERE:**
+>
+> **The last open funds-recovery gap is closed.** `reclaim_unsettled` now pays each writer's unclaimed premium + pro-rata collateral atomically (one `vault_usdc→writer_usdc` transfer, cranker signs, payout owner-pinned to the writer). Replaces the old `ClaimPremiumFirst` precondition that stranded premium-bearing dead-feed vaults (claim_premium needs the writer to sign — impossible once the feed is dead). Zero-premium path byte-identical; accounts struct unchanged (no IDL change); `ClaimPremiumFirst` enum variant retained (still used by withdraw_from_vault → error codes unshifted).
+>
+> **(1) RUST — ✅ SHIPPED + DEPLOYED.** Commit `d712ea9` (master+main). Deployed **opta ONLY, feature-free, slot 473901900** (was 473707105), authority admin `5YRMuuoY`, `.so` sha256 `fc9f2051…`, deploy sig `4FetSCDA…`. Smaller-upgrade (1596176 vs prior 1604624) → on-chain first-N == local, 8448-byte tail all-zero (verified). Gates: cargo clean / **bankrun 15/15 reclaim** (new: single / partial-prior-claim / multi-writer / double-call / malicious-cranker→ConstraintRaw / not-voided→VaultNotVoided) + full bankrun suite exit 0 / host-unit 84-0 / **validator 90-pass 0-fail 66-pending**. NO hook redeploy, NO VPS redeploy.
+>
+> **(2) LIVE CANARIES — ✅ BOTH PROVEN (real money moved, admin as cranker on THIRD-PARTY writers).**
+>   - **Canary A** = TSLA Call $450 `8jrkhmvhY66uBAkAxrnvmKviKQLirHLUcuv58T7uFdGe` (single writer `GkG1UX8M…`). initialize_void (`4LdfddLc…`) → reclaim (`41TVZC9M…`): premium $24.743934 + collateral $22,500.00 = **$22,524.743934** to writer ATA; vault_usdc→0; shares→0; premium_claimed→24743934; conservation exact.
+>   - **Canary B** = AAPL Call $300 `8AGz9VrJLEQkmG3ghQFm3WaGr2YLL3b4Kr4YbYbALRtc` (2 writers). void (`3zPAYnMo…`) → reclaim W1 `GkG1UX8M…` (`5UXnD4kG…`, **premium_debt=5281766** case, +$60,017.902588) → reclaim W2 `DnExEYnZ…` (`oD8P1Zsk…`, +$150,057.960885). Running CR/TS decremented per-writer; vault_usdc→0; **conservation exact, 0 floor dust** (CR==TS 1:1). Proves per-writer iteration + voided-doesn't-block-2nd-writer + nonzero premium_debt.
+>
+> **(3) CRANK — ✅ COMMITTED (commit-only, NOT on VPS).** Commit `3ca63cc` (master+main): removed the `premium_per_share_cumulative != 0` skip in `runReclaimSweep` + refreshed stale "zero-premium only" comments (reclaimUnsettled.ts + bot.ts). 2-phase orchestrator unchanged. crank tsc + typecheck:tests clean. **The VPS crank is now 2 commits behind: `8b4c9b3` (dark reclaim wiring) + `3ca63cc` (premium filter removal).**
+>
+> **▶ 2 VAULTS INTENTIONALLY HELD as premium-bearing crank canaries — DO NOT void/reclaim manually:**
+>   - **MSFT Put $400** `GteYo9RbYjHQ4EMBoLDQ86xByDMWmfVR1N7xgxFndYXB` (1 writer, ~$204,300)
+>   - **TSLA Put $400** `8xW8ewiqbCrE6H9s5opQ3XCXq6JgL19ESDM6g7Ca7ViR` (1 writer, ~$20,065)
+>   They are the live proof for the crank's AUTOMATED premium-bearing sweep. **This requires `3ca63cc` deployed to the VPS first** — the currently-running VPS crank still has the zero-premium filter and would SKIP them even with reclaim enabled.
+>
+> **▶ VPS REDEPLOY SEQUENCING (post-July-8):** on the July-8 runbook redeploy, pull → the VPS picks up BOTH pending crank commits (`8b4c9b3` + `3ca63cc`). Then `OPTA_RECLAIM_CRANK_ENABLED=1` sweeps zero-premium candidates (Ad5zz684 seed pool, BAhgX8uA husk — see July-8 block) AND the 2 held premium-bearing canaries (MSFT/TSLA Put) in the same pass. Verify conservation per vault.
+>
+> **▶ HARNESS NOTE (local-only):** `.test-fixtures/run-tests.sh` needs `mkdir -p .anchor` before launching the validator (else `--ledger .anchor/test-ledger` fails to boot and the suite hangs). Applied on-disk locally, but `.test-fixtures/` is gitignored (`.gitignore:35`) so it is NOT committed — either un-ignore run-tests.sh specifically or re-apply the one-liner in fresh checkouts. Also: run validator gates on a **/tmp ledger**, not /mnt/d (too slow).
+>
+> **▶ NEXT SUBSTANTIVE ARC:** H-03 done → per the 2026-07-03 ordering, next is frontend/ops (H-04 bundled faucet key removal, H-05 American quote hard-gates), then the trade-page v1 arc. Read-only H-03 tooling kept local (untracked): `scripts/_probe_h03_candidates.ts`, `_probe_h03_sizes.ts`, `_probe_h03_canary{A,B}.ts`, `_exec_h03_canary{A,B}.ts`.
+
+> **2026-07-03 (SESSION CLOSE — TWO-AUDIT MERGE FIXES LIVE + VALIDATOR DEBT RESOLVED). ▶ RESUME HERE:**
+>
+> **(1) AUDIT-FIX SLICE — ✅ 5 PATCHES LIVE.** Merged Run-8 + A-to-Z static audit; landed on-chain fixes only. Commit `7a1be4c` (20 files, +817/−75), pushed master+main. Deployed both programs, opta first: **opta slot 473707105** (was 473484452, tx `5BqyZ6bz`), **hook slot 473707252** (was 464160129, tx `3PkGsUmT`), authority admin `5YRMuuoY`, sbf v3 feature-free. Patches:
+>   - **C-1 (CRITICAL):** fill_order Bid branch — pinned maker_option_account to order.owner/option_mint (raw byte-check) → closed theft of every open Bid's escrowed USDC. New err MakerOptionAccountInvalid (6077).
+>   - **H-1 (High):** bounded permissionless seed_vol to 0-sentinel or [0.05, 2.0] in initialize_vol_oracle; reset_vol_oracle re-seeds (admin repair path); L-7 sign guard in quote.rs. New err SeedVolOutOfBounds (6078).
+>   - **H-2 (High):** holders-first window now gates on `total_options_sold > 0 || writer_ask_collateral_swept > 0` (withdraw_post_settlement + auto_finalize_writers) → writer-ask ITM holders no longer front-run by pool writers. Accounting-safe (touches no settlement math).
+>   - **A-to-Z H-01:** hook protocol_state → Signer; both opta CPI sites (create_series, mint_from_vault) → new_with_signer(PROTOCOL_SEED) → closed pre-init squat. Touched BOTH programs (why opta deploys first — matched pair).
+>   - **M-1/M-03:** reconciled feature_flags to WRITER_ASKS_ENABLED + AMERICAN_ENABLED both TRUE (the Jul 1 flip is intentional); fixed RED invariant test + stale dark-launch comments.
+>   - **Live smokes ALL PASSED:** P4 CPI pair (create_series tx `uj4YSVbN` + mint_from_vault, hook PDAs init'd), fill_order Bid honest path (fillBid tx `3M43NWEy`, pin accepts legit maker acct). Theft-blocked negative path is bankrun-proven.
+>
+> **(2) VALIDATOR TEST DEBT — ✅ RESOLVED (deterministic 0).** The 31 stale failures were 3 drift classes, not ~15 sites. Commits `3db2a0c` (83 site-edits: initializeVolOracle 3-arg + SB-null across 17 files, + tsconfig.typecheck.json + `npm run typecheck:tests` gate wired into `npm test`, teeth-verified catches 2-arg drift) and `74216eb` (reach-0: deleted zzz-vol-oracle.ts [bankrun-covered], future-dated SOL fixture for shared-vaults, shrank settle_expiry offsets to base+2..7 to beat validator clock lag, opta hook test → signed bogus keypair). Both pushed master+main. **Validator now 90/0/66, deterministic across 3x runs; bankrun 194/0/2; typecheck green.** Drift now caught at compile time.
+>   - Known skip: `_vol_oracle_helpers.ts` stays any-typed (calls test-synth-only synthWarmVolOracle absent from feature-free IDL); inline callers in typed files ARE gate-covered.
+>
+> **▶ JULY 8 RUNBOOK STILL STANDS** (from 2026-07-02 block below, 23:19:56Z) — void seed reclaim canary is unchanged and unaffected by today's slice. Do not lose it; July 8 is close.
+>
+> **▶ NEXT SUBSTANTIVE ARC = H-03 premium-bearing reclaim** — the last open funds-recovery gap. Needs a NEW Rust instruction: permissionless dead-feed vault unwind that atomically pays unclaimed premium + pro-rata collateral to the writer's ATA (cranker signs, payout pinned to writer, never redirected). Currently premium-bearing dead-feed vaults are writer-gated + stranded by design (claim_premium needs writer Signer). Then, in order: frontend/ops (H-04 bundled faucet key removal, H-05 American quote hard-gates), then alignment (crank redeploy — 1 commit behind on default-OFF sweep, functional no-op; untracked-work commit + gitignore split).
+
 > **2026-07-02 (SESSION CLOSE — WRITER-ASK ARC LIVE + PROVEN; void seeded). ▶ RESUME HERE:**
 >
 > **(1) WRITER_ASKS_ENABLED — ✅ LIVE.** Upgrade `2HqRePHq…PcyL`, slot 473200808→473317653, hash `a8d16dfc…9028b8b`, authority admin, buffer consumed (+10.448 SOL recovered), NO brick (behavior-only, no schema delta). Flag commit `9ab31dd`. Dark source rebuilt byte-identical to prior on-chain 276 (reproducible).

@@ -1,9 +1,9 @@
-import { FC, useState, useMemo } from "react";
+import { FC, useMemo } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
-import { showToast } from "./Toast";
 import { inferClusterFromUrl } from "../utils/env";
+import { DevnetSolButton } from "./DevnetSolButton";
 import { DevnetFaucetButton } from "./DevnetFaucetButton";
 
 /**
@@ -18,9 +18,8 @@ import { DevnetFaucetButton } from "./DevnetFaucetButton";
  */
 export const Header: FC = () => {
   const location = useLocation();
-  const { publicKey, connected } = useWallet();
+  const { connected } = useWallet();
   const { connection } = useConnection();
-  const [airdropping, setAirdropping] = useState(false);
   const isDevnet = useMemo(
     () => inferClusterFromUrl(connection.rpcEndpoint) === "devnet",
     [connection.rpcEndpoint],
@@ -35,20 +34,6 @@ export const Header: FC = () => {
   ];
 
   const isActive = (path: string) => location.pathname === path;
-
-  const handleAirdrop = async () => {
-    if (!publicKey || !connection) return;
-    setAirdropping(true);
-    try {
-      const sig = await connection.requestAirdrop(publicKey, 1_000_000_000); // 1 SOL
-      await connection.confirmTransaction(sig, "confirmed");
-      showToast({ type: "success", title: "Airdropped 1 SOL!", message: "You now have devnet SOL for transaction fees." });
-    } catch (err: any) {
-      showToast({ type: "error", title: "Airdrop failed", message: "Devnet may be rate-limited. Try again in a minute." });
-    } finally {
-      setAirdropping(false);
-    }
-  };
 
   return (
     <header className="fixed top-0 left-0 right-0 z-50 border-b border-border bg-bg-primary/80 backdrop-blur-xl">
@@ -95,13 +80,7 @@ export const Header: FC = () => {
           {/* Get Test SOL + USDC — only visible when wallet connected on devnet */}
           {connected && isDevnet && (
             <>
-              <button
-                onClick={handleAirdrop}
-                disabled={airdropping}
-                className="rounded-lg bg-bg-surface border border-border px-3 py-1.5 text-xs font-medium text-text-secondary hover:text-text-primary hover:border-border-light transition-colors disabled:opacity-50"
-              >
-                {airdropping ? "Sending..." : "Get Test SOL"}
-              </button>
+              <DevnetSolButton className="rounded-lg bg-bg-surface border border-border px-3 py-1.5 text-xs font-medium text-text-secondary hover:text-text-primary hover:border-border-light transition-colors disabled:opacity-50" />
               <DevnetFaucetButton className="rounded-lg bg-bg-surface border border-border px-3 py-1.5 text-xs font-medium text-text-secondary hover:text-text-primary hover:border-border-light transition-colors disabled:opacity-50" />
             </>
           )}

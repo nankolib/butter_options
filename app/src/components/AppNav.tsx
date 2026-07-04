@@ -5,6 +5,7 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { Wordmark } from "./brand";
 import { NewMarketModal } from "../pages/markets/NewMarketModal";
+import { DevnetSolButton } from "./DevnetSolButton";
 import { DevnetFaucetButton } from "./DevnetFaucetButton";
 
 /**
@@ -66,6 +67,7 @@ export const AppNav: FC = () => {
       </div>
 
       <div className="flex items-center gap-4">
+        <DevnetSolButton className="hidden sm:inline-flex items-center no-underline transition-opacity duration-300 ease-opta opacity-65 hover:opacity-100 disabled:opacity-40 disabled:cursor-wait" />
         <DevnetFaucetButton className="hidden sm:inline-flex items-center no-underline transition-opacity duration-300 ease-opta opacity-65 hover:opacity-100 disabled:opacity-40 disabled:cursor-wait" />
         <button
           type="button"

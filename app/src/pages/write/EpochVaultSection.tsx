@@ -8,6 +8,7 @@ import { SectionNumber } from "../../components/layout";
 import { showToast } from "../../components/Toast";
 import { WriterForm, type WriterFormValues, type AssetOption } from "./WriterForm";
 import { LiveQuoteCard } from "./LiveQuoteCard";
+import { useOptionPriceQuoteFreshness } from "../../hooks/useOptionPriceQuoteFreshness";
 import {
   applyVolSmile,
   calculateCallPremium,
@@ -152,6 +153,30 @@ export const EpochVaultSection: FC<EpochVaultSectionProps> = ({
       tooltip: `Vol oracle for ${chosen.ticker} not yet seeded. New markets need ~1 hour for the oracle crank to initialize the oracle. Try again later, or contact support if this persists past 24 hours.`,
     };
   }, [chosen, unseededTickers]);
+
+  // H-05: American writes require a FRESH on-chain quote (vol oracle warm +
+  // not-stale + initialized) — expiry-independent, so the front (earliest)
+  // ladder expiry validates the whole write. Same shared authority as Trade.
+  const amerEnabled = values.exerciseStyle === "american" && connected && !!chosen && strikeNum > 0;
+  const { isFresh: amerFresh, statusReason: amerReason } = useOptionPriceQuoteFreshness(
+    amerEnabled,
+    chosen ? { publicKey: chosen.market.publicKey, account: { pythFeedId: chosen.market.account.pythFeedId } } : null,
+    amerEnabled
+      ? {
+          strike: strikeNum,
+          expiryTs: frontExpiryTs,
+          side: values.side,
+          exerciseStyle: "american" as const,
+          carryRateBps: Number(chosen?.market.account.carryRateBps ?? 0),
+        }
+      : null,
+  );
+  const americanQuoteBlock = useMemo<{ tooltip: string } | null>(() => {
+    if (values.exerciseStyle !== "american") return null;
+    if (!chosen || strikeNum <= 0) return null;
+    if (amerFresh) return null;
+    return { tooltip: amerReason ?? "Awaiting a fresh on-chain quote for this American option." };
+  }, [values.exerciseStyle, chosen, strikeNum, amerFresh, amerReason]);
 
   const handleSubmit = async () => {
     if (!chosen || strikeNum <= 0 || contractsNum <= 0 || ladderError || cells.length === 0) return;
@@ -360,6 +385,7 @@ export const EpochVaultSection: FC<EpochVaultSectionProps> = ({
           unseededTickers={unseededTickers}
           epochExpirySlot={expirySlot}
           ladderBlock={ladderError ? { tooltip: ladderError } : null}
+          americanQuoteBlock={americanQuoteBlock}
         />
         <LiveQuoteCard
           asset={values.asset}

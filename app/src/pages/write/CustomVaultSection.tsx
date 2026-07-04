@@ -6,6 +6,7 @@ import { SectionNumber } from "../../components/layout";
 import { showToast } from "../../components/Toast";
 import { WriterForm, type WriterFormValues, type AssetOption } from "./WriterForm";
 import { LiveQuoteCard } from "./LiveQuoteCard";
+import { useOptionPriceQuoteFreshness } from "../../hooks/useOptionPriceQuoteFreshness";
 import {
   applyVolSmile,
   calculateCallPremium,
@@ -93,6 +94,33 @@ export const CustomVaultSection: FC<CustomVaultSectionProps> = ({
       tooltip: `Vol oracle for ${chosen.ticker} not yet seeded. New markets need ~1 hour for the oracle crank to initialize the oracle. Try again later, or contact support if this persists past 24 hours.`,
     };
   }, [chosen, unseededTickers]);
+
+  // H-05: American writes require a FRESH on-chain quote (vol oracle warm +
+  // not-stale + initialized). The freshness verdict is expiry-independent, so
+  // the single chosen expiry validates it. Uses the exact same authority the
+  // Trade-side gate uses (useOptionPriceQuoteFreshness → quoteFreshness).
+  const amerEnabled =
+    values.exerciseStyle === "american" && connected && !!chosen && strikeNum > 0 && values.expiry != null;
+  const { isFresh: amerFresh, statusReason: amerReason } = useOptionPriceQuoteFreshness(
+    amerEnabled,
+    chosen ? { publicKey: chosen.market.publicKey, account: { pythFeedId: chosen.market.account.pythFeedId } } : null,
+    amerEnabled && values.expiry != null
+      ? {
+          strike: strikeNum,
+          expiryTs: values.expiry,
+          side: values.side,
+          exerciseStyle: "american" as const,
+          carryRateBps: Number(chosen?.market.account.carryRateBps ?? 0),
+        }
+      : null,
+  );
+  const americanQuoteBlock = useMemo<{ tooltip: string } | null>(() => {
+    if (values.exerciseStyle !== "american") return null;
+    // Only gate once the terms needed to quote exist; fieldsReady handles the rest.
+    if (!chosen || strikeNum <= 0 || values.expiry == null) return null;
+    if (amerFresh) return null;
+    return { tooltip: amerReason ?? "Awaiting a fresh on-chain quote for this American option." };
+  }, [values.exerciseStyle, chosen, strikeNum, values.expiry, amerFresh, amerReason]);
 
   const handleSubmit = async () => {
     if (!chosen || strikeNum <= 0 || contractsNum <= 0 || values.expiry == null) return;
@@ -200,6 +228,7 @@ export const CustomVaultSection: FC<CustomVaultSectionProps> = ({
           marketHoursBlock={marketHoursBlock}
           volOracleBlock={volOracleBlock}
           unseededTickers={unseededTickers}
+          americanQuoteBlock={americanQuoteBlock}
         />
         <LiveQuoteCard
           asset={values.asset}

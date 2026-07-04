@@ -77,12 +77,17 @@ export const OfferingsPanel: FC<OfferingsPanelProps> = ({
   amerError = null,
 }) => {
   const isAmerican = exerciseStyle === "american";
-  // For American cells the "fair" reference (header strip + the premium-vs-fair
-  // pills) is the on-chain quote premium; falls back to the B-S fairPremium
-  // until the quote resolves. IV likewise comes from the protocol's realized
-  // vol. European is byte-identical to before.
-  const fairRef =
-    isAmerican && amerQuote ? amerQuote.premiumPerContract : fairPremium;
+  // For American cells the "fair" reference (the premium-vs-fair pills) is the
+  // on-chain quote premium ONLY. H-05: until the quote resolves we do NOT fall
+  // back to the EUR B-S fairPremium as a comparison basis — that number is
+  // structurally wrong for American, so it stays display-only (the header shows
+  // "Quote —") and the pills suppress (fairRef 0 → computePremiumPct null).
+  // European is byte-identical to before.
+  const fairRef = isAmerican
+    ? amerQuote
+      ? amerQuote.premiumPerContract
+      : 0
+    : fairPremium;
   const displayIv = isAmerican ? amerQuote?.volAnnualized ?? null : ivSmiled;
   const amerStatus = isAmerican
     ? describeOptionPriceQuoteStatus(amerLoading, amerError, amerQuote)

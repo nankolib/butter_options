@@ -80,6 +80,14 @@ type WriterFormProps = {
   /** W1 vol-oracle gate. Asset tickers whose VolOracle PDA is missing on
    *  chain — drives the per-chip "Oracle pending" badge. */
   unseededTickers: ReadonlySet<string>;
+  /**
+   * H-05 American-quote gate. Non-null when a chosen American write can't be
+   * confirmed against a FRESH on-chain quote (oracle warming / stale / not
+   * initialized / pricing failed / still loading). Disables submit with the
+   * status reason — same pattern as volOracleBlock. Null for European writes
+   * and once a fresh quote resolves.
+   */
+  americanQuoteBlock?: { tooltip: string } | null;
 };
 
 /**
@@ -111,6 +119,7 @@ export const WriterForm: FC<WriterFormProps> = ({
   unseededTickers,
   epochExpirySlot,
   ladderBlock,
+  americanQuoteBlock,
 }) => {
   // If the chosen asset disappears from the asset list (e.g. data refresh
   // dropped it), reset to first available.
@@ -304,6 +313,17 @@ export const WriterForm: FC<WriterFormProps> = ({
         </div>
       )}
 
+      {americanQuoteBlock && (
+        <div className="border border-crimson rounded-sm p-3">
+          <div className="font-mono font-medium text-[10.5px] uppercase tracking-[0.2em] text-crimson mb-1">
+            On-chain quote required
+          </div>
+          <div className="font-sans italic font-medium leading-[1.5] text-ink-body text-[12.5px]">
+            {americanQuoteBlock.tooltip}
+          </div>
+        </div>
+      )}
+
       <AdvancedSection
         premiumPerContract={values.premiumPerContract}
         onChange={(next) => onChange({ ...values, premiumPerContract: next })}
@@ -318,17 +338,20 @@ export const WriterForm: FC<WriterFormProps> = ({
             !fieldsReady ||
             marketHoursBlock !== null ||
             volOracleBlock !== null ||
-            (ladderBlock ?? null) !== null)
+            (ladderBlock ?? null) !== null ||
+            (americanQuoteBlock ?? null) !== null)
         }
         title={
           connected
             ? ladderBlock
               ? ladderBlock.tooltip
-              : volOracleBlock
-                ? volOracleBlock.tooltip
-                : marketHoursBlock
-                  ? marketHoursBlock.tooltip
-                  : undefined
+              : americanQuoteBlock
+                ? americanQuoteBlock.tooltip
+                : volOracleBlock
+                  ? volOracleBlock.tooltip
+                  : marketHoursBlock
+                    ? marketHoursBlock.tooltip
+                    : undefined
             : undefined
         }
         className="w-full inline-flex items-center justify-center gap-2 rounded-full border border-ink bg-ink text-paper px-4 py-3 font-mono text-[11px] uppercase tracking-[0.2em] hover:bg-transparent hover:text-ink transition-colors duration-300 ease-opta disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-ink disabled:hover:text-paper"

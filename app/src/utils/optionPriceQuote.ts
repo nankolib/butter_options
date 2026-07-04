@@ -132,6 +132,36 @@ export function describeOptionPriceQuoteStatus(
   return null;
 }
 
+/** Freshness verdict for an American on-chain quote — the H-05 trade gate. */
+export type QuoteFreshness = { isFresh: boolean; statusReason: string | null };
+
+/**
+ * Single authority for "is this American on-chain quote fresh enough to TRADE
+ * on?" (H-05). fresh = a resolved quote, not loading, with NO error — any
+ * oracle-warmup / oracle-stale / oracle-not-initialized / pricing-failed (or
+ * any other) revert makes it not fresh. `statusReason` is the human copy for a
+ * disabled control: the shared describeOptionPriceQuoteStatus wording, or a
+ * "request a quote" prompt when none has been attempted yet.
+ *
+ * This is the ONE definition of "fresh" reused by the Write (WriterForm) and
+ * Trade (OrderTicket / BuyModal) gates so they never diverge.
+ *
+ * EXTENSION POINT (warming badge, M1): when the FE later decodes VolOracle
+ * sample_count / last_sample_ts, thread that progress in here so call sites
+ * don't change — this stays the single source of the freshness verdict.
+ */
+export function quoteFreshness(
+  loading: boolean,
+  error: OptionPriceQuoteFailure | null,
+  quote: OptionPriceQuote | null,
+): QuoteFreshness {
+  const isFresh = !loading && !error && quote != null;
+  const statusReason =
+    describeOptionPriceQuoteStatus(loading, error, quote) ??
+    (isFresh ? null : "Request an on-chain quote to continue");
+  return { isFresh, statusReason };
+}
+
 function kindForCode(code: number | null): OptionPriceQuoteErrorKind {
   switch (code) {
     case 6051:

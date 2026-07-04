@@ -6,7 +6,7 @@ import { getAssociatedTokenAddress, getAccount, TOKEN_PROGRAM_ID } from "@solana
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { useProgram } from "../../hooks/useProgram";
-import { useOptionPriceQuote } from "../../hooks/useOptionPriceQuote";
+import { useOptionPriceQuoteFreshness } from "../../hooks/useOptionPriceQuoteFreshness";
 import { showToast } from "../../components/Toast";
 import { MoneyAmount } from "../../components/MoneyAmount";
 import { HairlineRule } from "../../components/layout";
@@ -168,7 +168,12 @@ export const BuyModal: FC<BuyModalProps> = ({
     quote: amerQuote,
     error: amerError,
     loading: amerLoading,
-  } = useOptionPriceQuote(cellStyle === "american", quoteMarket, quoteParams);
+    isFresh: amerFresh,
+    statusReason: amerReason,
+  } = useOptionPriceQuoteFreshness(cellStyle === "american", quoteMarket, quoteParams);
+  // H-05: buying an American cell requires a fresh on-chain quote — never let a
+  // buy proceed on the EUR Black-Scholes approximation. (European: no gate.)
+  const amerBuyBlocked = cellStyle === "american" && !amerFresh;
 
   // Esc dismiss
   useEffect(() => {
@@ -373,6 +378,11 @@ export const BuyModal: FC<BuyModalProps> = ({
                   You can't buy your own listing.
                 </div>
               )}
+              {amerBuyBlocked && amerReason && (
+                <div className="font-mono text-[10.5px] uppercase tracking-[0.18em] text-crimson mb-4">
+                  {amerReason}
+                </div>
+              )}
               {exceedsInventory && nextCheapestWithEnough && (
                 <div className="font-mono text-[10.5px] uppercase tracking-[0.18em] text-crimson mb-4">
                   Only {selectedInventory.toLocaleString()} available at{" "}
@@ -422,7 +432,7 @@ export const BuyModal: FC<BuyModalProps> = ({
                 <button
                   type="button"
                   onClick={connected ? handleConfirm : () => setVisible(true)}
-                  disabled={connected && !canSubmit}
+                  disabled={connected && (!canSubmit || amerBuyBlocked)}
                   title={sourceTitle}
                   className="flex-1 rounded-full border border-ink bg-ink text-paper px-4 py-3 font-mono text-[11px] uppercase tracking-[0.2em] hover:bg-transparent hover:text-ink transition-colors duration-300 ease-opta disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-ink disabled:hover:text-paper"
                 >
@@ -430,7 +440,9 @@ export const BuyModal: FC<BuyModalProps> = ({
                     ? "Connect Wallet"
                     : submitting
                       ? "Confirming…"
-                      : `Buy ${qtyNum} from ${sourceLabel} →`}
+                      : amerBuyBlocked
+                        ? (amerReason ?? "On-chain quote required")
+                        : `Buy ${qtyNum} from ${sourceLabel} →`}
                 </button>
               </div>
             </div>

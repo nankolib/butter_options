@@ -10,7 +10,7 @@ import { usePegFill, usePostOrder, useFillOrder, useFillWriterAsk } from "../../
 import { calculateCallGreeks, calculatePutGreeks, getDefaultVolatility, applyVolSmile } from "../../utils/blackScholes";
 import { TOKEN_2022_PROGRAM_ID, MARKET_SEED, PROGRAM_ID, DEVNET_USDC_MINT } from "../../utils/constants";
 import {
-  fetchOptionPriceQuote, describeOptionPriceQuoteStatus,
+  fetchOptionPriceQuote, describeOptionPriceQuoteStatus, quoteFreshness,
   OptionPriceQuoteFailure, type OptionPriceQuote,
 } from "../../utils/optionPriceQuote";
 import type { UnifiedChainRow } from "../../hooks/useUnifiedChain";
@@ -192,7 +192,10 @@ export const OrderTicket: FC<{
         const asks = orders
           .filter((o) => o.optionMint === row.optionMint && o.kind !== "bid")
           .sort((a, b) => a.price - b.price);
-        const pegRef = mark?.premium ?? Infinity;
+        // American: the resting-ask-vs-peg reference is the on-chain quote only,
+        // NEVER the EUR model (mark.premium) — the submit gate guarantees `rfq`
+        // is fresh here. European keeps the model reference.
+        const pegRef = useOnChainQuote ? (rfq?.premiumPerContract ?? Infinity) : (mark?.premium ?? Infinity);
         if (asks.length && asks[0].price <= pegRef) {
           // Belt-and-suspenders on top of the shared book store: re-verify the
           // target order still exists on-chain before dispatch. A concurrent
@@ -215,7 +218,12 @@ export const OrderTicket: FC<{
             : await fill.submit(asks[0], qty);
         } else {
           phRoute = "peg";
-          const maxPremium = (estPrice ?? mark?.premium ?? 0) * (1 + slippagePct / 100);
+          // American: peg max-premium basis is the on-chain quote only, never the
+          // EUR model. European may fall back to the model/aggregate as before.
+          const basis = useOnChainQuote
+            ? (rfq?.premiumPerContract ?? 0)
+            : (estPrice ?? mark?.premium ?? 0);
+          const maxPremium = basis * (1 + slippagePct / 100);
           sig = await peg.submit(ref, qty, maxPremium > 0 ? maxPremium : 1_000_000);
         }
       } else if (side === "buy" && type === "limit") {
@@ -265,6 +273,15 @@ export const OrderTicket: FC<{
   // Buy·Limit / Sell·Limit require a positive price — chain reverts (InvalidContractSize)
   // on price 0. Mirror the Write-mode gate rather than letting the tx fail.
   const limitGate = (!isWrite && type === "limit" && !(limitPrice > 0)) ? "Set a limit price" : null;
+
+  // H-05: American rows must trade on a FRESH on-chain quote (shared authority),
+  // never the EUR model. Hard-block Buy (market/limit) and Write until the RFQ
+  // resolves fresh; Sell (resale of held contracts) doesn't need a premium quote.
+  const amerFresh = quoteFreshness(rfqLoading, rfqError, rfq);
+  const needsFreshAmerQuote = useOnChainQuote && (side === "buy" || side === "write");
+  const amerQuoteGate = needsFreshAmerQuote && !amerFresh.isFresh
+    ? (amerFresh.statusReason ?? "Request an on-chain quote to continue")
+    : null;
 
   return (
     <div className="border border-rule rounded-md p-5 bg-paper">
@@ -349,8 +366,11 @@ export const OrderTicket: FC<{
         <Stat label="θ decay / day" value={thetaPerDay != null ? fmt(thetaPerDay) : "—"} />
         <Stat label="Liquidation" value="None" sub="max loss = premium" />
       </div>
+      </>)}
 
-      {/* RFQ — on-chain quote-on-demand (T5) */}
+      {/* RFQ — on-chain quote-on-demand (T5). American renders it in BOTH Buy and
+          Write (H-05: submit is hard-gated on a fresh quote, so the writer needs
+          the same request path); European Buy keeps the disabled model-price note. */}
       {useOnChainQuote ? (
         <div className="mb-3">
           <button type="button" onClick={requestQuote} disabled={rfqLoading}
@@ -370,24 +390,24 @@ export const OrderTicket: FC<{
             </div>
           )}
         </div>
-      ) : (
+      ) : (!isWrite && (
         <button type="button" disabled title="On-chain quote is American-only; EUR uses the model price"
           className="w-full font-mono text-[10.5px] uppercase tracking-[0.18em] border border-rule rounded-md py-2 mb-3 text-ink-muted/50 cursor-not-allowed">
           Request quote · model price (EUR)
         </button>
-      )}
-      </>)}
+      ))}
 
       {/* Submit */}
-      <button type="button" disabled={submitting || sellNoBalance || !publicKey || (isWrite && !!writeGate) || !!limitGate}
+      <button type="button" disabled={submitting || sellNoBalance || !publicKey || (isWrite && !!writeGate) || !!limitGate || !!amerQuoteGate}
         onClick={submit}
         className={`w-full font-mono text-[12px] uppercase tracking-[0.2em] rounded-md py-3 transition-colors ${
-          submitting || sellNoBalance || !publicKey || (isWrite && !!writeGate) || !!limitGate ? "bg-paper-2 text-ink-muted cursor-not-allowed" : "bg-ink text-paper hover:opacity-90"
+          submitting || sellNoBalance || !publicKey || (isWrite && !!writeGate) || !!limitGate || !!amerQuoteGate ? "bg-paper-2 text-ink-muted cursor-not-allowed" : "bg-ink text-paper hover:opacity-90"
         }`}>
         {!publicKey ? "Connect wallet"
           : submitting ? "Submitting…"
-          : isWrite ? (writeGate ?? `Write ${qty} · ask ${fmt(limitPrice)}`)
+          : isWrite ? (writeGate ?? amerQuoteGate ?? `Write ${qty} · ask ${fmt(limitPrice)}`)
           : limitGate ? limitGate
+          : amerQuoteGate ? amerQuoteGate
           : sellNoBalance ? "No contracts held to sell"
           : `${side === "buy" ? "Buy" : "Sell"} ${qty} · ${type === "market" ? "Market" : "Limit"}`}
       </button>

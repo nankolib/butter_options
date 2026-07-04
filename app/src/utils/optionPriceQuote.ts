@@ -55,6 +55,7 @@ export type OptionPriceQuoteErrorKind =
   | "oracle-warmup" //         6044 — < 168 samples; needs ~7d of pushes
   | "oracle-stale" //          6045 — last sample > 6h old (crank gap)
   | "oracle-not-initialized" // 6043 — no oracle for this feed yet
+  | "no-time-value" //         6012 — deep OTM / zero time value; premium rounds to 0
   | "pricing-failed" //        6050/6048 — BS-2002 / invalid-spot
   | "unknown";
 
@@ -114,6 +115,8 @@ export function describeOptionPriceQuoteStatus(
         return "Vol oracle stale — awaiting a fresh price push";
       case "oracle-not-initialized":
         return "Vol oracle not initialized for this asset";
+      case "no-time-value":
+        return "No time value at this expiry — the option is too far out-of-the-money to carry a premium";
       case "pricing-failed":
         return "On-chain pricing unavailable for these terms";
       default:
@@ -179,6 +182,12 @@ function kindForCode(code: number | null): OptionPriceQuoteErrorKind {
     case 3007:
     case 3012:
       return "oracle-not-initialized";
+    // 6012 InvalidPremium — the American pricer computed a premium that rounds
+    // to 0 USDC (deep OTM / no time value at this expiry); quote.rs reverts
+    // `require!(premium_usdc > 0, InvalidPremium)`. Distinct copy so the user
+    // sees WHY, not a generic "unavailable".
+    case 6012:
+      return "no-time-value";
     case 6050:
     case 6048:
       return "pricing-failed";

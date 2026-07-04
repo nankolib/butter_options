@@ -4,6 +4,7 @@ import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { showToast } from "./Toast";
 import { inferClusterFromUrl } from "../utils/env";
+import { DevnetFaucetButton } from "./DevnetFaucetButton";
 
 /**
  * Header — persistent navigation bar across all pages.
@@ -20,7 +21,6 @@ export const Header: FC = () => {
   const { publicKey, connected } = useWallet();
   const { connection } = useConnection();
   const [airdropping, setAirdropping] = useState(false);
-  const [mintingUsdc, setMintingUsdc] = useState(false);
   const isDevnet = useMemo(
     () => inferClusterFromUrl(connection.rpcEndpoint) === "devnet",
     [connection.rpcEndpoint],
@@ -47,46 +47,6 @@ export const Header: FC = () => {
       showToast({ type: "error", title: "Airdrop failed", message: "Devnet may be rate-limited. Try again in a minute." });
     } finally {
       setAirdropping(false);
-    }
-  };
-
-  const handleUsdcFaucet = async () => {
-    if (!publicKey || !connection) return;
-    // Defense-in-depth: even if the isDevnet render gate ever regresses, the
-    // client never triggers the faucet off-devnet. (The server route also
-    // hard-checks the devnet genesis hash before signing.)
-    if (!isDevnet) {
-      showToast({ type: "error", title: "Faucet disabled", message: "Devnet only." });
-      return;
-    }
-    setMintingUsdc(true);
-    try {
-      // H-04: the faucet signing key is server-side only. The browser holds no
-      // key — it asks the serverless route to sign & send the USDC transfer.
-      const res = await fetch("/api/faucet", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ wallet: publicKey.toBase58() }),
-      });
-      const data = await res.json().catch(() => ({} as any));
-      if (!res.ok) {
-        if (res.status === 503) {
-          // Env var not set (e.g. code deployed before activation) — graceful.
-          showToast({ type: "error", title: "Faucet not configured", message: data.error || "Server faucet key is not set yet." });
-        } else if (res.status === 429) {
-          showToast({ type: "error", title: "Slow down", message: data.error || "Faucet cooldown active — try again shortly." });
-        } else {
-          showToast({ type: "error", title: "USDC faucet failed", message: data.error || "Try again in a minute." });
-        }
-        return;
-      }
-      const usd = typeof data.balance === "number" ? `$${data.balance.toLocaleString()} USDC` : "USDC";
-      showToast({ type: "success", title: "Got test USDC!", message: `Your balance: ${usd}` });
-    } catch (err: any) {
-      console.error("USDC faucet error:", err);
-      showToast({ type: "error", title: "USDC faucet failed", message: err?.message || "Network error." });
-    } finally {
-      setMintingUsdc(false);
     }
   };
 
@@ -142,13 +102,7 @@ export const Header: FC = () => {
               >
                 {airdropping ? "Sending..." : "Get Test SOL"}
               </button>
-              <button
-                onClick={handleUsdcFaucet}
-                disabled={mintingUsdc}
-                className="rounded-lg bg-bg-surface border border-border px-3 py-1.5 text-xs font-medium text-text-secondary hover:text-text-primary hover:border-border-light transition-colors disabled:opacity-50"
-              >
-                {mintingUsdc ? "Sending..." : "Get Test USDC"}
-              </button>
+              <DevnetFaucetButton className="rounded-lg bg-bg-surface border border-border px-3 py-1.5 text-xs font-medium text-text-secondary hover:text-text-primary hover:border-border-light transition-colors disabled:opacity-50" />
             </>
           )}
 

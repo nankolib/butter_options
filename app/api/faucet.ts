@@ -102,13 +102,14 @@ async function release(key: string): Promise<void> {
 }
 
 function fmtRemaining(secs: number): string {
-  if (secs >= 3600) {
-    const h = Math.floor(secs / 3600);
-    const m = Math.round((secs % 3600) / 60);
-    return m ? `${h}h ${m}m` : `${h}h`;
-  }
-  if (secs >= 60) return `${Math.ceil(secs / 60)}m`;
-  return `${Math.max(1, secs)}s`;
+  if (secs < 60) return `${Math.max(1, Math.round(secs))}s`;
+  // Round to whole minutes FIRST, then split — avoids the "23h 60m" carry bug
+  // (rounding 3598s/60 → 60m separately from the hours).
+  const mins = Math.round(secs / 60);
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  if (h === 0) return `${m}m`;
+  return m ? `${h}h ${m}m` : `${h}h`;
 }
 
 export default async function handler(req: any, res: any) {

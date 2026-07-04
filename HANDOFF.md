@@ -1,6 +1,17 @@
 # Opta — Engineer Handoff
 
-> **2026-07-04 (SESSION CLOSE — H-04 FAUCET-KEY ROTATION + H-05 AMERICAN QUOTE HARD-GATES ✅ BOTH SHIPPED & LIVE-VERIFIED). ▶ RESUME HERE:** Both closed pending Nanko's 3-click UI smoke on prod.
+> **2026-07-04 (SESSION CLOSE — FAUCET v2: DURABLE COOLDOWNS + API-ROUTED SOL ✅ SHIPPED, FUNDED & LIVE-VERIFIED). ▶ RESUME HERE:**
+>
+> **Faucet limits reworked.** Commits `02d6f60` (feature) + `dc18034` (time-format fix), master+main, live on Vercel `02d6f60` (opta.fyi proxy serves it too).
+> - **`app/api/faucet.ts`** now takes `{ wallet, kind?: "usdc" | "sol" }`. **Durable per-wallet cooldown** via Upstash Redis (Vercel "Upstash for Redis" — `KV_REST_API_URL` + `KV_REST_API_TOKEN` auto-injected, connected by Nanko): atomic `SET NX EX` (USDC `faucet:usdc:<w>` 86400s=24h; SOL `faucet:sol:<w>` 14400s=4h), `DEL`-released if the transfer fails so a failed tx never burns the window; 429 returns remaining from `TTL`. **FAIL-SAFE:** Redis unconfigured/throws → per-instance in-memory fallback + logged warning (faucet stays up). **SOL branch:** `SystemProgram.transfer` 50_000_000 lamports (0.05 SOL). USDC unchanged (10k cap + devnet-genesis guard). Old in-memory Map is now the fallback only.
+> - **`DevnetSolButton`** POSTs `{kind:"sol"}` (was client `requestAirdrop`, which couldn't enforce an amount + was unreliable — a live `requestAirdrop(0.05)` returned `-32603`).
+> - **Dep:** `@upstash/redis` added via `--package-lock-only` (10-line lock change, zero transitive deps). It shows a LOCAL-ONLY IDE "cannot find module" (not in local `node_modules`; `api/` is outside the tsc/vite build so `npm run build` is clean) — Vercel installs it and it works in prod (verified).
+> - **FAUCET WALLET FUNDED:** 5 SOL admin `5YRMuuoY…` → faucet `J8Kct5tS…` (sig `3hHrYKNq…`); faucet now **5.497936 SOL** (~109 SOL-drops @ 0.05). Admin left 14.04 SOL. Script `scripts/_exec_fund_faucet.mjs` (untracked-local; reads the WSL admin keypair in place).
+> - **LIVE VERIFY (throwaway `21nR5Tv8…`, all 4 pass):** USDC #1 → 200 balance 10,000 (sig `5sP6hQ6j…`); USDC #2 → **429** "try again in 24h"; SOL #1 → 200 sol 0.05 (sig `5kMDednv…`); SOL #2 → **429** "try again in 4h". (The verify found the `23h 60m`/`3h 60m` rounding bug → fixed in `dc18034`.)
+>
+> **▶ STILL PENDING from the prior arc:** opta.fyi→Vercel reverse-proxy is LIVE; **dead-code removal HELD** (`scripts/deploy-web.sh` + `snippets/opta-headers.conf`) until the proxy has 24h clean traffic (≥2026-07-05) — deploy-web.sh is the instant rollback path (see the block below). Option (c) DNS-to-Vercel queued (needs Hasan).
+
+> **2026-07-04 (SESSION CLOSE — H-04 FAUCET-KEY ROTATION + H-05 AMERICAN QUOTE HARD-GATES ✅ BOTH SHIPPED & LIVE-VERIFIED).** Both closed pending Nanko's 3-click UI smoke on prod.
 >
 > **(1) H-04 — BUNDLED FAUCET KEY REMOVED (server-side rotation).** Commit `da6a11b` (master+main, 5 files). The devnet faucet 64-byte secret was bundled in `app/src/utils/constants.ts` (`DEVNET_FAUCET_KEYPAIR`) and shipped in the Vercel bundle + committed since `5807eeb` — now deleted everywhere.
 >   - **New serverless route `app/api/faucet.ts`** (Vercel Node function; NOT in the Vite/tsc client build — outside `src/`). Holds the key in server-only env var **`FAUCET_SECRET_KEY`** (JSON-array format, NO `VITE_`/`NEXT_PUBLIC_` prefix). Signs the USDC transfer server-side (faucet = fee payer + authority; user signs nothing). Guards: **devnet-genesis hard check**, fixed 10k-USDC cap, best-effort per-wallet cooldown.

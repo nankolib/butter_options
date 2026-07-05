@@ -99,15 +99,36 @@ function deriveCell(market: PublicKey, strikeDollars: number, expiryTs: number, 
   return { seriesMint, seriesRecord, vault };
 }
 
+const VALID_TENORS = ["weekly", "nextweekly", "monthly", "quarterly"] as const;
+type TenorFilter = typeof VALID_TENORS[number];
+
 function parseFlags() {
   const a = process.argv.slice(2);
   const get = (k: string) => { const i = a.indexOf(k); return i >= 0 ? a[i + 1] : undefined; };
   const liveRequested = a.includes("--live");
+  // Optional grid filters (compose with --asset/--side, AND semantics). Absent =
+  // full-roll behavior, byte-identical to pre-filter. Respected by dry-run AND live.
+  let strike: number | undefined;
+  const strikeRaw = get("--strike");
+  if (strikeRaw !== undefined) {
+    strike = Number(strikeRaw);
+    if (!Number.isFinite(strike) || strike <= 0)
+      die(2, `--strike must be a positive number (got "${strikeRaw}")`);
+  }
+  let tenor: TenorFilter | undefined;
+  const tenorRaw = get("--tenor")?.toLowerCase();
+  if (tenorRaw !== undefined) {
+    if (!(VALID_TENORS as readonly string[]).includes(tenorRaw))
+      die(2, `--tenor must be one of ${VALID_TENORS.join("|")} (got "${tenorRaw}")`);
+    tenor = tenorRaw as TenorFilter;
+  }
   return {
     live: liveRequested && process.env.OPTA_GENERATOR_LIVE === "1",
     liveRequested,
     asset: get("--asset")?.toUpperCase(),
     side: get("--side")?.toLowerCase() as "call" | "put" | undefined,
+    strike,
+    tenor,
   };
 }
 
@@ -144,7 +165,8 @@ async function buildPlan(c: Connection, program: anchor.Program<Opta>, flags: Re
   const now = Date.now();
   const cells: Cell[] = [];
   const excluded: string[] = [];
-  let reqSol = 0, reqUsdc = 0, policyBSkipped = 0;
+  const assetGrids: Record<string, number[]> = {}; // for off-grid --strike rejection msg
+  let reqSol = 0, reqUsdc = 0, policyBSkipped = 0, strikeMatched = false;
 
   for (const A of ASSETS) {
     if (flags.asset && A.ticker !== flags.asset) continue;
@@ -162,10 +184,16 @@ async function buildPlan(c: Connection, program: anchor.Program<Opta>, flags: Re
     for (const [lab, ts] of raw) { if (!byExp.has(ts)) byExp.set(ts, []); byExp.get(ts)!.push(lab); }
     const atm = Math.round(o.spot / A.step) * A.step;
     const strikes = [-3, -2, -1, 0, 1, 2, 3].map((i) => atm + i * A.step).filter((s) => s > 0);
+    assetGrids[A.ticker] = strikes;
+    if (flags.strike !== undefined && strikes.includes(flags.strike)) strikeMatched = true;
     const sides: ("call" | "put")[] = flags.side ? [flags.side] : ["call", "put"];
 
     for (const [ts, labels] of [...byExp.entries()].sort((a, b) => a[0] - b[0])) {
+      // --tenor filter (AND): skip expiries whose merged labels don't include it.
+      if (flags.tenor && !labels.some((l) => l.toLowerCase() === flags.tenor)) continue;
       for (const strike of strikes) for (const side of sides) {
+        // --strike filter (AND): keep only the exact grid-snapped strike.
+        if (flags.strike !== undefined && strike !== flags.strike) continue;
         const optIdx = side === "call" ? 0 : 1;
         const d = deriveCell(A.market, strike, ts, optIdx);
         const hasRecord = seriesRecords.has(d.seriesRecord.toBase58());
@@ -193,6 +221,11 @@ async function buildPlan(c: Connection, program: anchor.Program<Opta>, flags: Re
           expiryTs: ts, tenorLabels: labels, ...d, needSeries, needVault, status });
       }
     }
+  }
+  // --strike given but it matched no processed asset's grid → clean rejection, no plan.
+  if (flags.strike !== undefined && !strikeMatched) {
+    const grids = Object.entries(assetGrids).map(([t, g]) => `${t} [${g.join(", ")}]`).join("  |  ");
+    die(2, `--strike ${flags.strike} is off-grid. Valid grid-snapped strikes: ${grids || "(no warm asset in scope)"}`);
   }
   return { cells, excluded, reqSol, reqUsdc, policyBSkipped };
 }
@@ -269,7 +302,8 @@ async function main() {
   const provider = new anchor.AnchorProvider(connection, new anchor.Wallet(signer), { commitment: "confirmed" });
   const program = new anchor.Program<Opta>(JSON.parse(fs.readFileSync(IDL_JSON_PATH, "utf-8")), provider);
   L(JSON.stringify({ ev: "boot", rpc: redact(rpcUrl), signer: signer.publicKey.toBase58(),
-    mode: flags.live ? "LIVE" : "DRY-RUN", asset: flags.asset ?? "all", side: flags.side ?? "both" }));
+    mode: flags.live ? "LIVE" : "DRY-RUN", asset: flags.asset ?? "all", side: flags.side ?? "both",
+    strike: flags.strike ?? "all", tenor: flags.tenor ?? "all" }));
 
   const protocolState = pda([Buffer.from(S.protocol)]);
   const usdcMint = (await program.account.protocolState.fetch(protocolState)).usdcMint as PublicKey;

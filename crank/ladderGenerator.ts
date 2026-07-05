@@ -153,20 +153,31 @@ async function buildPlan(c: Connection, program: anchor.Program<Opta>, flags: Re
   const vmDisc = DISC_VAULT_MINT;
   const svDisc = DISC_SHARED_VAULT;
   const zero32 = Buffer.alloc(32);
-  // Series records = VaultMint (137 B) with writer == default (offset 8+32=40).
+  // Type identity is the 8-byte Anchor discriminator, NOT the account SIZE
+  // (mirrors the FE's safeFetchAll memcmp). SharedVault has grown by schema
+  // migration (260 → 268 → 276 B) and will keep growing; VaultMint can too. A
+  // hard size literal silently drops every current-schema account from the scan,
+  // which breaks idempotency (a live vault reads as absent → re-HEAL) AND Policy B
+  // (a user vault reads as absent → not skipped). The `data.length >= N` guards
+  // below are READ-SAFETY FLOORS for the fixed byte offsets we read, never
+  // schema-size gates — any real account of that type already exceeds them.
+  // Series records = VaultMint with writer == default (offset 8+32=40). A per-mint
+  // record carries a REAL writer, so writer==default uniquely selects series
+  // records (the discriminator already fixes the type; size is irrelevant).
   const seriesRecords = new Set(all.filter((a) =>
-    a.account.data.length === 137 && a.account.data.slice(0, 8).equals(vmDisc)
+    a.account.data.length >= 72 && a.account.data.slice(0, 8).equals(vmDisc)
     && a.account.data.slice(40, 72).equals(zero32)).map((a) => a.pubkey.toBase58()));
-  // Vaults = SharedVault (260 B) → created_at at offset 227.
+  // Vaults = SharedVault (discriminator match) → created_at at offset 227 (a fixed
+  // offset valid at every size ≥ 260, i.e. 260/268/276/…).
   const vaults = new Map<string, number>(all.filter((a) =>
-    a.account.data.length === 260 && a.account.data.slice(0, 8).equals(svDisc))
+    a.account.data.length >= 235 && a.account.data.slice(0, 8).equals(svDisc))
     .map((a) => [a.pubkey.toBase58(), Number(a.account.data.readBigInt64LE(227))]));
 
   const now = Date.now();
   const cells: Cell[] = [];
   const excluded: string[] = [];
   const assetGrids: Record<string, number[]> = {}; // for off-grid --strike rejection msg
-  let reqSol = 0, reqUsdc = 0, policyBSkipped = 0, strikeMatched = false;
+  let reqSol = 0, reqUsdc = 0, policyBSkipped = 0, fullySeeded = 0, strikeMatched = false;
 
   for (const A of ASSETS) {
     if (flags.asset && A.ticker !== flags.asset) continue;
@@ -200,8 +211,8 @@ async function buildPlan(c: Connection, program: anchor.Program<Opta>, flags: Re
         const hasVault = vaults.has(d.vault.toBase58()) && (vaults.get(d.vault.toBase58()) ?? 0) > 0;
 
         // ---- Idempotency / policy branch ----
-        // 1. fully seeded → SKIP.
-        if (hasRecord && hasVault) continue;
+        // 1. fully seeded (record + vault both present) → SKIP (idempotent).
+        if (hasRecord && hasVault) { fullySeeded++; continue; }
         // 2. POLICY B free-ride guard: vault PRESENT + record MISSING = a vault
         //    the generator did not seed → SKIP (never activate a peg on a user's
         //    collateral). NOTE the condition is `hasVault` — the OPPOSITE of the
@@ -227,7 +238,7 @@ async function buildPlan(c: Connection, program: anchor.Program<Opta>, flags: Re
     const grids = Object.entries(assetGrids).map(([t, g]) => `${t} [${g.join(", ")}]`).join("  |  ");
     die(2, `--strike ${flags.strike} is off-grid. Valid grid-snapped strikes: ${grids || "(no warm asset in scope)"}`);
   }
-  return { cells, excluded, reqSol, reqUsdc, policyBSkipped };
+  return { cells, excluded, reqSol, reqUsdc, policyBSkipped, fullySeeded };
 }
 
 async function buildCellIxs(program: anchor.Program<Opta>, signer: PublicKey, usdcMint: PublicKey,
@@ -283,7 +294,7 @@ function printPlan(plan: Awaited<ReturnType<typeof buildPlan>>, adminSol: number
   for (const c of plan.cells.slice(0, 8))
     L(`  ${c.ticker} ${c.side === "call" ? "C" : "P"} ${usd(c.strikeDollars)} ${fdate(c.expiryTs)} {${c.tenorLabels.join("+")}} -> ${c.status}`);
   L("\n=== TOTALS ===");
-  L(`cells to seed = ${plan.cells.length} (one tx each) | policy-B skipped (user vaults) = ${plan.policyBSkipped}`);
+  L(`cells to seed = ${plan.cells.length} (one tx each) | fully-seeded skipped (idempotent) = ${plan.fullySeeded} | policy-B skipped (user vaults) = ${plan.policyBSkipped}`);
   L(`SOL rent ≈ ${plan.reqSol.toFixed(4)} | USDC collateral = ${usd(plan.reqUsdc)}`);
   L(`signer: ${adminSol.toFixed(3)} SOL | ${usd(adminUsdc)} USDC | coverage SOL ${adminSol >= plan.reqSol ? "OK" : "SHORT"} / USDC ${adminUsdc >= plan.reqUsdc ? "OK" : "SHORT"}`);
 }

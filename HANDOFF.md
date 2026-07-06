@@ -1,6 +1,18 @@
 # Opta — Engineer Handoff
 
-> **2026-07-06 (SESSION CLOSE — TRADE-PAGE QA MATRIX PASSED + LADDER LIVE-ROLLED + 3 FE FIXES SHIPPED). ▶ RESUME HERE:**
+> **2026-07-06 (RECON CORRECTION — 3 HANDOFF-STALE ITEMS VERIFIED DONE, read-only). ▶ RESUME HERE.** Supersedes any older "held pending" language for these three in the historical blocks below (do not re-open them).
+>
+> **(A) SWITCHBOARD STAGE 3 — COMPLETE.** Commit `9bf4dda` ("Stage 3 arc COMPLETE — deployed + exercised live"). The read path **branches on `oracle_source`** (no longer unconditionally Pyth): `settle_expiry.rs:116-138` + `exercise_american.rs:118-135` (`match ORACLE_SOURCE_PYTH / ORACLE_SOURCE_SWITCHBOARD`). `sbOracleCrank` is **wired into the live bot** (`bot.ts:1144-1166`); the liveness loop is env-gated (`bot.ts:1176-1209`). The **HIGH-5 proof gate is branched by `oracle_source`** (`create_market.rs:75`, `migrate_pyth_feed.rs:44`). The deployed program (slot **473901900**, feature-free, authority `5YRMuuoY`) already carries all of this — no redeploy needed. **No separate backend indexer exists** — the FE self-indexes via direct on-chain reads; the crank serves `GET /liveness` from an in-memory map. Any "**held pending Jack / devnet-oracle confirmation**" language is **VOID**.
+>
+> **(B) TRADFI SURFACE — LIVE.** 2 on-chain Switchboard **gold** markets: **SBXAU** `4pEmVTXdg6GayFeFmnSphiK3eLLYrPGSfX8g9ah8ADT1` + **XAUSMOKE** `4FU8cV8sMdWJX4GDvwBzp52YHoummFc7pCoHmqq9Z3Qf` (the only two `oracle_source==1` markets on-chain). Pilot is **gold-via-SB**, NOT a PAXG-named market. ⚠️ **Decode caveat:** of 446 optionsMarkets, **427 are OLD-LAYOUT legacy markets** whose `oracle_source` byte decodes as **garbage (values 2–255)** against the current IDL — they are **NOT** SB markets. Only **17 clean Pyth (`==0`) + 2 SB (`==1`)** are current-layout. Never count "non-Pyth" as SB from a raw scan.
+>
+> **(C) TRADE PAGE V2 — FLIPPED + LIVE.** `TRADE_V2_UI = true` (`constants.ts:145`) + `AMERICAN_ENABLED_UI = true` (`constants.ts:134`), both committed on master; flip merge `943c6b8`. `constants.ts` + `vercel.json` are **no longer parked locals** — both tracked and clean (empty `git status`). Live buildId **`8e399cf` == repo tip**.
+>
+> **▶ ADDED OPEN ITEM (this recon):** **⚠️ VITE_RPC_URL VERCEL GAP.** The prod build env does NOT set `VITE_RPC_URL` (`env.ts:61` fallback note), so `opta-solana.vercel.app` runs on the **PUBLIC devnet RPC**, not Helius — the Helius key exists only in local `app/.env.local`. **Fix:** add `VITE_RPC_URL` to the Vercel project env + redeploy. Rate-limit risk under load until fixed.
+>
+> ---
+
+> **2026-07-06 (SESSION CLOSE — TRADE-PAGE QA MATRIX PASSED + LADDER LIVE-ROLLED + 3 FE FIXES SHIPPED).**
 >
 > **(1) TRADE-PAGE QA MATRIX — ✅ ALL 6 SLICES PASSED ON PROD (real money, every one conserving to the micro-USDC).** Read-only verification of the already-shipped exchange, driven by Nanko's clicks on `opta.fyi/trade` + `/portfolio`, verified around each. Guinea-pig = the **canary series** SOL $80 Call exp 2026-07-10 (mint `Ck9mXZct…`, vault `CSTik3B863…`).
 >   - **S1 vault-peg mint-on-fill** — `fill_vault_peg`, premium split (vault_share + 50 bps fee), 0→1 minted. (Found FE gap: no grid peg-capacity gate → fixed in (3).)

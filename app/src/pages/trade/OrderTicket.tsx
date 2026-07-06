@@ -161,7 +161,10 @@ export const OrderTicket: FC<{
   const estTotal = estPrice != null ? estPrice * qty : null;
 
   // Readouts (T-spec): λ elasticity, decay (θ/day), no-liquidation reminder.
-  const lambda = mark && estPrice && estPrice > 0 ? (mark.delta * (spot ?? 0)) / estPrice : null;
+  // λ is a greek (elasticity Δ·S/V): V MUST be the model premium the delta was
+  // computed against — not the transaction price (estPrice) — else it's an
+  // incoherent hybrid. Matches ContractDetailModal (greeks.lambda) + SimpleTradePanel.
+  const lambda = mark && mark.premium > 0 ? (mark.delta * (spot ?? 0)) / mark.premium : null;
   const thetaPerDay = mark?.theta ?? null;
 
   // Pre-fill the limit price with the cheap mark when switching to Limit.

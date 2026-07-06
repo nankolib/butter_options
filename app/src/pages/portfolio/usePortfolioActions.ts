@@ -24,7 +24,6 @@ import {
   deriveHookStatePda,
 } from "../../utils/constants";
 import { usdcToNumber, hexFromBytes } from "../../utils/format";
-import { requiredCollateralPerContract } from "../../utils/collateral";
 import {
   deriveVaultResaleListing,
   deriveVaultResaleEscrow,
@@ -32,7 +31,6 @@ import {
 import {
   buildPostUpdateAndExerciseAmericanTx,
   submitWithFallback,
-  fetchHermesParsedPrice,
 } from "../../utils/pythPullPost";
 import { decodeError, isWalletReplay } from "../../utils/errorDecoder";
 import { showToast } from "../../components/Toast";
@@ -344,31 +342,14 @@ async function exerciseAmericanV2({
   });
   const sig = await submitWithFallback(program.provider.connection, provider.wallet, txs);
 
-  // Capped-intrinsic payout estimate (display only) from a live Hermes spot:
-  // CALL min(spot − strike, collateral/contract), PUT strike − spot.
-  const isCall = "call" in v.optionType;
-  const strike = usdcToNumber(v.strikePrice);
-  let payoutMsg = "";
-  const parsed = await fetchHermesParsedPrice(feedIdHex).catch(() => null);
-  if (parsed && parsed.price > 0) {
-    const collateralPerContract = requiredCollateralPerContract(
-      strike,
-      isCall ? "call" : "put",
-    );
-    const rawIntrinsic = isCall
-      ? Math.max(0, parsed.price - strike)
-      : Math.max(0, strike - parsed.price);
-    const cappedPerContract = isCall
-      ? Math.min(rawIntrinsic, collateralPerContract)
-      : rawIntrinsic;
-    const total = (cappedPerContract * position.contracts).toFixed(2);
-    payoutMsg = ` Received ~$${total} USDC.`;
-  }
-
+  // No client-side payout estimate: a post-submit Hermes /latest read races the
+  // Pyth price the tx actually posted + consumed, so the two spots diverge and
+  // any $ figure here can mislead (observed ~$0.96 shown vs $1.12 paid). The
+  // exact USDC intrinsic settled on-chain and is in the wallet.
   showToast({
     type: "success",
     title: "Exercised early!",
-    message: `${position.contracts} contracts burned.${payoutMsg}`,
+    message: `${position.contracts} contract${position.contracts === 1 ? "" : "s"} exercised · USDC sent to your wallet.`,
     txSignature: sig,
   });
 }

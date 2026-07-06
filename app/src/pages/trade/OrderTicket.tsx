@@ -72,6 +72,10 @@ export const OrderTicket: FC<{
   const [rfq, setRfq] = useState<OptionPriceQuote | null>(null);
   const [rfqLoading, setRfqLoading] = useState(false);
   const [rfqError, setRfqError] = useState<OptionPriceQuoteFailure | null>(null);
+  // BUG-1: contracts the vault can still mint-on-fill. Null until the focused
+  // vault is read; suppresses a Buy·Market that would route to an exhausted peg
+  // and revert InsufficientVaultCollateral on-chain.
+  const [pegRemaining, setPegRemaining] = useState<number | null>(null);
 
   const isSeries = row.provenance === "series";
   const isWrite = side === "write";
@@ -135,6 +139,26 @@ export const OrderTicket: FC<{
     })();
     return () => { live = false; };
   }, [side, publicKey, program]);
+
+  // BUG-1: derive remaining peg capacity from the focused vault (single-account
+  // read — NOT a full scan). free = (total_collateral − early_exercise_payout) −
+  // (total_options_minted − exercised_options) × collateral_per_token; remaining
+  // contracts = floor(free / cpt). Only series (peg-backed) rows have a peg.
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      if (!program || !isSeries) { if (live) setPegRemaining(null); return; }
+      try {
+        const v: any = await program.account.sharedVault.fetch(new PublicKey(row.vault));
+        const cpt = v.strikePrice.toNumber(); // collateral_per_token = strike
+        const net = v.totalCollateral.toNumber() - (v.earlyExercisePayout?.toNumber?.() ?? 0);
+        const liveContracts = v.totalOptionsMinted.toNumber() - (v.exercisedOptions?.toNumber?.() ?? 0);
+        const free = net - liveContracts * cpt;
+        if (live) setPegRemaining(cpt > 0 ? Math.max(0, Math.floor(free / cpt)) : null);
+      } catch { if (live) setPegRemaining(null); }
+    })();
+    return () => { live = false; };
+  }, [program, isSeries, row.vault]);
 
   // est. reference price off the cheap aggregate (Pass-0): ask for buy, bid for sell.
   const refPrice = side === "buy" ? row.bestAsk : row.bestBid;
@@ -221,6 +245,12 @@ export const OrderTicket: FC<{
             : await fill.submit(asks[0], qty);
         } else {
           phRoute = "peg";
+          // BUG-1 backstop: never send a peg fill the vault can't back (the button
+          // gate above already blocks this; this guards a stale-book race).
+          if (pegRemaining != null && pegRemaining < qty) {
+            setStatus({ kind: "err", msg: pegRemaining <= 0 ? "Vault sold out — no peg capacity." : `Only ${pegRemaining} contract(s) available at the peg.` });
+            setBusy(false); return;
+          }
           // American: peg max-premium basis is the on-chain quote only, never the
           // EUR model. European may fall back to the model/aggregate as before.
           const basis = useOnChainQuote
@@ -284,6 +314,20 @@ export const OrderTicket: FC<{
   const needsFreshAmerQuote = useOnChainQuote && (side === "buy" || side === "write");
   const amerQuoteGate = needsFreshAmerQuote && !amerFresh.isFresh
     ? (amerFresh.statusReason ?? "Request an on-chain quote to continue")
+    : null;
+
+  // BUG-1: a Buy·Market reverts on an exhausted peg only when it would ROUTE to
+  // the peg — i.e. no resting ask ≤ the peg reference. A resting resale/writer
+  // ask still fills (fill_order / fill_writer_ask don't touch vault collateral),
+  // so gate ONLY the peg route, never a resting-ask fill.
+  const bestRestingAsk = orders
+    .filter((o) => o.optionMint === row.optionMint && o.kind !== "bid")
+    .reduce<number | null>((m, o) => (m == null || o.price < m ? o.price : m), null);
+  const pegRef = useOnChainQuote ? (rfq?.premiumPerContract ?? Infinity) : (mark?.premium ?? Infinity);
+  const wouldRouteToPeg =
+    side === "buy" && type === "market" && !(bestRestingAsk != null && bestRestingAsk <= pegRef);
+  const pegGate = wouldRouteToPeg && pegRemaining != null && pegRemaining < qty
+    ? (pegRemaining <= 0 ? "Sold out · vault capacity exhausted" : `Only ${pegRemaining} left at the vault peg`)
     : null;
 
   return (
@@ -401,16 +445,17 @@ export const OrderTicket: FC<{
       ))}
 
       {/* Submit */}
-      <button type="button" disabled={submitting || sellNoBalance || !publicKey || (isWrite && !!writeGate) || !!limitGate || !!amerQuoteGate}
+      <button type="button" disabled={submitting || sellNoBalance || !publicKey || (isWrite && !!writeGate) || !!limitGate || !!amerQuoteGate || !!pegGate}
         onClick={submit}
         className={`w-full font-mono text-[12px] uppercase tracking-[0.2em] rounded-md py-3 transition-colors ${
-          submitting || sellNoBalance || !publicKey || (isWrite && !!writeGate) || !!limitGate || !!amerQuoteGate ? "bg-paper-2 text-ink-muted cursor-not-allowed" : "bg-ink text-paper hover:opacity-90"
+          submitting || sellNoBalance || !publicKey || (isWrite && !!writeGate) || !!limitGate || !!amerQuoteGate || !!pegGate ? "bg-paper-2 text-ink-muted cursor-not-allowed" : "bg-ink text-paper hover:opacity-90"
         }`}>
         {!publicKey ? "Connect wallet"
           : submitting ? "Submitting…"
           : isWrite ? (writeGate ?? amerQuoteGate ?? `Write ${qty} · ask ${fmt(limitPrice)}`)
           : limitGate ? limitGate
           : amerQuoteGate ? amerQuoteGate
+          : pegGate ? pegGate
           : sellNoBalance ? "No contracts held to sell"
           : `${side === "buy" ? "Buy" : "Sell"} ${qty} · ${type === "market" ? "Market" : "Limit"}`}
       </button>

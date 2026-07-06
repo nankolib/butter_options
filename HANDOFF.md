@@ -10,6 +10,14 @@
 >
 > **▶ ADDED OPEN ITEM (this recon):** **⚠️ VITE_RPC_URL VERCEL GAP.** The prod build env does NOT set `VITE_RPC_URL` (`env.ts:61` fallback note), so `opta-solana.vercel.app` runs on the **PUBLIC devnet RPC**, not Helius — the Helius key exists only in local `app/.env.local`. **Fix:** add `VITE_RPC_URL` to the Vercel project env + redeploy. Rate-limit risk under load until fixed.
 >
+> **▶ JUL-8 RECLAIM FLIP — RECON DONE, FLIP PENDING (2026-07-06, read-only; the flip is a separate greenlit step).**
+>   - **4 canaries verified on-chain** (all len=276, `is_settled=0`, `voided=0`, SettlementRecord ABSENT): `Ad5zz684…49S` (SBXAU $100, pool $10 + ~$200 pot), `BAhgX8uA…GAxT` (BTC $85k husk, 0 writers), `GteYo9R…dYXB` (MSFT Put $400, vault_usdc **$204,300.48**), `8xW8ewi…7ViR` (TSLA Put $400, vault_usdc **$20,064.90**).
+>   - **Eligibility:** BAh/Gte/8xW eligible NOW (grace +38–45d); **Ad5 grace ends 2026-07-08T23:19:56Z** → **flip at/after ~23:25Z** to sweep all 4 in one tick (earlier → Ad5 reverts `GracePeriodNotElapsed`, crash-isolated, retries next tick — safe).
+>   - **Crank:** `OPTA_RECLAIM_CRANK_ENABLED` **absent** from `/opt/opta-crank/.env` (DARK, `bot.ts:380`). Vault discovery = **discriminator memcmp** (`safeFetchAll`, `bot.ts:554`) — immune to the 260-byte length bug. One tick sweeps ALL eligible (`reclaimUnsettled.ts:282`; cluster-time grace `:286`). Wallet `5sHZ…` **20.85 SOL**, sweep **<0.05 SOL**.
+>   - **Funds:** writer-only, owner-pinned (`reclaim_unsettled.rs:228` + `:73`); cranker is gas-only (permissionless, `:190-193`) → **no admin key on the VPS**. Voided pays holders **$0** by design (invariant #6). Gte/8xW writer = `DnExEYnZ…`; Ad5 pool writer = admin `5YRMuuoY`.
+>   - **Flip sequence:** dry-run `_probe_reclaim_dryrun.ts` (expect `candidates=4`, `errors=0`) → **verify Ad5 `writer_ask_pot_usdc`** (~$200 is HANDOFF-sourced, UNVERIFIED this recon) → add `OPTA_RECLAIM_CRANK_ENABLED=1` → `systemctl restart --no-block opta-crank` → expect `voided=4, writersReclaimed=3, usdcMoved≈$224,375.38` → manual permissionless `reclaim_writer_ask_residual` on the Ad5 pot backer → conservation check → decide keep-or-revert.
+>   - **Deployed reclaim = the H-03 premium-bearing version, slot `473901900`** (supersedes the Pass-D `469592830` references in the historical blocks below).
+>
 > ---
 
 > **2026-07-06 (SESSION CLOSE — TRADE-PAGE QA MATRIX PASSED + LADDER LIVE-ROLLED + 3 FE FIXES SHIPPED).**

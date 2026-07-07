@@ -44,12 +44,59 @@ export interface SbFeedDatum {
 const ON_DEMAND_DEVNET_QUEUE_B58 = "EYiAmGSdsQTuCw413V5BzaruWuCCSDgTPtBGvLkXHbe7";
 const QUOTE_PROGRAM_ID_B58 = "orac1eFjzWL5R3RbbdMV68K9H6TaCVVcL6LjvQQWAbz";
 
-/** Gold (XAU/USD via PAXG) — the 1c-i-A-proven pilot feed. */
+// Crypto-surface migration (Pyth Core → Switchboard, Jul-31 cutover): the 5
+// live crypto assets get parallel SB feeds so their SB vol oracles can warm
+// ahead of cutover. feedHash = FeedHash.computeOracleFeedId(buildOracleFeed(entry))
+// — validated to reproduce the gold hash; the `symbol` is part of the hash so it
+// MUST NOT change once minted. Sources: Binance+Coinbase for BTC/ETH/SOL/XRP;
+// FARTCOIN uses Gate+MEXC (Bybit spot does not list FARTCOIN — "Not supported
+// symbols"). Each verified live via Crossbar simulate vs Pyth spot within <0.07%.
 export const SB_FEED_DATA: SbFeedDatum[] = [
+  /** Gold (XAU/USD via PAXG) — the 1c-i-A-proven pilot feed. */
   {
     feedHashHex: "6c3c5cc720d1ffd8108aca22bf7834d659612b7e1a4e5f623b76846d1167355e",
     symbol: "XAU/USD",
     suggestedAssetClass: 1, // commodity
+    queuePubkey: ON_DEMAND_DEVNET_QUEUE_B58,
+    quoteProgramPubkey: QUOTE_PROGRAM_ID_B58,
+    minOracleSamples: 2,
+  },
+  {
+    feedHashHex: "baf182b54386b4a1c0354b7d64fb33d679301087a8b509d6a397d7b4f5162ee2",
+    symbol: "BTC/USD",
+    suggestedAssetClass: 0, // crypto
+    queuePubkey: ON_DEMAND_DEVNET_QUEUE_B58,
+    quoteProgramPubkey: QUOTE_PROGRAM_ID_B58,
+    minOracleSamples: 2,
+  },
+  {
+    feedHashHex: "1d8f55a03da760d0f322bc1d066427e95573f651d506e0e31a5499659349caa3",
+    symbol: "ETH/USD",
+    suggestedAssetClass: 0, // crypto
+    queuePubkey: ON_DEMAND_DEVNET_QUEUE_B58,
+    quoteProgramPubkey: QUOTE_PROGRAM_ID_B58,
+    minOracleSamples: 2,
+  },
+  {
+    feedHashHex: "e01fe3bb1d659e5957296b2637658defd1f8b42fc87dd9f16e8fff16fcaeb463",
+    symbol: "SOL/USD",
+    suggestedAssetClass: 0, // crypto
+    queuePubkey: ON_DEMAND_DEVNET_QUEUE_B58,
+    quoteProgramPubkey: QUOTE_PROGRAM_ID_B58,
+    minOracleSamples: 2,
+  },
+  {
+    feedHashHex: "a1c4ce28a9a4abd471fb2eb11236c299a3b02cad72f3f93437aa01578405f736",
+    symbol: "XRP/USD",
+    suggestedAssetClass: 0, // crypto
+    queuePubkey: ON_DEMAND_DEVNET_QUEUE_B58,
+    quoteProgramPubkey: QUOTE_PROGRAM_ID_B58,
+    minOracleSamples: 2,
+  },
+  {
+    feedHashHex: "9612492ea0fdac76ef82ee98f21eee60c98ebb5cc8a2810fc415e56a7357a5f2",
+    symbol: "FARTCOIN/USD",
+    suggestedAssetClass: 0, // crypto
     queuePubkey: ON_DEMAND_DEVNET_QUEUE_B58,
     quoteProgramPubkey: QUOTE_PROGRAM_ID_B58,
     minOracleSamples: 2,

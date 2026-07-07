@@ -54,11 +54,40 @@ export interface SbFeedEntry {
 // normalized feedHash). These stay HERE, not in sbFeedData.ts: they are the
 // SB-managed-quote job source, conceptually part of the SDK path, and the FE
 // has no use for them. ----
+// NOTE: job ORDER + exact URLs/paths are load-bearing — they feed
+// FeedHash.computeOracleFeedId(buildOracleFeed(entry)) which MUST equal the
+// feedHash key (and the on-chain market/vol-oracle feed_id). Do not reorder or
+// edit a job's url/path without re-minting the feedHash.
 const JOBS_BY_FEED: Record<string, Array<Record<string, unknown>>> = {
   // Gold (XAU/USD via PAXG)
   "6c3c5cc720d1ffd8108aca22bf7834d659612b7e1a4e5f623b76846d1167355e": [
     { tasks: [{ httpTask: { url: "https://api.binance.com/api/v3/ticker/price?symbol=PAXGUSDT" } }, { jsonParseTask: { path: "$.price" } }] },
     { tasks: [{ httpTask: { url: "https://api.exchange.coinbase.com/products/PAXG-USD/ticker" } }, { jsonParseTask: { path: "$.price" } }] },
+  ],
+  // BTC/USD — Binance + Coinbase
+  "baf182b54386b4a1c0354b7d64fb33d679301087a8b509d6a397d7b4f5162ee2": [
+    { tasks: [{ httpTask: { url: "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT" } }, { jsonParseTask: { path: "$.price" } }] },
+    { tasks: [{ httpTask: { url: "https://api.exchange.coinbase.com/products/BTC-USD/ticker" } }, { jsonParseTask: { path: "$.price" } }] },
+  ],
+  // ETH/USD — Binance + Coinbase
+  "1d8f55a03da760d0f322bc1d066427e95573f651d506e0e31a5499659349caa3": [
+    { tasks: [{ httpTask: { url: "https://api.binance.com/api/v3/ticker/price?symbol=ETHUSDT" } }, { jsonParseTask: { path: "$.price" } }] },
+    { tasks: [{ httpTask: { url: "https://api.exchange.coinbase.com/products/ETH-USD/ticker" } }, { jsonParseTask: { path: "$.price" } }] },
+  ],
+  // SOL/USD — Binance + Coinbase
+  "e01fe3bb1d659e5957296b2637658defd1f8b42fc87dd9f16e8fff16fcaeb463": [
+    { tasks: [{ httpTask: { url: "https://api.binance.com/api/v3/ticker/price?symbol=SOLUSDT" } }, { jsonParseTask: { path: "$.price" } }] },
+    { tasks: [{ httpTask: { url: "https://api.exchange.coinbase.com/products/SOL-USD/ticker" } }, { jsonParseTask: { path: "$.price" } }] },
+  ],
+  // XRP/USD — Binance + Coinbase
+  "a1c4ce28a9a4abd471fb2eb11236c299a3b02cad72f3f93437aa01578405f736": [
+    { tasks: [{ httpTask: { url: "https://api.binance.com/api/v3/ticker/price?symbol=XRPUSDT" } }, { jsonParseTask: { path: "$.price" } }] },
+    { tasks: [{ httpTask: { url: "https://api.exchange.coinbase.com/products/XRP-USD/ticker" } }, { jsonParseTask: { path: "$.price" } }] },
+  ],
+  // FARTCOIN/USD — Gate + MEXC (Bybit spot does not list FARTCOIN)
+  "9612492ea0fdac76ef82ee98f21eee60c98ebb5cc8a2810fc415e56a7357a5f2": [
+    { tasks: [{ httpTask: { url: "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=FARTCOIN_USDT" } }, { jsonParseTask: { path: "$[0].last" } }] },
+    { tasks: [{ httpTask: { url: "https://api.mexc.com/api/v3/ticker/price?symbol=FARTCOINUSDT" } }, { jsonParseTask: { path: "$.price" } }] },
   ],
 };
 

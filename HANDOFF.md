@@ -1,5 +1,39 @@
 # Opta — Engineer Handoff
 
+> **2026-07-07 (SESSION CLOSE — PYTH-DEADLINE RECON + SB CRYPTO MIGRATION STAGED + MAGICBLOCK CODE-VERIFIED/PARKED). ▶ RESUME HERE — this is the current resume pointer; it supersedes the "▶ RESUME HERE" markers in every block below (their content stays valid as history; the Jul-8 flip runbook + VITE_RPC_URL gap are still LIVE open items, carried forward here).**
+>
+> **▶ RESUME HERE (next session, in order):**
+> 1. **JUL-8 RECLAIM FLIP** (~23:25Z devnet cluster time, after Ad5 grace `2026-07-08T23:19:56Z`) — **runbook UNCHANGED**, see the 2026-07-06 recon block + the 4-candidate July-8 runbook below (do not re-derive). **Run the Pyth-deadline exposure scan alongside it** (prompt exists): scan all live Pyth vaults for expiries **> Jul 31**, check max mintable expiry, propose a minimal gate.
+> 2. **On "flip done" → GATE D of the SB migration:** `volOracleCrank` SB branch (registry-driven), VPS deploy, 2-tick verify. **⏱ WARMUP CLOCK STARTS HERE — 168h.** Every hour of delay slips cutover.
+> 3. **Pending user actions:** Vercel dashboard redeploy (cache **UNCHECKED**) + devtools verify RPC hits **Helius**; add `VITE_RPC_URL` to **Preview** via dashboard. (See the VITE_RPC_URL gap in the 2026-07-06 block — still open.)
+>
+> ---
+>
+> **[PYTH DEADLINE — DRIVES EVERYTHING]**
+> Pyth Core goes **paid July 31, 2026** (Hermes needs an API key, **$500/mo Starter**). Breaks **all 7 Hermes touchpoints** (full inventory in this session's 2026-07-07 recon). **DECISION: the entire crypto surface migrates to Switchboard.** Pyth stays in code as a **dormant branch** — re-adding later = buy a key + create Pyth-source markets. **Settlement model: fresh-at-settle (300s window); Opta pays the settlement crank, users pay all other pulls.**
+>
+> **[SB CRYPTO MIGRATION — PHASE A STAGED]**
+> Recon corrections: the **live crypto surface = 5 assets, not 16** (BTC ETH SOL XRP FARTCOIN, all Pyth oracles warm). **No in-place source flip exists** for markets or vol-oracles — the path is **parallel SB-born accounts + name handover at cutover**.
+> - **Gate B DONE (`35a5adc`):** 5 SB feeds minted + registered. **FARTCOIN = Gate+MEXC median** (Bybit doesn't list it). All feeds **≤0.062% vs Pyth**.
+> - **Gate C DONE:** 5 SB vol oracles birthed, `sample_count=0`, SB write path proven via sim (6046 revert lands post-quote-verification). PDAs in the session log / on-chain by `feedHash`.
+> - **Gate C2 DONE (`0b19271`):** `close_market` drafted + **3/3 bankrun tests** + `preflight_close_market.ts` (refuses if live vaults). **NOT DEPLOYED — ships in the cutover deploy.**
+> - **Gate D HELD** until the reclaim flip is done.
+> - **CUTOVER (~Jul 20, after warmup):** stop new Pyth crypto mints → last Pyth vaults expire/settle → `close_market` the old 5 → `create_market` **real names** BTC/ETH/SOL/XRP/FARTCOIN, `source=SB`, warm oracles inherited by `feedHash`. **NAMING RULE:** clean names only — no suffixes, no lowercase, **no oracle branding ever** (UX rule: oracle provenance is never user-visible; SBXAU/XAUSMOKE display cleanup lands with the design overhaul, not before).
+>
+> **[MAGICBLOCK — PARKED POST-PMF, ARCHITECTURE DECIDED]**
+> Read-only code recon of `ephemeral-spl-token` + `magicblock-engine-examples`: **Q1 mint-on-fill in-ER = NO** (no mint path exists; the in-ER `EphemeralAta` ledger bypasses the token program). **Q2 custom hook in-ER = leaning NO** (zero hook handling anywhere; bare `TransferChecked`; invariant-bypass risk). **Q3 mainnet fees/audit = unanswered** (nothing in-repo; validator self-labels unaudited) — asked again. **DECIDED ARCHITECTURE when revisited: match-in-ER / mint-on-L1 at commit.** Two PoCs specced (**PoC-A** mint, **PoC-B** hook side-effect) if ever needed. **Follow-up sent to MagicBlock** re: split reference architecture + Q3.
+>
+> **[AWAITING EXTERNAL]**
+> - **Jack / Switchboard:** devnet costs at 50+ feeds, rate limits, sources by asset class (equities off-hours, longtail Solana). **Gates the BOARD-EXPANSION ARC** (campaign assets JUP/JTO/WIF/BONK + equities + commodities; equities need **~4–5wk warmup** so their feeds must be created first).
+> - **MagicBlock:** split reference architecture + mainnet fees/audit.
+>
+> **[ROADMAP QUEUE AFTER MIGRATION]**
+> 1. **Frontend design overhaul** — Claude Design + CC, full site + text, design-book deliverable. Includes the clean asset-name display mapping.
+> 2. **Gamified devnet experience** (user acquisition) — points engine, quests/leaderboard, taker bots, PostHog instrumentation; sybil design needed. The board-expansion arc feeds it.
+> 3. **Seeker app finalization.**
+>
+> ---
+
 > **2026-07-06 (RECON CORRECTION — 3 HANDOFF-STALE ITEMS VERIFIED DONE, read-only). ▶ RESUME HERE.** Supersedes any older "held pending" language for these three in the historical blocks below (do not re-open them).
 >
 > **(A) SWITCHBOARD STAGE 3 — COMPLETE.** Commit `9bf4dda` ("Stage 3 arc COMPLETE — deployed + exercised live"). The read path **branches on `oracle_source`** (no longer unconditionally Pyth): `settle_expiry.rs:116-138` + `exercise_american.rs:118-135` (`match ORACLE_SOURCE_PYTH / ORACLE_SOURCE_SWITCHBOARD`). `sbOracleCrank` is **wired into the live bot** (`bot.ts:1144-1166`); the liveness loop is env-gated (`bot.ts:1176-1209`). The **HIGH-5 proof gate is branched by `oracle_source`** (`create_market.rs:75`, `migrate_pyth_feed.rs:44`). The deployed program (slot **473901900**, feature-free, authority `5YRMuuoY`) already carries all of this — no redeploy needed. **No separate backend indexer exists** — the FE self-indexes via direct on-chain reads; the crank serves `GET /liveness` from an in-memory map. Any "**held pending Jack / devnet-oracle confirmation**" language is **VOID**.

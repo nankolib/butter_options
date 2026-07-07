@@ -2,6 +2,7 @@
 // instructions/mod.rs — Re-exports all instruction modules
 // =============================================================================
 
+pub mod close_market;
 pub mod create_market;
 pub mod initialize_protocol;
 pub mod migrate_pyth_feed;
@@ -106,6 +107,7 @@ pub mod create_test_shared_vault;
 #[cfg(feature = "test-synth-vol")]
 pub mod synth_warm_vol_oracle;
 
+pub use close_market::*;
 pub use create_market::*;
 pub use initialize_protocol::*;
 pub use migrate_pyth_feed::*;

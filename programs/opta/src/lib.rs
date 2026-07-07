@@ -503,6 +503,21 @@ pub mod opta {
         instructions::migrate_market_oracle_source::handle_migrate_market_oracle_source(ctx)
     }
 
+    /// Admin-only. Closes an OptionsMarket PDA and returns its rent to the admin.
+    /// Used at the Pyth→Switchboard cutover to free a crypto asset's name PDA so
+    /// an SB-sourced market can be re-created under the SAME real name.
+    ///
+    /// NO on-chain child-check is possible: SharedVaults are independent PDAs
+    /// keyed by market.key() and the market holds no child counter, so proving
+    /// "no open vaults" would need unbounded remaining_accounts. Safety is
+    /// enforced OFF-CHAIN by scripts/preflight_close_market.ts (refuses to build
+    /// the tx if any live vault references the market). VolOracles (keyed by
+    /// feed_id) are NOT children and survive by design. Admin-trusted (devnet);
+    /// ships in the cutover deploy, INERT until then.
+    pub fn close_market(ctx: Context<CloseMarket>, asset_name: String) -> Result<()> {
+        instructions::close_market::handle_close_market(ctx, asset_name)
+    }
+
     /// One-time SharedVault schema migration that adds the trailing
     /// exercise_style field to pre-Pass-1 vaults. Admin-only.
     /// Caller passes vault accounts via remaining_accounts (recommended

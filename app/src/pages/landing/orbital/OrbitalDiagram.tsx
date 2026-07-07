@@ -35,8 +35,8 @@ export const OrbitalDiagram: FC = () => (
       <OrbitNode label="Transfer Hook" position="top" />
       <OrbitNode label="Permanent Delegate" position="right-top" />
       <OrbitNode label="Black–Scholes" position="right-bottom" lead />
-      <OrbitNode label="Pyth Oracle" position="left-bottom" />
-      <OrbitNode label="EWMA Vol" position="left-top" />
+      <OrbitNode label="Price Oracle" position="left-bottom" />
+      <OrbitNode label="Realized Vol" position="left-top" />
     </div>
   </div>
 );

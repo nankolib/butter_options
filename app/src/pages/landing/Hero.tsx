@@ -75,8 +75,8 @@ export const Hero: FC = () => {
             />
             Solana devnet
           </MetaLabel>
-          <MetaLabel>v0.1 — April 2026</MetaLabel>
-          <MetaLabel>Audit rounds · 7 complete</MetaLabel>
+          <MetaLabel>v0.2 — July 2026</MetaLabel>
+          <MetaLabel>Audited · criticals closed</MetaLabel>
         </div>
 
         {/* headline */}

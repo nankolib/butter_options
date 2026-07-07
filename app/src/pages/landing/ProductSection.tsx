@@ -62,8 +62,8 @@ export const ProductSection: FC = () => (
               <em className="italic font-fraunces-mid-em">Pricing</em>, on-chain.
             </>
           }
-          body="Black–Scholes computed natively via solmath. EWMA volatility from Pyth feeds, with smile correction. No off-chain oracle, no marker latency."
-          tag="Solmath · Pyth · EWMA"
+          body="Black–Scholes and BS-2002 computed natively via solmath. Volatility from an on-chain realized-vol oracle. No off-chain pricing server."
+          tag="Solmath · On-chain · Vol-oracle"
           staggerIndex={0}
         />
         <Mech

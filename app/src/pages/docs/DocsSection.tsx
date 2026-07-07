@@ -83,7 +83,7 @@ export const DocsSection: FC = () => {
   const chunk = doc.sections[section.slug] ?? "";
 
   return (
-    <Fade key={section.slug}>
+    <Fade key={section.slug} threshold={0}>
       <article ref={articleRef}>
         {section.kind === "appendix" ? (
           <MetaLabel as="div" className="mb-6">

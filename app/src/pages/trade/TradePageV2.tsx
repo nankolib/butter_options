@@ -1,5 +1,6 @@
 import type { FC } from "react";
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { usePaperPalette } from "../../hooks";
 import { PaperGrain } from "../../components/layout";
 import { AppNav } from "../../components/AppNav";
@@ -49,6 +50,35 @@ export const TradePageV2: FC = () => {
   usePaperPalette();
   const td = useTradeData();
   const chain = useUnifiedChain();
+
+  // Deep-link intake from the Markets inspector's "Trade →" (/trade?asset=&expiry=).
+  // One-shot and defensive: only applies values that exist in the loaded lists,
+  // and silently no-ops otherwise (falls back to the page's own default). Extra
+  // params (strike/side) are ignored here — asset+expiry is the preselect scope.
+  const [searchParams] = useSearchParams();
+  const assetApplied = useRef(false);
+  const expiryApplied = useRef(false);
+  useEffect(() => {
+    if (assetApplied.current || td.availableAssets.length === 0) return;
+    const asset = searchParams.get("asset");
+    if (asset && td.availableAssets.includes(asset)) td.setSelectedAsset(asset);
+    assetApplied.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [td.availableAssets, searchParams]);
+  useEffect(() => {
+    if (expiryApplied.current || td.availableExpiries.length === 0) return;
+    const asset = searchParams.get("asset");
+    if (asset && td.selectedAsset !== asset) return; // wait until the asset is active
+    const raw = searchParams.get("expiry");
+    const want = raw != null ? Number(raw) : NaN;
+    if (Number.isFinite(want)) {
+      const day = (t: number) => Math.floor(t / 86_400);
+      const match = td.availableExpiries.find((e) => day(e) === day(want));
+      if (match != null) td.setSelectedExpiry(match);
+    }
+    expiryApplied.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [td.availableExpiries, td.selectedAsset, searchParams]);
 
   const [persona, setPersona] = useState<Persona>(() =>
     (typeof localStorage !== "undefined" && localStorage.getItem(PERSONA_KEY) === "simple") ? "simple" : "pro",

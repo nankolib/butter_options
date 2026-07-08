@@ -67,21 +67,32 @@
   --color-rule-soft: rgba(10, 10, 8, 0.08);
   --color-dot-teal: #1AC6A5;
 
-  /* ----- Landing dual-mode tokens (one-viewport landing only)
+  /* ----- Dual-mode surface tokens (data-mode surfaces: Landing + Markets terminal)
 
-     Semantic, mode-agnostic tokens consumed exclusively by the
-     one-viewport Landing (pages/Landing.tsx + pages/landing/Logo,
-     ModeToggle). Light values live here; html[data-mode="dark"]
-     (set only by the Landing via useLandingMode) overrides them below.
-     Docs never sets data-mode, so it keeps the paper tokens above and
-     is unaffected. Keep these separate from --color-paper/--color-ink
-     precisely so Docs stays light-only. */
+     Semantic, mode-agnostic tokens. Light values live here; the
+     html[data-mode="dark"] block below flips them. Consumers:
+       - Landing (pages/Landing.tsx) — sets data-mode="light" via useLandingMode.
+       - Markets terminal (pages/markets/*) — sets data-mode="dark" via useSurfaceMode.
+     Other trader pages use data-paper (not data-mode) so they are unaffected.
+     Docs never sets data-mode, so it keeps the paper tokens above. Keep these
+     separate from --color-paper/--color-ink so Docs stays light-only.
+
+     Base six (Landing + terminal): */
   --color-l-bg: #F1ECE2;
   --color-l-text: #0A0A08;
   --color-l-muted: #504B41;
   --color-l-faint: #8A8577;
   --color-l-hair: rgba(10, 10, 8, 0.14);
   --color-l-dot: #1AC6A5;
+  /* Terminal-only additions (raised panels, data-color, overlays). up/down/on-*
+     are identical in both modes — color encodes data, not surface. */
+  --color-l-surface: #EAE4D6;
+  --color-l-surface-2: #EAE4D6;
+  --color-l-up: #1AC6A5;
+  --color-l-down: #D7263D;
+  --color-l-on-up: #04342C;
+  --color-l-on-down: #FCEBEB;
+  --color-l-overlay: rgba(10, 10, 8, 0.34);
 
   /* ----- fonts
      Strict three-font split, established 2026-05-09 to fix small-size
@@ -256,6 +267,10 @@ html[data-mode="dark"] {
   --color-l-faint: #5E5B50;
   --color-l-hair: #26261F;
   --color-l-dot: #D7263D;
+  /* Terminal-only additions — warm charcoal panels, darker overlay. */
+  --color-l-surface: #14140F;
+  --color-l-surface-2: #1A1A15;
+  --color-l-overlay: rgba(6, 6, 4, 0.62);
 }
 html[data-mode] ::selection {
   background: var(--color-l-dot);

@@ -21,6 +21,8 @@ export type MarketRow = {
   /** SharedVault account (NOT market). */
   account: any;
   asset: string;
+  /** On-chain asset_class: 0 Crypto · 1 Commodity · 2 Equity · 3 FX · 4 ETF. */
+  assetClass: number;
   side: "call" | "put";
   strike: number;
   expiry: number;
@@ -29,6 +31,12 @@ export type MarketRow = {
   openInterest: number;
   vaultTvl: number | null;
   status: MarketStatus;
+  /** European or American — drives the inspector's premium path (RFQ vs model). */
+  exerciseStyle: "european" | "american";
+  /** Oracle settlement price for settled contracts (USDC-scaled), else null. */
+  settlementPrice: number | null;
+  /** Cumulative net premium collected by this vault (USDC). No per-day indexer. */
+  premiaWritten: number;
   /** Always true post-P1 — vault rows are v2 by definition. Kept for
    *  call-site compatibility with the existing MarketsTable. */
   isV2: boolean;
@@ -88,11 +96,14 @@ export function useMarketsData(): UseMarketsData {
     refetch();
   }, [refetch]);
 
-  // Map market PDA → asset name for fast lookup during row build.
+  // Map market PDA → { name, class } for fast lookup during row build.
   const assetByMarket = useMemo(() => {
-    const map = new Map<string, string>();
+    const map = new Map<string, { name: string; class: number }>();
     for (const m of markets) {
-      map.set(m.publicKey.toBase58(), m.account.assetName as string);
+      map.set(m.publicKey.toBase58(), {
+        name: m.account.assetName as string,
+        class: typeof m.account.assetClass === "number" ? m.account.assetClass : 0,
+      });
     }
     return map;
   }, [markets]);
@@ -136,8 +147,9 @@ export function useMarketsData(): UseMarketsData {
     const now = Math.floor(Date.now() / 1000);
     const out: MarketRow[] = [];
     for (const v of vaults) {
-      const asset = assetByMarket.get((v.account.market as PublicKey).toBase58());
-      if (!asset) continue; // vault's market dropped by safeFetchAll's strict validator
+      const meta = assetByMarket.get((v.account.market as PublicKey).toBase58());
+      if (!meta) continue; // vault's market dropped by safeFetchAll's strict validator
+      const asset = meta.name;
 
       const isCall = "call" in v.account.optionType;
       const strike = usdcToNumber(v.account.strikePrice);
@@ -148,6 +160,12 @@ export function useMarketsData(): UseMarketsData {
       const isSettled = !!v.account.isSettled;
       const isPastExpiry = expiry <= now;
       const status: MarketStatus = isSettled ? "settled" : isPastExpiry ? "expired" : "open";
+      const exerciseStyle: "european" | "american" =
+        v.account.exerciseStyle && "european" in v.account.exerciseStyle ? "european" : "american";
+      const settlementPrice = isSettled ? usdcToNumber(v.account.settlementPrice) : null;
+      const premiaWritten = v.account.netPremiumCollected
+        ? usdcToNumber(v.account.netPremiumCollected)
+        : 0;
 
       const spot = spotPrices[asset] ?? null;
       let iv: number | null = null;
@@ -160,6 +178,7 @@ export function useMarketsData(): UseMarketsData {
         publicKey: v.publicKey,
         account: v.account,
         asset,
+        assetClass: meta.class,
         side: isCall ? "call" : "put",
         strike,
         expiry,
@@ -168,6 +187,9 @@ export function useMarketsData(): UseMarketsData {
         openInterest: oiByVault.get(v.publicKey.toBase58()) ?? 0,
         vaultTvl: usdcToNumber(v.account.totalCollateral),
         status,
+        exerciseStyle,
+        settlementPrice,
+        premiaWritten,
         isV2: true,
       });
     }

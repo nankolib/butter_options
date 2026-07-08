@@ -67,6 +67,22 @@
   --color-rule-soft: rgba(10, 10, 8, 0.08);
   --color-dot-teal: #1AC6A5;
 
+  /* ----- Landing dual-mode tokens (one-viewport landing only)
+
+     Semantic, mode-agnostic tokens consumed exclusively by the
+     one-viewport Landing (pages/Landing.tsx + pages/landing/Logo,
+     ModeToggle). Light values live here; html[data-mode="dark"]
+     (set only by the Landing via useLandingMode) overrides them below.
+     Docs never sets data-mode, so it keeps the paper tokens above and
+     is unaffected. Keep these separate from --color-paper/--color-ink
+     precisely so Docs stays light-only. */
+  --color-l-bg: #F1ECE2;
+  --color-l-text: #0A0A08;
+  --color-l-muted: #504B41;
+  --color-l-faint: #8A8577;
+  --color-l-hair: rgba(10, 10, 8, 0.14);
+  --color-l-dot: #1AC6A5;
+
   /* ----- fonts
      Strict three-font split, established 2026-05-09 to fix small-size
      Fraunces unreadability flagged by Superteam Pakistan reviewer:
@@ -80,6 +96,10 @@
   --font-serif: "Fraunces", "Times New Roman", serif;
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+  /* --font-mono-plex → IBM Plex Mono. Landing-only: eyebrow, route
+     row, footer, mode toggle. Kept separate from --font-mono so the
+     trader pages stay on JetBrains Mono. */
+  --font-mono-plex: "IBM Plex Mono", ui-monospace, "SF Mono", monospace;
 
   /* ----- easing */
   --ease-opta: cubic-bezier(0.16, 1, 0.3, 1);
@@ -96,6 +116,10 @@
   --animate-neb-drift-2: neb-drift-2 32s var(--ease-opta) infinite alternate;
   --animate-scan: scan 12s var(--ease-opta) infinite;
   --animate-cta-breathe: cta-breathe 6s var(--ease-opta) infinite;
+  /* Landing eyebrow dot — slow, calm opacity breathe (~2.6s). Distinct
+     from --animate-pulse-live (crimson box-shadow ring, wrong for a
+     mode-aware teal/crimson dot); this one is color-agnostic. */
+  --animate-l-pulse: l-pulse 2.6s var(--ease-opta) infinite;
 
   /* ----- shadow tokens (paper-surface effects) */
   --shadow-dot-glow: 0 0 12px rgba(215, 38, 61, 0.5);
@@ -147,6 +171,10 @@
 @keyframes cta-breathe {
   0%, 100% { transform: translate(-50%, -50%) scale(1);    opacity: 0.85; }
   50%      { transform: translate(-50%, -50%) scale(1.08); opacity: 1; }
+}
+@keyframes l-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.32; }
 }
 
 /* ============================================================================
@@ -207,6 +235,31 @@ html[data-paper="true"] {
 html[data-paper="true"] ::selection {
   background: var(--color-ink);
   color: var(--color-paper);
+}
+
+/* One-viewport Landing dual mode. The Landing sets data-mode="light|dark"
+   on <html> via useLandingMode() (default light, ignores prefers-color-
+   scheme, persists to localStorage). The document-root background flip
+   catches overscroll / route-transition flashes; the --color-l-* overrides
+   swap every landing utility (bg-l-bg, text-l-text, border-l-hair, …) in
+   place. Docs never sets data-mode, so the light defaults in @theme stand. */
+html[data-mode="light"] {
+  background-color: #F1ECE2;
+  color: #0A0A08;
+}
+html[data-mode="dark"] {
+  background-color: #0C0C0A;
+  color: #F1ECE2;
+  --color-l-bg: #0C0C0A;
+  --color-l-text: #F1ECE2;
+  --color-l-muted: #8C897C;
+  --color-l-faint: #5E5B50;
+  --color-l-hair: #26261F;
+  --color-l-dot: #D7263D;
+}
+html[data-mode] ::selection {
+  background: var(--color-l-dot);
+  color: var(--color-l-bg);
 }
 
 /* Force the injected TradingView embed iframe to fill its sized container

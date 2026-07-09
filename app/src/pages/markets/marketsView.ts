@@ -44,7 +44,8 @@ export function fmtInt(n: number): string {
 export function fmtPrice(n: number): string {
   if (n >= 1000) return n.toLocaleString("en-US", { maximumFractionDigits: 0 });
   if (n >= 1) return n.toFixed(2);
-  return n.toFixed(4);
+  const s = n.toFixed(4);
+  return /^-0(?:\.0+)?$/.test(s) ? s.slice(1) : s; // never negative-zero
 }
 export function fmtStrike(n: number): string {
   if (n >= 1000) return n.toLocaleString("en-US", { maximumFractionDigits: 0 });

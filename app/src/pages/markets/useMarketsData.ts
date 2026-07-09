@@ -6,6 +6,7 @@ import { useVaults } from "../../hooks/useVaults";
 import { usePythPrices } from "../../hooks/usePythPrices";
 import { applyVolSmile, getDefaultVolatility } from "../../utils/blackScholes";
 import { hexFromBytes, usdcToNumber } from "../../utils/format";
+import { canonicalAsset } from "../../utils/assetDisplay";
 
 export type MarketStatus = "open" | "settled" | "expired";
 
@@ -100,8 +101,11 @@ export function useMarketsData(): UseMarketsData {
   const assetByMarket = useMemo(() => {
     const map = new Map<string, { name: string; class: number }>();
     for (const m of markets) {
+      // Canonical display symbol; "" hides provenance seeds (SB…/…SPOT) — rows
+      // with an empty name are skipped in the row build below.
+      const name = canonicalAsset(m.account.assetName) ?? "";
       map.set(m.publicKey.toBase58(), {
-        name: m.account.assetName as string,
+        name,
         class: typeof m.account.assetClass === "number" ? m.account.assetClass : 0,
       });
     }
@@ -131,7 +135,7 @@ export function useMarketsData(): UseMarketsData {
         m.publicKey.equals(v.account.market as PublicKey),
       );
       if (!market) continue;
-      const ticker = market.account.assetName as string;
+      const ticker = canonicalAsset(market.account.assetName);
       if (!ticker || seen.has(ticker)) continue;
       seen.add(ticker);
       out.push({
@@ -150,6 +154,7 @@ export function useMarketsData(): UseMarketsData {
       const meta = assetByMarket.get((v.account.market as PublicKey).toBase58());
       if (!meta) continue; // vault's market dropped by safeFetchAll's strict validator
       const asset = meta.name;
+      if (!asset) continue; // hidden provenance seed (SBXAU / …SPOT) — never surfaced
 
       const isCall = "call" in v.account.optionType;
       const strike = usdcToNumber(v.account.strikePrice);

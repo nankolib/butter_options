@@ -7,7 +7,7 @@
  */
 import { PublicKey } from "@solana/web3.js";
 import { Program } from "@coral-xyz/anchor";
-import { Buffer } from "buffer";
+import { coalescedProgramAccounts } from "../utils/programAccounts";
 
 // Account discriminators from the current IDL
 const DISCRIMINATORS: Record<string, number[]> = {
@@ -38,20 +38,16 @@ export async function safeFetchAll<T>(
   const discriminator = DISCRIMINATORS[accountName];
   if (!discriminator) throw new Error(`Unknown account: ${accountName}`);
 
-  const discriminatorBytes = Buffer.from(discriminator);
   const connection = program.provider.connection;
 
-  // Fetch all accounts owned by our program with matching discriminator
-  const rawAccounts = await connection.getProgramAccounts(program.programId, {
-    filters: [
-      {
-        memcmp: {
-          offset: 0,
-          bytes: bs58Encode(discriminatorBytes),
-        },
-      },
-    ],
-  });
+  // Fetch all accounts owned by our program with matching discriminator.
+  // Coalesced + timeout-bounded (see programAccounts.ts) so concurrent identical
+  // scans across hooks collapse into one request and can't hang indefinitely.
+  const rawAccounts = await coalescedProgramAccounts(
+    connection,
+    program.programId,
+    discriminator,
+  );
 
   // Decode each account individually, skipping decode failures
   const decoded: { publicKey: PublicKey; account: T }[] = [];

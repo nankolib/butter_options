@@ -1,84 +1,54 @@
 import type { FC } from "react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { usePaperPalette } from "../../hooks";
-import { PaperGrain } from "../../components/layout";
-import { AppNav } from "../../components/AppNav";
-import { TradeStatementHeader } from "./TradeStatementHeader";
+import { useSurfaceMode } from "../../hooks/useSurfaceMode";
+import { TerminalAppBar } from "../../components/TerminalAppBar";
 import { AssetDropdown } from "./AssetDropdown";
 import { ExpiryTabs } from "./ExpiryTabs";
-import { TradeFooter } from "./TradeFooter";
-import { TradeChainV2, type FocusedContract, type DetailTarget } from "./TradeChainV2";
-import { OrderTicket } from "./OrderTicket";
-import { OrderBookLadder } from "./OrderBookLadder";
-import { OpenOrders } from "./OpenOrders";
+import { TradeChainV2, type FocusedContract } from "./TradeChainV2";
+import { ContractInspector } from "../markets/ContractInspector";
+import { TradeDock } from "./TradeDock";
+import { BookAndTape } from "./BookAndTape";
 import { BuyModal } from "./BuyModal";
-import { calculateCallPremium, calculatePutPremium, getDefaultVolatility, applyVolSmile } from "../../utils/blackScholes";
-
-// Lazy-load the chart-heavy surfaces (lightweight-charts / TradingView embed)
-// so they leave the initial chunk and load only when their surface mounts (T-perf).
-const PriceChart = lazy(() => import("./PriceChart").then((m) => ({ default: m.PriceChart })));
-const SimpleTradePanel = lazy(() => import("./SimpleTradePanel").then((m) => ({ default: m.SimpleTradePanel })));
-const ContractDetailModal = lazy(() => import("./ContractDetailModal").then((m) => ({ default: m.ContractDetailModal })));
-
-const ChartFallback: FC = () => (
-  <div className="border border-rule rounded-md p-12 text-center my-2">
-    <p className="font-mono text-[10.5px] uppercase tracking-[0.2em] text-ink-muted m-0">Loading…</p>
-  </div>
-);
 import { useTradeData, type Offering } from "./useTradeData";
 import { useUnifiedChain } from "../../hooks/useUnifiedChain";
+import { calculateCallPremium, calculatePutPremium, getDefaultVolatility, applyVolSmile } from "../../utils/blackScholes";
+
+// Lazy-load the chart-heavy surfaces so they leave the initial chunk.
+const PriceChart = lazy(() => import("./PriceChart").then((m) => ({ default: m.PriceChart })));
+const SimpleTradePanel = lazy(() => import("./SimpleTradePanel").then((m) => ({ default: m.SimpleTradePanel })));
+
+const ChartFallback: FC = () => (
+  <div className="flex h-full items-center justify-center">
+    <p className="font-mono-plex text-[10.5px] uppercase tracking-[0.16em] text-l-muted">Loading…</p>
+  </div>
+);
 
 /**
- * TradePageV2 — the new exchange Trade page (flag-gated by TRADE_V2_UI).
+ * TradePageV2 — the terminal trading surface (design lock 2026-07-09).
  *
- * Pass 1: GRID view only — the unified series+legacy chain (useUnifiedChain),
- * Deribit-style, paper aesthetic. CHART is a placeholder (Pass 3); the order
- * ticket is Pass 2. Row selection sets focused-contract state (highlight only
- * for now). View choice persists in localStorage (T1).
+ * Shared TerminalAppBar + dark-default surface (useSurfaceMode), over a
+ * fixed-height flex column: context strip · expiry tabs · main (symmetric chain
+ * or chart, left) + docked ContractInspector (right rail) · full-width bottom
+ * dock. Row click loads the docked ticket; deep-links from Markets carry
+ * asset·expiry·strike·side and focus the contract directly. SIMPLE persona swaps
+ * the chain for the plain-English panel beside the chart.
  *
- * Reuse: selectors + spot + ATM come from the existing useTradeData (the V1
- * data hook), so feed wiring isn't duplicated; chain rows come from the Pass-0
- * useUnifiedChain aggregate.
+ * Mechanics (RFQ, buy/sell/write, epoch writer-asks, deep-link intake) are the
+ * shipped V2 engine — this slice is a reskin + restructure, not a rewrite.
  */
 const VIEW_KEY = "opta.trade.view.v2";
 const PERSONA_KEY = "opta.trade.persona";
 type View = "grid" | "chart";
 type Persona = "pro" | "simple";
 
+const day = (ts: number) => Math.floor(ts / 86_400);
+
 export const TradePageV2: FC = () => {
-  usePaperPalette();
+  const { mode, toggle } = useSurfaceMode("dark");
   const td = useTradeData();
   const chain = useUnifiedChain();
-
-  // Deep-link intake from the Markets inspector's "Trade →" (/trade?asset=&expiry=).
-  // One-shot and defensive: only applies values that exist in the loaded lists,
-  // and silently no-ops otherwise (falls back to the page's own default). Extra
-  // params (strike/side) are ignored here — asset+expiry is the preselect scope.
   const [searchParams] = useSearchParams();
-  const assetApplied = useRef(false);
-  const expiryApplied = useRef(false);
-  useEffect(() => {
-    if (assetApplied.current || td.availableAssets.length === 0) return;
-    const asset = searchParams.get("asset");
-    if (asset && td.availableAssets.includes(asset)) td.setSelectedAsset(asset);
-    assetApplied.current = true;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [td.availableAssets, searchParams]);
-  useEffect(() => {
-    if (expiryApplied.current || td.availableExpiries.length === 0) return;
-    const asset = searchParams.get("asset");
-    if (asset && td.selectedAsset !== asset) return; // wait until the asset is active
-    const raw = searchParams.get("expiry");
-    const want = raw != null ? Number(raw) : NaN;
-    if (Number.isFinite(want)) {
-      const day = (t: number) => Math.floor(t / 86_400);
-      const match = td.availableExpiries.find((e) => day(e) === day(want));
-      if (match != null) td.setSelectedExpiry(match);
-    }
-    expiryApplied.current = true;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [td.availableExpiries, td.selectedAsset, searchParams]);
 
   const [persona, setPersona] = useState<Persona>(() =>
     (typeof localStorage !== "undefined" && localStorage.getItem(PERSONA_KEY) === "simple") ? "simple" : "pro",
@@ -89,12 +59,9 @@ export const TradePageV2: FC = () => {
     const saved = typeof localStorage !== "undefined" ? localStorage.getItem(VIEW_KEY) : null;
     return saved === "chart" ? "chart" : "grid";
   });
-  useEffect(() => {
-    try { localStorage.setItem(VIEW_KEY, view); } catch { /* ignore */ }
-  }, [view]);
+  useEffect(() => { try { localStorage.setItem(VIEW_KEY, view); } catch { /* ignore */ } }, [view]);
 
   const [focused, setFocused] = useState<FocusedContract | null>(null);
-  const [detailTarget, setDetailTarget] = useState<DetailTarget | null>(null);
 
   // Legacy Buy bridges to the existing classic BuyModal (purchase_from_vault /
   // buy_v2_resale) — reuse, not reimplementation.
@@ -116,19 +83,137 @@ export const TradePageV2: FC = () => {
     });
   };
 
-  const monthLabel = useMemo(
-    () => new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" }),
-    [],
+  // Filter the unified chain to the selected asset + expiry (match by UTC day).
+  const visibleRows = useMemo(
+    () => chain.rows.filter((r) => r.asset === td.selectedAsset && day(r.expiry) === day(td.selectedExpiry)),
+    [chain.rows, td.selectedAsset, td.selectedExpiry],
   );
-  const timestampLabel = useMemo(() => {
-    const now = new Date();
-    const datePart = now.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
-    const timePart = now.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" });
-    return `${datePart} · ${timePart} UTC`;
-  }, []);
 
-  // Cheap FE mark for the focused contract — used as the chart-page ladder's
-  // "vault peg" level (display only; no eager on-chain view, T6).
+  // ---- Asset universe + defaults from the UNIFIED CHAIN (BUG-1 fix) ----
+  // The dropdown, default, and expiries derive from the SAME tolerant source
+  // the grid renders (useUnifiedChain), so an asset can never be listed but
+  // un-chartable, and SOL/BTC are never dropped by a strict/partially-loaded
+  // market fetch. Assets are ranked by open interest → the default is the
+  // biggest market, not an alphabetical accident. Empty/"?" names are filtered.
+  const chainAssets = useMemo(() => {
+    // Union the tolerant chain source with td's list (both already canonicalized
+    // at the data layer) so a partial load of EITHER still populates the dropdown
+    // (the empty-dropdown regression came from one source being momentarily empty).
+    //
+    // Ranked by MARKET BREADTH (# of live contracts), tie-broken by open interest
+    // then name. Breadth — NOT raw OI — is the right "biggest market" signal: OI is
+    // contracts-sold, so a thin asset with a few sold contracts (FARTCOIN) outranks
+    // SOL on OI while having no live expiry to show. Breadth makes SOL the default.
+    const stat = new Map<string, { rows: number; oi: number }>();
+    for (const r of chain.rows) {
+      if (!r.asset || r.asset === "?" || r.isSettled) continue;
+      const s = stat.get(r.asset) ?? { rows: 0, oi: 0 };
+      s.rows += 1;
+      s.oi += r.oi;
+      stat.set(r.asset, s);
+    }
+    for (const a of td.availableAssets) {
+      if (a && !stat.has(a)) stat.set(a, { rows: 0, oi: 0 });
+    }
+    return [...stat.entries()]
+      .sort((a, b) => b[1].rows - a[1].rows || b[1].oi - a[1].oi || a[0].localeCompare(b[0]))
+      .map(([a]) => a);
+  }, [chain.rows, td.availableAssets]);
+
+  const chainExpiries = useMemo(() => {
+    const now = Date.now() / 1000;
+    const byDay = new Map<number, number>();
+    for (const r of chain.rows) {
+      if (r.asset !== td.selectedAsset || r.expiry <= now) continue;
+      const dk = day(r.expiry);
+      byDay.set(dk, Math.min(byDay.get(dk) ?? Infinity, r.expiry));
+    }
+    return [...byDay.values()].sort((a, b) => a - b);
+  }, [chain.rows, td.selectedAsset]);
+
+  // Default asset once the chain has assets: honor a deep-link ?asset, else the
+  // highest-OI asset. One-shot; the shell owns the default (td no longer resets).
+  const assetDefaulted = useRef(false);
+  useEffect(() => {
+    if (assetDefaulted.current || !chainAssets.length) return;
+    const urlAsset = searchParams.get("asset");
+    const canUseUrl = urlAsset && chainAssets.includes(urlAsset);
+    // Wait until the chain fetch SETTLES before locking the breadth default, so a
+    // partial/early set can't lock a low-breadth asset (the FARTCOIN default bug).
+    // A deep-link asset applies immediately (it's an explicit choice, no ranking).
+    if (!canUseUrl && chain.loading) return;
+    const want = canUseUrl ? urlAsset : chainAssets[0];
+    if (want && want !== td.selectedAsset) td.setSelectedAsset(want);
+    assetDefaulted.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chainAssets, chain.loading]);
+
+  // Keep a valid expiry for the selected asset: honor ?expiry once, else the
+  // nearest. Re-runs when the asset (hence its expiry set) changes.
+  const expiryDefaulted = useRef(false);
+  useEffect(() => {
+    if (!chainExpiries.length) return;
+    if (td.selectedExpiry && chainExpiries.includes(td.selectedExpiry)) return;
+    let want = chainExpiries[0];
+    const urlExpiry = searchParams.get("expiry");
+    if (!expiryDefaulted.current && urlExpiry) {
+      const match = chainExpiries.find((e) => day(e) === day(Number(urlExpiry)));
+      if (match != null) want = match;
+    }
+    expiryDefaulted.current = true;
+    td.setSelectedExpiry(want);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chainExpiries, td.selectedExpiry]);
+
+  // Invalidate a stale focus when the asset/expiry selection changes.
+  useEffect(() => {
+    if (focused && (focused.asset !== td.selectedAsset || day(focused.expiry) !== day(td.selectedExpiry))) {
+      setFocused(null);
+    }
+  }, [focused, td.selectedAsset, td.selectedExpiry]);
+
+  // Deep-link focus: asset·expiry·strike·side (the reconciled canonical shape).
+  // td applies asset/expiry; here we focus the matching strike+side row once the
+  // unified chain has it. One-shot, retries until the row materialises.
+  const deepFocusApplied = useRef(false);
+  useEffect(() => {
+    if (deepFocusApplied.current) return;
+    const rawStrike = searchParams.get("strike");
+    if (!rawStrike) { deepFocusApplied.current = true; return; }
+    if (!visibleRows.length) return; // wait for the chain to load this expiry
+    const strike = parseFloat(rawStrike);
+    const side = searchParams.get("side"); // call | put
+    const want = visibleRows.find(
+      (r) => Math.abs(r.strike - strike) < 1e-6 && (!side || r.optionType === side),
+    );
+    if (want) { setFocused(want); deepFocusApplied.current = true; }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleRows, searchParams]);
+
+  // Pro default focus → prefer a SERIES row, else epoch → legacy → first.
+  useEffect(() => {
+    if (focused || persona !== "pro" || !visibleRows.length) return;
+    // Don't pre-empt a pending deep-link focus.
+    if (!deepFocusApplied.current && searchParams.get("strike")) return;
+    const pick =
+      visibleRows.find((r) => r.provenance === "series") ??
+      visibleRows.find((r) => r.provenance === "epoch") ??
+      visibleRows[0];
+    if (pick) setFocused(pick);
+  }, [visibleRows, persona, focused, searchParams]);
+
+  const seriesCount = visibleRows.filter((r) => r.provenance === "series").length;
+  const totalOi = visibleRows.reduce((n, r) => n + r.oi, 0);
+
+  // Graceful surface state (BUG-2 fix). Once the chain yields assets we render
+  // and STAY rendered — a wallet-connect refetch or a timed-out scan keeps the
+  // prior rows (useUnifiedChain) so the surface never blanks. We only show the
+  // spinner while genuinely first-loading, and a resolved empty/error state
+  // otherwise (never an indefinite "Loading…").
+  const hasAssets = chainAssets.length > 0;
+
+  // Cheap FE mark for the focused contract — the order-book "vault peg" level
+  // (display only; the precise American number is the inspector's on-chain RFQ).
   const focusedMark = useMemo(() => {
     if (!focused || !td.spot || td.spot <= 0) return null;
     const d = Math.max(0, (focused.expiry - Date.now() / 1000) / 86_400);
@@ -139,219 +224,155 @@ export const TradePageV2: FC = () => {
       : calculatePutPremium(td.spot, focused.strike, d, vol, 0, undefined, focused.asset);
   }, [focused, td.spot]);
 
-  // Filter the unified chain to the selected asset + expiry (match by UTC day).
-  const day = (ts: number) => Math.floor(ts / 86_400);
-  const visibleRows = useMemo(
-    () =>
-      chain.rows.filter(
-        (r) => r.asset === td.selectedAsset && day(r.expiry) === day(td.selectedExpiry),
-      ),
-    [chain.rows, td.selectedAsset, td.selectedExpiry],
-  );
-
-  // Invalidate a stale focus when the asset/expiry selection changes — otherwise
-  // the CHART (symbol + candles), ticket, ladder, and open-orders keep rendering
-  // the PRIOR asset's contract (CHART has no chain row to re-click). Clearing to
-  // null lets the default-focus effect below auto-repoint to the new selection's
-  // series row. Covers both asset-switch and expiry-switch staleness.
-  useEffect(() => {
-    if (focused && (focused.asset !== td.selectedAsset || day(focused.expiry) !== day(td.selectedExpiry))) {
-      setFocused(null);
+  const focusMint = (mint: string) => {
+    const r = chain.rows.find((x) => x.optionMint === mint);
+    if (r) {
+      setFocused(r);
+      if (r.asset !== td.selectedAsset) td.setSelectedAsset(r.asset);
     }
-  }, [focused, td.selectedAsset, td.selectedExpiry]);
+  };
 
-  // Pro default focus → prefer a SERIES row (book-backed), else fall back
-  // epoch → legacy → first row, so assets with only legacy/epoch inventory
-  // (e.g. BTC, no series yet) still auto-focus a contract instead of leaving
-  // the ticket/chart empty.
-  useEffect(() => {
-    if (focused || persona !== "pro" || !visibleRows.length) return;
-    const pick =
-      visibleRows.find((r) => r.provenance === "series") ??
-      visibleRows.find((r) => r.provenance === "epoch") ??
-      visibleRows[0];
-    if (pick) setFocused(pick);
-  }, [visibleRows, persona, focused]);
-
-  const seriesCount = visibleRows.filter((r) => r.provenance === "series").length;
-  const totalOi = visibleRows.reduce((n, r) => n + r.oi, 0);
-
-  const loading = td.loading || chain.loading;
+  const refetchAll = () => { chain.refetch(); td.refetch(); };
 
   return (
-    <div className="relative bg-paper text-ink overflow-x-hidden min-h-screen">
-      <PaperGrain />
-      <AppNav />
-      <main className="mx-auto w-full max-w-[1280px] px-[clamp(20px,4vw,56px)] pt-[120px] pb-[clamp(40px,8vh,80px)]">
-        <TradeStatementHeader
-          monthLabel={monthLabel}
-          timestampLabel={timestampLabel}
-          assets={td.availableAssets}
-          selectedAsset={td.selectedAsset}
-          onAssetChange={td.setSelectedAsset}
-          assetSelector={
-            <AssetDropdown
-              assets={td.availableAssets}
-              selected={td.selectedAsset}
-              onChange={td.setSelectedAsset}
-            />
-          }
-        />
+    <div className="flex h-screen flex-col overflow-hidden bg-l-bg font-sans text-l-text">
+      <TerminalAppBar mode={mode} onToggleMode={toggle} />
 
-        {/* Persona toggle — Pro | Simple (sticky, T1) */}
-        <div className="flex items-center justify-between gap-4 my-6 flex-wrap">
-          <div className="flex items-center gap-px bg-rule border border-rule rounded-md w-fit overflow-hidden">
-            {(["pro", "simple"] as Persona[]).map((p) => (
-              <button
-                key={p}
-                type="button"
-                onClick={() => setPersona(p)}
-                className={`font-mono text-[11px] uppercase tracking-[0.2em] px-6 py-2 transition-colors ${
-                  persona === p ? "bg-ink text-paper" : "bg-paper text-ink-muted hover:text-ink"
-                }`}
-              >
-                {p}
-              </button>
-            ))}
-          </div>
+      {/* Context strip */}
+      <div className="flex h-[46px] flex-none items-center gap-4 border-b border-l-hair px-5">
+        <AssetDropdown assets={chainAssets} selected={td.selectedAsset} onChange={td.setSelectedAsset} />
+        <span className="font-mono-plex text-[15px] tabular-nums text-l-text">
+          {td.spot != null ? `$${td.spot.toFixed(td.spot < 100 ? 4 : 2)}` : "—"}
+        </span>
+        {td.stale && <span className="font-mono-plex text-[9px] uppercase tracking-[0.12em] text-l-faint">stale</span>}
+        <span className="ml-3 font-mono-plex text-[11px] tabular-nums text-l-muted">
+          {td.selectedExpiry ? countdown(td.selectedExpiry) : ""}
+        </span>
 
-          {/* GRID | CHART sub-toggle lives inside Pro only */}
+        <div className="ml-auto flex items-center gap-2">
+          <Toggle options={[["pro", "Pro"], ["simple", "Simple"]]} value={persona} onChange={(v) => setPersona(v as Persona)} />
           {persona === "pro" && (
-            <div className="flex items-center gap-px bg-rule border border-rule rounded-md w-fit overflow-hidden">
-              {(["grid", "chart"] as View[]).map((v) => (
-                <button
-                  key={v}
-                  type="button"
-                  onClick={() => setView(v)}
-                  className={`font-mono text-[11px] uppercase tracking-[0.2em] px-5 py-2 transition-colors ${
-                    view === v ? "bg-ink text-paper" : "bg-paper text-ink-muted hover:text-ink"
-                  }`}
-                >
-                  {v}
-                </button>
-              ))}
-            </div>
+            <Toggle options={[["grid", "Grid"], ["chart", "Chart"]]} value={view} onChange={(v) => setView(v as View)} />
           )}
         </div>
+      </div>
 
-        {loading ? (
-          <div className="border border-rule rounded-md p-12 text-center">
-            <p className="font-sans italic font-medium leading-[1.55] text-ink-body text-[15px] m-0">
-              Loading from devnet…
-            </p>
-          </div>
-        ) : td.availableAssets.length === 0 ? (
-          <div className="border border-rule rounded-md p-12 text-center">
-            <p className="font-sans italic font-medium leading-[1.55] text-ink-body text-[15px] m-0">
-              No active markets — visit Markets to create one.
-            </p>
-          </div>
-        ) : persona === "simple" ? (
-          <Suspense fallback={<ChartFallback />}>
-            <SimpleTradePanel
-              asset={td.selectedAsset}
-              spot={td.spot}
-              rows={chain.rows.filter((r) => r.asset === td.selectedAsset)}
-              expiries={td.availableExpiries}
-              selectedExpiry={td.selectedExpiry}
-              setSelectedExpiry={td.setSelectedExpiry}
-              onDone={() => { chain.refetch(); td.refetch(); }}
-            />
-          </Suspense>
-        ) : (
-          <>
-            <ExpiryTabs
-              expiries={td.availableExpiries}
-              selected={td.selectedExpiry}
-              onSelect={td.setSelectedExpiry}
-            />
+      {/* Expiry tabs (Pro) */}
+      {persona === "pro" && (
+        <div className="flex-none border-b border-l-hair px-5 py-[9px]">
+          <ExpiryTabs expiries={chainExpiries} selected={td.selectedExpiry} onSelect={td.setSelectedExpiry} />
+        </div>
+      )}
 
-            {view === "grid" ? (
-              <div className={focused ? "grid lg:grid-cols-[1fr_360px] gap-8 items-start" : ""}>
+      {/* Main area — graceful: spinner only while first-loading; once we have
+          assets we stay rendered (wallet-connect refetch never blanks); a
+          resolved empty/error state instead of an indefinite spinner. */}
+      {!hasAssets && chain.loading ? (
+        <div className="flex flex-1 items-center justify-center">
+          <p className="font-mono-plex text-[12px] uppercase tracking-[0.14em] text-l-muted">Loading from devnet…</p>
+        </div>
+      ) : !hasAssets ? (
+        <div className="flex flex-1 flex-col items-center justify-center gap-3">
+          <p className="font-mono-plex text-[12px] text-l-muted">
+            {chain.error ? "Couldn't reach devnet — the public RPC may be rate-limited." : "No active markets — visit Markets to create one."}
+          </p>
+          {chain.error && (
+            <button
+              type="button"
+              onClick={refetchAll}
+              className="rounded-[6px] border border-l-hair px-[13px] py-[6px] font-mono-plex text-[11px] uppercase tracking-[0.12em] text-l-text transition-colors hover:bg-l-surface"
+            >
+              Retry
+            </button>
+          )}
+        </div>
+      ) : persona === "simple" ? (
+        <div className="flex flex-1 flex-col overflow-hidden">
+          <div className="grid flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[1fr_420px]">
+            <div className="hidden min-h-0 overflow-hidden border-r border-l-hair lg:block">
+              <Suspense fallback={<ChartFallback />}>
+                <PriceChart row={focused} spot={td.spot} />
+              </Suspense>
+            </div>
+            <div className="overflow-auto p-5">
+              <Suspense fallback={<ChartFallback />}>
+                <SimpleTradePanel
+                  asset={td.selectedAsset}
+                  spot={td.spot}
+                  rows={chain.rows.filter((r) => r.asset === td.selectedAsset)}
+                  expiries={chainExpiries}
+                  selectedExpiry={td.selectedExpiry}
+                  setSelectedExpiry={td.setSelectedExpiry}
+                  onDone={refetchAll}
+                />
+              </Suspense>
+            </div>
+          </div>
+          <div className="flex-none border-t border-l-hair px-5 py-[7px] font-mono-plex text-[11px] tabular-nums text-l-muted">
+            {td.selectedAsset} {td.spot != null ? `$${td.spot.toFixed(2)}` : "—"} · Expiry {td.selectedExpiry ? countdown(td.selectedExpiry) : "—"}
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="flex flex-1 overflow-hidden">
+            {/* Left: chain or chart. Below 1280px the book+tape stack under it. */}
+            <div className="min-w-0 flex-1 overflow-auto p-4">
+              {view === "grid" ? (
                 <TradeChainV2
                   rows={visibleRows}
                   spot={td.spot}
                   atmStrike={td.atmStrike}
                   focused={focused}
                   onSelect={setFocused}
-                  onShowDetails={setDetailTarget}
                 />
-                {focused && (
-                  <div className="lg:sticky lg:top-[120px] space-y-6">
-                    <OrderTicket
-                      row={focused}
-                      spot={td.spot}
-                      onDone={() => { chain.refetch(); td.refetch(); }}
-                      onLegacyBuy={onLegacyBuy}
-                    />
-                    <div className="border border-rule rounded-md p-5 bg-paper">
-                      <OpenOrders optionMint={focused.optionMint} />
-                    </div>
-                  </div>
-                )}
-              </div>
-            ) : focused ? (
-              <>
-                {/* Aligned band: chart (left, fills) + ticket (right, drives height).
-                    items-stretch makes both columns equal-height → tops & bottoms flush. */}
-                <div className="grid lg:grid-cols-[1fr_360px] gap-8 items-stretch">
+              ) : (
+                <div className="h-full min-h-0">
                   <Suspense fallback={<ChartFallback />}>
                     <PriceChart row={focused} spot={td.spot} />
                   </Suspense>
-                  <OrderTicket
-                    row={focused}
-                    spot={td.spot}
-                    onDone={() => { chain.refetch(); td.refetch(); }}
-                    onLegacyBuy={onLegacyBuy}
-                  />
                 </div>
-                {/* Order book sits BELOW the band, under the left column. */}
-                <div className="border border-rule rounded-md p-5 mt-6 lg:mr-[392px]">
-                  <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-ink-muted mb-3">Order book</div>
-                  <OrderBookLadder optionMint={focused.optionMint} pegPrice={focusedMark} />
+              )}
+              {focused && (
+                <div className="mt-6 xl:hidden">
+                  <BookAndTape optionMint={focused.optionMint} pegPrice={focusedMark} isSeries={focused.provenance === "series"} />
                 </div>
-                <div className="border border-rule rounded-md p-5 mt-6 lg:mr-[392px]">
-                  <OpenOrders optionMint={focused.optionMint} />
-                </div>
-              </>
-            ) : (
-              <Suspense fallback={<ChartFallback />}>
-                <PriceChart row={null} spot={td.spot} />
-              </Suspense>
+              )}
+            </div>
+
+            {/* Middle: order book + tape — its own column on ≥1280px only. */}
+            {focused && (
+              <div className="hidden w-[264px] flex-none overflow-auto border-l border-l-hair p-4 xl:block">
+                <BookAndTape optionMint={focused.optionMint} pegPrice={focusedMark} isSeries={focused.provenance === "series"} />
+              </div>
             )}
 
-            {/* Minimal summary band (reused hairline rhythm). */}
-            <div className="grid grid-cols-3 gap-px bg-rule border-y border-rule mt-12">
-              {[
-                { label: "Total OI", value: totalOi > 0 ? totalOi.toLocaleString() : "—", sub: "Contracts · this expiry" },
-                { label: "Series", value: seriesCount > 0 ? String(seriesCount) : "—", sub: "Book-backed contracts" },
-                { label: "Focused", value: focused ? `$${focused.strike} ${focused.optionType}` : "—", sub: focused ? focused.provenance : "Select a contract" },
-              ].map((c, i) => (
-                <div key={i} className="bg-paper p-6 md:p-7">
-                  <div className="font-mono font-medium text-[11px] uppercase tracking-[0.2em] text-ink-muted mb-5">{c.label}</div>
-                  <div className="font-mono font-normal text-[clamp(20px,2.2vw,28px)] leading-[0.95] text-ink mb-3">{c.value}</div>
-                  <div className="font-mono font-medium text-[10.5px] uppercase tracking-[0.18em] text-ink-muted">{c.sub}</div>
+            {/* Right: docked inspector rail (no book/tape — those are the middle column). */}
+            <div className="w-[360px] flex-none overflow-auto border-l border-l-hair p-4">
+              {focused ? (
+                <ContractInspector
+                  mode="docked"
+                  row={focused}
+                  spot={td.spot}
+                  onDone={refetchAll}
+                  onLegacyBuy={onLegacyBuy}
+                />
+              ) : (
+                <div className="flex h-full items-center justify-center px-6 text-center">
+                  <p className="font-mono-plex text-[11px] text-l-muted">Select a contract to trade.</p>
                 </div>
-              ))}
+              )}
             </div>
-          </>
-        )}
+          </div>
 
-        <TradeFooter />
-      </main>
+          {/* Bottom dock */}
+          <TradeDock onFocusMint={focusMint} />
 
-      {detailTarget && (
-        <Suspense fallback={null}>
-          <ContractDetailModal
-            call={detailTarget.call}
-            put={detailTarget.put}
-            initialSide={detailTarget.side}
-            spot={td.spot}
-            onClose={() => setDetailTarget(null)}
-            onDone={() => { chain.refetch(); td.refetch(); }}
-            onLegacyBuy={onLegacyBuy}
-          />
-        </Suspense>
+          {/* Footer summary line */}
+          <div className="flex-none border-t border-l-hair px-5 py-[7px] font-mono-plex text-[11px] tabular-nums text-l-muted">
+            Total OI {totalOi > 0 ? totalOi.toLocaleString() : "—"} · {seriesCount} series book-backed
+            {focused && <> · Focus {focused.asset} {focused.strike}{focused.optionType === "call" ? "C" : "P"}</>}
+          </div>
+        </>
       )}
 
       {buyTarget && (
@@ -367,11 +388,35 @@ export const TradePageV2: FC = () => {
           offerings={buyTarget.offerings}
           initialSelected={buyTarget.initialSelected}
           onClose={() => setBuyTarget(null)}
-          onSuccess={() => { chain.refetch(); td.refetch(); }}
+          onSuccess={refetchAll}
         />
       )}
     </div>
   );
 };
+
+const Toggle: FC<{ options: [string, string][]; value: string; onChange: (v: string) => void }> = ({ options, value, onChange }) => (
+  <div className="flex gap-px overflow-hidden rounded-[6px] border border-l-hair bg-l-hair">
+    {options.map(([v, label]) => (
+      <button key={v} type="button" onClick={() => onChange(v)}
+        className={`px-[13px] py-[5px] font-sans text-[12px] font-medium transition-colors ${
+          value === v ? "bg-l-surface-2 text-l-text" : "bg-l-surface text-l-muted hover:text-l-text"
+        }`}>
+        {label}
+      </button>
+    ))}
+  </div>
+);
+
+function countdown(expiryTs: number): string {
+  const now = Date.now() / 1000;
+  const diff = expiryTs - now;
+  const dateStr = new Date(expiryTs * 1000).toLocaleDateString("en-GB", { day: "2-digit", month: "short" }).toUpperCase();
+  if (diff <= 0) return `${dateStr} · EXPIRED`;
+  const d = Math.floor(diff / 86400);
+  const h = Math.floor((diff % 86400) / 3600);
+  const m = Math.floor((diff % 3600) / 60);
+  return d > 0 ? `${dateStr} · ${d}D ${h}H` : `${dateStr} · ${h}H ${m}M`;
+}
 
 export default TradePageV2;

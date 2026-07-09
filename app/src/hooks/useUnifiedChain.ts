@@ -15,6 +15,7 @@ export function useUnifiedChain() {
   const [rows, setRows] = useState<UnifiedChainRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
 
   const refetch = useCallback(async () => {
     if (!program) { setLoading(false); return; }
@@ -22,9 +23,12 @@ export function useUnifiedChain() {
     setError(null);
     try {
       setRows(await fetchUnifiedChain(program.provider.connection, program.programId));
+      setLoaded(true);
     } catch (e: any) {
+      // Keep the previously-loaded rows on failure (a wallet-connect refetch or a
+      // rate-limited/timed-out scan must NOT blank an already-rendered chain).
+      // The timeout in coalescedProgramAccounts guarantees this resolves.
       setError(e?.message ?? String(e));
-      setRows([]);
     } finally {
       setLoading(false);
     }
@@ -32,5 +36,5 @@ export function useUnifiedChain() {
 
   useEffect(() => { void refetch(); }, [refetch]);
 
-  return { rows, loading, error, refetch };
+  return { rows, loading, error, loaded, refetch };
 }

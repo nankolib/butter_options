@@ -13,6 +13,7 @@ import {
   getDefaultVolatility,
 } from "../../utils/blackScholes";
 import { hexFromBytes, usdcToNumber } from "../../utils/format";
+import { canonicalAsset } from "../../utils/assetDisplay";
 
 export type ChainBest = {
   vaultMint: { publicKey: PublicKey; account: any };
@@ -214,15 +215,20 @@ export function useTradeData(): UseTradeData {
     for (const v of vaults) {
       if (v.account.isSettled) continue;
       const mkt = markets.find((m) => m.publicKey.equals(v.account.market as PublicKey));
-      if (mkt) names.add(mkt.account.assetName as string);
+      const asset = mkt ? canonicalAsset(mkt.account.assetName) : null;
+      if (asset) names.add(asset);
     }
     return Array.from(names).sort();
   }, [vaults, markets]);
 
-  // Auto-select first asset when the list materialises and the current
-  // selection is gone.
+  // Auto-select ONLY when nothing is selected yet. Previously this reset the
+  // selection to availableAssets[0] whenever the current asset wasn't in THIS
+  // hook's (strict, sometimes partially-loaded) list — which fought the Trade
+  // shell's chain-sourced selection and could bounce a valid asset (e.g. SOL)
+  // back to an alphabetical default. The shell owns the default now; this only
+  // seeds V1 / an unset state.
   useEffect(() => {
-    if (availableAssets.length > 0 && !availableAssets.includes(selectedAsset)) {
+    if (availableAssets.length > 0 && !selectedAsset) {
       setSelectedAsset(availableAssets[0]);
     }
   }, [availableAssets, selectedAsset]);
@@ -235,7 +241,7 @@ export function useTradeData(): UseTradeData {
     for (const v of vaults) {
       if (v.account.isSettled) continue;
       const mkt = markets.find((m) => m.publicKey.equals(v.account.market as PublicKey));
-      if (!mkt || mkt.account.assetName !== selectedAsset) continue;
+      if (!mkt || canonicalAsset(mkt.account.assetName) !== selectedAsset) continue;
       const t =
         typeof v.account.expiry === "number" ? v.account.expiry : v.account.expiry.toNumber();
       // Exclude PAST expiries — a non-settled-but-expired vault must not become the
@@ -247,8 +253,11 @@ export function useTradeData(): UseTradeData {
     return Array.from(dayMap.values()).sort((a, b) => a - b);
   }, [vaults, markets, selectedAsset]);
 
+  // Seed the expiry only when unset (the shell drives expiry from the unified
+  // chain, so don't bounce a shell-selected expiry that isn't in this hook's
+  // possibly-partial list).
   useEffect(() => {
-    if (availableExpiries.length > 0 && !availableExpiries.includes(selectedExpiry)) {
+    if (availableExpiries.length > 0 && !selectedExpiry) {
       setSelectedExpiry(availableExpiries[0]);
     }
   }, [availableExpiries, selectedExpiry]);
@@ -293,7 +302,7 @@ export function useTradeData(): UseTradeData {
         m.publicKey.equals(v.account.market as PublicKey),
       );
       if (!market) continue;
-      const ticker = market.account.assetName as string;
+      const ticker = canonicalAsset(market.account.assetName);
       if (!ticker || seen.has(ticker)) continue;
       seen.add(ticker);
       out.push({
@@ -370,7 +379,7 @@ export function useTradeData(): UseTradeData {
         const parentMkt = markets.find((m) =>
           m.publicKey.equals(parentVault.account.market as PublicKey),
         );
-        if (!parentMkt || parentMkt.account.assetName !== selectedAsset) continue;
+        if (!parentMkt || canonicalAsset(parentMkt.account.assetName) !== selectedAsset) continue;
 
         const vIsCall = "call" in parentVault.account.optionType;
         // ExerciseStyle Anchor enum: { european:{} } | { american:{} }. Same
@@ -527,7 +536,7 @@ export function useTradeData(): UseTradeData {
       const parentMkt = markets.find((m) =>
         m.publicKey.equals(parentVault.account.market as PublicKey),
       );
-      if (!parentMkt || parentMkt.account.assetName !== selectedAsset) continue;
+      if (!parentMkt || canonicalAsset(parentMkt.account.assetName) !== selectedAsset) continue;
       const minted = vm.account.quantityMinted?.toNumber?.() ?? 0;
       if ("call" in parentVault.account.optionType) totalCallOi += minted;
       else totalPutOi += minted;

@@ -17,8 +17,9 @@
 // =============================================================================
 
 import { Connection, PublicKey } from "@solana/web3.js";
-import { utils } from "@coral-xyz/anchor";
 import { Buffer } from "buffer";
+import { coalescedProgramAccounts } from "./programAccounts";
+import { canonicalAsset } from "./assetDisplay";
 
 // ---- Discriminators (first 8 bytes of sha256("account:<Name>")) -------------
 const DISC = {
@@ -37,10 +38,11 @@ async function getByDisc(
   programId: PublicKey,
   disc: readonly number[],
 ): Promise<{ pubkey: PublicKey; data: Buffer }[]> {
-  const raw = await connection.getProgramAccounts(programId, {
-    commitment: "confirmed",
-    filters: [{ memcmp: { offset: 0, bytes: utils.bytes.bs58.encode(Buffer.from(disc)) } }],
-  });
+  // Coalesced + timeout-bounded (see programAccounts.ts) — the Trade page scans
+  // sharedVault / vaultMint / optionsMarket / restingOrder here AND via
+  // safeFetchAll concurrently; sharing one in-flight request per discriminator
+  // halves the mount burst that rate-limits public devnet.
+  const raw = await coalescedProgramAccounts(connection, programId, disc);
   return raw.map((r) => ({ pubkey: r.pubkey, data: Buffer.from(r.account.data) }));
 }
 
@@ -239,16 +241,20 @@ export async function fetchUnifiedChain(connection: Connection, programId: Publi
   for (const a of vaultAccts) {
     const v = parseSharedVault(a.pubkey, a.data);
     if (!v) continue;
+    // Canonical display symbol (hides Switchboard "SB…" seeds + raw "…SPOT" feeds
+    // at the data layer, so provenance never reaches ANY surface). null = drop.
+    const asset = canonicalAsset(assetMap.get(v.market));
+    if (!asset) continue;
     const ser = seriesByVault.get(v.pubkey);
     const side = ser ? book.get(ser.optionMint) : undefined;
     const bestBid = side && side.bids.length ? side.bids[0].price : null;
     const bestAsk = side && side.asks.length ? side.asks[0].price : null;
     rows.push({
-      key: `${assetMap.get(v.market) ?? "?"}|${v.strike}|${v.expiry}|${v.optionType}`,
+      key: `${asset}|${v.strike}|${v.expiry}|${v.optionType}`,
       // series = canonical book/peg mint; epoch/custom per-writer vaults both
       // trade the classic path (routing keys on "series" only) — label-only split.
       provenance: ser ? "series" : v.vaultType === "epoch" ? "epoch" : "legacy",
-      asset: assetMap.get(v.market) ?? "?",
+      asset,
       strike: v.strike,
       expiry: v.expiry,
       optionType: v.optionType,

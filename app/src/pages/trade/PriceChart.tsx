@@ -6,21 +6,49 @@ import { calculateCallPremium, calculatePutPremium, getDefaultVolatility, applyV
 import { TradingViewWidget, tvSymbol } from "./TradingViewWidget";
 import type { UnifiedChainRow } from "../../hooks/useUnifiedChain";
 
+// ============================================================================
+// ⛔ DO NOT swap the UNDERLYING chart to lightweight-charts / a client-side OHLC
+//    API (CoinGecko et al.). This decision has now been made TWICE — the first
+//    revert is documented in git history; the second was a design-lock ruling by
+//    the founder on 2026-07-09 after an agent re-litigated it during a "reskin".
+//
+//    UNDERLYING = TradingView Advanced Real-Time Chart embed. Non-negotiable:
+//      1. COVERAGE  — TradingView charts EVERY Opta asset class (equities,
+//         commodities, FX, crypto) from real exchange feeds via tvSymbol().
+//         A crypto-only OHLC API leaves AAPL / XAU / TSLA / … permanently blank.
+//      2. RELIABILITY — lightweight-charts "failed to render reliably on this
+//         terminal layout" (the prior revert's own words). TradingView is the
+//         validated choice for this layout.
+//      3. RATE LIMITS — a free client-side OHLC API 429s on a shared preview /
+//         prod domain. Unacceptable for a live trading surface.
+//
+//    CONTRACT = the real on-chain OrderFilled tape (fetchContractFills), rendered
+//    as a fills table. NEVER synthesize candles from spot or a model.
+//
+//    If a task says "reskin the chart," reskin the CHROME (header, toggles, tape)
+//    — do NOT re-architect the data source or the rendering engine.
+// ============================================================================
+
 /**
- * PriceChart — Pro chart pane (Pass 12 pivot).
- *
- * lightweight-charts failed to render reliably on this terminal layout across
- * three fixes (zero-height under the Pass-8 grid). We pivot to the proven
- * TradingView widget (the same one Simple uses) for the UNDERLYING chart, and
- * DEFER the contract candle chart (sparse on devnet) to a "recent trades" readout
- * from the OrderFilled tape. No lightweight-charts here anymore.
- *
- *   UNDERLYING → TradingView Advanced Real-Time Chart + strike/BE/spot text.
- *   CONTRACT   → recent-fills list + current mark + strike/BE (no candle chart).
+ * PriceChart — Trade terminal chart pane (terminal redesign, design lock
+ * 2026-07-09). Terminal-skinned chrome (`-l-` tokens, mono-plex, hairlines) over:
+ *   UNDERLYING → theme-aware TradingView embed (all asset classes, real feeds).
+ *   CONTRACT   → on-chain OrderFilled fills tape (honest-empty when unsettled).
  */
 const MODE_KEY = "opta.trade.chart.mode";
 type Mode = "underlying" | "contract";
-const fmt = (n: number) => `$${n.toFixed(n < 100 ? 4 : 2)}`;
+
+const fmt = (n: number) => {
+  let s = n.toFixed(Math.abs(n) < 100 ? 4 : 2);
+  if (/^-0(?:\.0+)?$/.test(s)) s = s.slice(1); // never negative-zero
+  return `$${s}`;
+};
+
+/** Current app surface mode (data-mode on <html>); defaults dark for /trade. */
+function readMode(): "light" | "dark" {
+  if (typeof document === "undefined") return "dark";
+  return document.documentElement.getAttribute("data-mode") === "light" ? "light" : "dark";
+}
 
 export const PriceChart: FC<{ row: UnifiedChainRow | null; spot: number | null }> = ({ row, spot }) => {
   const { program } = useProgram();
@@ -28,6 +56,14 @@ export const PriceChart: FC<{ row: UnifiedChainRow | null; spot: number | null }
     (typeof localStorage !== "undefined" && localStorage.getItem(MODE_KEY) === "contract") ? "contract" : "underlying",
   );
   useEffect(() => { try { localStorage.setItem(MODE_KEY, mode); } catch { /* ignore */ } }, [mode]);
+
+  // Theme-follow: the TradingView embed re-injects when data-mode flips.
+  const [theme, setTheme] = useState<"light" | "dark">(readMode);
+  useEffect(() => {
+    const obs = new MutationObserver(() => setTheme(readMode()));
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ["data-mode"] });
+    return () => obs.disconnect();
+  }, []);
 
   const [fills, setFills] = useState<ContractFill[]>([]);
   const [fillsLoading, setFillsLoading] = useState(false);
@@ -44,7 +80,7 @@ export const PriceChart: FC<{ row: UnifiedChainRow | null; spot: number | null }
     return { mark: m, breakeven: row.optionType === "call" ? row.strike + m : row.strike - m };
   }, [row?.strike, row?.optionType, row?.expiry, row?.asset, spot]);
 
-  // Load the contract tape only in CONTRACT mode.
+  // Contract fills tape (CONTRACT mode only).
   useEffect(() => {
     let live = true;
     if (mode !== "contract" || !row?.optionMint || !program) { setFills([]); return; }
@@ -58,73 +94,89 @@ export const PriceChart: FC<{ row: UnifiedChainRow | null; spot: number | null }
 
   if (!row) {
     return (
-      <div className="border border-rule rounded-md p-16 text-center my-2">
-        <p className="font-fraunces-text italic font-light text-ink text-[20px] m-0">Select a contract</p>
-        <p className="font-mono text-[10.5px] uppercase tracking-[0.2em] text-ink-muted mt-2 m-0">click a strike in GRID to chart it</p>
+      <div className="flex h-full min-h-0 flex-col items-center justify-center rounded-[10px] border border-l-hair bg-l-bg p-16 text-center">
+        <p className="m-0 font-mono-plex text-[13px] text-l-text">Select a contract</p>
+        <p className="m-0 mt-2 font-mono-plex text-[10px] uppercase tracking-[0.2em] text-l-muted">click a strike in the grid to chart it</p>
       </div>
     );
   }
 
-  const readout = (
-    <span className="font-mono text-[10.5px] text-ink-muted">
-      strike <span className="text-ink">${row.strike}</span>
-      {breakeven != null && <> · BE <span className="text-ink">{fmt(breakeven)}</span></>}
-      {spot != null && <> · spot <span className="text-ink">{fmt(spot)}</span></>}
-    </span>
-  );
-
   return (
-    // Fills the (stretched) grid cell so the chart window grows to the band height
-    // (= the ticket panel's height). header (fixed) + chart window (flex-1).
-    <div className="flex flex-col h-full min-h-0">
-      <div className="flex items-center justify-between mb-3 gap-3 flex-wrap shrink-0">
-        <div className="font-mono text-[11px] uppercase tracking-[0.2em] text-ink-muted">
-          {row.asset} ${row.strike} {row.optionType}
+    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-[10px] border border-l-hair bg-l-bg text-l-text">
+      {/* Header */}
+      <div className="flex flex-none flex-wrap items-center gap-x-4 gap-y-2 border-b border-l-hair px-4 py-[10px]">
+        <div className="flex items-center gap-[7px]">
+          <span
+            className="h-[6px] w-[6px] flex-none rounded-full"
+            style={{ background: row.optionType === "call" ? "var(--color-l-up)" : "var(--color-l-down)" }}
+          />
+          <span className="font-mono-plex text-[11px] uppercase tracking-[0.14em] text-l-text">
+            {row.asset} ${row.strike} {row.optionType}
+          </span>
         </div>
-        <div className="flex items-center gap-3">
-          {readout}
-          <div className="flex gap-px bg-rule border border-rule rounded-md overflow-hidden">
-            {(["underlying", "contract"] as Mode[]).map((m) => (
-              <button key={m} type="button" onClick={() => setMode(m)}
-                className={`font-mono text-[10px] uppercase tracking-[0.18em] px-4 py-2 transition-colors ${
-                  mode === m ? "bg-ink text-paper" : "bg-paper text-ink-muted hover:text-ink"
-                }`}>
-                {m}
-              </button>
-            ))}
-          </div>
+
+        {/* Underlying | Contract toggle */}
+        <div className="flex gap-[2px]">
+          {(["underlying", "contract"] as Mode[]).map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setMode(m)}
+              className={`rounded-[6px] border px-[10px] py-[4px] font-mono-plex text-[10px] uppercase tracking-[0.14em] transition-colors ${
+                mode === m ? "border-l-text bg-l-surface text-l-text" : "border-l-hair text-l-muted hover:text-l-text"
+              }`}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+
+        <div className="ml-auto flex items-center gap-4">
+          {mode === "contract" && (
+            <span className="font-mono-plex text-[11px] tabular-nums text-l-muted">
+              mark <span className="text-l-text">{mark != null ? fmt(mark) : "—"}</span>
+            </span>
+          )}
+          <span className="font-mono-plex text-[10.5px] tabular-nums text-l-muted">
+            strike <span className="text-l-text">${row.strike}</span>
+            {breakeven != null && <> · BE <span className="text-l-text">{fmt(breakeven)}</span></>}
+            {spot != null && <> · spot <span className="text-l-text">{fmt(spot)}</span></>}
+          </span>
         </div>
       </div>
 
+      {/* Body */}
       {mode === "underlying" ? (
-        <div className="flex-1 min-h-0">
-          <TradingViewWidget symbol={tvSymbol(row.asset)} height="100%" minHeight={420} />
+        // Underlying real-time chart — all asset classes, real exchange feeds.
+        // Re-keyed on theme so the embed re-themes with the surface mode.
+        <div className="relative flex-1 min-h-0 p-3" style={{ minHeight: 340 }}>
+          <TradingViewWidget key={theme} symbol={tvSymbol(row.asset)} theme={theme} height="100%" minHeight={320} />
         </div>
       ) : (
-        <div className="flex-1 min-h-0 overflow-auto border border-rule rounded-md p-5" style={{ minHeight: 420 }}>
-          <div className="flex items-baseline justify-between mb-3">
-            <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-ink-muted">Recent trades</div>
-            <div className="font-mono text-[11px] text-ink-muted">mark <span className="text-ink">{mark != null ? fmt(mark) : "—"}</span></div>
+        <div className="flex-1 min-h-0 overflow-auto p-4" style={{ minHeight: 340 }}>
+          <div className="mb-3 flex items-baseline justify-between">
+            <span className="font-mono-plex text-[9px] uppercase tracking-[0.2em] text-l-muted">Recent trades</span>
+            <span className="font-mono-plex text-[10px] text-l-faint">on-chain tape · {fills.length}</span>
           </div>
           {fillsLoading ? (
-            <p className="font-mono text-[11px] text-ink-muted py-6 text-center">Loading tape…</p>
+            <p className="py-6 text-center font-mono-plex text-[11px] text-l-muted">Loading tape…</p>
           ) : fills.length === 0 ? (
-            <p className="font-mono text-[11px] text-ink-muted py-6 text-center">No fills yet — this contract hasn't traded.</p>
+            <p className="py-6 text-center font-mono-plex text-[11px] text-l-muted">No fills yet — this contract hasn't traded.</p>
           ) : (
             <table className="w-full border-collapse">
               <thead>
-                <tr className="border-b border-rule text-ink-muted">
-                  <th className="text-left font-mono text-[9.5px] uppercase tracking-[0.18em] py-2">Price</th>
-                  <th className="text-right font-mono text-[9.5px] uppercase tracking-[0.18em] py-2">Size</th>
-                  <th className="text-right font-mono text-[9.5px] uppercase tracking-[0.18em] py-2">Time (UTC)</th>
+                <tr className="border-b border-l-hair">
+                  <th className="py-2 text-left font-mono-plex text-[9px] uppercase tracking-[0.14em] text-l-muted">Price</th>
+                  <th className="py-2 text-right font-mono-plex text-[9px] uppercase tracking-[0.14em] text-l-muted">Size</th>
+                  <th className="py-2 text-right font-mono-plex text-[9px] uppercase tracking-[0.14em] text-l-muted">Time (UTC)</th>
                 </tr>
               </thead>
               <tbody>
                 {[...fills].reverse().map((f, i) => (
-                  <tr key={i} className="border-b border-rule-soft">
-                    <td className="text-left font-mono text-[12px] text-crimson py-1.5">{fmt(f.price)}</td>
-                    <td className="text-right font-mono text-[12px] text-ink py-1.5">{f.qty}</td>
-                    <td className="text-right font-mono text-[11px] text-ink-muted py-1.5">
+                  <tr key={i} className="border-b border-l-hair">
+                    <td className="py-[6px] text-left font-mono-plex text-[12px] tabular-nums text-l-text">{fmt(f.price)}</td>
+                    <td className="py-[6px] text-right font-mono-plex text-[12px] tabular-nums text-l-text">{f.qty}</td>
+                    <td className="py-[6px] text-right font-mono-plex text-[11px] tabular-nums text-l-muted">
                       {f.time ? new Date(f.time * 1000).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "UTC" }) : "—"}
                     </td>
                   </tr>
@@ -132,11 +184,13 @@ export const PriceChart: FC<{ row: UnifiedChainRow | null; spot: number | null }
               </tbody>
             </table>
           )}
-          <p className="font-mono text-[9.5px] text-ink-muted/70 mt-3">
-            Contract price history — fills shown ({fills.length}). Full candle chart with volume is parked (devnet tape is sparse).
+          <p className="mt-3 font-mono-plex text-[9px] text-l-faint">
+            Contract price history — real on-chain fills only ({fills.length}). Candle history is deferred (devnet tape is sparse).
           </p>
         </div>
       )}
     </div>
   );
 };
+
+export default PriceChart;

@@ -71,7 +71,9 @@ const MarketRowEl: FC<{ row: MarketRow }> = ({ row: r }) => {
   const fullName = ASSET_FULL_NAME[r.asset];
   const isOpen = r.status === "open";
   const rowOpacity = isOpen ? "" : "opacity-70";
-  const tradeHref = `/trade?market=${r.publicKey.toBase58()}&asset=${encodeURIComponent(r.asset)}&strike=${r.strike}&type=${r.side}&expiry=${r.expiry}`;
+  // Canonical deep-link shape (reconciled 2026-07-09): asset·expiry·strike·side.
+  // Trade intake reads exactly these four keys; `side` is call|put (never `type`).
+  const tradeHref = `/trade?asset=${encodeURIComponent(r.asset)}&expiry=${r.expiry}&strike=${r.strike}&side=${r.side}`;
 
   return (
     <tr className={`border-b border-rule-soft align-middle ${rowOpacity}`}>

@@ -1,33 +1,30 @@
 import type { FC, ReactNode } from "react";
-import { useMemo } from "react";
-import { calculateCallPremium, calculatePutPremium, getDefaultVolatility } from "../../utils/blackScholes";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { calculateCallGreeks, calculatePutGreeks, getDefaultVolatility, applyVolSmile } from "../../utils/blackScholes";
 import type { UnifiedChainRow } from "../../hooks/useUnifiedChain";
 
 /**
- * TradeChainV2 — Deribit-style unified chain for the v2 exchange Trade page.
+ * TradeChainV2 — the terminal options chain (design lock 2026-07-09).
  *
- * Calls (left) │ Strike (centre) │ Puts (right). Per side: Bid · Ask · OI · Mark.
- *   - bid/ask/OI come from the Pass-0 unified aggregate (book best bid/ask +
- *     series OI). Legacy per-event rows have no book → "—".
- *   - mark is a CHEAP client-side TS Black-Scholes figure (carry r=0, asset
- *     smile applied) — the precise American number comes from the on-chain
- *     get_option_price view only when a contract is engaged (Pass 2/RFQ).
- *   - provenance (series vs legacy) is shown as a small badge under the strike,
- *     not a separate section (T2).
+ * ONE fixed mirrored template, strike dead-center, identical mirrored widths:
+ *   [IV Δ OI MARK ASK BID] · gutter · [STRIKE] · gutter · [BID ASK MARK OI Δ IV]
+ * The left (calls) and right (puts) columns use symmetric minmax(min,1fr) widths
+ * (each side's widths are the exact reverse of the other) and the two gutter
+ * columns share one fixed width, so the columns BREATHE to fill the pane while
+ * the strike column stays geometrically centered — both asserted by
+ * check-trade-visibility.mjs. The grid fills its container (no max-width /
+ * centering); it only scrolls when narrower than the summed minimums.
  *
- * Selection highlights the focused contract; the ticket (Pass 2) and chart
- * (Pass 3) will read that focused state.
+ * Bid is teal, ask crimson; greeks/IV in --text-2. Cells flash their direction
+ * colour for ~300ms when a price changes. A full-width SPOT marker row sits
+ * between the two strikes that bracket live spot (pinned to the top/bottom edge
+ * when spot is outside the listed range).
+ *
+ * Clicking either side loads that contract into the docked ticket (onSelect).
+ * There is NO ⓘ column and NO details modal on Trade.
  */
 
-/** The focused contract is the full unified row (carries bid/ask/oi/mark). */
 export type FocusedContract = UnifiedChainRow;
-
-/** A strike's both sides + which to open the detail modal on (F). */
-export interface DetailTarget {
-  call: UnifiedChainRow | null;
-  put: UnifiedChainRow | null;
-  side: "call" | "put";
-}
 
 interface GridRow {
   strike: number;
@@ -35,20 +32,42 @@ interface GridRow {
   put: UnifiedChainRow | null;
 }
 
-const fmtPrice = (n: number): string => `$${n.toFixed(n < 100 ? 4 : 2)}`;
+// Symmetric column minimums (px). Right side is the exact reverse; both gutters
+// share GUT so the strike lands dead-center. Data columns are minmax(min,1fr) so
+// they grow to fill the pane; the fr shares are symmetric → strike stays centered.
+const W = { iv: 42, delta: 46, oi: 54, mark: 60, ask: 60, bid: 60 } as const;
+const GUT = 16;
+const STRIKE_W = 88;
+const LEFT = [W.iv, W.delta, W.oi, W.mark, W.ask, W.bid];
+const RIGHT = [W.bid, W.ask, W.mark, W.oi, W.delta, W.iv];
+const col = (m: number) => `minmax(${m}px, 1fr)`;
+const TEMPLATE = [...LEFT.map(col), `${GUT}px`, `${STRIKE_W}px`, `${GUT}px`, ...RIGHT.map(col)].join(" ");
+const MIN_W = LEFT.reduce((a, b) => a + b, 0) * 2 + GUT * 2 + STRIKE_W;
+
+/** $-formatter that never emits negative-zero ("$-0.0000" → "$0.0000"). */
+const fmtPrice = (n: number): string => {
+  const dp = Math.abs(n) < 100 ? 4 : 2;
+  let s = n.toFixed(dp);
+  if (/^-0(?:\.0+)?$/.test(s)) s = s.slice(1); // strip the sign off a rounded -0
+  return `$${s}`;
+};
 const fmtStrike = (n: number): string =>
   n >= 1000 ? n.toLocaleString(undefined, { maximumFractionDigits: 0 }) : String(n);
 
-function mark(row: UnifiedChainRow, spot: number | null): number | null {
-  if (!spot || spot <= 0) return null;
+interface SideMetrics { iv: number | null; delta: number | null; mark: number | null; }
+function metrics(row: UnifiedChainRow, spot: number | null): SideMetrics {
+  if (!spot || spot <= 0) return { iv: null, delta: null, mark: null };
   const days = Math.max(0, (row.expiry - Date.now() / 1000) / 86_400);
-  if (days <= 0) return null;
-  const vol = getDefaultVolatility(row.asset);
-  // carry r=0 (T6 note): for crypto carry=0 CALLs this equals the American premium.
-  return row.optionType === "call"
-    ? calculateCallPremium(spot, row.strike, days, vol, 0, undefined, row.asset)
-    : calculatePutPremium(spot, row.strike, days, vol, 0, undefined, row.asset);
+  if (days <= 0) return { iv: null, delta: null, mark: null };
+  const vol = applyVolSmile(getDefaultVolatility(row.asset), spot, row.strike, row.asset);
+  const g = row.optionType === "call"
+    ? calculateCallGreeks(spot, row.strike, days, vol, 0)
+    : calculatePutGreeks(spot, row.strike, days, vol, 0);
+  return { iv: vol, delta: g.delta, mark: g.premium };
 }
+
+const sameContract = (a: FocusedContract | null, b: UnifiedChainRow | null): boolean =>
+  !!a && !!b && a.vault === b.vault && a.optionType === b.optionType && a.strike === b.strike;
 
 export const TradeChainV2: FC<{
   rows: UnifiedChainRow[];
@@ -56,8 +75,7 @@ export const TradeChainV2: FC<{
   atmStrike: number | null;
   focused: FocusedContract | null;
   onSelect: (c: FocusedContract) => void;
-  onShowDetails: (t: DetailTarget) => void;
-}> = ({ rows, spot, atmStrike, focused, onSelect, onShowDetails }) => {
+}> = ({ rows, spot, atmStrike, focused, onSelect }) => {
   const gridRows = useMemo<GridRow[]>(() => {
     const byStrike = new Map<number, GridRow>();
     for (const r of rows) {
@@ -71,152 +89,209 @@ export const TradeChainV2: FC<{
 
   if (gridRows.length === 0) {
     return (
-      <div className="border border-rule rounded-md p-12 text-center">
-        <p className="font-sans italic font-medium leading-[1.55] text-ink-body text-[15px] m-0">
-          No contracts at this expiry.
-        </p>
+      <div className="rounded-[10px] border border-l-hair p-12 text-center">
+        <p className="font-mono-plex text-[12px] text-l-muted">No contracts at this expiry.</p>
       </div>
     );
   }
 
+  // SPOT marker placement: between the two strikes bracketing live spot; pinned
+  // to the top edge when spot ≤ lowest strike, bottom edge when spot ≥ highest.
+  const strikes = gridRows.map((g) => g.strike);
+  const lo = strikes[0], hi = strikes[strikes.length - 1];
+  const pinTop = spot != null && spot <= lo;
+  const pinBottom = spot != null && spot >= hi;
+  let betweenIdx = -1;
+  if (spot != null && !pinTop && !pinBottom) {
+    for (let i = 0; i < gridRows.length - 1; i++) {
+      if (strikes[i] < spot && spot <= strikes[i + 1]) { betweenIdx = i; break; }
+    }
+  }
+
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full border-collapse">
-        <thead>
-          <tr className="border-b border-rule">
-            <Th align="right">Bid</Th>
-            <Th align="right">Ask</Th>
-            <Th align="right">OI</Th>
-            <Th align="right">Mark</Th>
-            <Th align="center">Strike</Th>
-            <Th align="left">Mark</Th>
-            <Th align="left">OI</Th>
-            <Th align="left">Ask</Th>
-            <Th align="left">Bid</Th>
-          </tr>
-        </thead>
-        <tbody>
-          {gridRows.map((g) => (
-            <GridRowEl
-              key={g.strike}
+    <div data-testid="trade-chain" className="overflow-x-auto">
+      <div className="grid w-full" style={{ gridTemplateColumns: TEMPLATE, minWidth: MIN_W }}>
+        {/* Header */}
+        <HeaderCells labels={["IV", "Δ", "OI", "Mark", "Ask", "Bid"]} align="right" />
+        <div data-testid="chain-gutter" className="h-[30px] border-b border-l-hair" />
+        <div data-testid="chain-strike" className="flex h-[30px] items-center justify-center border-b border-l-hair">
+          <span className="font-mono-plex text-[9px] uppercase tracking-[0.12em] text-l-muted">Strike</span>
+        </div>
+        <div data-testid="chain-gutter" className="h-[30px] border-b border-l-hair" />
+        <HeaderCells labels={["Bid", "Ask", "Mark", "OI", "Δ", "IV"]} align="left" />
+
+        {/* Body */}
+        {pinTop && spot != null && <SpotMarker spot={spot} />}
+        {gridRows.map((g, i) => (
+          <Fragment key={g.strike}>
+            <RowCells
               g={g}
               spot={spot}
               isAtm={atmStrike != null && g.strike === atmStrike}
               focused={focused}
               onSelect={onSelect}
-              onShowDetails={onShowDetails}
             />
-          ))}
-        </tbody>
-      </table>
+            {betweenIdx === i && spot != null && <SpotMarker spot={spot} />}
+          </Fragment>
+        ))}
+        {pinBottom && spot != null && <SpotMarker spot={spot} />}
+      </div>
     </div>
   );
 };
 
-const GridRowEl: FC<{
+/** Full-width hairline row with a centered "● SPOT <price>" pill (flashes on tick). */
+const SpotMarker: FC<{ spot: number }> = ({ spot }) => (
+  <div data-testid="spot-marker" style={{ gridColumn: "1 / -1" }} className="flex items-center justify-center border-b border-l-hair py-[3px]">
+    <span className="inline-flex items-center gap-[6px] rounded-full border border-l-hair bg-l-bg px-[10px] py-[2px]">
+      <span className="h-[5px] w-[5px] rounded-full" style={{ background: "var(--color-l-up)" }} />
+      <span className="font-mono-plex text-[9.5px] uppercase tracking-[0.14em] text-l-muted">Spot</span>
+      <FlashSpan value={spot} />
+    </span>
+  </div>
+);
+
+const HeaderCells: FC<{ labels: string[]; align: "left" | "right" }> = ({ labels, align }) => (
+  <>
+    {labels.map((l, i) => (
+      <div
+        key={i}
+        className={`flex h-[30px] items-center border-b border-l-hair px-2 ${align === "right" ? "justify-end" : "justify-start"}`}
+      >
+        <span className="font-mono-plex text-[9px] uppercase tracking-[0.1em] text-l-muted">{l}</span>
+      </div>
+    ))}
+  </>
+);
+
+const RowCells: FC<{
   g: GridRow;
   spot: number | null;
   isAtm: boolean;
   focused: FocusedContract | null;
   onSelect: (c: FocusedContract) => void;
-  onShowDetails: (t: DetailTarget) => void;
-}> = ({ g, spot, isAtm, focused, onSelect, onShowDetails }) => {
-  const provs = [g.call?.provenance, g.put?.provenance].filter(Boolean) as ("series" | "epoch" | "legacy")[];
-  const badge = provs.includes("series")
-    ? provs.some((p) => p !== "series") ? "SER·MIX" : "SERIES"
-    : provs.includes("epoch")
-      ? "EPOCH"
-      : provs.length ? "LEGACY" : "";
-  // Strike-cell ⤢ opens the detail modal (both sides; Call default if both exist).
-  const hasAny = !!(g.call || g.put);
+}> = ({ g, spot, isAtm, focused, onSelect }) => {
+  const cm = g.call ? metrics(g.call, spot) : null;
+  const pm = g.put ? metrics(g.put, spot) : null;
+  const callFocused = sameContract(focused, g.call);
+  const putFocused = sameContract(focused, g.put);
+
+  const badge = provenanceBadge(g);
+  const rowBg = "border-b border-l-hair";
+  const selCall = g.call ? () => onSelect(g.call!) : undefined;
+  const selPut = g.put ? () => onSelect(g.put!) : undefined;
 
   return (
-    <tr className={`border-t border-b ${isAtm ? "border-rule" : "border-rule-soft"} align-middle`}>
-      <SideCells row={g.call} side="call" spot={spot} focused={focused} onSelect={onSelect} />
+    <>
+      {/* Left side (calls): IV Δ OI MARK ASK BID — right-aligned toward the strike. */}
+      <DataCell align="right" muted focused={callFocused} onClick={selCall}>{cm?.iv != null ? `${(cm.iv * 100).toFixed(0)}%` : "—"}</DataCell>
+      <DataCell align="right" muted focused={callFocused} onClick={selCall}>{cm?.delta != null ? cm.delta.toFixed(2) : "—"}</DataCell>
+      <DataCell align="right" muted focused={callFocused} onClick={selCall}>{g.call && g.call.oi > 0 ? g.call.oi.toLocaleString() : "—"}</DataCell>
+      <FlashCell align="right" value={cm?.mark ?? null} focused={callFocused} onClick={selCall} />
+      <FlashCell align="right" value={g.call?.bestAsk ?? null} tone="down" focused={callFocused} onClick={selCall} />
+      <FlashCell align="right" value={g.call?.bestBid ?? null} tone="up" focused={callFocused} onClick={selCall} />
 
-      <td className="px-2 py-2 sm:px-3 sm:py-4 text-center align-middle">
-        <button
-          type="button"
-          onClick={() => hasAny && onShowDetails({ call: g.call, put: g.put, side: g.call ? "call" : "put" })}
-          title="Contract details"
-          className="group inline-flex items-center gap-1 hover:text-crimson transition-colors"
-        >
-          <span className="font-fraunces-text italic font-light text-ink group-hover:text-crimson text-[18px] leading-tight">
-            ${fmtStrike(g.strike)}
-          </span>
-          <span className="font-mono text-[10px] text-ink-muted group-hover:text-crimson">⤢</span>
-        </button>
+      {/* gutter */}
+      <div className={rowBg} />
+      {/* strike */}
+      <div className={`flex flex-col items-center justify-center ${rowBg} py-2`}>
+        <span className="font-mono-plex text-[13px] tabular-nums text-l-text">{fmtStrike(g.strike)}</span>
         {badge && (
-          <div className={`font-mono text-[8.5px] uppercase tracking-[0.18em] mt-1 ${
-            badge === "LEGACY" ? "text-ink-muted" : badge === "EPOCH" ? "text-ink" : "text-crimson"
-          }`}>
+          <span
+            className="mt-[2px] font-mono-plex text-[8px] uppercase tracking-[0.14em]"
+            style={{ color: badge === "LEGACY" ? "var(--color-l-faint)" : badge === "EPOCH" ? "var(--color-l-muted)" : "var(--color-l-up)" }}
+          >
             {badge}
-          </div>
+          </span>
         )}
         {isAtm && (
-          <div className="font-mono text-[9px] uppercase tracking-[0.2em] text-crimson mt-1">ATM</div>
+          <span className="mt-[1px] font-mono-plex text-[8px] uppercase tracking-[0.16em]" style={{ color: "var(--color-l-up)" }}>ATM</span>
         )}
-      </td>
+      </div>
+      {/* gutter */}
+      <div className={rowBg} />
 
-      <SideCells row={g.put} side="put" spot={spot} focused={focused} onSelect={onSelect} />
-    </tr>
+      {/* Right side (puts): BID ASK MARK OI Δ IV — left-aligned mirror. */}
+      <FlashCell align="left" value={g.put?.bestBid ?? null} tone="up" focused={putFocused} onClick={selPut} />
+      <FlashCell align="left" value={g.put?.bestAsk ?? null} tone="down" focused={putFocused} onClick={selPut} />
+      <FlashCell align="left" value={pm?.mark ?? null} focused={putFocused} onClick={selPut} />
+      <DataCell align="left" muted focused={putFocused} onClick={selPut}>{g.put && g.put.oi > 0 ? g.put.oi.toLocaleString() : "—"}</DataCell>
+      <DataCell align="left" muted focused={putFocused} onClick={selPut}>{pm?.delta != null ? pm.delta.toFixed(2) : "—"}</DataCell>
+      <DataCell align="left" muted focused={putFocused} onClick={selPut}>{pm?.iv != null ? `${(pm.iv * 100).toFixed(0)}%` : "—"}</DataCell>
+    </>
   );
 };
 
-/** Four cells for one side. Order flips so both sides read toward the strike. */
-const SideCells: FC<{
-  row: UnifiedChainRow | null;
-  side: "call" | "put";
-  spot: number | null;
-  focused: FocusedContract | null;
-  onSelect: (c: FocusedContract) => void;
-}> = ({ row, side, spot, focused, onSelect }) => {
-  const align = side === "call" ? "right" : "left";
-  if (!row) {
-    return (
-      <>
-        <Td align={align}>—</Td>
-        <Td align={align}>—</Td>
-        <Td align={align}>—</Td>
-        <Td align={align}>—</Td>
-      </>
-    );
-  }
-  const m = mark(row, spot);
-  const isFocused =
-    focused != null && focused.vault === row.vault && focused.optionType === row.optionType && focused.strike === row.strike;
-  const bid = <Td align={align}>{row.bestBid != null ? <span className="text-ink">{fmtPrice(row.bestBid)}</span> : "—"}</Td>;
-  const ask = <Td align={align}>{row.bestAsk != null ? <span className="text-ink">{fmtPrice(row.bestAsk)}</span> : "—"}</Td>;
-  const oi = <Td align={align}>{row.oi > 0 ? row.oi.toLocaleString() : "—"}</Td>;
-  const markCell = (
-    <td className={`px-2 py-2 sm:px-3 sm:py-3 align-middle ${align === "right" ? "text-right" : "text-left"}`}>
-      <button
-        type="button"
-        onClick={() => onSelect(row)}
-        className={`font-mono text-[13px] leading-tight px-2 py-1 rounded transition-colors ${
-          isFocused ? "bg-crimson/10 text-crimson" : "text-ink-body hover:bg-paper-2"
-        }`}
-      >
-        {m != null ? fmtPrice(m) : "—"}
-      </button>
-    </td>
+function provenanceBadge(g: GridRow): string {
+  const provs = [g.call?.provenance, g.put?.provenance].filter(Boolean) as ("series" | "epoch" | "legacy")[];
+  if (provs.includes("series")) return provs.some((p) => p !== "series") ? "SER·MIX" : "SERIES";
+  if (provs.includes("epoch")) return "EPOCH";
+  return provs.length ? "LEGACY" : "";
+}
+
+const cellBase = "flex h-[31px] items-center border-b border-l-hair px-2 font-mono-plex text-[12.5px] tabular-nums transition-colors";
+
+const DataCell: FC<{ children: ReactNode; align: "left" | "right"; muted?: boolean; focused?: boolean; onClick?: () => void }> = ({
+  children, align, muted, focused, onClick,
+}) => (
+  <div
+    onClick={onClick}
+    className={`${cellBase} ${align === "right" ? "justify-end" : "justify-start"} ${muted ? "text-l-muted" : "text-l-text"} ${
+      focused ? "bg-l-surface" : ""
+    } ${onClick ? "cursor-pointer hover:bg-l-surface" : ""}`}
+  >
+    {children}
+  </div>
+);
+
+/** A numeric cell that flashes its direction color for ~300ms on value change. */
+const FlashCell: FC<{
+  value: number | null;
+  align: "left" | "right";
+  tone?: "up" | "down";
+  focused?: boolean;
+  onClick?: () => void;
+}> = ({ value, align, tone, focused, onClick }) => {
+  const flash = useFlash(value);
+  const baseColor = tone === "up" ? "var(--color-l-up)" : tone === "down" ? "var(--color-l-down)" : undefined;
+  const color = flash ? (flash === "up" ? "var(--color-l-up)" : "var(--color-l-down)") : baseColor;
+  return (
+    <div
+      onClick={onClick}
+      style={{ color }}
+      className={`${cellBase} ${align === "right" ? "justify-end" : "justify-start"} ${color ? "" : "text-l-text"} ${
+        focused ? "bg-l-surface" : ""
+      } ${onClick ? "cursor-pointer hover:bg-l-surface" : ""}`}
+    >
+      {value != null ? fmtPrice(value) : "—"}
+    </div>
   );
-  // Calls read Bid·Ask·OI·Mark toward the strike; puts mirror (Mark·OI·Ask·Bid).
-  return side === "call" ? <>{bid}{ask}{oi}{markCell}</> : <>{markCell}{oi}{ask}{bid}</>;
 };
 
-const Th: FC<{ children: ReactNode; align: "left" | "center" | "right" }> = ({ children, align }) => (
-  <th className={`font-mono font-medium text-[10.5px] uppercase tracking-[0.18em] py-3 px-3 text-ink-muted align-bottom whitespace-nowrap ${
-    align === "right" ? "text-right" : align === "center" ? "text-center" : "text-left"
-  }`}>
-    {children}
-  </th>
-);
+const FlashSpan: FC<{ value: number }> = ({ value }) => {
+  const flash = useFlash(value);
+  const color = flash === "up" ? "var(--color-l-up)" : flash === "down" ? "var(--color-l-down)" : undefined;
+  return (
+    <span className="font-mono-plex text-[11px] tabular-nums text-l-text" style={color ? { color } : undefined}>
+      {fmtPrice(value)}
+    </span>
+  );
+};
 
-const Td: FC<{ children: ReactNode; align: "left" | "right" }> = ({ children, align }) => (
-  <td className={`font-mono text-[13px] text-ink-body px-2 py-2 sm:px-3 sm:py-3 align-middle whitespace-nowrap ${
-    align === "right" ? "text-right" : "text-left"
-  }`}>
-    {children}
-  </td>
-);
+/** Shared flash-on-change hook: returns "up"/"down" for ~300ms after value moves. */
+function useFlash(value: number | null): "up" | "down" | null {
+  const prev = useRef<number | null>(value);
+  const [flash, setFlash] = useState<"up" | "down" | null>(null);
+  useEffect(() => {
+    if (prev.current != null && value != null && value !== prev.current) {
+      setFlash(value > prev.current ? "up" : "down");
+      const t = window.setTimeout(() => setFlash(null), 300);
+      prev.current = value;
+      return () => window.clearTimeout(t);
+    }
+    prev.current = value;
+  }, [value]);
+  return flash;
+}
+
+export default TradeChainV2;

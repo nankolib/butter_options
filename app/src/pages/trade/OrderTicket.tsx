@@ -21,10 +21,17 @@ const RFQ_TTL_MS = 15_000;
 const rfqCache = new Map<string, { q: OptionPriceQuote; at: number }>();
 
 /**
- * OrderTicket — the write path for the v2 Trade page (Pass 2).
+ * OrderTicket — the write path for the v2 Trade page. Terminal design language
+ * (design lock 2026-07-09): mono-plex numerals, hairline panels, side-colored
+ * segments, one teal-fill primary submit.
  *
- * Order types: Market | Limit (live). Stop / TP/SL are greyed "coming soon"
- * (Phase 4 keeper triggers — no handlers, no local triggers, T4).
+ * `variant`:
+ *   "standalone" — full self-contained ticket (own header + RFQ request block).
+ *   "docked"     — lives inside the docked ContractInspector, which owns the
+ *                  header/badges + protocol-quote centerpiece + RFQ request, and
+ *                  seeds this ticket's quote via `seedQuote`. Header + the RFQ
+ *                  request block are suppressed to avoid duplication; every gate
+ *                  (incl. H-05 American freshness) still runs off the seed quote.
  *
  * Routing (provenance × type × side):
  *   SERIES Buy·Market  → best ask: resting ask ≤ peg → fill_order; else fill_vault_peg
@@ -33,23 +40,26 @@ const rfqCache = new Map<string, { q: OptionPriceQuote; at: number }>();
  *   SERIES Sell·Limit  → post_order ResaleAsk on HELD tokens (gated on balance)
  *   LEGACY Buy         → classic flow (existing BuyModal) via onLegacyBuy
  *   LEGACY Sell·Limit  → list via Portfolio (position-bound) — pointer only
- *
- * RFQ: "Request quote" renders but is NOT wired to the on-chain get_option_price
- * view this pass — that quote-on-demand + caching is Pass 4 (T5/T6).
  */
 type Side = "buy" | "sell" | "write";
 type OrderType = "market" | "limit" | "stop" | "tpsl";
 const LIVE_TYPES: OrderType[] = ["market", "limit"];
+
+const SIDE_VAR: Record<Side, string> = { buy: "--color-l-up", sell: "--color-l-down", write: "--color-l-text" };
 
 export const OrderTicket: FC<{
   row: UnifiedChainRow;
   spot: number | null;
   onDone: () => void;
   onLegacyBuy: (row: UnifiedChainRow) => void;
-  /** Pre-seed the RFQ (e.g. the modal's one-shot on-open quote) so the ticket
-   *  shows the protocol price immediately without a second click. */
+  /** Pre-seed the RFQ (e.g. the inspector's on-open quote) so the ticket shows
+   *  the protocol price immediately without a second click. */
   seedQuote?: OptionPriceQuote | null;
-}> = ({ row, spot, onDone, onLegacyBuy, seedQuote = null }) => {
+  variant?: "standalone" | "docked";
+  /** Deep-link / caller-preselected side (loads the ticket ready to act). */
+  initialSide?: Side;
+}> = ({ row, spot, onDone, onLegacyBuy, seedQuote = null, variant = "standalone", initialSide }) => {
+  const docked = variant === "docked";
   const { publicKey } = useWallet();
   const { program } = useProgram();
   const { orders, refetch: refetchBook } = useBook();
@@ -58,7 +68,7 @@ export const OrderTicket: FC<{
   const fill = useFillOrder();
   const fillWA = useFillWriterAsk();
 
-  const [side, setSide] = useState<Side>("buy");
+  const [side, setSide] = useState<Side>(initialSide ?? "buy");
   const [type, setType] = useState<OrderType>("market");
   const [qty, setQty] = useState(1);
   const [limitPrice, setLimitPrice] = useState<number>(0);
@@ -83,8 +93,11 @@ export const OrderTicket: FC<{
   // get_option_price view. Routing (below) stays on `isSeries` (provenance).
   const useOnChainQuote = row.exerciseStyle === "american";
 
+  // Follow a caller-driven side change (deep-link / row reselect).
+  useEffect(() => { if (initialSide) setSide(initialSide); }, [initialSide]);
+
   // Reset the RFQ when the focused contract changes; seed from the caller's
-  // one-shot quote when provided (modal on-open RFQ).
+  // one-shot quote when provided (inspector on-open RFQ).
   useEffect(() => { setRfq(seedQuote); setRfqError(null); }, [row.vault, row.optionType, row.strike, seedQuote]);
 
   // On-chain quote-on-demand: fire get_option_price for this series (American
@@ -184,10 +197,9 @@ export const OrderTicket: FC<{
     : ((side === "buy" ? rfq?.premiumPerContract : undefined) ?? refPrice ?? modelPremium ?? null);
   const estTotal = estPrice != null ? estPrice * qty : null;
 
-  // Readouts (T-spec): λ elasticity, decay (θ/day), no-liquidation reminder.
-  // λ is a greek (elasticity Δ·S/V): V MUST be the model premium the delta was
-  // computed against — not the transaction price (estPrice) — else it's an
-  // incoherent hybrid. Matches ContractDetailModal (greeks.lambda) + SimpleTradePanel.
+  // Readouts: λ elasticity, decay (θ/day), no-liquidation reminder. λ is a greek
+  // (elasticity Δ·S/V): V MUST be the model premium the delta was computed
+  // against — not the transaction price — else it's an incoherent hybrid.
   const lambda = mark && mark.premium > 0 ? (mark.delta * (spot ?? 0)) / mark.premium : null;
   const thetaPerDay = mark?.theta ?? null;
 
@@ -291,10 +303,14 @@ export const OrderTicket: FC<{
   }
 
   const submitting = busy || peg.submitting || post.submitting || fill.submitting || fillWA.submitting;
-  const fmt = (n: number) => `$${n.toFixed(n < 100 ? 4 : 2)}`;
+  // Never emit negative-zero ("$-0.0000" → "$0.0000").
+  const fmt = (n: number) => {
+    let s = n.toFixed(Math.abs(n) < 100 ? 4 : 2);
+    if (/^-0(?:\.0+)?$/.test(s)) s = s.slice(1);
+    return `$${s}`;
+  };
 
-  // Write (WriterAsk) collateral gate — series+American only; collateral = strike × qty
-  // (== collateral_per_contract on-chain). row.strike is the parsed vault strike, so no fetch.
+  // Write (WriterAsk) collateral gate — series+American only; collateral = strike × qty.
   const writeNeed = row.strike * qty;
   const writeGate = !isWrite ? null
     : !isSeries ? "Write is series-only"
@@ -303,23 +319,17 @@ export const OrderTicket: FC<{
     : !(limitPrice > 0) ? "Set an ask price"
     : null;
 
-  // Buy·Limit / Sell·Limit require a positive price — chain reverts (InvalidContractSize)
-  // on price 0. Mirror the Write-mode gate rather than letting the tx fail.
   const limitGate = (!isWrite && type === "limit" && !(limitPrice > 0)) ? "Set a limit price" : null;
 
-  // H-05: American rows must trade on a FRESH on-chain quote (shared authority),
-  // never the EUR model. Hard-block Buy (market/limit) and Write until the RFQ
-  // resolves fresh; Sell (resale of held contracts) doesn't need a premium quote.
+  // H-05: American rows must trade on a FRESH on-chain quote, never the EUR
+  // model. Hard-block Buy (market/limit) and Write until the RFQ resolves fresh.
   const amerFresh = quoteFreshness(rfqLoading, rfqError, rfq);
   const needsFreshAmerQuote = useOnChainQuote && (side === "buy" || side === "write");
   const amerQuoteGate = needsFreshAmerQuote && !amerFresh.isFresh
     ? (amerFresh.statusReason ?? "Request an on-chain quote to continue")
     : null;
 
-  // BUG-1: a Buy·Market reverts on an exhausted peg only when it would ROUTE to
-  // the peg — i.e. no resting ask ≤ the peg reference. A resting resale/writer
-  // ask still fills (fill_order / fill_writer_ask don't touch vault collateral),
-  // so gate ONLY the peg route, never a resting-ask fill.
+  // BUG-1: gate ONLY the peg route (no resting ask ≤ peg reference).
   const bestRestingAsk = orders
     .filter((o) => o.optionMint === row.optionMint && o.kind !== "bid")
     .reduce<number | null>((m, o) => (m == null || o.price < m ? o.price : m), null);
@@ -330,108 +340,124 @@ export const OrderTicket: FC<{
     ? (pegRemaining <= 0 ? "Sold out · vault capacity exhausted" : `Only ${pegRemaining} left at the vault peg`)
     : null;
 
+  const disabled = submitting || sellNoBalance || !publicKey || (isWrite && !!writeGate) || !!limitGate || !!amerQuoteGate || !!pegGate;
+
   return (
-    <div className="border border-rule rounded-md p-5 bg-paper">
-      {/* Header */}
-      <div className="flex items-baseline justify-between mb-4">
-        <div className="font-fraunces-text italic font-light text-ink text-[20px]">
-          {row.asset} ${row.strike} {row.optionType === "call" ? "Call" : "Put"}
+    <div className={docked ? "text-l-text" : "rounded-[10px] border border-l-hair bg-l-surface p-4 text-l-text"}>
+      {/* Header — standalone only (docked inspector renders header/badges itself) */}
+      {!docked && (
+        <div className="mb-4 flex items-baseline justify-between">
+          <div className="font-sans text-[16px] font-medium text-l-text">
+            {row.asset} {fmtStrike(row.strike)} {row.optionType === "call" ? "Call" : "Put"}
+          </div>
+          <div
+            className="font-mono-plex text-[9px] uppercase tracking-[0.16em]"
+            style={{ color: row.provenance === "series" ? "var(--color-l-up)" : "var(--color-l-muted)" }}
+          >
+            {row.provenance}
+          </div>
         </div>
-        <div className={`font-mono text-[9px] uppercase tracking-[0.18em] ${
-          row.provenance === "series" ? "text-crimson" : row.provenance === "epoch" ? "text-ink" : "text-ink-muted"
-        }`}>
-          {row.provenance}
-        </div>
-      </div>
+      )}
 
-      {/* Side */}
-      <Segment options={[["buy", "Buy"], ["sell", "Sell"], ["write", "Write"]]} value={side} onChange={(v) => setSide(v as Side)} />
+      {/* Side — Buy / Sell / Write */}
+      <Segment
+        options={[["buy", "Buy"], ["sell", "Sell"], ["write", "Write"]]}
+        value={side}
+        onChange={(v) => setSide(v as Side)}
+        colorVar={SIDE_VAR}
+      />
 
-      {/* Type — Market/Limit live, Stop/TP-SL greyed. Hidden for Write (always a limit post). */}
+      {/* Type — Market/Limit live, Stop/TP-SL gated. Hidden for Write (always a limit post). */}
       {!isWrite && (<>
-      <div className="flex gap-px bg-rule border border-rule rounded-md overflow-hidden my-3">
-        {(["market", "limit", "stop", "tpsl"] as OrderType[]).map((t) => {
-          const live = LIVE_TYPES.includes(t);
-          const label = t === "tpsl" ? "TP/SL" : t[0].toUpperCase() + t.slice(1);
-          return (
-            <button
-              key={t}
-              type="button"
-              disabled={!live}
-              onClick={() => live && setType(t)}
-              title={live ? "" : "Phase 4 — coming soon"}
-              className={`flex-1 font-mono text-[10.5px] uppercase tracking-[0.16em] px-2 py-2 transition-colors ${
-                !live ? "bg-paper text-ink-muted/40 cursor-not-allowed"
-                  : type === t ? "bg-ink text-paper" : "bg-paper text-ink-muted hover:text-ink"
-              }`}
-            >
-              {label}{!live && " ·"}
-            </button>
-          );
-        })}
-      </div>
-      <p className="font-mono text-[9.5px] text-ink-muted/70 mb-3 -mt-1">Stop · TP/SL — Phase 4 keeper triggers (coming soon)</p>
+        <div className="my-3 flex gap-px overflow-hidden rounded-[6px] border border-l-hair bg-l-hair">
+          {(["market", "limit", "stop", "tpsl"] as OrderType[]).map((t) => {
+            const live = LIVE_TYPES.includes(t);
+            const label = t === "tpsl" ? "TP/SL" : t[0].toUpperCase() + t.slice(1);
+            return (
+              <button
+                key={t}
+                type="button"
+                disabled={!live}
+                onClick={() => live && setType(t)}
+                title={live ? "" : "Phase 4 keeper triggers — coming soon"}
+                className={`flex-1 px-2 py-2 font-mono-plex text-[10.5px] uppercase tracking-[0.14em] transition-colors ${
+                  !live ? "cursor-not-allowed bg-l-surface text-l-faint"
+                    : type === t ? "bg-l-surface-2 text-l-text" : "bg-l-surface text-l-muted hover:text-l-text"
+                }`}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+        {/* Honest inline state for the gated trigger tabs (Phase 4 placement is a
+            follow-up slice: StopEntryBuy / TakeProfitSell taxonomy). */}
+        <p className="-mt-1 mb-3 font-mono-plex text-[9.5px] text-l-muted">
+          Stop · TP/SL — keeper triggers live on-chain; placement UI coming soon.
+        </p>
       </>)}
 
       {/* Qty + price */}
       <Field label="Quantity">
-        <input type="number" min={1} value={qty} onChange={(e) => setQty(Math.max(1, Number(e.target.value) || 1))}
-          className="w-full bg-transparent border border-rule rounded px-3 py-2 font-mono text-[14px] text-ink outline-none focus:border-ink" />
+        <NumInput value={qty} min={1} step={1} onChange={(n) => setQty(Math.max(1, n || 1))} />
       </Field>
 
       {(type === "limit" || isWrite) && (
-        <Field label={isWrite ? "Ask price (USDC / contract)" : "Limit price (USDC / contract)"}>
-          <input type="number" min={0} step="0.0001" value={limitPrice} onChange={(e) => setLimitPrice(Math.max(0, Number(e.target.value) || 0))}
-            className="w-full bg-transparent border border-rule rounded px-3 py-2 font-mono text-[14px] text-ink outline-none focus:border-ink" />
+        <Field label={isWrite ? "Ask price · USDC / contract" : "Limit price · USDC / contract"}>
+          <NumInput value={limitPrice} min={0} step={0.0001} onChange={(n) => setLimitPrice(Math.max(0, n || 0))} />
         </Field>
       )}
       {type === "market" && !isWrite && (
         <Field label="Max slippage %">
-          <input type="number" min={0} step="0.5" value={slippagePct} onChange={(e) => setSlippagePct(Math.max(0, Number(e.target.value) || 0))}
-            className="w-full bg-transparent border border-rule rounded px-3 py-2 font-mono text-[14px] text-ink outline-none focus:border-ink" />
+          <NumInput value={slippagePct} min={0} step={0.5} onChange={(n) => setSlippagePct(Math.max(0, n || 0))} />
         </Field>
       )}
 
       {/* Write — collateral to lock (strike × qty) + wallet USDC */}
       {isWrite && (
-        <div className="grid grid-cols-2 gap-px bg-rule border border-rule rounded-md overflow-hidden my-3">
+        <div className="my-3 grid grid-cols-2 gap-px overflow-hidden rounded-[6px] border border-l-hair bg-l-hair">
           <Stat label="Collateral to lock" value={fmt(writeNeed)} sub="strike × qty" />
           <Stat label="Your USDC" value={<span data-ph-mask>{usdcBalance != null ? fmt(usdcBalance) : "…"}</span>} />
         </div>
       )}
 
       {!isWrite && (<>
-      {/* Est price / total */}
-      <div className="grid grid-cols-2 gap-px bg-rule border border-rule rounded-md overflow-hidden my-3">
-        <Stat label={side === "buy" ? "Est. ask" : "Est. bid"} value={estPrice != null ? fmt(estPrice) : "—"} />
-        <Stat label="Est. total" value={estTotal != null ? fmt(estTotal) : "—"} />
-      </div>
+        {/* Est price / total */}
+        <div className="my-3 grid grid-cols-2 gap-px overflow-hidden rounded-[6px] border border-l-hair bg-l-hair">
+          <Stat label={side === "buy" ? "Est. ask" : "Est. bid"} value={estPrice != null ? fmt(estPrice) : "—"} />
+          <Stat label="Est. total" value={estTotal != null ? fmt(estTotal) : "—"} />
+        </div>
 
-      {/* Readouts */}
-      <div className="grid grid-cols-3 gap-px bg-rule border border-rule rounded-md overflow-hidden mb-3">
-        <Stat label="λ leverage" value={lambda != null ? `${lambda.toFixed(1)}×` : "—"} />
-        <Stat label="θ decay / day" value={thetaPerDay != null ? fmt(thetaPerDay) : "—"} />
-        <Stat label="Liquidation" value="None" sub="max loss = premium" />
-      </div>
+        {/* λ / θ + no-liquidation badge (teal outline) */}
+        <div className="mb-3 grid grid-cols-2 gap-px overflow-hidden rounded-[6px] border border-l-hair bg-l-hair">
+          <Stat label="λ leverage" value={lambda != null ? `${lambda.toFixed(1)}×` : "—"} />
+          <Stat label="θ decay / day" value={thetaPerDay != null ? fmt(thetaPerDay) : "—"} />
+        </div>
+        <div
+          className="mb-3 flex items-center gap-[8px] rounded-[6px] border px-[11px] py-[8px]"
+          style={{ borderColor: "var(--color-l-up)" }}
+        >
+          <span className="h-[6px] w-[6px] flex-none rounded-full" style={{ background: "var(--color-l-up)" }} />
+          <span className="font-mono-plex text-[10.5px] text-l-text">No liquidation — max loss = premium</span>
+        </div>
       </>)}
 
-      {/* RFQ — on-chain quote-on-demand (T5). American renders it in BOTH Buy and
-          Write (H-05: submit is hard-gated on a fresh quote, so the writer needs
-          the same request path); European Buy keeps the disabled model-price note. */}
-      {useOnChainQuote ? (
+      {/* RFQ request block — standalone only. In docked mode the inspector renders
+          the protocol-quote centerpiece + request/re-quote and seeds this ticket. */}
+      {!docked && (useOnChainQuote ? (
         <div className="mb-3">
           <button type="button" onClick={requestQuote} disabled={rfqLoading}
-            className="w-full font-mono text-[10.5px] uppercase tracking-[0.18em] border border-rule rounded-md py-2 text-ink hover:bg-paper-2 transition-colors disabled:opacity-50 disabled:cursor-wait">
-            {rfqLoading ? "Pricing on-chain…" : rfq ? "Re-quote" : "Request quote"}
+            className="w-full rounded-[6px] border border-l-hair py-2 font-mono-plex text-[10.5px] uppercase tracking-[0.16em] text-l-text transition-colors hover:bg-l-surface disabled:cursor-wait disabled:opacity-50">
+            {rfqLoading ? "Pricing on-chain…" : rfq ? "Re-quote" : "Request on-chain quote"}
           </button>
           {(rfq || rfqError) && (
             <div className="mt-2">
               {rfq && (
-                <div className="font-mono text-[13px] text-ink">
+                <div className="font-mono-plex text-[13px] tabular-nums text-l-text">
                   Protocol quote · {fmt(rfq.premiumPerContract)}/contract · total {fmt(rfq.premiumPerContract * qty)}
                 </div>
               )}
-              <div className="font-mono text-[9.5px] text-ink-muted/70 mt-0.5">
+              <div className="mt-0.5 font-mono-plex text-[9.5px] text-l-muted">
                 {describeOptionPriceQuoteStatus(rfqLoading, rfqError, rfq)}
               </div>
             </div>
@@ -439,16 +465,15 @@ export const OrderTicket: FC<{
         </div>
       ) : (!isWrite && (
         <button type="button" disabled title="On-chain quote is American-only; EUR uses the model price"
-          className="w-full font-mono text-[10.5px] uppercase tracking-[0.18em] border border-rule rounded-md py-2 mb-3 text-ink-muted/50 cursor-not-allowed">
-          Request quote · model price (EUR)
+          className="mb-3 w-full cursor-not-allowed rounded-[6px] border border-l-hair py-2 font-mono-plex text-[10.5px] uppercase tracking-[0.16em] text-l-faint">
+          Model price · EUR
         </button>
-      ))}
+      )))}
 
-      {/* Submit */}
-      <button type="button" disabled={submitting || sellNoBalance || !publicKey || (isWrite && !!writeGate) || !!limitGate || !!amerQuoteGate || !!pegGate}
-        onClick={submit}
-        className={`w-full font-mono text-[12px] uppercase tracking-[0.2em] rounded-md py-3 transition-colors ${
-          submitting || sellNoBalance || !publicKey || (isWrite && !!writeGate) || !!limitGate || !!amerQuoteGate || !!pegGate ? "bg-paper-2 text-ink-muted cursor-not-allowed" : "bg-ink text-paper hover:opacity-90"
+      {/* Submit — the single teal-fill primary action */}
+      <button type="button" disabled={disabled} onClick={submit}
+        className={`w-full rounded-[6px] py-3 font-sans text-[13px] font-medium transition-opacity ${
+          disabled ? "cursor-not-allowed bg-l-surface-2 text-l-muted" : "bg-l-up text-l-on-up hover:opacity-90"
         }`}>
         {!publicKey ? "Connect wallet"
           : submitting ? "Submitting…"
@@ -457,51 +482,79 @@ export const OrderTicket: FC<{
           : amerQuoteGate ? amerQuoteGate
           : pegGate ? pegGate
           : sellNoBalance ? "No contracts held to sell"
-          : `${side === "buy" ? "Buy" : "Sell"} ${qty} · ${type === "market" ? "Market" : "Limit"}`}
+          : `${side === "buy" ? "Buy" : "Sell"} ${qty} · ${type === "market" ? "Market" : fmt(limitPrice)}`}
       </button>
 
       {isSeries && side === "sell" && type === "limit" && (
-        <p className="font-mono text-[9.5px] text-ink-muted/70 mt-2">
-          Sell·Limit lists held contracts (resale). Held: {held ?? "…"}. Writing new contracts to sell is Phase 3.
+        <p className="mt-2 font-mono-plex text-[9.5px] text-l-muted">
+          Sell·Limit lists held contracts (resale). Held: {held ?? "…"}.
         </p>
       )}
       {!isSeries && (
-        <p className="font-mono text-[9.5px] text-ink-muted/70 mt-2">
+        <p className="mt-2 font-mono-plex text-[9.5px] text-l-muted">
           Legacy contract — Buy routes to the classic vault/resale flow; sell-side listing lives in Portfolio.
         </p>
       )}
 
       {status && (
-        <p className={`font-mono text-[10.5px] mt-3 ${status.kind === "ok" ? "text-ink" : "text-crimson"}`}>{status.msg}</p>
+        <p className="mt-3 font-mono-plex text-[10.5px]" style={{ color: status.kind === "ok" ? "var(--color-l-up)" : "var(--color-l-down)" }}>
+          {status.msg}
+        </p>
       )}
     </div>
   );
 };
 
-const Segment: FC<{ options: [string, string][]; value: string; onChange: (v: string) => void }> = ({ options, value, onChange }) => (
-  <div className="flex gap-px bg-rule border border-rule rounded-md overflow-hidden">
-    {options.map(([v, label]) => (
-      <button key={v} type="button" onClick={() => onChange(v)}
-        className={`flex-1 font-mono text-[11px] uppercase tracking-[0.18em] px-3 py-2 transition-colors ${
-          value === v ? "bg-ink text-paper" : "bg-paper text-ink-muted hover:text-ink"
-        }`}>
-        {label}
-      </button>
-    ))}
+const fmtStrike = (n: number): string => (n >= 1000 ? n.toLocaleString(undefined, { maximumFractionDigits: 0 }) : String(n));
+
+const Segment: FC<{
+  options: [string, string][];
+  value: string;
+  onChange: (v: string) => void;
+  colorVar?: Record<string, string>;
+}> = ({ options, value, onChange, colorVar }) => (
+  <div className="flex gap-px overflow-hidden rounded-[6px] border border-l-hair bg-l-hair">
+    {options.map(([v, label]) => {
+      const selected = value === v;
+      const cv = colorVar?.[v];
+      return (
+        <button key={v} type="button" onClick={() => onChange(v)}
+          className={`flex-1 px-3 py-2 font-sans text-[12px] font-medium transition-colors ${
+            selected ? "text-l-text" : "bg-l-surface text-l-muted hover:text-l-text"
+          }`}
+          style={selected ? {
+            background: cv ? `color-mix(in srgb, var(${cv}) 14%, transparent)` : undefined,
+            color: cv && cv !== "--color-l-text" ? `var(${cv})` : undefined,
+          } : undefined}>
+          {label}
+        </button>
+      );
+    })}
   </div>
 );
 
 const Field: FC<{ label: string; children: ReactNode }> = ({ label, children }) => (
   <div className="mb-3">
-    <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-muted mb-1.5">{label}</div>
+    <div className="mb-1.5 font-mono-plex text-[9.5px] uppercase tracking-[0.14em] text-l-muted">{label}</div>
     {children}
   </div>
 );
 
+const NumInput: FC<{ value: number; min: number; step: number; onChange: (n: number) => void }> = ({ value, min, step, onChange }) => (
+  <input
+    type="number"
+    min={min}
+    step={step}
+    value={value}
+    onChange={(e) => onChange(Number(e.target.value))}
+    className="w-full rounded-[6px] border border-l-hair bg-transparent px-3 py-2 font-mono-plex text-[14px] tabular-nums text-l-text outline-none transition-colors focus:border-l-muted"
+  />
+);
+
 const Stat: FC<{ label: string; value: ReactNode; sub?: string }> = ({ label, value, sub }) => (
-  <div className="bg-paper p-3">
-    <div className="font-mono text-[9.5px] uppercase tracking-[0.16em] text-ink-muted mb-1.5">{label}</div>
-    <div className="font-mono text-[15px] text-ink leading-none">{value}</div>
-    {sub && <div className="font-mono text-[8.5px] uppercase tracking-[0.14em] text-ink-muted mt-1">{sub}</div>}
+  <div className="bg-l-surface p-3">
+    <div className="mb-1.5 font-mono-plex text-[9px] uppercase tracking-[0.14em] text-l-muted">{label}</div>
+    <div className="font-mono-plex text-[15px] leading-none tabular-nums text-l-text">{value}</div>
+    {sub && <div className="mt-1 font-mono-plex text-[8.5px] uppercase tracking-[0.12em] text-l-muted">{sub}</div>}
   </div>
 );

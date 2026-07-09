@@ -7,18 +7,18 @@ type ExpiryTabsProps = {
 };
 
 /**
- * Horizontal pill row of available expiries. Active = dark fill +
- * paper text. Inactive = paper background + hairline border + ink
- * text.
+ * Horizontal terminal chip row of available expiries. Selected = leading
+ * teal dot + surface fill + emphasized text; others muted with hairline
+ * border. Dates + countdowns render mono/tabular.
  *
- * Pill label: short date + countdown, e.g. "03 May · 5D 21H". When
+ * Chip label: short date + countdown, e.g. "03 MAY 5D 21H". When
  * countdown is < 1 day it falls back to hours; < 1 hour to minutes.
  */
 export const ExpiryTabs: FC<ExpiryTabsProps> = ({ expiries, selected, onSelect }) => {
   if (expiries.length === 0) return null;
 
   return (
-    <div className="flex flex-wrap gap-2 mb-8">
+    <div className="flex flex-wrap gap-[6px] mb-8">
       {expiries.map((ts) => {
         const active = ts === selected;
         return (
@@ -27,15 +27,21 @@ export const ExpiryTabs: FC<ExpiryTabsProps> = ({ expiries, selected, onSelect }
             type="button"
             onClick={() => onSelect(ts)}
             aria-pressed={active}
-            className={`inline-flex items-center gap-3 rounded-full border px-[16px] py-[8px] font-mono font-medium text-[11px] uppercase tracking-[0.18em] transition-colors duration-300 ease-opta ${
+            className={`inline-flex items-center gap-[7px] rounded-[6px] border px-[11px] py-[6px] font-mono-plex text-[12px] tabular-nums transition-colors ${
               active
-                ? "border-ink bg-ink text-paper"
-                : "border-rule text-ink-muted hover:text-ink hover:border-ink"
+                ? "border-l-hair bg-l-surface text-l-text"
+                : "border-l-hair text-l-muted hover:text-l-text hover:bg-l-surface"
             }`}
           >
-            <span>{formatShortDate(ts)}</span>
-            <span aria-hidden="true" className={active ? "opacity-80" : "opacity-70"}>·</span>
-            <span className={active ? "opacity-90" : "text-ink-body"}>
+            {active && (
+              <span
+                aria-hidden="true"
+                className="h-[6px] w-[6px] flex-none rounded-full"
+                style={{ background: "var(--color-l-up)" }}
+              />
+            )}
+            <span className={active ? "text-l-text" : ""}>{formatShortDate(ts)}</span>
+            <span className={active ? "text-l-muted" : "text-l-faint"}>
               {formatCountdown(ts)}
             </span>
           </button>

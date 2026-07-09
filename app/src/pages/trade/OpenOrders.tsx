@@ -7,12 +7,16 @@ import posthog from "posthog-js";
 
 /**
  * OpenOrders — the connected wallet's resting orders + one-click cancel.
- * Reuses the paper hairline idiom (same as OrderBookLadder). Scope to a single
- * series via `optionMint`, or pass null to list ALL of the wallet's orders.
- * Cancel → useCancelOrder (T1) → refetch the book.
+ * Terminal design language (design lock 2026-07-09): hairline rows, mono-plex
+ * numerics, up/down side accents. Scope to a single series via `optionMint`, or
+ * pass null to list ALL of the wallet's orders. Self-contained + prop-driven so
+ * it drops into the Trade bottom dock unchanged. Cancel → useCancelOrder (T1) →
+ * refetch the book.
  */
 const KIND_LABEL: Record<string, string> = { bid: "BID", resaleAsk: "RESALE", writerAsk: "WRITER", vaultPeg: "PEG" };
 const fmt = (n: number) => `$${n.toFixed(n < 100 ? 4 : 2)}`;
+// bid is the buy (up) side; every ask/peg variant is the sell (down) side.
+const isBuySide = (kind: string) => kind === "bid";
 
 export const OpenOrders: FC<{ optionMint?: string | null }> = ({ optionMint = null }) => {
   const { publicKey } = useWallet();
@@ -42,27 +46,65 @@ export const OpenOrders: FC<{ optionMint?: string | null }> = ({ optionMint = nu
   if (!publicKey) return null;
 
   return (
-    <div className="font-mono text-[12px]">
-      <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-ink-muted mb-3">Your open orders</div>
+    <div className="text-l-text">
+      <div className="font-mono-plex text-[9px] uppercase tracking-[0.14em] text-l-muted mb-[10px]">Your open orders</div>
       {mine.length === 0 ? (
-        <div className="font-mono text-[11px] text-ink-muted py-3">No open orders</div>
+        <div className="font-mono-plex text-[11px] text-l-muted py-3">No open orders</div>
       ) : (
-        <div className="space-y-px">
-          {mine.map((o) => (
-            <div key={o.pubkey} className="flex items-center justify-between gap-3 py-1.5 px-1 border-b border-rule-soft last:border-0">
-              <span className={`text-[9.5px] uppercase tracking-[0.14em] w-14 ${o.kind === "bid" ? "text-teal" : "text-crimson"}`}>{KIND_LABEL[o.kind] ?? o.kind}</span>
-              <span className="text-ink flex-1">{fmt(o.price)}</span>
-              <span className="text-ink-muted flex-1">×{o.qty}</span>
-              <span className="text-ink-muted text-[10.5px] flex-1">{o.kind === "writerAsk" ? `coll ${fmt(o.collateralPerContract)}` : "—"}</span>
-              <button type="button" onClick={() => onCancel(o)} disabled={busy === o.pubkey}
-                className="font-mono text-[9.5px] uppercase tracking-[0.14em] border border-rule rounded px-2 py-1 text-ink hover:bg-paper-2 disabled:opacity-40 disabled:cursor-wait">
-                {busy === o.pubkey ? "…" : "Cancel"}
-              </button>
-            </div>
-          ))}
+        <div className="overflow-hidden rounded-[10px] border border-l-hair">
+          {/* Header */}
+          <div
+            className="grid h-[28px] items-center border-b border-l-hair bg-l-surface"
+            style={{ gridTemplateColumns: "72px 1fr 60px minmax(88px,1fr) 78px" }}
+          >
+            <span className="px-3 font-mono-plex text-[9px] uppercase tracking-[0.1em] text-l-muted">Side</span>
+            <span className="px-3 text-right font-mono-plex text-[9px] uppercase tracking-[0.1em] text-l-muted">Price</span>
+            <span className="px-3 text-right font-mono-plex text-[9px] uppercase tracking-[0.1em] text-l-muted">Qty</span>
+            <span className="px-3 text-right font-mono-plex text-[9px] uppercase tracking-[0.1em] text-l-muted">Collateral</span>
+            <span className="px-3" />
+          </div>
+          {mine.map((o) => {
+            const buy = isBuySide(o.kind);
+            return (
+              <div
+                key={o.pubkey}
+                className="grid h-[32px] items-center border-b border-l-hair last:border-0 hover:bg-l-surface"
+                style={{ gridTemplateColumns: "72px 1fr 60px minmax(88px,1fr) 78px" }}
+              >
+                <span className="flex items-center gap-[6px] px-3">
+                  <span
+                    className="h-[6px] w-[6px] flex-none rounded-full"
+                    style={{ background: buy ? "var(--color-l-up)" : "var(--color-l-down)" }}
+                  />
+                  <span
+                    className="font-mono-plex text-[9.5px] uppercase tracking-[0.12em]"
+                    style={{ color: buy ? "var(--color-l-up)" : "var(--color-l-down)" }}
+                  >
+                    {KIND_LABEL[o.kind] ?? o.kind}
+                  </span>
+                </span>
+                <span className="px-3 text-right font-mono-plex text-[12px] tabular-nums text-l-text">{fmt(o.price)}</span>
+                <span className="px-3 text-right font-mono-plex text-[12px] tabular-nums text-l-muted">×{o.qty}</span>
+                <span className="px-3 text-right font-mono-plex text-[11px] tabular-nums text-l-muted">
+                  {o.kind === "writerAsk" ? fmt(o.collateralPerContract) : "—"}
+                </span>
+                <span className="flex justify-end px-3">
+                  <button
+                    type="button"
+                    onClick={() => onCancel(o)}
+                    disabled={busy === o.pubkey}
+                    className="font-mono-plex text-[9.5px] uppercase tracking-[0.12em] rounded-[6px] border px-[9px] py-[4px] text-l-down transition-colors hover:bg-l-surface disabled:opacity-40 disabled:cursor-wait"
+                    style={{ borderColor: "var(--color-l-down)" }}
+                  >
+                    {busy === o.pubkey ? "…" : "Cancel"}
+                  </button>
+                </span>
+              </div>
+            );
+          })}
         </div>
       )}
-      {err && <p className="font-mono text-[10px] text-crimson mt-2">{err}</p>}
+      {err && <p className="font-mono-plex text-[10px] text-l-down mt-2">{err}</p>}
     </div>
   );
 };

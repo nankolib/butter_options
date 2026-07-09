@@ -1,44 +1,33 @@
 import type { FC, ReactNode } from "react";
-import { useState } from "react";
 import { NavLink } from "react-router-dom";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { FaucetIconButton } from "./FaucetIconButton";
-import { NewMarketModal } from "./NewMarketModal";
 
 /**
- * MarketsAppBar — route-scoped terminal header for the redesigned /markets.
+ * TerminalAppBar — the shared dark-default terminal chrome for the trading app.
+ *
+ * Extracted from the Markets bar (design lock 2026-07-08) into components/ so
+ * every terminal surface reuses ONE bar: Markets and Trade today, Write +
+ * Portfolio next. Layout is fixed — logo · centered nav (active dot is
+ * route-driven, no prop) · faucet icons · DEVNET · mode toggle · [pageAction] ·
+ * wallet — so it is pixel-identical across pages. The ONLY per-page variation is
+ * `pageAction`, a slot rendered between the mode toggle and the wallet block
+ * (Markets passes its "New market" control; Trade passes nothing).
  *
  * Deliberately NOT the shared AppNav (paper palette, parked, used by the other
- * trader pages): this is the dark-default terminal chrome per the design lock —
- * logo · center nav · faucet icons · DEVNET badge · mode toggle · New market ·
- * wallet. Other pages keep AppNav until their own redesign slice. Sits as a
- * flex-none row at the top of the terminal's flex column (the whole surface is a
- * fixed-height column with an internally-scrolling body), so no fixed offset.
- *
- * "New market" is a SECONDARY outlined button (Connect wallet stays the only
- * primary). It reuses the existing NewMarketModal as-is — that modal's paper
- * palette clashes with the terminal chrome; its terminal reskin is a later slice
- * (tracked in HANDOFF). Mirrors AppNav's connect-first gate.
+ * paper pages): this is the terminal chrome. Sits as a flex-none row atop a
+ * fixed-height flex column whose body scrolls internally, so no fixed offset.
  */
-export const MarketsAppBar: FC<{ mode: "light" | "dark"; onToggleMode: () => void }> = ({
-  mode,
-  onToggleMode,
-}) => {
+export const TerminalAppBar: FC<{
+  mode: "light" | "dark";
+  onToggleMode: () => void;
+  pageAction?: ReactNode;
+}> = ({ mode, onToggleMode, pageAction }) => {
   const { publicKey, connected, disconnect } = useWallet();
   const { setVisible } = useWalletModal();
-  const [showNewMarket, setShowNewMarket] = useState(false);
-
-  const handleNewMarket = () => {
-    if (!connected) {
-      setVisible(true);
-      return;
-    }
-    setShowNewMarket(true);
-  };
 
   return (
-    <>
     <header className="flex h-[52px] flex-none items-center gap-4 border-b border-l-hair px-5">
       {/* Logo — italic Fraunces "opta" + mode-aware dot (flat, no glow) */}
       <span
@@ -74,13 +63,7 @@ export const MarketsAppBar: FC<{ mode: "light" | "dark"; onToggleMode: () => voi
         >
           <span aria-hidden="true" className="h-[9px] w-[9px] rounded-full bg-l-dot" />
         </button>
-        <button
-          type="button"
-          onClick={handleNewMarket}
-          className="hidden items-center rounded-[6px] border border-l-muted px-[13px] py-[7px] font-sans text-[13px] font-medium text-l-text transition-colors duration-300 ease-opta hover:border-l-text sm:inline-flex"
-        >
-          New market
-        </button>
+        {pageAction}
         {connected && publicKey ? (
           <>
             <span data-ph-mask className="hidden items-center gap-2 font-mono-plex text-[11px] text-l-muted sm:inline-flex">
@@ -106,13 +89,6 @@ export const MarketsAppBar: FC<{ mode: "light" | "dark"; onToggleMode: () => voi
         )}
       </div>
     </header>
-    {showNewMarket && (
-      <NewMarketModal
-        onClose={() => setShowNewMarket(false)}
-        onCreated={() => setShowNewMarket(false)}
-      />
-    )}
-    </>
   );
 };
 
@@ -138,4 +114,4 @@ function truncate(pk: string): string {
   return `${pk.slice(0, 4)}…${pk.slice(-4)}`;
 }
 
-export default MarketsAppBar;
+export default TerminalAppBar;

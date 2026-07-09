@@ -3,17 +3,21 @@ import { useEffect, useMemo, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { usePegFill } from "../../hooks/useOrderFlows";
 import { calculateCallGreeks, calculatePutGreeks, getDefaultVolatility, applyVolSmile } from "../../utils/blackScholes";
-import { fetchUnderlyingCandles } from "../../utils/chartData";
-import { TradingViewWidget, tvSymbol } from "./TradingViewWidget";
 import type { UnifiedChainRow } from "../../hooks/useUnifiedChain";
 
 /**
  * SimpleTradePanel — the Simple persona (perps/meme one-tap mode, §5b).
  *
- * Chart-first: TradingView underlying widget + Up/Down direction + USDC amount +
- * expiry chips + auto-strike (no strike picking) + a plain-English outcome card.
+ * Terminal skin, F6 frame (design lock 2026-07-09): plain-English "up or down?"
+ * heading, two big direction choices, an amount field with quick chips, expiry
+ * chips, and ONE honest outcome line + a single primary action. Radically fewer
+ * controls than Pro — no strike picking, no greeks, no chart. All numbers are
+ * `font-mono-plex tabular-nums`; micro-copy is `font-sans`; no serif.
+ *
  * Buys route through the SAME peg write path (usePegFill) — Simple always takes
- * the protocol peg (the natural one-tap counterparty), leaving the P2P book to Pro.
+ * the protocol peg (the natural one-tap counterparty), leaving the P2P book to
+ * Pro. The auto-strike + FE preview below are unchanged; only the surface moved
+ * to the dual-mode `-l-` tokens so it reads correctly in light and dark.
  */
 const PRESETS = [10, 50, 100];
 
@@ -30,7 +34,6 @@ export const SimpleTradePanel: FC<{
   const peg = usePegFill();
   const [direction, setDirection] = useState<"up" | "down">("up");
   const [amount, setAmount] = useState(50);
-  const [pct24h, setPct24h] = useState<number | null>(null);
   const [status, setStatus] = useState<{ kind: "ok" | "err"; msg: string } | null>(null);
 
   const day = (ts: number) => Math.floor(ts / 86_400);
@@ -44,17 +47,6 @@ export const SimpleTradePanel: FC<{
     const first = expiries.find(has);
     if (first != null) setSelectedExpiry(first);
   }, [rows, direction, expiries, selectedExpiry]);
-
-  // 24h change from a 1-day CoinGecko OHLC (best-effort).
-  useEffect(() => {
-    let live = true;
-    setPct24h(null);
-    (async () => {
-      const c = await fetchUnderlyingCandles(asset, 1);
-      if (live && c.length) setPct24h(((c[c.length - 1].close - c[0].open) / c[0].open) * 100);
-    })();
-    return () => { live = false; };
-  }, [asset]);
 
   // Auto-strike: the ATM-closest SERIES for asset+direction+expiry.
   const auto = useMemo(() => {
@@ -99,103 +91,167 @@ export const SimpleTradePanel: FC<{
     }
   }
 
-  const expiryLabel = (e: number) => new Date(e * 1000).toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
+  const noteLabel = (e: number) => new Date(e * 1000).toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
+  // Expiry chip copy: "Today 22H" for a same-UTC-day expiry, else "17 JUL".
+  const chipLabel = (e: number) => {
+    const now = Date.now() / 1000;
+    if (day(e) === day(now)) {
+      const h = Math.max(0, Math.round((e - now) / 3600));
+      return h > 0 ? `Today ${h}H` : "Today";
+    }
+    return noteLabel(e).toUpperCase();
+  };
+
+  const buyDisabled = !publicKey || !auto || !preview || peg.submitting;
+  const buyLabel = !publicKey
+    ? "Connect wallet"
+    : !auto
+      ? "No market"
+      : peg.submitting
+        ? "Buying…"
+        : `Buy ${direction === "up" ? "Up" : "Down"} · $${(preview?.cost ?? amount).toFixed(2)}`;
 
   return (
-    <div className="mt-4">
-      {/* Asset header sits ABOVE the grid so the chart's top edge and the ticket's
-          top edge align exactly (Pass-8 E). */}
-      <div className="flex items-baseline gap-4 mb-3">
-        <div className="font-fraunces-text italic font-light text-ink text-[32px]">{asset}</div>
-        <div className="font-mono text-[20px] text-ink">{spot != null ? `$${spot.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : "—"}</div>
-        {pct24h != null && (
-          <div className={`font-mono text-[14px] ${pct24h >= 0 ? "text-teal" : "text-crimson"}`}>
-            {pct24h >= 0 ? "+" : ""}{pct24h.toFixed(2)}% 24h
+    <div className="mx-auto mt-4 w-full max-w-[520px]">
+      <div className="rounded-[10px] border border-l-hair bg-l-surface p-6">
+        {/* Heading — plain English, no serif */}
+        <h2 className="font-sans text-[22px] font-medium leading-tight text-l-text">
+          Will {asset} be up or down?
+        </h2>
+        <p className="mt-1.5 font-sans text-[13px] leading-snug text-l-muted">
+          Pick a direction and an expiry. Your risk is only what you put in.
+        </p>
+        {spot != null && (
+          <div className="mt-2 font-mono-plex text-[12px] tabular-nums text-l-muted">
+            {asset} now ${spot.toLocaleString(undefined, { maximumFractionDigits: 2 })}
           </div>
         )}
-      </div>
 
-      <div className="grid lg:grid-cols-[1fr_340px] gap-6 items-stretch">
-        {/* Chart-dominant: the widget fills the viewport height (perps-style); the
-            ticket stretches to match so tops + bottoms are flush. */}
-        <TradingViewWidget symbol={tvSymbol(asset)} height="calc(100dvh - 280px)" minHeight={560} />
-
-        {/* Ticket — top-aligned with the chart's top edge */}
-        <div className="border border-rule rounded-md p-5 bg-paper">
-        {/* Direction */}
-        <div className="grid grid-cols-2 gap-3 mb-4">
-          <button type="button" onClick={() => setDirection("up")}
-            className={`rounded-md py-4 font-mono text-[13px] uppercase tracking-[0.18em] transition-colors border ${
-              direction === "up" ? "bg-teal text-paper border-teal" : "bg-paper text-ink-muted border-rule hover:text-ink"
-            }`}>↑ Up · Call</button>
-          <button type="button" onClick={() => setDirection("down")}
-            className={`rounded-md py-4 font-mono text-[13px] uppercase tracking-[0.18em] transition-colors border ${
-              direction === "down" ? "bg-crimson text-paper border-crimson" : "bg-paper text-ink-muted border-rule hover:text-ink"
-            }`}>↓ Down · Put</button>
+        {/* Direction — two big choices */}
+        <div className="mt-5 grid grid-cols-2 gap-3">
+          {(["up", "down"] as const).map((dir) => {
+            const active = direction === dir;
+            const c = dir === "up" ? "var(--color-l-up)" : "var(--color-l-down)";
+            return (
+              <button
+                key={dir}
+                type="button"
+                onClick={() => setDirection(dir)}
+                style={active ? { borderColor: c, color: c, background: `color-mix(in srgb, ${c} 12%, transparent)` } : undefined}
+                className={`rounded-[6px] border py-5 transition-colors ${
+                  active ? "" : "border-l-hair text-l-muted hover:text-l-text"
+                }`}
+              >
+                <span className="font-sans text-[16px] font-medium">{dir === "up" ? "▲ Up" : "▼ Down"}</span>{" "}
+                <span className="font-mono-plex text-[12px] opacity-70">/ {dir === "up" ? "CALL" : "PUT"}</span>
+              </button>
+            );
+          })}
         </div>
 
         {/* Amount */}
-        <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-muted mb-1.5">Amount (USDC)</div>
-        <input type="number" min={1} value={amount} onChange={(e) => setAmount(Math.max(1, Number(e.target.value) || 1))}
-          className="w-full bg-transparent border border-rule rounded px-3 py-2 font-mono text-[15px] text-ink outline-none focus:border-ink mb-2" />
-        <div className="flex gap-2 mb-4">
-          {PRESETS.map((p) => (
-            <button key={p} type="button" onClick={() => setAmount(p)}
-              className="flex-1 font-mono text-[11px] border border-rule rounded py-1.5 text-ink-muted hover:text-ink hover:bg-paper-2 transition-colors">${p}</button>
-          ))}
-          <button type="button" disabled title="Max = wallet balance (Pass 6)"
-            className="flex-1 font-mono text-[11px] border border-rule rounded py-1.5 text-ink-muted/40 cursor-not-allowed">Max</button>
+        <div className="mt-5 mb-2 font-mono-plex text-[9px] uppercase tracking-[0.14em] text-l-muted">Amount (USDC)</div>
+        <div className="flex items-center gap-2 rounded-[6px] border border-l-hair bg-l-bg px-4 py-3 transition-colors focus-within:border-l-muted">
+          <span className="font-mono-plex text-[20px] leading-none text-l-muted">$</span>
+          <input
+            type="number"
+            min={1}
+            value={amount}
+            onChange={(e) => setAmount(Math.max(1, Number(e.target.value) || 1))}
+            className="w-full bg-transparent font-mono-plex text-[24px] leading-none tabular-nums text-l-text outline-none"
+          />
+        </div>
+        <div className="mt-2 flex gap-2">
+          {PRESETS.map((p) => {
+            const active = amount === p;
+            return (
+              <button
+                key={p}
+                type="button"
+                onClick={() => setAmount(p)}
+                className={`flex-1 rounded-[6px] border py-1.5 font-mono-plex text-[12px] tabular-nums transition-colors ${
+                  active ? "border-l-text bg-l-surface-2 text-l-text" : "border-l-hair text-l-muted hover:text-l-text"
+                }`}
+              >
+                ${p}
+              </button>
+            );
+          })}
+          <button
+            type="button"
+            disabled
+            title="Max = wallet balance (Pass 6)"
+            className="flex-1 cursor-not-allowed rounded-[6px] border border-l-hair py-1.5 font-mono-plex text-[12px] text-l-faint"
+          >
+            Max
+          </button>
         </div>
 
-        {/* Expiry chips */}
-        <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-muted mb-1.5">Expiry</div>
-        <div className="flex flex-wrap gap-2 mb-4">
-          {expiries.map((e) => (
-            <button key={e} type="button" onClick={() => setSelectedExpiry(e)}
-              className={`font-mono text-[11px] rounded px-3 py-1.5 border transition-colors ${
-                day(e) === day(selectedExpiry) ? "bg-ink text-paper border-ink" : "bg-paper text-ink-muted border-rule hover:text-ink"
-              }`}>{expiryLabel(e)}</button>
-          ))}
+        {/* Expiry */}
+        <div className="mb-2 mt-5 font-mono-plex text-[9px] uppercase tracking-[0.14em] text-l-muted">Expires</div>
+        <div className="flex flex-wrap gap-2">
+          {expiries.map((e) => {
+            const active = day(e) === day(selectedExpiry);
+            return (
+              <button
+                key={e}
+                type="button"
+                onClick={() => setSelectedExpiry(e)}
+                className={`rounded-[6px] border px-3 py-1.5 font-mono-plex text-[12px] tabular-nums transition-colors ${
+                  active ? "border-l-text bg-l-surface-2 text-l-text" : "border-l-hair text-l-muted hover:text-l-text"
+                }`}
+              >
+                {chipLabel(e)}
+              </button>
+            );
+          })}
         </div>
 
-        {/* Auto-strike (soft) */}
-        {auto ? (
-          <div className="font-mono text-[11px] text-ink-muted mb-4">
-            Strike <span className="text-ink">${auto.strike}</span> · expires {expiryLabel(auto.expiry)}
+        {/* Outcome — honest, bound to the real FE preview */}
+        {auto && preview ? (
+          <div className="mt-5">
+            <div className="flex items-start gap-2">
+              <span className="mt-[6px] h-[6px] w-[6px] flex-none rounded-full" style={{ background: "var(--color-l-up)" }} />
+              <span className="font-sans text-[13px] leading-snug text-l-text">
+                Can't be liquidated — max loss ={" "}
+                <span className="font-mono-plex tabular-nums">${preview.cost.toFixed(2)}</span>
+              </span>
+            </div>
+            <div className="mt-1 pl-[14px] font-sans text-[12px] leading-snug text-l-muted">
+              Auto-picks the <span className="font-mono-plex tabular-nums text-l-text">${auto.strike}</span> strike ·{" "}
+              {preview.qty} contract{preview.qty > 1 ? "s" : ""} · profit if {asset}{" "}
+              {direction === "up" ? "≥" : "≤"}{" "}
+              <span className="font-mono-plex tabular-nums text-l-text">${preview.breakeven.toFixed(2)}</span> at expiry
+            </div>
           </div>
         ) : (
-          <div className="font-mono text-[11px] text-crimson mb-4">No {direction === "up" ? "call" : "put"} market yet at this expiry.</div>
-        )}
-
-        {/* Outcome card */}
-        {auto && preview && (
-          <div className="border border-rule rounded-md p-4 mb-4 bg-paper-2/40">
-            <div className="font-sans text-[13px] text-ink leading-snug mb-2">
-              Can't be liquidated — <span className="text-ink">max loss = ${preview.cost.toFixed(2)}</span> ({preview.qty} contract{preview.qty > 1 ? "s" : ""}).
-            </div>
-            <div className="font-mono text-[11px] text-ink-muted">
-              Profit if {asset} {direction === "up" ? "≥" : "≤"} ${preview.breakeven.toFixed(2)} at expiry
-            </div>
-            <div className="font-mono text-[11px] text-ink-muted mt-1">≈{preview.leverage.toFixed(1)}× leverage</div>
+          <div className="mt-5 font-sans text-[13px] leading-snug" style={{ color: "var(--color-l-down)" }}>
+            {auto
+              ? "Warming up a price…"
+              : `No ${direction === "up" ? "up (call)" : "down (put)"} market yet at this expiry.`}
           </div>
         )}
 
-        {/* Buy */}
-        <button type="button" onClick={buy}
-          disabled={!publicKey || !auto || !preview || peg.submitting}
-          className={`w-full font-mono text-[13px] uppercase tracking-[0.2em] rounded-md py-4 transition-colors ${
-            !publicKey || !auto || !preview || peg.submitting ? "bg-paper-2 text-ink-muted cursor-not-allowed"
-              : direction === "up" ? "bg-teal text-paper hover:opacity-90" : "bg-crimson text-paper hover:opacity-90"
-          }`}>
-          {!publicKey ? "Connect wallet"
-            : !auto ? "No market"
-            : peg.submitting ? "Buying…"
-            : `Buy ${direction === "up" ? "Up" : "Down"} · $${preview?.cost.toFixed(2) ?? amount}`}
+        {/* Primary action — one teal button */}
+        <button
+          type="button"
+          onClick={buy}
+          disabled={buyDisabled}
+          className={`mt-4 w-full rounded-[6px] py-4 font-sans text-[14px] font-medium transition-opacity ${
+            buyDisabled
+              ? "cursor-not-allowed border border-l-hair bg-l-surface text-l-muted"
+              : "bg-l-up text-l-on-up hover:opacity-90"
+          }`}
+        >
+          {buyLabel}
         </button>
 
-        {status && <p className={`font-mono text-[10.5px] mt-3 ${status.kind === "ok" ? "text-ink" : "text-crimson"}`}>{status.msg}</p>}
+        {status && (
+          <p className={`mt-3 font-mono-plex text-[11px] leading-snug ${status.kind === "ok" ? "text-l-muted" : "text-l-down"}`}>
+            {status.msg}
+          </p>
+        )}
       </div>
-    </div>
     </div>
   );
 };

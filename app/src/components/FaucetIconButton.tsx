@@ -1,15 +1,17 @@
 import type { FC, ReactNode } from "react";
 import { useMemo, useRef, useState } from "react";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
-import { inferClusterFromUrl } from "../../utils/env";
-import { SolMark, UsdcMark } from "../../assets/BrandMarks";
+import { inferClusterFromUrl } from "../utils/env";
+import { SolMark, UsdcMark } from "../assets/BrandMarks";
 
 /**
  * FaucetIconButton — terminal-surface faucet control (SOL or USDC).
  *
- * Same server-side flow as DevnetSolButton / DevnetFaucetButton (POST
- * /api/faucet, durable per-wallet cooldown, browser holds no key). The endpoint
- * returns (verified against the live faucet):
+ * Shared app chrome: lives in components/ so every terminal bar (Markets, Trade,
+ * and Write/Portfolio next) reuses the same control. Same server-side flow as
+ * DevnetSolButton / DevnetFaucetButton (POST /api/faucet, durable per-wallet
+ * cooldown, browser holds no key). The endpoint returns (verified against the
+ * live faucet):
  *   • 200 SOL  → { signature, kind:"sol", sol:0.05 }
  *   • 200 USDC → { signature, kind:"usdc", balance:10000 }  (resulting balance)
  *   • 429      → { error:"Faucet cooldown — try again in 3h 59m", retryAfter:14355 }

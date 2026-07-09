@@ -1,16 +1,18 @@
 import type { FC } from "react";
 import { useSurfaceMode } from "../../hooks/useSurfaceMode";
-import { MarketsAppBar } from "./MarketsAppBar";
+import { TerminalAppBar } from "../../components/TerminalAppBar";
+import { MarketsNewMarketAction } from "./MarketsNewMarketAction";
 import { MarketsTerminal } from "./MarketsTerminal";
 
 /**
  * MarketsPage — the terminal discovery surface (design lock 2026-07-08).
  *
- * Replaces the paper/statement browser with a dark-default terminal: a
- * route-scoped MarketsAppBar over a fixed-height flex column whose body (protocol
- * strip · pulse tiles · two-level table · inspector) scrolls internally. Dark is
- * the default for /markets only (useSurfaceMode); the other trader pages keep
- * their paper palette + shared AppNav (which still owns "+ New Market").
+ * Replaces the paper/statement browser with a dark-default terminal: the shared
+ * TerminalAppBar over a fixed-height flex column whose body (protocol strip ·
+ * pulse tiles · two-level table · inspector) scrolls internally. Dark is the
+ * default for /markets only (useSurfaceMode); the other trader pages keep their
+ * paper palette + shared AppNav. Markets passes its "New market" control as the
+ * bar's pageAction slot; other pages pass none.
  *
  * All numbers bind to real chain/derived state — see marketsView's honesty note:
  * no 24h tape (none is derivable), IV is the vol model, premia is cumulative.
@@ -21,7 +23,7 @@ export const MarketsPage: FC = () => {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-l-bg font-sans text-l-text">
-      <MarketsAppBar mode={mode} onToggleMode={toggle} />
+      <TerminalAppBar mode={mode} onToggleMode={toggle} pageAction={<MarketsNewMarketAction />} />
       <MarketsTerminal />
     </div>
   );

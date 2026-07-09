@@ -5,8 +5,10 @@ import { PublicKey } from "@solana/web3.js";
 import posthog from "posthog-js";
 import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { useProgram } from "../../hooks/useProgram";
-import { useBook } from "../../hooks/useBook";
+import { useBook, type BookOrder } from "../../hooks/useBook";
 import { usePegFill, usePostOrder, useFillOrder, useFillWriterAsk } from "../../hooks/useOrderFlows";
+import { deriveOrderPubkey } from "./orderFlows";
+import { refreshAfterMutation } from "./orderRefresh";
 import { calculateCallGreeks, calculatePutGreeks, getDefaultVolatility, applyVolSmile } from "../../utils/blackScholes";
 import { TOKEN_2022_PROGRAM_ID, MARKET_SEED, PROGRAM_ID, DEVNET_USDC_MINT } from "../../utils/constants";
 import {
@@ -217,7 +219,17 @@ export const OrderTicket: FC<{
     try {
       let sig: string | null = null;
       let phRoute: string | undefined; // buy·market dispatch route for analytics
+      let removed: string[] = [];       // optimistically removed (fully-filled resting order)
+      let added: BookOrder | undefined; // optimistically inserted (just-posted resting order)
       const ref = { asset: row.asset, vault: row.vault, optionMint: row.optionMint! };
+      const nonce = Math.floor(Date.now() / 1000);
+      const optimisticOrder = (kind: "bid" | "resaleAsk" | "writerAsk"): BookOrder => ({
+        pubkey: deriveOrderPubkey(row.optionMint!, publicKey, nonce),
+        owner: publicKey.toBase58(), optionMint: row.optionMint!, vault: row.vault, kind,
+        price: limitPrice, qty, qtyInitial: qty, nonce: String(nonce),
+        createdAt: Math.floor(Date.now() / 1000),
+        collateralPerContract: kind === "writerAsk" ? row.strike : 0,
+      });
       if (!isSeries) {
         if (side === "buy") { onLegacyBuy(row); setBusy(false); return; }
         setStatus({ kind: "err", msg: "Legacy listings are managed in Portfolio." });
@@ -225,7 +237,8 @@ export const OrderTicket: FC<{
       }
       if (side === "write") {
         // Write = mint-on-fill sell side: post a WriterAsk (escrows strike×qty USDC).
-        sig = await post.submit(ref, "writerAsk", limitPrice, qty, Math.floor(Date.now() / 1000));
+        sig = await post.submit(ref, "writerAsk", limitPrice, qty, nonce);
+        if (sig) added = optimisticOrder("writerAsk");
       } else if (side === "buy" && type === "market") {
         // Best ask: a resting ask ≤ peg → take it; else fill the vault peg.
         const asks = orders
@@ -255,6 +268,7 @@ export const OrderTicket: FC<{
           sig = asks[0].kind === "writerAsk"
             ? await fillWA.submit(asks[0], qty)
             : await fill.submit(asks[0], qty);
+          if (sig && qty >= asks[0].qty) removed = [asks[0].pubkey]; // fully consumed
         } else {
           phRoute = "peg";
           // BUG-1 backstop: never send a peg fill the vault can't back (the button
@@ -272,16 +286,19 @@ export const OrderTicket: FC<{
           sig = await peg.submit(ref, qty, maxPremium > 0 ? maxPremium : 1_000_000);
         }
       } else if (side === "buy" && type === "limit") {
-        sig = await post.submit(ref, "bid", limitPrice, qty, Math.floor(Date.now() / 1000));
+        sig = await post.submit(ref, "bid", limitPrice, qty, nonce);
+        if (sig) added = optimisticOrder("bid");
       } else if (side === "sell" && type === "market") {
         const bids = orders
           .filter((o) => o.optionMint === row.optionMint && o.kind === "bid")
           .sort((a, b) => b.price - a.price);
         if (!bids.length) { setStatus({ kind: "err", msg: "No resting bid to sell into." }); setBusy(false); return; }
         sig = await fill.submit(bids[0], qty);
+        if (sig && qty >= bids[0].qty) removed = [bids[0].pubkey]; // fully consumed
       } else if (side === "sell" && type === "limit") {
         if (sellNoBalance) { setBusy(false); return; }
-        sig = await post.submit(ref, "resaleAsk", limitPrice, qty, Math.floor(Date.now() / 1000));
+        sig = await post.submit(ref, "resaleAsk", limitPrice, qty, nonce);
+        if (sig) added = optimisticOrder("resaleAsk");
       }
       if (sig) {
         setStatus({ kind: "ok", msg: `Submitted · ${sig.slice(0, 8)}…` });
@@ -292,7 +309,9 @@ export const OrderTicket: FC<{
           asset: row.asset, strike: row.strike, optionType: row.optionType, qty,
           price: type === "market" ? undefined : limitPrice, route: phRoute, sig,
         });
-        void refetchBook();
+        // Two-layer refresh: optimistic (instant) + reconcile (chain truth) across
+        // book, chain grid, and dock. onDone still refetches spot/legacy (td).
+        refreshAfterMutation(program!, { removed, added });
         onDone();
       }
     } catch (e: any) {

@@ -6,7 +6,8 @@
 // current Trade page renders from) is left untouched — Pass 0 is non-visual.
 import { useCallback, useEffect, useState } from "react";
 import { useProgram } from "./useProgram";
-import { fetchUnifiedChain, type UnifiedChainRow } from "../utils/exchangeData";
+import { fetchUnifiedChain, invalidateBookCache, invalidateVaultCache, type UnifiedChainRow } from "../utils/exchangeData";
+import { subscribeMutations } from "../utils/mutationBus";
 
 export type { UnifiedChainRow } from "../utils/exchangeData";
 
@@ -17,8 +18,15 @@ export function useUnifiedChain() {
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
 
-  const refetch = useCallback(async () => {
+  const refetch = useCallback(async (fresh = false) => {
     if (!program) { setLoading(false); return; }
+    // `fresh` (mutation-triggered) drops the coalesced vault + book scans so the
+    // chain's best bid/ask reflect the just-confirmed order change, not a snapshot
+    // taken before it. Normal refetches stay coalesced.
+    if (fresh) {
+      invalidateVaultCache(program.programId);
+      invalidateBookCache(program.programId);
+    }
     setLoading(true);
     setError(null);
     try {
@@ -35,6 +43,9 @@ export function useUnifiedChain() {
   }, [program]);
 
   useEffect(() => { void refetch(); }, [refetch]);
+  // A confirmed order mutation refetches the chain chain-fresh (fixes the grid's
+  // bid/ask staying stale after a cancel fired from OpenOrders / the inspector).
+  useEffect(() => subscribeMutations(() => { void refetch(true); }), [refetch]);
 
   return { rows, loading, error, loaded, refetch };
 }

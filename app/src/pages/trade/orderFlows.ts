@@ -128,6 +128,20 @@ export async function postSeriesOrder(
   }).preInstructions([CU(400_000)]).rpc();
 }
 
+/**
+ * Derive a resting-order PDA client-side (same seeds as postSeriesOrder) so the
+ * UI can insert an optimistic order under the REAL pubkey — the reconcile refetch
+ * then replaces it in place (no duplicate).
+ */
+export function deriveOrderPubkey(optionMint: string, owner: PublicKey, nonce: number): string {
+  return pda([
+    Buffer.from(RESTING_ORDER_SEED),
+    new PublicKey(optionMint).toBuffer(),
+    owner.toBuffer(),
+    new BN(nonce).toArrayLike(Buffer, "le", 8),
+  ]).toBase58();
+}
+
 /** A resting order the taker is about to fill. */
 export interface FillableOrder {
   pubkey: string;

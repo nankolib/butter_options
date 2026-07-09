@@ -18,7 +18,7 @@
 
 import { Connection, PublicKey } from "@solana/web3.js";
 import { Buffer } from "buffer";
-import { coalescedProgramAccounts } from "./programAccounts";
+import { coalescedProgramAccounts, invalidateProgramAccounts } from "./programAccounts";
 import { canonicalAsset } from "./assetDisplay";
 
 // ---- Discriminators (first 8 bytes of sha256("account:<Name>")) -------------
@@ -94,7 +94,39 @@ export function parseRestingOrder(pubkey: PublicKey, d: Buffer): BookOrder | nul
 
 export async function fetchBook(connection: Connection, programId: PublicKey): Promise<BookOrder[]> {
   const accts = await getByDisc(connection, programId, DISC.restingOrder);
-  return accts.map((a) => parseRestingOrder(a.pubkey, a.data)).filter((o): o is BookOrder => o !== null);
+  return accts
+    .map((a) => parseRestingOrder(a.pubkey, a.data))
+    .filter((o): o is BookOrder => o !== null && !isSuppressed(o.pubkey));
+}
+
+// ---- Optimistic suppression -------------------------------------------------
+// A just-cancelled/filled order can still be returned by a lagging
+// getProgramAccounts for a slot or two after the tx confirms. Suppressed pubkeys
+// are dropped from every fetchBook result (book + unified chain, which both parse
+// RestingOrder here) until the TTL, so an early reconcile can't re-introduce a
+// removed order after the optimistic layer took it out.
+const suppressed = new Map<string, number>(); // pubkey -> expiry (ms)
+const SUPPRESS_TTL_MS = 8000;
+
+export function suppressOrders(pubkeys: string[], ttlMs = SUPPRESS_TTL_MS): void {
+  const until = Date.now() + ttlMs;
+  for (const p of pubkeys) suppressed.set(p, until);
+}
+function isSuppressed(pubkey: string): boolean {
+  const until = suppressed.get(pubkey);
+  if (until == null) return false;
+  if (Date.now() > until) { suppressed.delete(pubkey); return false; }
+  return true;
+}
+
+/** Drop the coalesced RestingOrder scan so the next book fetch is chain-fresh. */
+export function invalidateBookCache(programId: PublicKey): void {
+  invalidateProgramAccounts(programId, DISC.restingOrder);
+}
+/** Drop the coalesced SharedVault + VaultMint scans (OI / series change on fills). */
+export function invalidateVaultCache(programId: PublicKey): void {
+  invalidateProgramAccounts(programId, DISC.sharedVault);
+  invalidateProgramAccounts(programId, DISC.vaultMint);
 }
 
 /** Group orders by series option-mint, split into sorted bid/ask sides. */

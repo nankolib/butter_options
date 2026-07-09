@@ -57,3 +57,13 @@ export async function coalescedProgramAccounts(
   );
   return p;
 }
+
+/**
+ * Drop any in-flight coalesced scan for (program, discriminator). Called after a
+ * confirmed on-chain mutation so the NEXT fetch starts a FRESH scan instead of
+ * joining a snapshot taken before the mutation (the stale-UI-after-cancel bug).
+ */
+export function invalidateProgramAccounts(programId: PublicKey, disc: readonly number[]): void {
+  const key = `${programId.toBase58()}:${utils.bytes.bs58.encode(Buffer.from(disc))}`;
+  inflight.delete(key);
+}

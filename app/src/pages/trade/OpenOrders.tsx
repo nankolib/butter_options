@@ -1,8 +1,10 @@
 import type { FC } from "react";
 import { useMemo, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
+import { useProgram } from "../../hooks/useProgram";
 import { useBook, type BookOrder } from "../../hooks/useBook";
 import { useCancelOrder } from "../../hooks/useOrderFlows";
+import { refreshAfterMutation } from "./orderRefresh";
 import posthog from "posthog-js";
 
 /**
@@ -20,7 +22,8 @@ const isBuySide = (kind: string) => kind === "bid";
 
 export const OpenOrders: FC<{ optionMint?: string | null }> = ({ optionMint = null }) => {
   const { publicKey } = useWallet();
-  const { orders, refetch } = useBook();
+  const { program } = useProgram();
+  const { orders } = useBook();
   const cancel = useCancelOrder();
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -37,7 +40,11 @@ export const OpenOrders: FC<{ optionMint?: string | null }> = ({ optionMint = nu
     setErr(null); setBusy(o.pubkey);
     try {
       const sig = await cancel.submit(o);
-      if (sig) { posthog.capture("trade_cancel", { kind: o.kind, sig }); await refetch(); }
+      if (sig && program) {
+        posthog.capture("trade_cancel", { kind: o.kind, sig });
+        // Optimistic remove + reconcile: book, chain grid, and dock all refresh.
+        refreshAfterMutation(program, { removed: [o.pubkey] });
+      }
     } catch (e: any) {
       setErr((e?.message ?? String(e)).slice(0, 120));
     } finally { setBusy(null); }

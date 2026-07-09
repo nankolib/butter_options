@@ -34,6 +34,7 @@ import { hexFromBytes } from "../../utils/format";
 import { buildPositions, type Position } from "../portfolio/positions";
 import { buildWriterRows, type WriterRow } from "../portfolio/writerRows";
 import { scanRecentActivity, type ActivityEvent } from "./tradeHistory";
+import { subscribeMutations } from "../../utils/mutationBus";
 
 interface AccountWrapper {
   publicKey: PublicKey;
@@ -305,6 +306,11 @@ export function useTradeDockData(): TradeDockData {
     void refetchPositions();
     void refetchHistory();
   }, [refetchPositions, refetchHistory]);
+
+  // A confirmed order mutation refreshes positions/balances/history (open orders
+  // update via useBook's own subscription). refreshAfterMutation invalidated the
+  // vault caches, so the reconcile scan is chain-fresh.
+  useEffect(() => subscribeMutations(refetch), [refetch]);
 
   return {
     holderPositions,

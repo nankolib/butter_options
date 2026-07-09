@@ -8,7 +8,8 @@
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import type { Program } from "@coral-xyz/anchor";
 import { useProgram } from "./useProgram";
-import { fetchBook, indexBook, type BookOrder } from "../utils/exchangeData";
+import { fetchBook, indexBook, suppressOrders, invalidateBookCache, type BookOrder } from "../utils/exchangeData";
+import { subscribeMutations } from "../utils/mutationBus";
 
 export type { BookOrder } from "../utils/exchangeData";
 
@@ -25,11 +26,18 @@ function notify() {
   for (const cb of subscribers) cb();
 }
 
-async function fetchInto(program: Program<any> | null): Promise<void> {
+async function fetchInto(program: Program<any> | null, fresh = false): Promise<void> {
   if (!program) {
     sharedLoading = false;
     notify();
     return;
+  }
+  // `fresh` (mutation-triggered) forces a chain-fresh scan: drop the coalesced
+  // RestingOrder cache AND this store's in-flight so we can't be served a
+  // snapshot taken before the mutation. Normal mounts stay coalesced.
+  if (fresh) {
+    invalidateBookCache(program.programId);
+    inflight = null;
   }
   // Coalesce concurrent refetches (many consumers mount at once).
   if (inflight) return inflight;
@@ -60,6 +68,23 @@ const subscribe = (cb: () => void): (() => void) => {
 };
 const getSnapshot = () => version;
 
+// ---- Optimistic layer (instant UI before the reconcile refetch lands) -------
+/** Remove orders NOW (cancel / fully-filled) + suppress them so a lagging scan
+ *  can't re-add them before the chain index catches up. */
+export function optimisticRemoveOrders(pubkeys: string[]): void {
+  if (!pubkeys.length) return;
+  suppressOrders(pubkeys);
+  const drop = new Set(pubkeys);
+  sharedOrders = sharedOrders.filter((o) => !drop.has(o.pubkey));
+  notify();
+}
+/** Insert/replace an order NOW (just-posted resting order). Reconcile replaces it
+ *  with chain truth under the same (derived) pubkey — no duplicate. */
+export function optimisticUpsertOrder(order: BookOrder): void {
+  sharedOrders = [order, ...sharedOrders.filter((o) => o.pubkey !== order.pubkey)];
+  notify();
+}
+
 export function useBook() {
   const { program } = useProgram();
   // Re-render this consumer whenever the shared store changes.
@@ -68,7 +93,9 @@ export function useBook() {
   useEffect(() => {
     void fetchInto(program ?? null);
   }, [program]);
-  const refetch = useCallback(() => fetchInto(program ?? null), [program]);
+  // A confirmed order mutation (from any surface) refetches the book chain-fresh.
+  useEffect(() => subscribeMutations(() => { void fetchInto(program ?? null, true); }), [program]);
+  const refetch = useCallback((fresh = false) => fetchInto(program ?? null, fresh), [program]);
 
   return {
     orders: sharedOrders,

@@ -18,6 +18,17 @@
 //
 // PREREQ: cd app && npm i -D playwright-core --no-save
 // RUN from repo root:  node scripts/check-trade-visibility.mjs
+//
+// MANUAL VERIFICATION — stale-UI-after-mutation (needs a funded devnet wallet;
+// not automatable headless because it requires signing real txs):
+//   1. Buy·Limit a bid → it appears INSTANTLY in the order book + Open Orders
+//      (optimistic add), and is still there after ~1.5s (reconcile confirms it).
+//   2. Cancel that bid → it VANISHES INSTANTLY from the chain grid bid column,
+//      the order book, AND the Open Orders dock tab (optimistic remove), and does
+//      NOT flicker back within the ~1.5s reconcile window (suppression guard).
+//   3. Buy·Market a contract → the taken resting ask disappears; OI/positions in
+//      the dock update within the reconcile window. No manual page refresh needed
+//      for any of the above.
 // =============================================================================
 
 import { createServer } from "node:http";

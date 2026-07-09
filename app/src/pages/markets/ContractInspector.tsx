@@ -14,6 +14,7 @@ import type { MarketRow } from "./useMarketsData";
 import type { UnifiedChainRow } from "../../hooks/useUnifiedChain";
 import { OrderTicket } from "../trade/OrderTicket";
 import { OpenOrders } from "../trade/OpenOrders";
+import { refreshAfterMutation } from "../trade/orderRefresh";
 import { fmtPrice, fmtStrike, fmtInt, fmtUsdCompact, expiryLabel } from "./marketsView";
 
 /**
@@ -239,7 +240,11 @@ const DockedInspector: FC<{
     setClosing(true);
     try {
       const sig = await fill.submit(bestBid, held ?? 1);
-      if (sig) { setPosStatus({ kind: "ok", msg: `Closed · ${sig.slice(0, 8)}…` }); onDone(); }
+      if (sig) {
+        setPosStatus({ kind: "ok", msg: `Closed · ${sig.slice(0, 8)}…` });
+        if (program) refreshAfterMutation(program, { removed: (held ?? 1) >= bestBid.qty ? [bestBid.pubkey] : [] });
+        onDone();
+      }
     } catch (e: any) { setPosStatus({ kind: "err", msg: (e?.message ?? String(e)).slice(0, 120) }); }
     finally { setClosing(false); }
   }

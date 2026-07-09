@@ -116,6 +116,7 @@ export interface SbTickReport {
   feedsInitialized: number;     // birthed (or would-birth in dry-run)
   feedsPushed: number;          // pushed (or would-push in dry-run)
   feedsErrored: number;
+  failedFeeds: string[];        // feedHashes that errored this pass (→ mid-hour retry)
   durationMs: number;
 }
 
@@ -133,8 +134,12 @@ const PUSH_CU_LIMIT = 400_000;
  *  attempt RE-FETCHES a fresh quote (a quote past ~512 slots / ~3.5 min is
  *  unrecoverable). After this many misses we log-and-continue so one bad feed
  *  never stalls the whole tick. */
-const SB_PUSH_MAX_ATTEMPTS = 4;
-const CROSSBAR_URL = "https://crossbar.switchboard.xyz";
+const SB_PUSH_MAX_ATTEMPTS = 8;
+/** Inter-feed stagger in the warming pass — avoid a same-second N-feed burst
+ *  against the oracle gateway (belt-and-suspenders alongside the self-hosted
+ *  crossbar). */
+const SB_FEED_STAGGER_MS = 7000;
+const CROSSBAR_URL = process.env.OPTA_CROSSBAR_URL ?? "https://crossbar.switchboard.xyz";
 
 // ---- Settle-at-expiry (1c-ii-B) --------------------------------------------
 /** On-chain SB settle window (must match settle_expiry.rs SB_SETTLE_WINDOW_SECS).
@@ -204,8 +209,20 @@ export async function runSbOracleCrank(
   // settle pass (cheap — a no-op when there are no SB markets), and refreshes the
   // SB-market cache + runs the warming push when the wall-clock hour rolls over.
   let sbMarkets = await discoverSbMarketsGuarded(ctx);
-  await runWarmingGuard(ctx, sb, sbMarkets);
+  let lastReport = await runWarmingGuard(ctx, sb, sbMarkets);
   let lastWarmHour = Math.floor(Date.now() / HOUR_MS);
+
+  // Mid-hour retry: a feed that fails the hourly warming push is retried at
+  // +10/+20/+30min so a transient miss can't silently eat the 2h reseed window
+  // (VOL_ORACLE_MAX_SAMPLE_GAP_SECS). Seeded from each hourly pass's failedFeeds.
+  const RETRY_DELAYS_MS = [10, 20, 30].map((m) => m * 60_000);
+  const retryQueue = new Map<string, { idx: number; dueMs: number }>();
+  const seedRetries = (r: SbTickReport | null) => {
+    retryQueue.clear();
+    for (const f of r?.failedFeeds ?? [])
+      retryQueue.set(f, { idx: 0, dueMs: Date.now() + RETRY_DELAYS_MS[0] });
+  };
+  seedRetries(lastReport);
 
   while (!ctx.shouldShutdown()) {
     await sleepInterruptibly(SETTLE_CHECK_INTERVAL_MS, ctx.shouldShutdown);
@@ -214,11 +231,36 @@ export async function runSbOracleCrank(
     // Fast settle-check every tick (uses the cached SB-market set).
     await runSettleGuard(ctx, sb, sbMarkets);
 
+    // Mid-hour retries for feeds that failed this hour's warming push. Each
+    // due feed re-runs the push path (already-birthed → class unused); success
+    // clears it, else it reschedules until the +30min slot is exhausted.
+    for (const [feed, st] of [...retryQueue]) {
+      if (ctx.shouldShutdown()) break;
+      if (Date.now() < st.dueMs) continue;
+      const r: SbTickReport = {
+        marketsScanned: 0, sbMarketsFound: 0, feedsSupported: 0,
+        feedsSkippedUnsupported: 0, feedsInitialized: 0, feedsPushed: 0,
+        feedsErrored: 0, failedFeeds: [], durationMs: 0,
+      };
+      await processOneSbFeed(ctx, sb, feed, undefined, r);
+      if (r.feedsPushed > 0) {
+        retryQueue.delete(feed);
+        ctx.log("info", "sb-oracle mid-hour retry OK", { feed: feed.slice(0, 10) });
+      } else if (st.idx + 1 >= RETRY_DELAYS_MS.length) {
+        retryQueue.delete(feed);
+        ctx.log("warn", "sb-oracle mid-hour retries exhausted", { feed: feed.slice(0, 10) });
+      } else {
+        st.idx += 1;
+        st.dueMs = Date.now() + RETRY_DELAYS_MS[st.idx];
+      }
+    }
+
     // Hourly: re-discover markets + warming push.
     const hr = Math.floor(Date.now() / HOUR_MS);
     if (hr > lastWarmHour) {
       sbMarkets = await discoverSbMarketsGuarded(ctx);
-      await runWarmingGuard(ctx, sb, sbMarkets);
+      lastReport = await runWarmingGuard(ctx, sb, sbMarkets);
+      seedRetries(lastReport);
       lastWarmHour = hr;
     }
   }
@@ -234,13 +276,14 @@ async function discoverSbMarketsGuarded(ctx: SbOracleCrankContext): Promise<SbMa
   }
 }
 
-async function runWarmingGuard(ctx: SbOracleCrankContext, sb: SbClients, sbMarkets: SbMarketRec[]): Promise<void> {
+async function runWarmingGuard(ctx: SbOracleCrankContext, sb: SbClients, sbMarkets: SbMarketRec[]): Promise<SbTickReport | null> {
   try {
-    await runWarmingTick(ctx, sb, sbMarkets);
+    return await runWarmingTick(ctx, sb, sbMarkets);
   } catch (err) {
     ctx.log("error", "sb-oracle warming tick crashed (will retry next hour)", {
       err: String(err), stack: (err as any)?.stack,
     });
+    return null;
   }
 }
 
@@ -296,7 +339,7 @@ export async function runWarmingTick(
   const report: SbTickReport = {
     marketsScanned: 0, sbMarketsFound: sbMarkets.length, feedsSupported: 0,
     feedsSkippedUnsupported: 0, feedsInitialized: 0, feedsPushed: 0,
-    feedsErrored: 0, durationMs: 0,
+    feedsErrored: 0, failedFeeds: [], durationMs: 0,
   };
 
   const seen = new Set<string>();
@@ -332,9 +375,14 @@ export async function runWarmingTick(
     if (!classByFeed.has(m.feedHashHex)) classByFeed.set(m.feedHashHex, m.assetClass);
   }
 
-  for (const feedHashHex of supported) {
+  for (let i = 0; i < supported.length; i++) {
     if (ctx.shouldShutdown()) break;
-    await processOneSbFeed(ctx, sb, feedHashHex, classByFeed.get(feedHashHex), report);
+    // Stagger feeds ~7s apart (skip before the first) so the pass isn't a
+    // same-second N-feed burst against the oracle gateway.
+    if (i > 0) await sleepInterruptibly(SB_FEED_STAGGER_MS, ctx.shouldShutdown);
+    const errBefore = report.feedsErrored;
+    await processOneSbFeed(ctx, sb, supported[i], classByFeed.get(supported[i]), report);
+    if (report.feedsErrored > errBefore) report.failedFeeds.push(supported[i]);
   }
 
   report.durationMs = Date.now() - startMs;

@@ -1,5 +1,26 @@
 # Opta — Engineer Handoff
 
+> **2026-07-09 (SESSION CLOSE — JUL-8 RECLAIM FLIP EXECUTED + SB MIGRATION GATE D DEPLOYED + PYTH EXPOSURE SCANNED). ▶ RESUME HERE — supersedes the 2026-07-07 "▶ RESUME HERE" (its items 1 + 2 are now DONE).**
+>
+> **▶ RESUME HERE (next session, in order):**
+> 1. **SB WARMUP MONITOR → CUTOVER (~Jul 20).** The 5 crypto SB vol oracles are warming (168h clock anchored **2026-07-09T09:06Z → warm ~2026-07-16**). Watch `sample_count` climb hourly on BTC/ETH/SOL/XRP/FARTCOIN. At warm: stop new Pyth crypto mints → last Pyth vaults expire/settle → `close_market` old 5 → `create_market` real names `source=SB` (Gate C2 `close_market` + cutover deploy still undeployed — ships here).
+> 2. **PYTH EXPIRY GATE — DECISION NEEDED (exposure is REAL).** Scan found **46 live Pyth vaults expiring 2026-09-25** (> the Jul-31 Hermes paid deadline), and **NO on-chain upper-expiry bound exists** (create only checks `expiry>now` + min buffer) → max mintable expiry is **UNBOUNDED**. Proposed minimal gate below — NOT implemented (needs approval + a redeploy).
+> 3. **Pending user actions (carried):** Vercel dashboard redeploy (cache UNCHECKED) + add `VITE_RPC_URL` to Preview.
+>
+> **[JUL-8 RECLAIM FLIP — COMPLETE ✅ 2026-07-09]** Executed via the crank's `runReclaimSweep` (VPS `opta-crank`, HEAD then `a2e1a1a`). Flag `OPTA_RECLAIM_CRANK_ENABLED=1` **KEPT ON permanently** (Nanko decision). **5 vaults wound down** (voided, NOT settled — invariant #6; holders paid $0 by design): `Ad5zz684…`(SBXAU), `BAhgX8uA…`(BTC husk, 0 writers), `GteYo9R…`(MSFT), `8xW8ewi…`(TSLA), `5HUGDsiQ…`(**MSTR $175k — authorized as 5th target after read-only vetting: 0 VaultMint records / 0 holders / feed-parity-identical to the approved MSFT+TSLA**).
+> - **Exact conservation: $399,575.378947** moved, verified to the micro-USDC (Σ ATA increases == Σ payouts). Crank-reported `usdcMoved` metric = **$399,365.378947** (excludes Ad5's $10 pool via the net-negative-drawn quirk at [reclaimUnsettled.ts:324-325](crank/reclaimUnsettled.ts#L324) + the $200 residual — both expected). Reclaim gas **0.000050000 SOL** (10 tx × 5000 lamports). Post-sweep ATAs exact: `DnExEYnZ`=$5,081,454.944760, `GkG1UX8M`=$3,013,110.441916, `5YRMuuoY`=$7,163,137.663081.
+> - **All sweep paths live-proven** (2nd tick found 0 candidates, no re-processing, 0 errors). **10 sigs** (5 `initialize_void` + **4** `reclaim_unsettled` [BTC 0-writer → no reclaim] + 1 `reclaim_writer_ask_residual`):
+>   - `initialize_void`: MSTR `PcnDRayb…h5Fb` · TSLA `2EUWj6WY…X3Gd` · Ad5 `57S2ZLMD…HHQ6` · BTC `oDq6zJxD…dJSm` · MSFT `2ufJg9qU…xfXM`
+>   - `reclaim_unsettled`: MSTR `225JxMWz…bwhm` · TSLA `2yMczoCc…VBzb` · Ad5 `5W6UeLzr…WnNS` · MSFT `pNMp9hie…7ktk`
+>   - `reclaim_writer_ask_residual` (Ad5 pot → backer `5YRMuuoY`, $200.000000): `5eDE3PU3…ge6E5`
+> - **The July-8 4-candidate runbook is SUPERSEDED/DONE** (executed as a 5-candidate sweep; MSTR added mid-flight after vetting).
+>
+> **[SB CRYPTO MIGRATION — GATE D DEPLOYED ✅ 2026-07-09]** The warmup mechanism is **config, not a new code branch**: the existing `sbOracleCrank.ts` `OPTA_SB_FORCE_FEED` ops-hook already does registry-filtered pre-market warming. **Deploy = VPS `git pull --ff-only` `a2e1a1a`→`1e73ada`** (ships `35a5adc` = the 5-feed registry; ff-safe, no dep change, IDL unchanged, `VOL_ORACLE_SEED` intact) **+ `OPTA_SB_FORCE_FEED`=<5 crypto feedHashes>** appended to `/opt/opta-crank/.env` (backup `.env.bak-pre-gated`). Restart → boot warming tick pushed **all 5** crypto oracles (`feedsSupported:6 feedsPushed:5`; the 1 error was gold's transient SB-gateway miss, retries next hour). **168h warmup anchored ~2026-07-09T09:06Z** (first push reseeded stale birth baseline → `sample_count` starts climbing next hour). PDAs: BTC `35Ruih…`, ETH `96DDVT…`, SOL `8Ag1qR…`, XRP `Fm7i7s…`, FART `Gx9nCP…`. All other loops (settle/finalize/**reclaim**/trigger/pyth-vol/sb-settle) unaffected, 0 errors post-deploy. ⚠️ 2nd hourly warming tick (~10:06Z) not yet visually confirmed at session close.
+>
+> **[PYTH EXPIRY EXPOSURE — SCAN DONE, GATE PROPOSED (NOT built)]** 186 live Pyth vaults; **46 expire 2026-09-25** (> Jul-31). Max mintable expiry = **UNBOUNDED** (no upper-bound check in `create_shared_vault`/`create_series`). **Proposed minimal gate:** add an upper-expiry `require!` for `oracle_source==0` (Pyth) creation — reject `expiry` beyond a configurable Hermes-free cutoff (e.g. 2026-07-31), so no NEW Pyth vault can outlive the free feed; the 46 existing ones settle via paid Hermes OR are handled at cutover. Needs a Rust change + feature-free redeploy → **awaiting approval**.
+>
+> ---
+>
 > **2026-07-08 (SESSION CLOSE — FE DESIGN ARCS: LANDING + MARKETS TERMINAL SHIPPED. Frontend-only; NO on-chain change.)**
 >
 > **▶ THE ON-CHAIN RESUME POINTER IS UNCHANGED.** This block does not touch the Jul-8 reclaim flip or the SB crypto migration — those (in the 2026-07-07 block below) remain THE next priorities. This is pure FE/design work.

@@ -87,6 +87,8 @@ export type WriterRow = {
   side: "call" | "put";
   /** Vault exercise style — drives the EUR/AMER badge. Defaults european. */
   exerciseStyle: "european" | "american";
+  /** Vault origin — drives the EPOCH/CUSTOM badge. Defaults epoch. */
+  origin: "epoch" | "custom";
   strike: number;
   /** Unix seconds. */
   expiry: number;
@@ -204,6 +206,9 @@ export function buildWriterRows(args: BuildWriterRowsArgs): WriterRow[] {
     // shape-check as optionType; guard undefined → european for legacy vaults.
     const exerciseStyle: "european" | "american" =
       v.exerciseStyle && "american" in v.exerciseStyle ? "american" : "european";
+    // VaultType Anchor enum { epoch: {} } | { custom: {} }; guard undefined → epoch.
+    const origin: "epoch" | "custom" =
+      v.vaultType && "custom" in v.vaultType ? "custom" : "epoch";
     const strike = usdcToNumber(v.strikePrice);
     const expiry = asNumber(v.expiry);
     const market = marketMap.get((v.market as PublicKey).toBase58()) ?? null;
@@ -316,6 +321,7 @@ export function buildWriterRows(args: BuildWriterRowsArgs): WriterRow[] {
       asset,
       side: isCall ? "call" : "put",
       exerciseStyle,
+      origin,
       strike,
       expiry,
       state,

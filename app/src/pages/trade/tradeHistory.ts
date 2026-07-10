@@ -47,6 +47,10 @@ export interface ActivityEvent {
   ts: number;
   sig: string;
   counterparty?: string | null;
+  /** For `filled` events: the wallet's role in the fill. Lets a consumer derive
+   *  Bought vs Sold correctly (a taker hitting a bid SELLS; maker of a bid BUYS).
+   *  Null for non-fill events. Additive — existing consumers ignore it. */
+  role?: "maker" | "taker" | null;
 }
 
 export interface TapeTrade {
@@ -213,6 +217,7 @@ export async function scanRecentActivity(
             ts,
             sig: s.signature,
             counterparty: isTaker ? maker : taker,
+            role: isTaker ? "taker" : "maker",
           };
         }
 

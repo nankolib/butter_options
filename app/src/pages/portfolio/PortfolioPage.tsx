@@ -12,6 +12,8 @@ import { TOKEN_2022_PROGRAM_ID } from "../../utils/constants";
 import { hexFromBytes } from "../../utils/format";
 import { PaperGrain } from "../../components/layout";
 import { AppNav } from "../../components/AppNav";
+import { PORTFOLIO_TERMINAL_UI } from "../../utils/constants";
+import { PortfolioTerminalPage } from "./PortfolioTerminalPage";
 import { MoneyAmount } from "../../components/MoneyAmount";
 import { StatementHeader, type Denomination } from "./StatementHeader";
 import { SummaryBand, type SummaryCell } from "./SummaryBand";
@@ -63,7 +65,17 @@ interface MarketAccount {
  * WriterSummaryBand + WrittenPositionsSection so claim/withdraw math
  * is computed in exactly one place per side.
  */
-export const PortfolioPage: FC = () => {
+/**
+ * PortfolioPage — flag switch between the legacy paper surface
+ * (PortfolioPageLegacy, unchanged) and the new terminal surface
+ * (PortfolioTerminalPage). Gated by PORTFOLIO_TERMINAL_UI (default true).
+ * Mirrors Trade/Write — App.tsx and routing untouched; the page owns which
+ * surface it mounts.
+ */
+export const PortfolioPage: FC = () =>
+  PORTFOLIO_TERMINAL_UI ? <PortfolioTerminalPage /> : <PortfolioPageLegacy />;
+
+const PortfolioPageLegacy: FC = () => {
   usePaperPalette();
   const { publicKey, connected } = useWallet();
   const { program } = useProgram();

@@ -90,6 +90,10 @@
   --color-l-surface-2: #EAE4D6;
   --color-l-up: #1AC6A5;
   --color-l-down: #D7263D;
+  /* Small-teal-on-light legibility (master-brief addendum): ≤12px teal TEXT/
+     numerals on light surfaces darken to #0E9B80 for contrast; fills/buttons
+     keep --color-l-up (#1AC6A5). Dark mode overrides this back to #1AC6A5. */
+  --color-l-up-text: #0E9B80;
   --color-l-on-up: #04342C;
   --color-l-on-down: #FCEBEB;
   --color-l-overlay: rgba(10, 10, 8, 0.34);
@@ -271,6 +275,8 @@ html[data-mode="dark"] {
   --color-l-surface: #14140F;
   --color-l-surface-2: #1A1A15;
   --color-l-overlay: rgba(6, 6, 4, 0.62);
+  /* Dark mode: small teal text needs no darkening — matches the fill. */
+  --color-l-up-text: #1AC6A5;
 }
 html[data-mode] ::selection {
   background: var(--color-l-dot);

@@ -157,6 +157,17 @@ export const TRADE_V2_UI = true;
 export const WRITE_TERMINAL_UI = true;
 
 // ============================================================================
+// Portfolio-page arc — terminal-surface UI gate (FE terminal track, Slice 3)
+// ============================================================================
+// Gates the terminal reskin+restructure of /portfolio (two ledgers + activity +
+// utilities, summary strip, Claim all). When false, PortfolioPage renders the
+// legacy paper surface byte-identically; when true, the new PortfolioTerminalPage.
+// Ships true (Trade/Write precedent) — frontend presentation + refetch
+// orchestration only; every action's instruction assembly is unchanged. A new
+// flag defaulting true is NOT a flip of an existing gate.
+export const PORTFOLIO_TERMINAL_UI = true;
+
+// ============================================================================
 // Phase 2 demo cutoff
 // ============================================================================
 // Hide vaults created before the Phase 2 redeploy (2026-04-26 ~18:00 UTC).

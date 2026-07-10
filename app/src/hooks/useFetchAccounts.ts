@@ -7,7 +7,7 @@
  */
 import { PublicKey } from "@solana/web3.js";
 import { Program } from "@coral-xyz/anchor";
-import { coalescedProgramAccounts } from "../utils/programAccounts";
+import { coalescedProgramAccounts, invalidateProgramAccounts } from "../utils/programAccounts";
 
 // Account discriminators from the current IDL
 const DISCRIMINATORS: Record<string, number[]> = {
@@ -80,6 +80,28 @@ export async function safeFetchAll<T>(
   }
 
   return decoded;
+}
+
+/**
+ * invalidateAccountScans — drop the in-flight coalesced scan for each named
+ * account type, so the NEXT safeFetchAll starts a FRESH getProgramAccounts
+ * instead of joining a snapshot taken before a just-confirmed mutation.
+ *
+ * The invalidate-before-refetch primitive behind the Portfolio settle/claim
+ * mutation-refresh fix: Portfolio reads every ledger via safeFetchAll (coalesced,
+ * no TTL) and useVaults does NOT subscribe to the mutationBus, so a post-action
+ * refetch could otherwise be served a pre-mutation scan (the stale-until-reload
+ * bug fixed on Trade). Call this with the account types the refetch reads, then
+ * refetch. Unknown names are skipped defensively.
+ */
+export function invalidateAccountScans(
+  program: Program<any>,
+  accountNames: readonly AccountName[],
+): void {
+  for (const name of accountNames) {
+    const disc = DISCRIMINATORS[name];
+    if (disc) invalidateProgramAccounts(program.programId, disc);
+  }
 }
 
 /** Encode bytes as base58 for RPC memcmp filter. */

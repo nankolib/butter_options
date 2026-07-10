@@ -48,11 +48,15 @@ export const OrderBookLadder: FC<{ optionMint: string | null; pegPrice: number |
     return { asks, bids, askCum, bidCum, maxCum };
   }, [orders, optionMint]);
 
+  // Best (lowest) resting ask — asks are sorted high→low, so the last is best.
+  const bestAsk = asks.length ? asks[asks.length - 1].price : null;
   const spread = asks.length && bids.length ? asks[asks.length - 1].price - bids[0].price : null;
   const empty = !asks.length && !bids.length && pegPrice == null;
 
   return (
     <div className="font-mono-plex text-[12px] text-l-text">
+      {/* Machine-readable best-ask for the grid↔book parity gate. */}
+      {bestAsk != null && <span data-testid="book-best-ask" className="hidden">{fmt(bestAsk)}</span>}
       {asks.map((o, i) => (
         <Level
           key={o.pubkey}

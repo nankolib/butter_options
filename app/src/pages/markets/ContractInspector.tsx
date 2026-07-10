@@ -253,7 +253,7 @@ const DockedInspector: FC<{
   const payoff = premium != null ? payoffGeometry(row.strike, premium, isCall) : null;
 
   return (
-    <div data-testid="trade-inspector" className="text-l-text">
+    <div data-testid="trade-inspector" data-mint={row.optionMint ?? undefined} className="text-l-text">
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>

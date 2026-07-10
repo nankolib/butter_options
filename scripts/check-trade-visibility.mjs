@@ -232,8 +232,28 @@ try {
         } else rec("analytics caret toggles", "SKIP", "no toggle");
       } else rec("row click → docked ticket", "SKIP", "no clickable cell");
     } catch (e) { rec("row click → docked ticket", "FAIL", firstLine(e)); }
+
+    // Grid ASK cell == book panel best ask for the focused contract (both read
+    // the live useBook via one selector — no staler unified-chain snapshot).
+    try {
+      await page.waitForTimeout(400);
+      const parity = await page.evaluate(() => {
+        const insp = document.querySelector('[data-testid="trade-inspector"]');
+        const mint = insp && insp.getAttribute("data-mint");
+        if (!mint) return { skip: "no focused mint" };
+        const gridAsk = document.querySelector(`[data-field="ask"][data-mint="${mint}"]`);
+        const bookAsk = document.querySelector('[data-testid="book-best-ask"]');
+        if (!gridAsk || !bookAsk) return { skip: "thin book (no resting ask on focus)" };
+        const g = (gridAsk.textContent || "").trim();
+        const b = (bookAsk.textContent || "").trim();
+        return { grid: g, book: b, equal: g === b };
+      });
+      if (parity.skip) rec("grid ask == book best ask", "SKIP", parity.skip);
+      else rec("grid ask == book best ask", parity.equal ? "PASS" : "FAIL", `grid=${parity.grid} book=${parity.book}`);
+    } catch (e) { rec("grid ask == book best ask", "FAIL", firstLine(e)); }
   } else {
     rec("chain symmetric geometry", "SKIP", "no chain");
+    rec("grid ask == book best ask", "SKIP", "no chain");
   }
 
   // Bottom dock + tab switch

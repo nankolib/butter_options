@@ -129,6 +129,23 @@ export function invalidateVaultCache(programId: PublicKey): void {
   invalidateProgramAccounts(programId, DISC.vaultMint);
 }
 
+/** Best resting bid/ask for a contract from the LIVE book. THE ONE selector the
+ *  grid cells, the book panel, and the sweep all read — no parallel (staler)
+ *  derivation. Asks include resaleAsk + writerAsk (vaultPeg never rests), and
+ *  indexBook sorts bids high→low + asks low→high, so [0] is the best on each side
+ *  → ask = min(resale, writer). Fed by useBook, so a posted/cancelled order (bus
+ *  → optimistic + reconcile) updates the cell instantly. */
+export function bestRestingBidAsk(
+  byOptionMint: Map<string, { bids: BookOrder[]; asks: BookOrder[] }>,
+  optionMint: string | null,
+): { bid: number | null; ask: number | null } {
+  const side = optionMint ? byOptionMint.get(optionMint) : undefined;
+  return {
+    bid: side && side.bids.length ? side.bids[0].price : null,
+    ask: side && side.asks.length ? side.asks[0].price : null,
+  };
+}
+
 /** Group orders by series option-mint, split into sorted bid/ask sides. */
 export function indexBook(orders: BookOrder[]): Map<string, { bids: BookOrder[]; asks: BookOrder[] }> {
   const m = new Map<string, { bids: BookOrder[]; asks: BookOrder[] }>();

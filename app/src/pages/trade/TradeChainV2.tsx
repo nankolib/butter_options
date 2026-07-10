@@ -2,6 +2,8 @@ import type { FC, ReactNode } from "react";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { calculateCallGreeks, calculatePutGreeks, getDefaultVolatility, applyVolSmile } from "../../utils/blackScholes";
 import type { UnifiedChainRow } from "../../hooks/useUnifiedChain";
+import { useBook } from "../../hooks/useBook";
+import { bestRestingBidAsk, type BookOrder } from "../../utils/exchangeData";
 
 /**
  * TradeChainV2 — the terminal options chain (design lock 2026-07-09).
@@ -87,6 +89,11 @@ export const TradeChainV2: FC<{
     return [...byStrike.values()].sort((a, b) => a.strike - b.strike);
   }, [rows]);
 
+  // LIVE book (bus-subscribed + optimistic) — the bid/ask CELLS read best resting
+  // prices from HERE, not the staler useUnifiedChain snapshot, so they always
+  // match the book panel and update the instant an order posts/cancels.
+  const { byOptionMint } = useBook();
+
   if (gridRows.length === 0) {
     return (
       <div className="rounded-[10px] border border-l-hair p-12 text-center">
@@ -130,6 +137,7 @@ export const TradeChainV2: FC<{
               isAtm={atmStrike != null && g.strike === atmStrike}
               focused={focused}
               onSelect={onSelect}
+              byOptionMint={byOptionMint}
             />
             {betweenIdx === i && spot != null && <SpotMarker spot={spot} />}
           </Fragment>
@@ -170,11 +178,16 @@ const RowCells: FC<{
   isAtm: boolean;
   focused: FocusedContract | null;
   onSelect: (c: FocusedContract) => void;
-}> = ({ g, spot, isAtm, focused, onSelect }) => {
+  byOptionMint: Map<string, { bids: BookOrder[]; asks: BookOrder[] }>;
+}> = ({ g, spot, isAtm, focused, onSelect, byOptionMint }) => {
   const cm = g.call ? metrics(g.call, spot) : null;
   const pm = g.put ? metrics(g.put, spot) : null;
   const callFocused = sameContract(focused, g.call);
   const putFocused = sameContract(focused, g.put);
+
+  // Best resting bid/ask from the LIVE book (same source the panel + sweep read).
+  const callBA = bestRestingBidAsk(byOptionMint, g.call?.optionMint ?? null);
+  const putBA = bestRestingBidAsk(byOptionMint, g.put?.optionMint ?? null);
 
   const badge = provenanceBadge(g);
   const rowBg = "border-b border-l-hair";
@@ -188,8 +201,8 @@ const RowCells: FC<{
       <DataCell align="right" muted focused={callFocused} onClick={selCall}>{cm?.delta != null ? cm.delta.toFixed(2) : "—"}</DataCell>
       <DataCell align="right" muted focused={callFocused} onClick={selCall}>{g.call && g.call.oi > 0 ? g.call.oi.toLocaleString() : "—"}</DataCell>
       <FlashCell align="right" value={cm?.mark ?? null} focused={callFocused} onClick={selCall} />
-      <FlashCell align="right" value={g.call?.bestAsk ?? null} tone="down" focused={callFocused} onClick={selCall} />
-      <FlashCell align="right" value={g.call?.bestBid ?? null} tone="up" focused={callFocused} onClick={selCall} />
+      <FlashCell align="right" value={callBA.ask} tone="down" focused={callFocused} onClick={selCall} dataField="ask" dataMint={g.call?.optionMint} />
+      <FlashCell align="right" value={callBA.bid} tone="up" focused={callFocused} onClick={selCall} dataField="bid" dataMint={g.call?.optionMint} />
 
       {/* gutter */}
       <div className={rowBg} />
@@ -212,8 +225,8 @@ const RowCells: FC<{
       <div className={rowBg} />
 
       {/* Right side (puts): BID ASK MARK OI Δ IV — left-aligned mirror. */}
-      <FlashCell align="left" value={g.put?.bestBid ?? null} tone="up" focused={putFocused} onClick={selPut} />
-      <FlashCell align="left" value={g.put?.bestAsk ?? null} tone="down" focused={putFocused} onClick={selPut} />
+      <FlashCell align="left" value={putBA.bid} tone="up" focused={putFocused} onClick={selPut} dataField="bid" dataMint={g.put?.optionMint} />
+      <FlashCell align="left" value={putBA.ask} tone="down" focused={putFocused} onClick={selPut} dataField="ask" dataMint={g.put?.optionMint} />
       <FlashCell align="left" value={pm?.mark ?? null} focused={putFocused} onClick={selPut} />
       <DataCell align="left" muted focused={putFocused} onClick={selPut}>{g.put && g.put.oi > 0 ? g.put.oi.toLocaleString() : "—"}</DataCell>
       <DataCell align="left" muted focused={putFocused} onClick={selPut}>{pm?.delta != null ? pm.delta.toFixed(2) : "—"}</DataCell>
@@ -251,7 +264,9 @@ const FlashCell: FC<{
   tone?: "up" | "down";
   focused?: boolean;
   onClick?: () => void;
-}> = ({ value, align, tone, focused, onClick }) => {
+  dataField?: string;
+  dataMint?: string | null;
+}> = ({ value, align, tone, focused, onClick, dataField, dataMint }) => {
   const flash = useFlash(value);
   const baseColor = tone === "up" ? "var(--color-l-up)" : tone === "down" ? "var(--color-l-down)" : undefined;
   const color = flash ? (flash === "up" ? "var(--color-l-up)" : "var(--color-l-down)") : baseColor;
@@ -259,6 +274,8 @@ const FlashCell: FC<{
     <div
       onClick={onClick}
       style={{ color }}
+      data-field={dataField}
+      data-mint={dataMint ?? undefined}
       className={`${cellBase} ${align === "right" ? "justify-end" : "justify-start"} ${color ? "" : "text-l-text"} ${
         focused ? "bg-l-surface" : ""
       } ${onClick ? "cursor-pointer hover:bg-l-surface" : ""}`}

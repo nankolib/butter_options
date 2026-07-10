@@ -9,7 +9,7 @@ import { useBook, type BookOrder } from "../../hooks/useBook";
 import { usePegFill, usePostOrder, useFillOrder, useFillWriterAsk } from "../../hooks/useOrderFlows";
 import { deriveOrderPubkey } from "./orderFlows";
 import { refreshAfterMutation } from "./orderRefresh";
-import { planSweep, executeSweep, type SweepLevel } from "./marketSweep";
+import { planSweep, executeSweep, buildAskLevels, buildBidLevels, crossLimit } from "./marketSweep";
 import { calculateCallGreeks, calculatePutGreeks, getDefaultVolatility, applyVolSmile } from "../../utils/blackScholes";
 import { TOKEN_2022_PROGRAM_ID, MARKET_SEED, PROGRAM_ID, DEVNET_USDC_MINT } from "../../utils/constants";
 import {
@@ -225,13 +225,18 @@ export const OrderTicket: FC<{
       let sweepReport: string | null = null; // "Filled X of Y · avg $Z" for market sweeps
       const ref = { asset: row.asset, vault: row.vault, optionMint: row.optionMint! };
       const nonce = Math.floor(Date.now() / 1000);
-      const optimisticOrder = (kind: "bid" | "resaleAsk" | "writerAsk"): BookOrder => ({
+      const me = publicKey.toBase58();
+      const optimisticOrder = (kind: "bid" | "resaleAsk" | "writerAsk", qtyOverride?: number): BookOrder => ({
         pubkey: deriveOrderPubkey(row.optionMint!, publicKey, nonce),
-        owner: publicKey.toBase58(), optionMint: row.optionMint!, vault: row.vault, kind,
-        price: limitPrice, qty, qtyInitial: qty, nonce: String(nonce),
+        owner: me, optionMint: row.optionMint!, vault: row.vault, kind,
+        price: limitPrice, qty: qtyOverride ?? qty, qtyInitial: qtyOverride ?? qty, nonce: String(nonce),
         createdAt: Math.floor(Date.now() / 1000),
         collateralPerContract: kind === "writerAsk" ? row.strike : 0,
       });
+      // Vault peg as an ask level (American-only + priced on-chain) when a fresh
+      // quote + free capacity exist.
+      const pegAsk = (useOnChainQuote && rfq?.premiumPerContract != null && (pegRemaining ?? 0) > 0)
+        ? rfq.premiumPerContract : null;
       if (!isSeries) {
         if (side === "buy") { onLegacyBuy(row); setBusy(false); return; }
         setStatus({ kind: "err", msg: "Legacy listings are managed in Portfolio." });
@@ -242,22 +247,9 @@ export const OrderTicket: FC<{
         sig = await post.submit(ref, "writerAsk", limitPrice, qty, nonce);
         if (sig) added = optimisticOrder("writerAsk");
       } else if (side === "buy" && type === "market") {
-        // Multi-level sweep (Phase 1): walk [peg + resting asks] ascending, fill
-        // up to 4 levels within slippage, in ONE tx. Filters the taker's OWN asks
-        // (self-trade; writerAsk also blocks self-buy on-chain).
-        const me = publicKey.toBase58();
-        const levels: SweepLevel[] = orders
-          .filter((o) => o.optionMint === row.optionMint && o.kind !== "bid" && o.owner !== me)
-          .map((o) => ({
-            source: o.kind === "writerAsk" ? "writerAsk" : "resaleAsk",
-            price: o.price, capacity: o.qty,
-            order: { pubkey: o.pubkey, owner: o.owner, optionMint: o.optionMint, vault: o.vault, kind: o.kind },
-          }));
-        // Vault peg is American-only + priced on-chain; include it as a level when
-        // a fresh quote + free capacity exist. Leg qty = min(remaining, capacity).
-        if (useOnChainQuote && rfq?.premiumPerContract != null && (pegRemaining ?? 0) > 0) {
-          levels.push({ source: "peg", price: rfq.premiumPerContract, capacity: pegRemaining! });
-        }
+        // Multi-level sweep (Phase 1): [peg + resting asks] ascending, ≤4 levels
+        // within slippage, in ONE tx. Self-trade: own asks filtered out.
+        const levels = buildAskLevels(orders, row.optionMint!, me, pegAsk, pegRemaining ?? 0);
         const plan = planSweep({ side: "buy", qty, levels, slippagePct });
         if (!plan.legs.length) { setStatus({ kind: "err", msg: "No fillable liquidity within slippage." }); setBusy(false); return; }
         sig = await executeSweep(program!, ref, plan, slippagePct);
@@ -267,20 +259,35 @@ export const OrderTicket: FC<{
           sweepReport = `Filled ${plan.filledQty} of ${qty}${plan.filledQty < qty ? " · partial" : ""} · avg ${plan.avgPrice != null ? fmt(plan.avgPrice) : "—"}`;
         }
       } else if (side === "buy" && type === "limit") {
-        sig = await post.submit(ref, "bid", limitPrice, qty, nonce);
-        if (sig) added = optimisticOrder("bid");
+        // Marketable (limit ≥ best ask) → CROSS (sweep ≤ limit), then rest residual
+        // at the limit (TWO-TX). Below best ask → rest a bid unchanged.
+        const askLevels = buildAskLevels(orders, row.optionMint!, me, pegAsk, pegRemaining ?? 0);
+        const bestAsk = askLevels.length ? Math.min(...askLevels.map((l) => l.price)) : null;
+        if (bestAsk == null || limitPrice < bestAsk) {
+          sig = await post.submit(ref, "bid", limitPrice, qty, nonce);
+          if (sig) added = optimisticOrder("bid");
+        } else {
+          const cross = await crossLimit(program!, ref, { side: "buy", qty, limitPrice, taker: me, optionMint: row.optionMint!, orders, pegAsk, pegCapacity: pegRemaining ?? 0 });
+          removed = cross.removed;
+          const residual = qty - cross.filledQty;
+          let restErr = false;
+          if (residual > 0) {
+            try { const rs = await post.submit(ref, "bid", limitPrice, residual, nonce); if (rs) { sig = rs; added = optimisticOrder("bid", residual); } }
+            catch { restErr = true; }
+          }
+          if (!sig) sig = cross.sweepSigs[cross.sweepSigs.length - 1] ?? null;
+          phRoute = "crossBuy";
+          sweepReport = residual > 0
+            ? (restErr
+                ? `Filled ${cross.filledQty} of ${qty} · residual ${residual} failed to post — retry`
+                : `Filled ${cross.filledQty}${cross.avgPrice != null ? ` · avg ${fmt(cross.avgPrice)}` : ""} · rested ${residual} @ ${fmt(limitPrice)}`)
+            : `Filled ${cross.filledQty} of ${qty}${cross.avgPrice != null ? ` · avg ${fmt(cross.avgPrice)}` : ""}`;
+        }
       } else if (side === "sell" && type === "market") {
-        // Multi-level sweep into resting bids (descending), capped by held balance
-        // (each fill delivers Token-2022 contracts). No peg on the sell side.
-        const me = publicKey.toBase58();
+        // Multi-level sweep into resting bids (descending), capped by held balance.
         const sellQty = Math.min(qty, held ?? 0);
         if (sellQty <= 0) { setStatus({ kind: "err", msg: "No contracts held to sell." }); setBusy(false); return; }
-        const levels: SweepLevel[] = orders
-          .filter((o) => o.optionMint === row.optionMint && o.kind === "bid" && o.owner !== me)
-          .map((o) => ({
-            source: "bid", price: o.price, capacity: o.qty,
-            order: { pubkey: o.pubkey, owner: o.owner, optionMint: o.optionMint, vault: o.vault, kind: o.kind },
-          }));
+        const levels = buildBidLevels(orders, row.optionMint!, me);
         const plan = planSweep({ side: "sell", qty: sellQty, levels, slippagePct });
         if (!plan.legs.length) { setStatus({ kind: "err", msg: "No resting bid within slippage." }); setBusy(false); return; }
         sig = await executeSweep(program!, ref, plan, slippagePct);
@@ -291,8 +298,30 @@ export const OrderTicket: FC<{
         }
       } else if (side === "sell" && type === "limit") {
         if (sellNoBalance) { setBusy(false); return; }
-        sig = await post.submit(ref, "resaleAsk", limitPrice, qty, nonce);
-        if (sig) added = optimisticOrder("resaleAsk");
+        // Marketable (limit ≤ best bid) → CROSS into bids, then rest residual as a
+        // resale ask at the limit (TWO-TX). Above best bid → rest unchanged.
+        const bidLevels = buildBidLevels(orders, row.optionMint!, me);
+        const bestBid = bidLevels.length ? Math.max(...bidLevels.map((l) => l.price)) : null;
+        if (bestBid == null || limitPrice > bestBid) {
+          sig = await post.submit(ref, "resaleAsk", limitPrice, qty, nonce);
+          if (sig) added = optimisticOrder("resaleAsk");
+        } else {
+          const cross = await crossLimit(program!, ref, { side: "sell", qty, limitPrice, taker: me, optionMint: row.optionMint!, orders, pegAsk: null, pegCapacity: 0 });
+          removed = cross.removed;
+          const residual = qty - cross.filledQty; // held ≥ qty (sellNoBalance gate) → residual is restable
+          let restErr = false;
+          if (residual > 0) {
+            try { const rs = await post.submit(ref, "resaleAsk", limitPrice, residual, nonce); if (rs) { sig = rs; added = optimisticOrder("resaleAsk", residual); } }
+            catch { restErr = true; }
+          }
+          if (!sig) sig = cross.sweepSigs[cross.sweepSigs.length - 1] ?? null;
+          phRoute = "crossSell";
+          sweepReport = residual > 0
+            ? (restErr
+                ? `Sold ${cross.filledQty} of ${qty} · residual ${residual} failed to post — retry`
+                : `Sold ${cross.filledQty}${cross.avgPrice != null ? ` · avg ${fmt(cross.avgPrice)}` : ""} · rested ${residual} @ ${fmt(limitPrice)}`)
+            : `Sold ${cross.filledQty} of ${qty}${cross.avgPrice != null ? ` · avg ${fmt(cross.avgPrice)}` : ""}`;
+        }
       }
       if (sig) {
         setStatus({ kind: "ok", msg: sweepReport ? `${sweepReport} · ${sig.slice(0, 8)}…` : `Submitted · ${sig.slice(0, 8)}…` });

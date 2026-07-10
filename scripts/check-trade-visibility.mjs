@@ -29,6 +29,17 @@
 //   3. Buy·Market a contract → the taken resting ask disappears; OI/positions in
 //      the dock update within the reconcile window. No manual page refresh needed
 //      for any of the above.
+//
+// MANUAL VERIFICATION — marketable-limit crossing (Phase 2; multi-wallet):
+//   4. Book: resting ask 3.10 (qty 5). Buy·LIMIT 8 @ 3.20 (≥ best ask = marketable)
+//      → sweeps the 3.10 ask (tx1), then rests the residual 3 as a bid @ 3.20
+//      (tx2). Status "Filled 5 · rested 3 @ $3.20". Non-marketable (Buy·Limit 8 @
+//      3.00 < best ask) → just rests a bid, unchanged.
+//   5. Sell·LIMIT ≤ best bid → crosses into the bid(s), rests residual as a resale
+//      ask @ limit. Above best bid → rests unchanged.
+//   6. If the residual post fails, the fills still stand → "… residual N failed to
+//      post — retry". If the book gains a new marketable ask while tx1 confirms,
+//      the RIDER runs ONE more sweep before resting (no infinite loop).
 // =============================================================================
 
 import { createServer } from "node:http";

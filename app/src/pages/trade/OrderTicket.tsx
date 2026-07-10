@@ -9,6 +9,7 @@ import { useBook, type BookOrder } from "../../hooks/useBook";
 import { usePegFill, usePostOrder, useFillOrder, useFillWriterAsk } from "../../hooks/useOrderFlows";
 import { deriveOrderPubkey } from "./orderFlows";
 import { refreshAfterMutation } from "./orderRefresh";
+import { planSweep, executeSweep, type SweepLevel } from "./marketSweep";
 import { calculateCallGreeks, calculatePutGreeks, getDefaultVolatility, applyVolSmile } from "../../utils/blackScholes";
 import { TOKEN_2022_PROGRAM_ID, MARKET_SEED, PROGRAM_ID, DEVNET_USDC_MINT } from "../../utils/constants";
 import {
@@ -64,7 +65,7 @@ export const OrderTicket: FC<{
   const docked = variant === "docked";
   const { publicKey } = useWallet();
   const { program } = useProgram();
-  const { orders, refetch: refetchBook } = useBook();
+  const { orders } = useBook();
   const peg = usePegFill();
   const post = usePostOrder();
   const fill = useFillOrder();
@@ -221,6 +222,7 @@ export const OrderTicket: FC<{
       let phRoute: string | undefined; // buy·market dispatch route for analytics
       let removed: string[] = [];       // optimistically removed (fully-filled resting order)
       let added: BookOrder | undefined; // optimistically inserted (just-posted resting order)
+      let sweepReport: string | null = null; // "Filled X of Y · avg $Z" for market sweeps
       const ref = { asset: row.asset, vault: row.vault, optionMint: row.optionMint! };
       const nonce = Math.floor(Date.now() / 1000);
       const optimisticOrder = (kind: "bid" | "resaleAsk" | "writerAsk"): BookOrder => ({
@@ -240,68 +242,60 @@ export const OrderTicket: FC<{
         sig = await post.submit(ref, "writerAsk", limitPrice, qty, nonce);
         if (sig) added = optimisticOrder("writerAsk");
       } else if (side === "buy" && type === "market") {
-        // Best ask: a resting ask ≤ peg → take it; else fill the vault peg.
-        const asks = orders
-          .filter((o) => o.optionMint === row.optionMint && o.kind !== "bid")
-          .sort((a, b) => a.price - b.price);
-        // American: the resting-ask-vs-peg reference is the on-chain quote only,
-        // NEVER the EUR model (mark.premium) — the submit gate guarantees `rfq`
-        // is fresh here. European keeps the model reference.
-        const pegRef = useOnChainQuote ? (rfq?.premiumPerContract ?? Infinity) : (mark?.premium ?? Infinity);
-        if (asks.length && asks[0].price <= pegRef) {
-          // Belt-and-suspenders on top of the shared book store: re-verify the
-          // target order still exists on-chain before dispatch. A concurrent
-          // cancel/fill could have closed it (→ 3012 AccountNotInitialized);
-          // if so, refresh the shared book and ask the user to retry.
-          const live = program
-            ? await program.provider.connection.getAccountInfo(new PublicKey(asks[0].pubkey))
-            : null;
-          if (!live) {
-            await refetchBook();
-            setStatus({ kind: "err", msg: "That order just changed — book refreshed, please retry." });
-            setBusy(false);
-            return;
-          }
-          // Kind-aware: WriterAsks mint-on-fill via fill_writer_ask (distinct
-          // account set); resaleAsks take contracts via fill_order.
-          phRoute = asks[0].kind === "writerAsk" ? "writerAsk" : "fillOrder";
-          sig = asks[0].kind === "writerAsk"
-            ? await fillWA.submit(asks[0], qty)
-            : await fill.submit(asks[0], qty);
-          if (sig && qty >= asks[0].qty) removed = [asks[0].pubkey]; // fully consumed
-        } else {
-          phRoute = "peg";
-          // BUG-1 backstop: never send a peg fill the vault can't back (the button
-          // gate above already blocks this; this guards a stale-book race).
-          if (pegRemaining != null && pegRemaining < qty) {
-            setStatus({ kind: "err", msg: pegRemaining <= 0 ? "Vault sold out — no peg capacity." : `Only ${pegRemaining} contract(s) available at the peg.` });
-            setBusy(false); return;
-          }
-          // American: peg max-premium basis is the on-chain quote only, never the
-          // EUR model. European may fall back to the model/aggregate as before.
-          const basis = useOnChainQuote
-            ? (rfq?.premiumPerContract ?? 0)
-            : (estPrice ?? mark?.premium ?? 0);
-          const maxPremium = basis * (1 + slippagePct / 100);
-          sig = await peg.submit(ref, qty, maxPremium > 0 ? maxPremium : 1_000_000);
+        // Multi-level sweep (Phase 1): walk [peg + resting asks] ascending, fill
+        // up to 4 levels within slippage, in ONE tx. Filters the taker's OWN asks
+        // (self-trade; writerAsk also blocks self-buy on-chain).
+        const me = publicKey.toBase58();
+        const levels: SweepLevel[] = orders
+          .filter((o) => o.optionMint === row.optionMint && o.kind !== "bid" && o.owner !== me)
+          .map((o) => ({
+            source: o.kind === "writerAsk" ? "writerAsk" : "resaleAsk",
+            price: o.price, capacity: o.qty,
+            order: { pubkey: o.pubkey, owner: o.owner, optionMint: o.optionMint, vault: o.vault, kind: o.kind },
+          }));
+        // Vault peg is American-only + priced on-chain; include it as a level when
+        // a fresh quote + free capacity exist. Leg qty = min(remaining, capacity).
+        if (useOnChainQuote && rfq?.premiumPerContract != null && (pegRemaining ?? 0) > 0) {
+          levels.push({ source: "peg", price: rfq.premiumPerContract, capacity: pegRemaining! });
+        }
+        const plan = planSweep({ side: "buy", qty, levels, slippagePct });
+        if (!plan.legs.length) { setStatus({ kind: "err", msg: "No fillable liquidity within slippage." }); setBusy(false); return; }
+        sig = await executeSweep(program!, ref, plan, slippagePct);
+        if (sig) {
+          removed = plan.legs.filter((l) => l.order && l.qty >= l.capacity).map((l) => l.order!.pubkey);
+          phRoute = plan.legs.map((l) => l.source).join("+");
+          sweepReport = `Filled ${plan.filledQty} of ${qty}${plan.filledQty < qty ? " · partial" : ""} · avg ${plan.avgPrice != null ? fmt(plan.avgPrice) : "—"}`;
         }
       } else if (side === "buy" && type === "limit") {
         sig = await post.submit(ref, "bid", limitPrice, qty, nonce);
         if (sig) added = optimisticOrder("bid");
       } else if (side === "sell" && type === "market") {
-        const bids = orders
-          .filter((o) => o.optionMint === row.optionMint && o.kind === "bid")
-          .sort((a, b) => b.price - a.price);
-        if (!bids.length) { setStatus({ kind: "err", msg: "No resting bid to sell into." }); setBusy(false); return; }
-        sig = await fill.submit(bids[0], qty);
-        if (sig && qty >= bids[0].qty) removed = [bids[0].pubkey]; // fully consumed
+        // Multi-level sweep into resting bids (descending), capped by held balance
+        // (each fill delivers Token-2022 contracts). No peg on the sell side.
+        const me = publicKey.toBase58();
+        const sellQty = Math.min(qty, held ?? 0);
+        if (sellQty <= 0) { setStatus({ kind: "err", msg: "No contracts held to sell." }); setBusy(false); return; }
+        const levels: SweepLevel[] = orders
+          .filter((o) => o.optionMint === row.optionMint && o.kind === "bid" && o.owner !== me)
+          .map((o) => ({
+            source: "bid", price: o.price, capacity: o.qty,
+            order: { pubkey: o.pubkey, owner: o.owner, optionMint: o.optionMint, vault: o.vault, kind: o.kind },
+          }));
+        const plan = planSweep({ side: "sell", qty: sellQty, levels, slippagePct });
+        if (!plan.legs.length) { setStatus({ kind: "err", msg: "No resting bid within slippage." }); setBusy(false); return; }
+        sig = await executeSweep(program!, ref, plan, slippagePct);
+        if (sig) {
+          removed = plan.legs.filter((l) => l.order && l.qty >= l.capacity).map((l) => l.order!.pubkey);
+          phRoute = "sweepSell";
+          sweepReport = `Sold ${plan.filledQty} of ${qty}${plan.filledQty < qty ? " · partial" : ""} · avg ${plan.avgPrice != null ? fmt(plan.avgPrice) : "—"}`;
+        }
       } else if (side === "sell" && type === "limit") {
         if (sellNoBalance) { setBusy(false); return; }
         sig = await post.submit(ref, "resaleAsk", limitPrice, qty, nonce);
         if (sig) added = optimisticOrder("resaleAsk");
       }
       if (sig) {
-        setStatus({ kind: "ok", msg: `Submitted · ${sig.slice(0, 8)}…` });
+        setStatus({ kind: "ok", msg: sweepReport ? `${sweepReport} · ${sig.slice(0, 8)}…` : `Submitted · ${sig.slice(0, 8)}…` });
         const ev = side === "write" ? "trade_write_ask"
           : side === "buy" ? (type === "market" ? "trade_buy_market" : "trade_buy_limit")
           : (type === "market" ? "trade_sell_market" : "trade_sell_limit");
@@ -348,18 +342,10 @@ export const OrderTicket: FC<{
     ? (amerFresh.statusReason ?? "Request an on-chain quote to continue")
     : null;
 
-  // BUG-1: gate ONLY the peg route (no resting ask ≤ peg reference).
-  const bestRestingAsk = orders
-    .filter((o) => o.optionMint === row.optionMint && o.kind !== "bid")
-    .reduce<number | null>((m, o) => (m == null || o.price < m ? o.price : m), null);
-  const pegRef = useOnChainQuote ? (rfq?.premiumPerContract ?? Infinity) : (mark?.premium ?? Infinity);
-  const wouldRouteToPeg =
-    side === "buy" && type === "market" && !(bestRestingAsk != null && bestRestingAsk <= pegRef);
-  const pegGate = wouldRouteToPeg && pegRemaining != null && pegRemaining < qty
-    ? (pegRemaining <= 0 ? "Sold out · vault capacity exhausted" : `Only ${pegRemaining} left at the vault peg`)
-    : null;
-
-  const disabled = submitting || sellNoBalance || !publicKey || (isWrite && !!writeGate) || !!limitGate || !!amerQuoteGate || !!pegGate;
+  // No peg-capacity button gate: the multi-level sweep routes a Buy·Market past
+  // an exhausted peg to resting asks and reports an honest partial fill, so a
+  // low peg no longer blocks the order.
+  const disabled = submitting || sellNoBalance || !publicKey || (isWrite && !!writeGate) || !!limitGate || !!amerQuoteGate;
 
   return (
     <div className={docked ? "text-l-text" : "rounded-[10px] border border-l-hair bg-l-surface p-4 text-l-text"}>
@@ -499,7 +485,6 @@ export const OrderTicket: FC<{
           : isWrite ? (writeGate ?? amerQuoteGate ?? `Write ${qty} · ask ${fmt(limitPrice)}`)
           : limitGate ? limitGate
           : amerQuoteGate ? amerQuoteGate
-          : pegGate ? pegGate
           : sellNoBalance ? "No contracts held to sell"
           : `${side === "buy" ? "Buy" : "Sell"} ${qty} · ${type === "market" ? "Market" : fmt(limitPrice)}`}
       </button>

@@ -83,7 +83,10 @@ export const SimpleTradePanel: FC<{
       const sig = await peg.submit(
         { asset, vault: auto.vault, optionMint: auto.optionMint },
         preview.qty,
-        preview.premium * 1.15, // 15% peg cushion
+        // max_premium is the TOTAL ceiling (qty × premium) on-chain
+        // (fill_vault_peg.rs:205-211), NOT per-contract — the old `premium × 1.15`
+        // reverted (SlippageExceeded) for any auto-picked qty > 1. Use cost × 1.15.
+        preview.cost * 1.15, // 15% peg cushion on the total
       );
       if (sig) { setStatus({ kind: "ok", msg: `Bought ${preview.qty} · ${sig.slice(0, 8)}…` }); onDone(); }
     } catch (e: any) {

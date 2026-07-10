@@ -231,6 +231,98 @@ export async function fillWriterAsk(
 }
 
 // =============================================================================
+// Instruction-only builders (Phase 1 market sweep). Return { pre, fill } so the
+// sweep can compose up to 4 fills across levels into ONE legacy tx. These MIRROR
+// the .rpc() builders above account-for-account (kept separate so the proven
+// single-fill .rpc() paths stay byte-identical); the sweep adds ONE CU limit.
+// =============================================================================
+
+export interface FillIxs { pre: TransactionInstruction[]; fill: TransactionInstruction }
+
+/** fill_order (resaleAsk buy | bid sell) — instruction form of fillSeriesOrder. */
+export async function buildFillOrderIx(
+  program: Program<any>, order: FillableOrder, quantity: number, ctx?: OrderCtx,
+): Promise<FillIxs> {
+  const c = ctx ?? (await loadOrderCtx(program));
+  const taker = program.provider.publicKey!;
+  const maker = new PublicKey(order.owner);
+  const optionMint = new PublicKey(order.optionMint);
+  const vault = new PublicKey(order.vault);
+  const eaml = deriveExtraAccountMetaListPda(optionMint)[0];
+  const hookState = deriveHookStatePda(optionMint)[0];
+  const takerUsdc = getAssociatedTokenAddressSync(c.usdcMint, taker, false, TOKEN_PROGRAM_ID);
+  const makerUsdc = getAssociatedTokenAddressSync(c.usdcMint, maker, false, TOKEN_PROGRAM_ID);
+  const takerOption = getAssociatedTokenAddressSync(optionMint, taker, false, TOKEN_2022_PROGRAM_ID);
+  const makerOption = getAssociatedTokenAddressSync(optionMint, maker, false, TOKEN_2022_PROGRAM_ID);
+  const recipientAta = order.kind === "bid" ? makerOption : takerOption;
+  const recipient = order.kind === "bid" ? maker : taker;
+  const ataIx = createAssociatedTokenAccountIdempotentInstruction(
+    taker, recipientAta, recipient, optionMint, TOKEN_2022_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID);
+  const fill = await program.methods.fillOrder(new BN(quantity)).accountsStrict({
+    taker, optionMint, order: new PublicKey(order.pubkey), maker, sharedVault: vault,
+    escrow: pda([Buffer.from(RESTING_ORDER_ESCROW_SEED), new PublicKey(order.pubkey).toBuffer()]),
+    protocolState: c.protocolState, treasury: c.treasury,
+    takerUsdcAccount: takerUsdc, makerUsdcAccount: makerUsdc, takerOptionAccount: takerOption, makerOptionAccount: makerOption,
+    transferHookProgram: TRANSFER_HOOK_PROGRAM_ID, extraAccountMetaList: eaml, hookState,
+    tokenProgram: TOKEN_PROGRAM_ID, token2022Program: TOKEN_2022_PROGRAM_ID, systemProgram: SystemProgram.programId,
+  }).instruction();
+  return { pre: [ataIx], fill };
+}
+
+/** fill_writer_ask — instruction form of fillWriterAsk (mint-on-fill). */
+export async function buildFillWriterAskIx(
+  program: Program<any>, order: FillableOrder, quantity: number, ctx?: OrderCtx,
+): Promise<FillIxs> {
+  const c = ctx ?? (await loadOrderCtx(program));
+  const taker = program.provider.publicKey!;
+  const maker = new PublicKey(order.owner);
+  const optionMint = new PublicKey(order.optionMint);
+  const vault = new PublicKey(order.vault);
+  const orderPk = new PublicKey(order.pubkey);
+  const takerUsdc = getAssociatedTokenAddressSync(c.usdcMint, taker, false, TOKEN_PROGRAM_ID);
+  const makerUsdc = getAssociatedTokenAddressSync(c.usdcMint, maker, false, TOKEN_PROGRAM_ID);
+  const takerOption = getAssociatedTokenAddressSync(optionMint, taker, false, TOKEN_2022_PROGRAM_ID);
+  const record = pda([Buffer.from(VAULT_MINT_RECORD_SEED), optionMint.toBuffer()]);
+  const takerOptIx = createAssociatedTokenAccountIdempotentInstruction(
+    taker, takerOption, taker, optionMint, TOKEN_2022_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID);
+  const takerUsdcIx = createAssociatedTokenAccountIdempotentInstruction(taker, takerUsdc, taker, c.usdcMint, TOKEN_PROGRAM_ID);
+  const makerUsdcIx = createAssociatedTokenAccountIdempotentInstruction(taker, makerUsdc, maker, c.usdcMint, TOKEN_PROGRAM_ID);
+  const fill = await program.methods.fillWriterAsk(new BN(quantity)).accountsStrict({
+    taker, optionMint, order: orderPk, maker, sharedVault: vault,
+    vaultMintRecord: record, escrow: pda([Buffer.from(RESTING_ORDER_ESCROW_SEED), orderPk.toBuffer()]),
+    protocolState: c.protocolState, treasury: c.treasury,
+    takerUsdcAccount: takerUsdc, makerUsdcAccount: makerUsdc, takerOptionAccount: takerOption,
+    writerAskPot: pda([Buffer.from(WRITER_ASK_POT_SEED), optionMint.toBuffer()]),
+    writerAskPotUsdc: pda([Buffer.from(WRITER_ASK_POT_USDC_SEED), optionMint.toBuffer()]),
+    writerAskPosition: pda([Buffer.from(WRITER_ASK_POSITION_SEED), optionMint.toBuffer(), maker.toBuffer()]),
+    usdcMint: c.usdcMint,
+    tokenProgram: TOKEN_PROGRAM_ID, token2022Program: TOKEN_2022_PROGRAM_ID, systemProgram: SystemProgram.programId,
+  }).instruction();
+  return { pre: [takerOptIx, takerUsdcIx, makerUsdcIx], fill };
+}
+
+/** fill_vault_peg — instruction form of pegFill. `maxPremiumMicro` is the TOTAL
+ *  ceiling (qty × price), per the on-chain check (fill_vault_peg.rs:205-211). */
+export async function buildPegFillIx(
+  program: Program<any>, ref: SeriesRef, quantity: number, maxPremiumMicro: BN, ctx?: OrderCtx,
+): Promise<FillIxs> {
+  const c = ctx ?? (await loadOrderCtx(program));
+  const a = await seriesAccounts(program, ref);
+  const taker = program.provider.publicKey!;
+  const takerOption = getAssociatedTokenAddressSync(a.optionMint, taker, false, TOKEN_2022_PROGRAM_ID);
+  const takerUsdc = getAssociatedTokenAddressSync(c.usdcMint, taker, false, TOKEN_PROGRAM_ID);
+  const ataIx = createAssociatedTokenAccountIdempotentInstruction(
+    taker, takerOption, taker, a.optionMint, TOKEN_2022_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID);
+  const fill = await program.methods.fillVaultPeg(new BN(quantity), maxPremiumMicro).accountsStrict({
+    taker, sharedVault: a.vault, vaultMintRecord: a.record, market: a.market, volOracle: a.volOracle,
+    protocolState: c.protocolState, optionMint: a.optionMint, takerOptionAccount: takerOption,
+    takerUsdcAccount: takerUsdc, vaultUsdcAccount: a.vaultUsdc, treasury: c.treasury,
+    tokenProgram: TOKEN_PROGRAM_ID, token2022Program: TOKEN_2022_PROGRAM_ID,
+  }).instruction();
+  return { pre: [ataIx], fill };
+}
+
+// =============================================================================
 // Epoch-write → series infra builders (return instructions, so the write flow
 // can bundle create_series + create_shared_vault in ONE tx and skip whichever
 // already exists). Both target the CANONICAL series (spec-only seeds) — the

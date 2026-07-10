@@ -71,7 +71,7 @@ export const OrderBookLadder: FC<{ optionMint: string | null; pegPrice: number |
           <span className="font-mono-plex text-[12px] tabular-nums" style={{ color: "var(--color-l-down)" }}>
             {fmt(pegPrice)}
           </span>
-          <span className="font-mono-plex text-[9px] uppercase tracking-[0.14em] text-l-muted">vault peg</span>
+          <span className="font-mono-plex text-[9px] uppercase tracking-[0.14em] text-l-muted">vault</span>
         </div>
       )}
 

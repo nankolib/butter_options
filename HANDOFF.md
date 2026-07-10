@@ -1,8 +1,14 @@
 # Opta — Engineer Handoff
 
-> **2026-07-09 (SESSION CLOSE — JUL-8 RECLAIM FLIP EXECUTED + SB MIGRATION GATE D DEPLOYED + SB WARMUP RESCUE (SELF-HOSTED CROSSBAR + ROBUSTNESS) + PYTH EXPOSURE SCANNED). ▶ RESUME HERE — supersedes the 2026-07-07 "▶ RESUME HERE" (its items 1 + 2 are now DONE).**
+> **▶ RESUME HERE (2026-07-10) — FE TRACK.** Next slices: **Write page redesign → Portfolio redesign** (Portfolio inherits the settle/claim mutation-refresh follow-up — see the mutation-refresh pattern in the Trade block below). Pipeline: **brief → Claude Design lock → recon-gated build → rendered-DOM gates → preview verify → squash-ship.**
+>   - **PENDING — live production crossing confirmation:** the multi-level market sweep + marketable-limit crossing are **surface-verified on prod only** (opta.fyi `5933025`). A founder wallet click to exercise a real sweep / cross tx on production is **not yet done**.
+>   - The **on-chain track (parallel, still live — SB warmup cutover ~Jul 20 + Pyth expiry)** is the block directly below; unchanged.
 >
-> **▶ RESUME HERE (next session, in order):**
+> ---
+>
+> **2026-07-09 (SESSION CLOSE — JUL-8 RECLAIM FLIP EXECUTED + SB MIGRATION GATE D DEPLOYED + SB WARMUP RESCUE (SELF-HOSTED CROSSBAR + ROBUSTNESS) + PYTH EXPOSURE SCANNED). ON-CHAIN RESUME — supersedes the 2026-07-07 "▶ RESUME HERE" (its items 1 + 2 are now DONE).**
+>
+> **▶ ON-CHAIN RESUME (SB cutover ~Jul 20 + Pyth expiry, in order):**
 > 1. **SB WARMUP MONITOR → CUTOVER (~Jul 20).** 5 crypto SB vol oracles warming; **168h clock anchored at `sample_count=1` = 2026-07-09T11:00:50Z → warm ~2026-07-16T10:00Z** (~4d before cutover). Warmup RESCUED this session (see the crossbar block): public crossbar was flaky (tick2 = 0/5 crypto), now on **self-hosted crossbar** (proven 6/6) + mid-hour retry. Watch `sample_count` climb hourly on BTC/ETH/SOL/XRP/FARTCOIN (all should reach 168 barring outages). At warm: stop new Pyth crypto mints → last Pyth vaults expire/settle → `close_market` old 5 → `create_market` real names `source=SB` (Gate C2 `close_market` + cutover deploy still undeployed — ships here).
 > 2. **PYTH EXPIRY — WRITER-SIDE ONLY, no gate needed (holder scan done).** 186 live Pyth vaults; **46 expire 2026-09-25** (> Jul-31) but **ALL 46 have 0 third-party holders** (0 outstanding option tokens; every canonical mint supply = 0). $956,780 is writer collateral, returned by the proven reclaim path → **no holder harm, self-resolves**. Optional: $500 one-month Hermes bridge to settle normally, or nothing. Max mintable expiry is UNBOUNDED (no upper-bound check) → a future-mint Pyth expiry gate is **writer-UX only, not holder-safety** — build only if desired.
 > 3. **Pending user actions (carried):** Vercel dashboard redeploy (cache UNCHECKED). (`VITE_RPC_URL` now SET on Vercel Preview + Prod — `reference_vercel_env_gap` CLOSED 2026-07-10.)

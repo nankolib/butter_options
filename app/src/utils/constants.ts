@@ -145,6 +145,18 @@ export const AMERICAN_ENABLED_UI = true;
 export const TRADE_V2_UI = true;
 
 // ============================================================================
+// Write-page arc — terminal-surface UI gate (FE terminal track, Slice 2)
+// ============================================================================
+// Gates the terminal reskin+restructure of /write (split cockpit: EPOCH|CUSTOM
+// segmented control, premium centerpiece, terminal chrome). When false, WritePage
+// renders the legacy paper surface byte-identically; when true, the new
+// WriteTerminalPage. Ships true (Trade precedent — TRADE_V2_UI): the redesign is
+// frontend-only over the SAME useWriteSubmit tx engine, so there is no half-built
+// on-chain surface to dark-launch. New flag defaulting true is NOT a "flag flip"
+// of an existing gate (WRITER_ASKS_ENABLED / TRADE_V2_UI / AMERICAN_ENABLED_UI).
+export const WRITE_TERMINAL_UI = true;
+
+// ============================================================================
 // Phase 2 demo cutoff
 // ============================================================================
 // Hide vaults created before the Phase 2 redeploy (2026-04-26 ~18:00 UTC).

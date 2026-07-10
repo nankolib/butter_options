@@ -12,6 +12,8 @@ import { usePaperPalette } from "../../hooks";
 import { hexFromBytes } from "../../utils/format";
 import { PaperGrain, HairlineRule } from "../../components/layout";
 import { AppNav } from "../../components/AppNav";
+import { WRITE_TERMINAL_UI } from "../../utils/constants";
+import { WriteTerminalPage } from "./WriteTerminalPage";
 import { WriteStatementHeader } from "./WriteStatementHeader";
 import { EpochVaultSection } from "./EpochVaultSection";
 import { CustomVaultSection } from "./CustomVaultSection";
@@ -35,7 +37,16 @@ interface MarketAccount {
  * page-level banner lists each tenor's result (landed → tx link, failed →
  * reason) and offers a scoped "Retry failed" that re-runs ONLY the failed cells.
  */
-export const WritePage: FC = () => {
+/**
+ * WritePage — flag switch between the legacy paper surface (WritePageLegacy,
+ * unchanged) and the new terminal surface (WriteTerminalPage). Gated by
+ * WRITE_TERMINAL_UI (default true). Mirrors TradePage's V1/V2 switch — App.tsx
+ * and routing are untouched; the page owns which surface it mounts.
+ */
+export const WritePage: FC = () =>
+  WRITE_TERMINAL_UI ? <WriteTerminalPage /> : <WritePageLegacy />;
+
+const WritePageLegacy: FC = () => {
   usePaperPalette();
   const { program } = useProgram();
   const { connection } = useConnection();

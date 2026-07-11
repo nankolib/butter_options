@@ -3,6 +3,7 @@ import { useSurfaceMode } from "../../hooks/useSurfaceMode";
 import { TerminalAppBar } from "../../components/TerminalAppBar";
 import { MarketsNewMarketAction } from "./MarketsNewMarketAction";
 import { MarketsTerminal } from "./MarketsTerminal";
+import { useMarketsData } from "./useMarketsData";
 
 /**
  * MarketsPage — the terminal discovery surface (design lock 2026-07-08).
@@ -20,11 +21,18 @@ import { MarketsTerminal } from "./MarketsTerminal";
  */
 export const MarketsPage: FC = () => {
   const { mode, toggle } = useSurfaceMode("dark");
+  // Lifted so a create from the bar's pageAction can refetch the terminal body
+  // (both consume this one instance) — closes the AppNav-era cross-owner gap.
+  const marketsData = useMarketsData();
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-l-bg font-sans text-l-text">
-      <TerminalAppBar mode={mode} onToggleMode={toggle} pageAction={<MarketsNewMarketAction />} />
-      <MarketsTerminal />
+      <TerminalAppBar
+        mode={mode}
+        onToggleMode={toggle}
+        pageAction={<MarketsNewMarketAction onMarketCreated={marketsData.refetch} />}
+      />
+      <MarketsTerminal data={marketsData} />
     </div>
   );
 };

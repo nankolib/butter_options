@@ -8,8 +8,10 @@ const PROTOCOL_SEED = "protocol_v2";
 /**
  * useIsAdmin — true iff the connected wallet matches `protocol_state.admin`.
  *
- * Source-of-truth wrapper around the on-chain ProtocolState fetch. Used
- * to gate admin-only CTAs (NewMarketModal entry points, MigrateFeedTools).
+ * Source-of-truth wrapper around the on-chain ProtocolState fetch. Used to gate
+ * admin-only CTAs (e.g. MigrateFeedTools). NOTE: market creation is permissionless
+ * post-HIGH-5 — the New-market modal is connect-gated only and does NOT consult
+ * this hook. Only MigrateFeedSection currently depends on it.
  *
  * Returns false when:
  *   - Wallet not connected (no admin to check)

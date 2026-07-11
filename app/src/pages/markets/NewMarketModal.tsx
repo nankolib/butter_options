@@ -23,11 +23,27 @@ import {
   buildPostUpdateAndCreateMarketTx,
   submitWithFallback,
 } from "../../utils/pythPullPost";
+import { CREATE_MARKET_TERMINAL_UI } from "../../utils/constants";
+import { NewMarketTerminalModal } from "./NewMarketTerminalModal";
 
 type NewMarketModalProps = {
   onClose: () => void;
   onCreated: () => void;
 };
+
+/**
+ * NewMarketModal — flag switch between the terminal cockpit (locked design 1a,
+ * NewMarketTerminalModal) and the legacy paper modal (NewMarketModalLegacy,
+ * unchanged behavior). Gated by CREATE_MARKET_TERMINAL_UI (default true). Callers
+ * (MarketsNewMarketAction pageAction, AppNav) import this export unchanged — they
+ * inherit the switch through it.
+ */
+export const NewMarketModal: FC<NewMarketModalProps> = (props) =>
+  CREATE_MARKET_TERMINAL_UI ? (
+    <NewMarketTerminalModal {...props} />
+  ) : (
+    <NewMarketModalLegacy {...props} />
+  );
 
 const ASSET_CLASS_LABEL: Record<number, string> = {
   0: "Crypto",
@@ -335,7 +351,7 @@ function mapSbError(e: unknown): { title: string; message: string } {
       case 429:
         return { title, message: "Too many requests, try shortly." };
       case 502:
-        return { title, message: "Switchboard quote unavailable, please retry." };
+        return { title, message: "Verification quote unavailable — retry." };
       default:
         return { title, message: e.message || "Create service error." };
     }
@@ -362,8 +378,11 @@ function mapSbError(e: unknown): { title: string; message: string } {
  * friendly "name taken"; none → route by oracle_source.
  *
  * Esc and click-outside dismiss the modal.
+ *
+ * LEGACY: retained byte-identical behind CREATE_MARKET_TERMINAL_UI as the paper
+ * fallback. The live surface is NewMarketTerminalModal.
  */
-export const NewMarketModal: FC<NewMarketModalProps> = ({
+const NewMarketModalLegacy: FC<NewMarketModalProps> = ({
   onClose,
   onCreated,
 }) => {
@@ -620,9 +639,8 @@ export const NewMarketModal: FC<NewMarketModalProps> = ({
         if (!endpoint) {
           showToast({
             type: "error",
-            title: "SB create not configured",
-            message:
-              "Switchboard market creation isn't configured for this deployment.",
+            title: "Not enabled",
+            message: "Creation for this class isn't enabled yet.",
           });
           return;
         }
@@ -678,6 +696,7 @@ export const NewMarketModal: FC<NewMarketModalProps> = ({
         activeFeed.feedIdHex,
         activeFeed.assetClass,
         getHermesBase(),
+        activeFeed.oracleSource,
       );
       const tx = await submitWithFallback(
         program.provider.connection,
@@ -721,7 +740,7 @@ export const NewMarketModal: FC<NewMarketModalProps> = ({
   const showSearchBlock = selectedClass !== null && !advancedActive;
   const searchPlaceholder =
     catalogState.kind === "loading"
-      ? "Loading Hermes catalog…"
+      ? "Loading asset catalog…"
       : "Search by name or ticker (e.g. SOL, XAU, AAPL)";
 
   return (
@@ -778,13 +797,13 @@ export const NewMarketModal: FC<NewMarketModalProps> = ({
         {/* Hermes catalog banners — crypto only (SB classes don't use it). */}
         {showCatalogBanners && catalogState.kind === "stale" && (
           <div className="border border-rule-soft rounded-sm p-3 mb-5 text-[11px] font-mono font-medium uppercase tracking-[0.16em] text-ink-body">
-            ⚠ Hermes unreachable — showing cached catalog from{" "}
+            Catalog unreachable — showing cached assets from{" "}
             {new Date(catalogState.lastRefresh).toLocaleString()}
           </div>
         )}
         {showCatalogBanners && catalogState.kind === "failed" && (
           <div className="border border-rule-soft rounded-sm p-3 mb-5 text-[11px] font-mono uppercase tracking-[0.16em] text-crimson">
-            Hermes unreachable & no cached catalog. Use Advanced → paste feed_id hex.
+            Catalog unreachable and no cached copy. Use Advanced → paste a feed identifier.
             <div className="text-ink-body normal-case mt-1.5 tracking-normal">
               {catalogState.error}
             </div>

@@ -16,7 +16,7 @@
 
 import type { FC } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { PublicKey } from "@solana/web3.js";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
@@ -135,19 +135,22 @@ export const WriteTerminalPage: FC = () => {
   const chosen = useMemo(() => assets.find((a) => a.ticker === values.asset) ?? null, [assets, values.asset]);
   const spotForChosenAsset = values.asset ? spotPrices[values.asset] ?? null : null;
 
-  // Default the asset once markets load (highest-breadth would need the chain;
-  // first alphabetical is fine here — the dropdown lists all). One-shot per mode
-  // is unnecessary: seed both modes' asset from the same first ticker.
+  // Default the asset once markets load. Deep-link: /write?asset=NAME preselects
+  // that asset when it exists in the live set (from the New-market success moment's
+  // "Write first option"); otherwise first alphabetical. Seeds both modes.
+  const [searchParams] = useSearchParams();
   useEffect(() => {
     if (!tickers.length) return;
+    const paramAsset = searchParams.get("asset");
+    const desired = paramAsset && tickers.includes(paramAsset) ? paramAsset : tickers[0];
     if (!epochValues.asset || !tickers.includes(epochValues.asset)) {
-      setEpochValues((v) => ({ ...v, asset: tickers[0] }));
+      setEpochValues((v) => ({ ...v, asset: desired }));
     }
     if (!customValues.asset || !tickers.includes(customValues.asset)) {
-      setCustomValues((v) => ({ ...v, asset: tickers[0] }));
+      setCustomValues((v) => ({ ...v, asset: desired }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tickers.join(",")]);
+  }, [tickers.join(","), searchParams]);
 
   const handleSuccess = (payload: WriteSuccessPayload) => {
     setLastSuccess(payload);

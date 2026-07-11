@@ -502,6 +502,7 @@ export async function buildPostUpdateAndCreateMarketTx(
   pythFeedIdHex: string,
   assetClass: number,
   hermesBase: string = DEFAULT_HERMES_BASE,
+  oracleSource: number = 0,
 ): Promise<BuiltTx[]> {
   const priceUpdateData = await fetchHermesUpdate(pythFeedIdHex, hermesBase);
 
@@ -544,9 +545,12 @@ export async function buildPostUpdateAndCreateMarketTx(
     );
 
     const ix = await program.methods
-      // Phase B: 4-arg create_market — oracle_source=0 (Pyth) for the FE "+ New
-      // Market" button. SB-create is the separate switchboardCreateMarket.ts path.
-      .createMarket(assetName, feedIdBytes, assetClass, 0)
+      // Phase B: 4-arg create_market. oracle_source is forwarded from the caller
+      // (single source of truth) rather than hardcoded — this Pyth builder is only
+      // reached for oracle_source=0 (the modal's SB early-return guards the SB
+      // path), so this is runtime-identical to the prior literal 0 while removing
+      // the latent hardcode trap. SB-create is the switchboardCreateMarket.ts path.
+      .createMarket(assetName, feedIdBytes, assetClass, oracleSource)
       // Pyth path: pass the 3 SB optional accounts as null. anchor 0.32.1 does NOT
       // auto-null unprovided optionals at .instruction() — it throws "Account
       // `sbQueue` not provided". Explicit null = no Switchboard accounts on a Pyth

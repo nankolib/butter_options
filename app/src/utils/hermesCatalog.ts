@@ -327,8 +327,9 @@ export async function getCatalog(
     // Cold-start no-usable-cache path. Log loudly so DevTools shows the
     // actual network/parse failure instead of leaving the modal hanging.
     console.error("[hermesCatalog] fetch failed (no cache):", err);
+    // Provenance-generic user-facing copy (no provider name leaks into the DOM).
     throw new Error(
-      `Hermes catalog unavailable (${err?.message ?? "unknown"}). Use Advanced → paste feed_id hex.`,
+      `Asset catalog unavailable (${err?.message ?? "unknown"}). Use Advanced → paste a feed identifier.`,
     );
   }
 }

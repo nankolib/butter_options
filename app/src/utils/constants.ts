@@ -168,6 +168,25 @@ export const WRITE_TERMINAL_UI = true;
 export const PORTFOLIO_TERMINAL_UI = true;
 
 // ============================================================================
+// Markets create-market arc — terminal-surface UI gate (FE terminal track)
+// ============================================================================
+// Gates the terminal reskin of the New-market modal (locked design 1a): single
+// 520px cockpit with lifecycle states, the smart crypto asset input, and the
+// provenance-leak fix. When false, NewMarketModal renders the legacy paper modal
+// byte-identically; when true, the terminal variant. Both submit arms (Pyth /
+// SB) are unchanged — the redesign is presentation only over the same create
+// path. A new flag defaulting true is NOT a flip of an existing gate (Trade/
+// Write/Portfolio precedent).
+export const CREATE_MARKET_TERMINAL_UI = true;
+
+// Metaplex Token Metadata program — used ONLY to derive the classic-SPL metadata
+// PDA (["metadata", programId, mint]) when resolving a pasted token's symbol in
+// the smart asset input. Read-only account fetch; no mpl dependency pulled in.
+export const METAPLEX_METADATA_PROGRAM_ID = new PublicKey(
+  "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s",
+);
+
+// ============================================================================
 // Phase 2 demo cutoff
 // ============================================================================
 // Hide vaults created before the Phase 2 redeploy (2026-04-26 ~18:00 UTC).

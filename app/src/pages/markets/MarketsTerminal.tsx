@@ -1,6 +1,6 @@
 import type { FC, ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useMarketsData, type MarketRow } from "./useMarketsData";
+import { type MarketRow, type UseMarketsData } from "./useMarketsData";
 import { PulseTiles } from "./PulseTiles";
 import { ContractInspector } from "./ContractInspector";
 import { MoneyAmount } from "../../components/MoneyAmount";
@@ -38,8 +38,8 @@ import {
  * (labelled). Sits as the flex-1 body under MarketsAppBar; the protocol strip is
  * flex-none and the table/tiles scroll inside.
  */
-export const MarketsTerminal: FC = () => {
-  const { rows, summary, loading } = useMarketsData();
+export const MarketsTerminal: FC<{ data: UseMarketsData }> = ({ data }) => {
+  const { rows, summary, loading } = data;
 
   const [view, setView] = useState<"assets" | "contracts">("assets");
   const [tab, setTab] = useState<ClassTab>("Crypto");

@@ -24,6 +24,7 @@ import { VOL_ORACLE_SEED } from "@app/utils/constants";
 import {
   dedupeFeedIds,
   msUntilNextHourBoundary,
+  partitionPythMarkets,
 } from "./volOracleCrank";
 
 // ---- Tiny runner -----------------------------------------------------------
@@ -70,6 +71,44 @@ test("dedupeFeedIds: filters out malformed entries (not array, wrong length)", (
   assert.equal(out.length, 2, "two valid uniques, malformed dropped silently");
   assert.deepEqual(out[0], A);
   assert.deepEqual(out[1], B);
+});
+
+// ---- Stage 3 guard: partitionPythMarkets -----------------------------------
+
+/** Synthesize a market record carrying an oracle_source byte. */
+const mkMarket = (source: number, feedSeed = 1) => ({
+  publicKey: new PublicKey(Buffer.from(makeFeed(feedSeed))),
+  account: { oracleSource: source, pythFeedId: makeFeed(feedSeed), assetClass: 0 },
+});
+
+test("partitionPythMarkets: Switchboard market (oracle_source==1) is dropped", () => {
+  const pyth = mkMarket(0, 1);
+  const sb = mkMarket(1, 2);
+  const { pyth: kept, skippedSb } = partitionPythMarkets([pyth, sb]);
+  assert.equal(kept.length, 1, "only the Pyth market survives");
+  assert.equal(kept[0], pyth, "the surviving market is the Pyth one");
+  assert.equal(skippedSb, 1, "one SB market counted as skipped");
+});
+
+test("partitionPythMarkets: pure-Pyth set is unaffected (no SB present)", () => {
+  const a = mkMarket(0, 1);
+  const b = mkMarket(0, 2);
+  // A market with an undefined/absent source byte is treated as Pyth (legacy).
+  const legacy: { publicKey: PublicKey; account: { oracleSource?: number; pythFeedId: number[] } } = {
+    publicKey: new PublicKey(Buffer.from(makeFeed(3))),
+    account: { pythFeedId: makeFeed(3) },
+  };
+  const { pyth: kept, skippedSb } = partitionPythMarkets([a, b, legacy]);
+  assert.equal(kept.length, 3, "all Pyth/legacy markets kept");
+  assert.equal(skippedSb, 0, "nothing skipped");
+});
+
+test("partitionPythMarkets: mixed set keeps Pyth, drops every SB", () => {
+  const markets = [mkMarket(0, 1), mkMarket(1, 2), mkMarket(0, 3), mkMarket(1, 4), mkMarket(1, 5)];
+  const { pyth: kept, skippedSb } = partitionPythMarkets(markets);
+  assert.equal(kept.length, 2, "two Pyth markets kept");
+  assert.equal(skippedSb, 3, "three SB markets dropped");
+  assert.ok(kept.every((m) => (m.account.oracleSource as number) !== 1), "no SB market survives");
 });
 
 // ---- PDA derivation --------------------------------------------------------

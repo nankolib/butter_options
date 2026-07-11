@@ -71,6 +71,9 @@ export interface TickReport {
   feedsSkippedStalePyth: number;
   feedsSkippedOther: number;
   feedsErrored: number;
+  /** Stage 3: Switchboard-sourced markets dropped before discovery (this crank
+   *  is Pyth-only; SB vol is sbOracleCrank's job). Keeps the skip visible. */
+  marketsSkippedSb: number;
   durationMs: number;
 }
 
@@ -163,13 +166,19 @@ export async function tickOnce(
     feedsSkippedStalePyth: 0,
     feedsSkippedOther: 0,
     feedsErrored: 0,
+    marketsSkippedSb: 0,
     durationMs: 0,
   };
 
   // Discover via safeFetchAll: raw getProgramAccounts + discriminator
   // memcmp + per-account decode with shape filtering. The hardened
   // pattern that handles HANDOFF §11 orphan accounts cleanly.
-  const markets = await safeFetchAll<any>(ctx.program, "optionsMarket");
+  const allMarkets = await safeFetchAll<any>(ctx.program, "optionsMarket");
+  // Stage 3 guard: the Pyth vol crank must NEVER touch a Switchboard-sourced
+  // market (oracle_source==1) — it would corrupt or fail the SB VolOracle PDA
+  // (see partitionPythMarkets). Mirror the Pyth settle-loop skip in bot.ts.
+  const { pyth: markets, skippedSb } = partitionPythMarkets(allMarkets);
+  report.marketsSkippedSb = skippedSb;
   const allFeeds: number[][] = markets.map(
     (m) => m.account.pythFeedId as number[],
   );
@@ -187,6 +196,7 @@ export async function tickOnce(
 
   ctx.log("info", "vol-oracle tick: discovered feeds", {
     markets: markets.length,
+    marketsSkippedSb: report.marketsSkippedSb,
     uniqueFeeds: uniqueFeeds.length,
   });
 
@@ -337,6 +347,21 @@ async function processOneFeed(
 }
 
 // ---- Helpers (exported for unit tests) -------------------------------------
+
+/**
+ * Stage 3 guard: partition fetched markets into the Pyth-sourced set this crank
+ * serves, dropping Switchboard-sourced markets (oracle_source==1). SB markets
+ * store their SB feedHash in pyth_feed_id, which derives the SAME VolOracle PDA
+ * ([b"vol_oracle", feed_id]) that sbOracleCrank owns — so a Pyth push here would
+ * either win an init race and seed a Pyth-source oracle (corruption) or be
+ * rejected by push_vol_sample's SB arm. See runTick.
+ */
+export function partitionPythMarkets<T extends { account: { oracleSource?: number } }>(
+  markets: T[],
+): { pyth: T[]; skippedSb: number } {
+  const pyth = markets.filter((m) => (m.account.oracleSource as number) !== 1);
+  return { pyth, skippedSb: markets.length - pyth.length };
+}
 
 /**
  * Dedupe a list of 32-byte feed_ids. Multiple OptionsMarket accounts can

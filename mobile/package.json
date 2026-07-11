@@ -1,0 +1,36 @@
+{
+  "name": "opta-seeker-mobile",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./index.js",
+  "scripts": {
+    "start": "expo start --dev-client",
+    "android": "expo run:android",
+    "typecheck": "tsc --noEmit",
+    "doctor": "expo-doctor",
+    "prebuild": "expo prebuild --platform android",
+    "build:apk": "npx eas build --platform android --profile preview",
+    "ios": "expo run:ios"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "^0.32.1",
+    "@react-native-async-storage/async-storage": "^2.2.0",
+    "@solana/spl-token": "^0.4.14",
+    "@solana/web3.js": "^1.98.4",
+    "@wallet-ui/react-native-web3js": "^4.2.0",
+    "bn.js": "^5.2.3",
+    "buffer": "^6.0.3",
+    "expo": "^54.0.0",
+    "expo-dev-client": "^6.0.0",
+    "react": "^19.1.0",
+    "react-native": "^0.81.0",
+    "react-native-quick-crypto": "^0.7.16"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.28.0",
+    "@types/bn.js": "^5.2.0",
+    "@types/react": "^19.1.0",
+    "expo-doctor": "^1.17.0",
+    "typescript": "^5.9.3"
+  }
+}

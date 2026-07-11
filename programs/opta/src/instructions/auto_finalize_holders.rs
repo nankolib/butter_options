@@ -74,42 +74,23 @@ pub fn handle_auto_finalize_holders<'info>(
     let protocol_key = ctx.accounts.protocol_state.key();
 
     // Per-contract settlement payout (same base formula as exercise_from_vault).
-    // AM-MED-1: AMERICAN caps EACH contract at collateral_per_token (= strike)
-    // via the SAME helper as early exercise (exercise_capped_intrinsic), closing
-    // the hold-to-settlement edge where a deep-ITM CALL could extract
-    // settlement−strike (> strike) per contract instead of the strike cap it
-    // gets on early exercise. EUROPEAN keeps the uncapped intrinsic —
-    // byte-identical to pre-cap; only the aggregate collateral_remaining pool
-    // clamp (below) applies to it. Computed once outside the loop because
-    // settlement_price, strike_price and option_type are vault-wide.
-    let payout_per_contract: u64 = match exercise_style {
-        ExerciseStyle::American => exercise_capped_intrinsic(
-            option_type,
-            settlement_price,
-            strike_price,
-            required_collateral_per_contract(strike_price, option_type),
-        ),
-        ExerciseStyle::European => match option_type {
-            OptionType::Call => {
-                if settlement_price > strike_price {
-                    settlement_price
-                        .checked_sub(strike_price)
-                        .ok_or(OptaError::MathOverflow)?
-                } else {
-                    0
-                }
-            }
-            OptionType::Put => {
-                if strike_price > settlement_price {
-                    strike_price
-                        .checked_sub(settlement_price)
-                        .ok_or(OptaError::MathOverflow)?
-                } else {
-                    0
-                }
-            }
-        },
-    };
+    // BUNDLE strike-cap (Run-9, EUR insolvency fix). BOTH exercise styles now
+    // route through exercise_capped_intrinsic = min(raw_intrinsic,
+    // collateral_per_token). AM-MED-1 already capped AMERICAN here; this extends
+    // the identical cap to EUROPEAN, closing the hold-to-settlement insolvency
+    // edge where a deep-ITM CALL (settlement > 2×strike) paid settlement−strike
+    // (> 1× collateral) per contract and let the first FCFS claimant strand the
+    // rest (the aggregate collateral_remaining clamp below only prevents
+    // underflow, not per-claimant over-draw). AMERICAN is byte-identical (same
+    // helper + args). EUROPEAN PUT never binds (strike−settlement ≤ strike);
+    // only EUROPEAN CALL above 2×strike changes. Computed once outside the loop
+    // because settlement_price, strike_price and option_type are vault-wide.
+    let payout_per_contract: u64 = exercise_capped_intrinsic(
+        option_type,
+        settlement_price,
+        strike_price,
+        required_collateral_per_contract(strike_price, option_type),
+    );
 
     let mut holders_processed: u32 = 0;
     let mut total_burned: u64 = 0;

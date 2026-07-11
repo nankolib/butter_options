@@ -21,6 +21,8 @@ use anchor_spl::token::{self, Token, TokenAccount, Transfer};
 use crate::errors::OptaError;
 use crate::events::VaultSettled;
 use crate::state::*;
+use crate::utils::collateral::required_collateral_per_contract;
+use crate::utils::exercise_intrinsic::exercise_capped_intrinsic;
 
 pub fn handle_settle_vault(ctx: Context<SettleVault>) -> Result<()> {
     let vault = &ctx.accounts.shared_vault;
@@ -45,26 +47,21 @@ pub fn handle_settle_vault(ctx: Context<SettleVault>) -> Result<()> {
     // Calculate total payout owed to option holders
     let strike_price = vault.strike_price;
 
-    let payout_per_contract = match vault.option_type {
-        OptionType::Call => {
-            if settlement_price > strike_price {
-                settlement_price
-                    .checked_sub(strike_price)
-                    .ok_or(OptaError::MathOverflow)?
-            } else {
-                0
-            }
-        }
-        OptionType::Put => {
-            if strike_price > settlement_price {
-                strike_price
-                    .checked_sub(settlement_price)
-                    .ok_or(OptaError::MathOverflow)?
-            } else {
-                0
-            }
-        }
-    };
+    // BUNDLE strike-cap (Run-9) — COSMETIC / NON-BINDING. This per-contract value
+    // feeds ONLY the emitted VaultSettled.total_payout below; the money
+    // (collateral_remaining) is derived independently at the bottom of this
+    // handler and is NOT affected. Capping the per-contract intrinsic at
+    // collateral_per_token here makes the emitted analytics number reflect the
+    // real maximum payable (consistent with the now-capped per-contract cap the
+    // binding holder paths — exercise_from_vault / auto_finalize_holders — apply).
+    // Both styles capped; AMERICAN's emitted value is unchanged vs the pre-cap
+    // American waterfall. No state / fund-flow change.
+    let payout_per_contract = exercise_capped_intrinsic(
+        vault.option_type,
+        settlement_price,
+        strike_price,
+        required_collateral_per_contract(strike_price, vault.option_type),
+    );
 
     // Stage G F→G handshake: early-exercised contracts (exercise_american) are
     // already cash-settled and their tokens burned, so the at-expiry holder

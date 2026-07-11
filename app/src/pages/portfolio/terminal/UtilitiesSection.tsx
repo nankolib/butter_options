@@ -10,7 +10,6 @@
 // =============================================================================
 
 import type { FC } from "react";
-import { useState } from "react";
 import { PublicKey } from "@solana/web3.js";
 import { SettleExpiriesSection } from "../SettleExpiriesSection";
 import { MigrateFeedSection } from "../MigrateFeedSection";
@@ -25,13 +24,15 @@ export const UtilitiesSection: FC<{
   markets: AccountWrapper[];
   settlementRecords: AccountWrapper[];
   onRefetch: () => void;
-}> = ({ vaults, markets, settlementRecords, onRefetch }) => {
-  const [open, setOpen] = useState(false);
+  collapsed: boolean;
+  onToggle: () => void;
+}> = ({ vaults, markets, settlementRecords, onRefetch, collapsed, onToggle }) => {
+  const open = !collapsed;
   return (
-    <section className="mb-6 border-t border-l-hair pt-4">
+    <section className="mb-6 border-t border-l-hair pt-4" data-testid="utilities-band" data-collapsed={collapsed ? "true" : "false"}>
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={onToggle}
         aria-expanded={open}
         data-testid="utilities-toggle"
         className="flex w-full items-center justify-between font-mono-plex text-[10px] uppercase tracking-[0.16em] text-l-faint transition-colors hover:text-l-muted"

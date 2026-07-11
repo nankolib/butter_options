@@ -106,6 +106,9 @@ export const RowAction: FC<{
  * Accent header band for a ledger. `accent` drives the dot + 2px left border
  * (teal for holdings/long, crimson for written/short). Renders the eyebrow
  * label · count and an optional honest footnote.
+ *
+ * When `collapsible`, the whole band is a button (aria-expanded) with a rotating
+ * chevron; `collapsed` hides the footnote too (count + accent stay visible).
  */
 export const SectionBand: FC<{
   accent: "up" | "down";
@@ -115,21 +118,52 @@ export const SectionBand: FC<{
   footnote?: string;
   right?: ReactNode;
   testid?: string;
-}> = ({ accent, label, sublabel, count, footnote, right, testid }) => {
+  collapsible?: boolean;
+  collapsed?: boolean;
+  onToggle?: () => void;
+}> = ({ accent, label, sublabel, count, footnote, right, testid, collapsible = false, collapsed = false, onToggle }) => {
   const color = accent === "up" ? "var(--color-l-up)" : "var(--color-l-down)";
+  const inner = (
+    <>
+      <span aria-hidden="true" className="h-[6px] w-[6px] rounded-full" style={{ background: color }} data-testid="band-dot" />
+      <span className="font-mono-plex text-[11px] uppercase tracking-[0.16em] text-l-text">{label}</span>
+      {sublabel && <span className="font-mono-plex text-[10px] uppercase tracking-[0.14em] text-l-faint">{sublabel}</span>}
+      <span className="font-mono-plex text-[11px] tabular-nums text-l-muted">· {count}</span>
+      <span className="ml-auto flex items-center gap-3">
+        {right}
+        {collapsible && (
+          <span
+            aria-hidden="true"
+            data-testid="band-chevron"
+            className="inline-flex text-l-faint transition-transform duration-200"
+            style={{ transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)" }}
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </span>
+        )}
+      </span>
+    </>
+  );
   return (
-    <div className="mb-2" data-testid={testid} data-accent={accent}>
-      <div
-        className="flex items-center gap-[10px] border-l-2 bg-l-surface px-3 py-[9px]"
-        style={{ borderColor: color }}
-      >
-        <span aria-hidden="true" className="h-[6px] w-[6px] rounded-full" style={{ background: color }} data-testid="band-dot" />
-        <span className="font-mono-plex text-[11px] uppercase tracking-[0.16em] text-l-text">{label}</span>
-        {sublabel && <span className="font-mono-plex text-[10px] uppercase tracking-[0.14em] text-l-faint">{sublabel}</span>}
-        <span className="font-mono-plex text-[11px] tabular-nums text-l-muted">· {count}</span>
-        {right && <span className="ml-auto">{right}</span>}
-      </div>
-      {footnote && (
+    <div className="mb-2" data-testid={testid} data-accent={accent} data-collapsed={collapsed ? "true" : "false"}>
+      {collapsible ? (
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={!collapsed}
+          className="flex w-full items-center gap-[10px] border-l-2 bg-l-surface px-3 py-[9px] text-left transition-colors hover:bg-l-surface-2"
+          style={{ borderColor: color }}
+        >
+          {inner}
+        </button>
+      ) : (
+        <div className="flex items-center gap-[10px] border-l-2 bg-l-surface px-3 py-[9px]" style={{ borderColor: color }}>
+          {inner}
+        </div>
+      )}
+      {footnote && !collapsed && (
         <p className="mt-1.5 px-1 font-sans text-[11px] leading-[1.45] text-l-faint">{footnote}</p>
       )}
     </div>

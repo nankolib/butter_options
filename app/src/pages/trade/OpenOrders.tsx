@@ -4,6 +4,7 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import { useProgram } from "../../hooks/useProgram";
 import { useBook, type BookOrder } from "../../hooks/useBook";
 import { useCancelOrder } from "../../hooks/useOrderFlows";
+import { SolscanLink } from "../../components/SolscanLink";
 import { refreshAfterMutation } from "./orderRefresh";
 import posthog from "posthog-js";
 
@@ -62,7 +63,7 @@ export const OpenOrders: FC<{ optionMint?: string | null }> = ({ optionMint = nu
           {/* Header */}
           <div
             className="grid h-[28px] items-center border-b border-l-hair bg-l-surface"
-            style={{ gridTemplateColumns: "72px 1fr 60px minmax(88px,1fr) 78px" }}
+            style={{ gridTemplateColumns: "72px 1fr 60px minmax(88px,1fr) 118px" }}
           >
             <span className="px-3 font-mono-plex text-[9px] uppercase tracking-[0.1em] text-l-muted">Side</span>
             <span className="px-3 text-right font-mono-plex text-[9px] uppercase tracking-[0.1em] text-l-muted">Price</span>
@@ -76,7 +77,7 @@ export const OpenOrders: FC<{ optionMint?: string | null }> = ({ optionMint = nu
               <div
                 key={o.pubkey}
                 className="grid h-[32px] items-center border-b border-l-hair last:border-0 hover:bg-l-surface"
-                style={{ gridTemplateColumns: "72px 1fr 60px minmax(88px,1fr) 78px" }}
+                style={{ gridTemplateColumns: "72px 1fr 60px minmax(88px,1fr) 118px" }}
               >
                 <span className="flex items-center gap-[6px] px-3">
                   <span
@@ -95,7 +96,7 @@ export const OpenOrders: FC<{ optionMint?: string | null }> = ({ optionMint = nu
                 <span className="px-3 text-right font-mono-plex text-[11px] tabular-nums text-l-muted">
                   {o.kind === "writerAsk" ? fmt(o.collateralPerContract) : "—"}
                 </span>
-                <span className="flex justify-end px-3">
+                <span className="flex items-center justify-end gap-2 px-3">
                   <button
                     type="button"
                     onClick={() => onCancel(o)}
@@ -105,6 +106,7 @@ export const OpenOrders: FC<{ optionMint?: string | null }> = ({ optionMint = nu
                   >
                     {busy === o.pubkey ? "…" : "Cancel"}
                   </button>
+                  <SolscanLink kind="account" id={o.pubkey} label="order" />
                 </span>
               </div>
             );

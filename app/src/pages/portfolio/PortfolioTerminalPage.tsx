@@ -13,18 +13,19 @@
 import type { FC } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { PublicKey } from "@solana/web3.js";
-import { useConnection } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { useSurfaceMode } from "../../hooks/useSurfaceMode";
 import { TerminalAppBar } from "../../components/TerminalAppBar";
-import { inferClusterFromUrl } from "../../utils/env";
 import { usdcToNumber } from "../../utils/format";
 import { EXERCISE_WINDOW_SECONDS, type WriterRow, type WriterRowAction } from "./writerRows";
 import type { Position, PositionAction } from "./positions";
 import { usePortfolioData } from "./terminal/usePortfolioData";
 import { useClaimAll } from "./terminal/useClaimAll";
 import { useActivity } from "./terminal/portfolioActivity";
+import { useSectionCollapse } from "./terminal/useSectionCollapse";
+import { buildAssetRollup } from "./terminal/assetRollup";
 import { SummaryStrip } from "./terminal/SummaryStrip";
+import { ByAssetSection } from "./terminal/ByAssetSection";
 import { HoldingsLedger } from "./terminal/HoldingsLedger";
 import { WrittenLedger } from "./terminal/WrittenLedger";
 import { ActivitySection } from "./terminal/ActivitySection";
@@ -33,14 +34,13 @@ import { contractLabel, fmtCountdown } from "./terminal/portfolioUi";
 
 export const PortfolioTerminalPage: FC = () => {
   const { mode, toggle } = useSurfaceMode("dark");
-  const { connection } = useConnection();
   const { setVisible } = useWalletModal();
-  const cluster = useMemo(() => inferClusterFromUrl(connection.rpcEndpoint), [connection.rpcEndpoint]);
+  const { collapsed, toggle: toggleSection } = useSectionCollapse();
 
   const data = usePortfolioData();
   const {
     connected, publicKey, program, loading, positions, writerRows, vaults, vaultMints,
-    markets, settlementRecords, refetchAll, actions, writerActions,
+    markets, settlementRecords, spotPrices, refetchAll, actions, writerActions,
   } = data;
 
   // Ticking clock for lock countdowns (display only).
@@ -94,6 +94,12 @@ export const PortfolioTerminalPage: FC = () => {
     };
   }, [positions, writerRows, nowSecs]);
 
+  // ---- per-asset profitability rollup (live even while sections collapse) ----
+  const assetRows = useMemo(
+    () => buildAssetRollup(positions, writerRows, spotPrices, nowSecs),
+    [positions, writerRows, spotPrices, nowSecs],
+  );
+
   // ---- action dispatchers (reuse the byte-identical flows) ----
   const handleHolder = (p: Position, action: PositionAction) => {
     switch (action) {
@@ -143,11 +149,20 @@ export const PortfolioTerminalPage: FC = () => {
                 onClaimAll={claim.claimAll}
               />
 
+              <ByAssetSection
+                rows={assetRows}
+                loading={loading}
+                collapsed={collapsed("byAsset")}
+                onToggle={() => toggleSection("byAsset")}
+              />
+
               <HoldingsLedger
                 positions={positions}
                 loading={loading}
                 onAction={handleHolder}
                 busyId={actions.busyId}
+                collapsed={collapsed("holdings")}
+                onToggle={() => toggleSection("holdings")}
               />
 
               <WrittenLedger
@@ -157,15 +172,24 @@ export const PortfolioTerminalPage: FC = () => {
                 onAction={handleWriter}
                 busyId={writerActions.busyId}
                 busyLabel={writerActions.busyLabel}
+                collapsed={collapsed("written")}
+                onToggle={() => toggleSection("written")}
               />
 
-              <ActivitySection rows={activity.rows} loading={activity.loading} cluster={cluster} />
+              <ActivitySection
+                rows={activity.rows}
+                loading={activity.loading}
+                collapsed={collapsed("activity")}
+                onToggle={() => toggleSection("activity")}
+              />
 
               <UtilitiesSection
                 vaults={vaults}
                 markets={markets}
                 settlementRecords={settlementRecords}
                 onRefetch={refetchAll}
+                collapsed={collapsed("utilities")}
+                onToggle={() => toggleSection("utilities")}
               />
             </>
           )}

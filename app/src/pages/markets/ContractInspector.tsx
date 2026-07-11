@@ -13,6 +13,7 @@ import { fetchOptionPriceQuote, type OptionPriceQuote } from "../../utils/option
 import type { MarketRow } from "./useMarketsData";
 import type { UnifiedChainRow } from "../../hooks/useUnifiedChain";
 import { OrderTicket } from "../trade/OrderTicket";
+import { SolscanLink } from "../../components/SolscanLink";
 import { OpenOrders } from "../trade/OpenOrders";
 import { refreshAfterMutation } from "../trade/orderRefresh";
 import { fmtPrice, fmtStrike, fmtInt, fmtUsdCompact, expiryLabel } from "./marketsView";
@@ -269,10 +270,13 @@ const DockedInspector: FC<{
             <Badge tone={isSeries ? "up" : "faint"}>{provLabel}</Badge>
           </div>
         </div>
-        <span className="flex items-center gap-[5px] font-mono-plex text-[10px] uppercase tracking-[0.12em]" style={{ color: settled ? "var(--color-l-faint)" : "var(--color-l-up)" }}>
-          <span className="inline-block h-[6px] w-[6px] rounded-full" style={{ background: settled ? "var(--color-l-faint)" : "var(--color-l-up)" }} />
-          {settled ? "Settled" : "Live"}
-        </span>
+        <div className="flex items-center gap-[8px]">
+          <span className="flex items-center gap-[5px] font-mono-plex text-[10px] uppercase tracking-[0.12em]" style={{ color: settled ? "var(--color-l-faint)" : "var(--color-l-up)" }}>
+            <span className="inline-block h-[6px] w-[6px] rounded-full" style={{ background: settled ? "var(--color-l-faint)" : "var(--color-l-up)" }} />
+            {settled ? "Settled" : "Live"}
+          </span>
+          {row.optionMint && <SolscanLink kind="token" id={row.optionMint} label="option mint" />}
+        </div>
       </div>
 
       {/* Protocol-quote centerpiece */}

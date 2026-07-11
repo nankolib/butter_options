@@ -10,6 +10,7 @@
 
 import type { FC } from "react";
 import { Link } from "react-router-dom";
+import { SolscanLink } from "../../../components/SolscanLink";
 import type { Position, PositionAction } from "../positions";
 import {
   SectionBand, Th, Td, StyleBadge, StatusPill, RowAction, EmptyLine, SkeletonRows,
@@ -50,7 +51,9 @@ export const HoldingsLedger: FC<{
   loading: boolean;
   onAction: (p: Position, a: PositionAction) => void;
   busyId: string | null;
-}> = ({ positions, loading, onAction, busyId }) => {
+  collapsed: boolean;
+  onToggle: () => void;
+}> = ({ positions, loading, onAction, busyId, collapsed, onToggle }) => {
   // Sort: group order, then expiry ascending within a group.
   const sorted = [...positions].sort(
     (a, b) => GROUP_ORDER.indexOf(groupOf(a)) - GROUP_ORDER.indexOf(groupOf(b)) || a.expiry - b.expiry,
@@ -65,10 +68,14 @@ export const HoldingsLedger: FC<{
         count={positions.length}
         footnote="Mark from pool mid. Unrealized PnL once indexed."
         testid="holdings-band"
+        collapsible
+        collapsed={collapsed}
+        onToggle={onToggle}
       />
 
+      {!collapsed && (
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[720px] border-collapse">
+        <table className="w-full min-w-[760px] border-collapse">
           <thead>
             <tr className="border-b border-l-hair">
               <Th>Contract</Th><Th>Style</Th><Th>Expiry</Th><Th>Status</Th>
@@ -116,18 +123,21 @@ export const HoldingsLedger: FC<{
                       <Td align="right">{fmtUsd(mark)}</Td>
                       <Td align="right" tone="text">{fmtUsd(p.currentValue)}</Td>
                       <Td align="right">{fmtUsd(be)}</Td>
-                      <td className="py-[7px] text-right">
-                        {act ? (
-                          <RowAction
-                            onClick={() => onAction(p, act.action)}
-                            busy={busy}
-                            busyLabel={act.busyLabel}
-                          >
-                            {act.verb}
-                          </RowAction>
-                        ) : (
-                          <span className="font-mono-plex text-[10px] text-l-faint">—</span>
-                        )}
+                      <td className="py-[7px]">
+                        <div className="flex items-center justify-end gap-2">
+                          {act ? (
+                            <RowAction
+                              onClick={() => onAction(p, act.action)}
+                              busy={busy}
+                              busyLabel={act.busyLabel}
+                            >
+                              {act.verb}
+                            </RowAction>
+                          ) : (
+                            <span className="font-mono-plex text-[10px] text-l-faint">—</span>
+                          )}
+                          <SolscanLink kind="token" id={p.id} label="option mint" />
+                        </div>
                       </td>
                     </tr>
                   </>
@@ -137,6 +147,7 @@ export const HoldingsLedger: FC<{
           </tbody>
         </table>
       </div>
+      )}
     </section>
   );
 };

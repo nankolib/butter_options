@@ -56,7 +56,7 @@ type SolscanLinkProps = {
  * Visual register: matches the row's editorial palette — 1px paper-rule
  * border, ink-60 base color, ink on hover, mono "↗" glyph at 11px.
  */
-export const SolscanLink: FC<SolscanLinkProps> = ({ pda, ariaLabel }) => {
+export const SolscanLinkLegacy: FC<SolscanLinkProps> = ({ pda, ariaLabel }) => {
   const { connection } = useConnection();
   const cluster = inferClusterFromUrl(connection.rpcEndpoint);
   const url = solscanAccountUrl(pda, cluster);
@@ -75,4 +75,4 @@ export const SolscanLink: FC<SolscanLinkProps> = ({ pda, ariaLabel }) => {
   );
 };
 
-export default SolscanLink;
+export default SolscanLinkLegacy;

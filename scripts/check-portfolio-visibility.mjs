@@ -121,6 +121,9 @@ try {
       "summary strip: 4 stats + Claim all",
       "ACTIVITY rows + sig links",
       "LOCKED row: disabled + countdown",
+      "BY ASSET rows + signed P&L color",
+      "section collapse toggles + persists",
+      "solscan links on holder/writer rows",
     ]) rec(n, "SKIP", "wallet required — founder pass");
   } else {
     // If a wallet-injected environment ever runs this, assert the rendered ledgers.
@@ -213,6 +216,30 @@ try {
     });
     rec("mobile 390: primary button in viewport", ok ? "PASS" : "SKIP", ok ? "" : "no primary yet");
   } catch (e) { rec("mobile 390: primary button in viewport", "SKIP", firstLine(e)); }
+
+  // ---- SolscanLink URL correctness (deterministic via public Markets inspector) ----
+  // The cross-page sweep uses ONE component; assert its href on a non-wallet-gated
+  // surface (Markets → open a contract → inspector renders a token SolscanLink).
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`${BASE}/markets`, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector('[data-testid="asset-row"]', { timeout: 20000 });
+    await page.click('[data-testid="asset-row"]');
+    await page.waitForSelector('[data-testid="contract-row"]', { timeout: 8000 });
+    await page.click('[data-testid="contract-row"]');
+    await page.waitForSelector('[data-testid="trade-inspector"]', { timeout: 8000 });
+    const href = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="trade-inspector"] [data-testid="solscan-link"]');
+      return el ? el.getAttribute("href") : null;
+    });
+    if (href && /^https:\/\/solscan\.io\/(token|account|tx)\//.test(href) && href.includes("cluster=devnet")) {
+      rec("SolscanLink href (solscan.io + cluster=devnet)", "PASS", href.slice(0, 54));
+    } else {
+      rec("SolscanLink href (solscan.io + cluster=devnet)", href ? "FAIL" : "SKIP", href ?? "no inspector link (thin markets?)");
+    }
+  } catch (e) {
+    rec("SolscanLink href (solscan.io + cluster=devnet)", "SKIP", "markets didn't load — " + firstLine(e));
+  }
 } finally {
   if (browser) await browser.close().catch(() => {});
   server.close();

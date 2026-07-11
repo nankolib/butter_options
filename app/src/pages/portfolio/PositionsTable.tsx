@@ -1,7 +1,7 @@
 import type { FC, ReactNode } from "react";
 import type { PublicKey } from "@solana/web3.js";
 import { MoneyAmount } from "../../components/MoneyAmount";
-import { SolscanLink } from "../../utils/solscan";
+import { SolscanLinkLegacy } from "../../utils/solscan";
 import { ExerciseStyleBadge } from "./ExerciseStyleBadge";
 import type { Position, PositionAction } from "./positions";
 
@@ -169,7 +169,7 @@ const PositionRow: FC<{
       {/* Action — Solscan icon + primary action button (D7 retrofit). */}
       <td className="py-2 sm:py-4">
         <div className="flex items-center gap-3 justify-end">
-          <SolscanLink pda={solscanTargetFor(p)} />
+          <SolscanLinkLegacy pda={solscanTargetFor(p)} />
           {p.action !== "none" && (
             <button
               type="button"

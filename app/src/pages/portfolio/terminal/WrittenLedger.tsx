@@ -10,6 +10,7 @@
 
 import type { FC } from "react";
 import { Link } from "react-router-dom";
+import { SolscanLink } from "../../../components/SolscanLink";
 import { usdcToNumber } from "../../../utils/format";
 import { EXERCISE_WINDOW_SECONDS, type WriterRow, type WriterRowAction } from "../writerRows";
 import {
@@ -38,7 +39,9 @@ export const WrittenLedger: FC<{
   onAction: (row: WriterRow, a: WriterRowAction) => void;
   busyId: string | null;
   busyLabel: string | null;
-}> = ({ rows, loading, nowSecs, onAction, busyId, busyLabel }) => {
+  collapsed: boolean;
+  onToggle: () => void;
+}> = ({ rows, loading, nowSecs, onAction, busyId, busyLabel, collapsed, onToggle }) => {
   const sorted = [...rows].sort(
     (a, b) => GROUP_ORDER.indexOf(groupOf(a)) - GROUP_ORDER.indexOf(groupOf(b)) || a.expiry - b.expiry,
   );
@@ -52,10 +55,14 @@ export const WrittenLedger: FC<{
         count={rows.length}
         footnote="Settled vaults unlock for writers 24h after settlement — holders claim first."
         testid="written-band"
+        collapsible
+        collapsed={collapsed}
+        onToggle={onToggle}
       />
 
+      {!collapsed && (
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[820px] border-collapse">
+        <table className="w-full min-w-[860px] border-collapse">
           <thead>
             <tr className="border-b border-l-hair">
               <Th>Contract</Th><Th>Origin</Th><Th>Style</Th><Th>Expiry</Th><Th>Status</Th>
@@ -115,6 +122,7 @@ export const WrittenLedger: FC<{
           </tbody>
         </table>
       </div>
+      )}
     </section>
   );
 };
@@ -172,7 +180,13 @@ const WriterActionsCell: FC<{
       </RowAction>
     );
   }
-  return <div className="flex items-center justify-end gap-2">{primary}{burn}</div>;
+  return (
+    <div className="flex items-center justify-end gap-2">
+      {primary}
+      {burn}
+      <SolscanLink kind="account" id={row.vaultPda} label="vault" />
+    </div>
+  );
 };
 
 export default WrittenLedger;

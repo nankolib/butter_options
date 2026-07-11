@@ -1,7 +1,6 @@
 import type { FC, ReactNode } from "react";
 import { useState } from "react";
-import { useConnection } from "@solana/wallet-adapter-react";
-import { getSolscanTxUrl, inferClusterFromUrl } from "../../utils/env";
+import { SolscanLink } from "../../components/SolscanLink";
 import { OpenOrders } from "./OpenOrders";
 import { useTradeDockData } from "./useTradeDockData";
 import type { ActivityEvent } from "./tradeHistory";
@@ -38,8 +37,6 @@ const fmt = (n: number) => {
 const fmtStrike = (n: number) => (n >= 1000 ? n.toLocaleString(undefined, { maximumFractionDigits: 0 }) : String(n));
 
 export const TradeDock: FC<{ onFocusMint?: (mint: string) => void }> = ({ onFocusMint }) => {
-  const { connection } = useConnection();
-  const cluster = inferClusterFromUrl(connection.rpcEndpoint);
   const data = useTradeDockData();
   const [tab, setTab] = useState<Tab>("positions");
   // Default collapsed (matches the locked frames); expands on tab click or toggle.
@@ -94,8 +91,8 @@ export const TradeDock: FC<{ onFocusMint?: (mint: string) => void }> = ({ onFocu
         <div className="h-[204px] overflow-auto border-t border-l-hair px-4 py-3">
           {tab === "positions" && <PositionsTab holder={data.holderPositions} writer={data.writerRows} loading={data.loading.positions} onFocusMint={onFocusMint} />}
           {tab === "orders" && <div className="max-w-[720px]"><OpenOrders optionMint={null} /></div>}
-          {tab === "orderHistory" && <HistoryTab events={data.orderHistory} loading={data.loading.history} bounded={data.historyBounded} cluster={cluster} empty="No recent orders in this session." />}
-          {tab === "tradeHistory" && <HistoryTab events={data.tradeHistory} loading={data.loading.history} bounded={data.historyBounded} cluster={cluster} empty="No recent fills in this session." />}
+          {tab === "orderHistory" && <HistoryTab events={data.orderHistory} loading={data.loading.history} bounded={data.historyBounded} empty="No recent orders in this session." />}
+          {tab === "tradeHistory" && <HistoryTab events={data.tradeHistory} loading={data.loading.history} bounded={data.historyBounded} empty="No recent fills in this session." />}
           {tab === "balances" && <BalancesTab b={b} loading={data.loading.balances} />}
         </div>
       )}
@@ -111,25 +108,27 @@ const PositionsTab: FC<{ holder: Position[]; writer: WriterRow[]; loading: boole
   }
   return (
     <div className="overflow-hidden rounded-[10px] border border-l-hair">
-      <Row header cols="minmax(140px,1.4fr) 80px 80px 100px 110px">
-        <HCell>Contract</HCell><HCell>Role</HCell><HCell right>Size</HCell><HCell right>Value</HCell><HCell>State</HCell>
+      <Row header cols="minmax(140px,1.4fr) 80px 80px 100px 90px 28px">
+        <HCell>Contract</HCell><HCell>Role</HCell><HCell right>Size</HCell><HCell right>Value</HCell><HCell>State</HCell><HCell></HCell>
       </Row>
       {holder.map((p) => (
-        <Row key={p.id} cols="minmax(140px,1.4fr) 80px 80px 100px 110px" onClick={onFocusMint ? () => onFocusMint(p.id) : undefined}>
+        <Row key={p.id} cols="minmax(140px,1.4fr) 80px 80px 100px 90px 28px" onClick={onFocusMint ? () => onFocusMint(p.id) : undefined}>
           <Contract asset={p.asset} strike={p.strike} side={p.side} />
           <Cell><span style={{ color: "var(--color-l-up)" }}>Long</span></Cell>
           <Cell right>{p.contracts.toLocaleString()}</Cell>
           <Cell right>{fmt(p.currentValue)}</Cell>
           <Cell muted>{stateLabel(p.state)}</Cell>
+          <Cell><SolscanLink kind="token" id={p.id} label="option mint" /></Cell>
         </Row>
       ))}
       {writer.map((w) => (
-        <Row key={w.id} cols="minmax(140px,1.4fr) 80px 80px 100px 110px">
+        <Row key={w.id} cols="minmax(140px,1.4fr) 80px 80px 100px 90px 28px">
           <Contract asset={w.asset} strike={w.strike} side={w.side} />
           <Cell><span style={{ color: "var(--color-l-down)" }}>Writer</span></Cell>
           <Cell right>{w.optionsSold.toLocaleString()}</Cell>
           <Cell right>{fmt(w.collateralDeposited)}</Cell>
           <Cell muted>{w.state.replace(/-/g, " ")}</Cell>
+          <Cell><SolscanLink kind="account" id={w.vaultPda} label="vault" /></Cell>
         </Row>
       ))}
     </div>
@@ -137,7 +136,7 @@ const PositionsTab: FC<{ holder: Position[]; writer: WriterRow[]; loading: boole
 };
 
 // ---- History (bounded scan) ----------------------------------------------
-const HistoryTab: FC<{ events: ActivityEvent[]; loading: boolean; bounded: boolean; cluster: ReturnType<typeof inferClusterFromUrl>; empty: string }> = ({ events, loading, bounded, cluster, empty }) => {
+const HistoryTab: FC<{ events: ActivityEvent[]; loading: boolean; bounded: boolean; empty: string }> = ({ events, loading, bounded, empty }) => {
   if (loading && events.length === 0) return <SkeletonRows />;
   return (
     <div>
@@ -156,9 +155,10 @@ const HistoryTab: FC<{ events: ActivityEvent[]; loading: boolean; bounded: boole
               <Cell right>{e.qty != null ? `×${e.qty}` : "—"}</Cell>
               <Cell right muted>{relTime(e.ts)}</Cell>
               <Cell>
-                <a href={getSolscanTxUrl(e.sig, cluster)} target="_blank" rel="noopener noreferrer" className="text-l-muted underline decoration-l-hair hover:text-l-text">
-                  {e.sig.slice(0, 6)}…
-                </a>
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="text-l-muted">{e.sig.slice(0, 6)}…</span>
+                  <SolscanLink kind="tx" id={e.sig} label="transaction" />
+                </span>
               </Cell>
             </Row>
           ))}
@@ -197,7 +197,7 @@ const Row: FC<{ children: ReactNode; cols: string; header?: boolean; onClick?: (
     {children}
   </div>
 );
-const HCell: FC<{ children: ReactNode; right?: boolean }> = ({ children, right }) => (
+const HCell: FC<{ children?: ReactNode; right?: boolean }> = ({ children, right }) => (
   <span className={`px-3 font-mono-plex text-[9px] uppercase tracking-[0.1em] text-l-muted ${right ? "text-right" : ""}`}>{children}</span>
 );
 const Cell: FC<{ children: ReactNode; right?: boolean; muted?: boolean }> = ({ children, right, muted }) => (

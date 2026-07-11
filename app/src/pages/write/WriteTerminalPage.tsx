@@ -18,11 +18,11 @@ import type { FC } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { PublicKey } from "@solana/web3.js";
-import { useConnection, useWallet } from "@solana/wallet-adapter-react";
+import { useWallet } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { useProgram } from "../../hooks/useProgram";
 import { useSurfaceMode } from "../../hooks/useSurfaceMode";
-import { inferClusterFromUrl, getSolscanTxUrl } from "../../utils/env";
+import { SolscanLink } from "../../components/SolscanLink";
 import { safeFetchAll } from "../../hooks/useFetchAccounts";
 import { usePythPrices } from "../../hooks/usePythPrices";
 import { useVolOracleStatus } from "../../hooks/useVolOracleStatus";
@@ -65,8 +65,6 @@ export const WriteTerminalPage: FC = () => {
   const { program } = useProgram();
   const { connected } = useWallet();
   const { setVisible } = useWalletModal();
-  const { connection } = useConnection();
-  const cluster = useMemo(() => inferClusterFromUrl(connection.rpcEndpoint), [connection.rpcEndpoint]);
 
   const [markets, setMarkets] = useState<MarketAccount[]>([]);
   const [lastSuccess, setLastSuccess] = useState<WriteSuccessPayload | null>(null);
@@ -195,7 +193,6 @@ export const WriteTerminalPage: FC = () => {
       {lastSuccess && (
         <StatusBanner
           payload={lastSuccess}
-          cluster={cluster}
           onDismiss={() => setLastSuccess(null)}
           onRetry={async () => {
             const failed: WriteCell[] = lastSuccess.cells
@@ -333,10 +330,9 @@ export const WriteTerminalPage: FC = () => {
 // -----------------------------------------------------------------------------
 const StatusBanner: FC<{
   payload: WriteSuccessPayload;
-  cluster: ReturnType<typeof inferClusterFromUrl>;
   onDismiss: () => void;
   onRetry: () => void;
-}> = ({ payload, cluster, onDismiss, onRetry }) => {
+}> = ({ payload, onDismiss, onRetry }) => {
   const landed = payload.cells.filter((c) => c.status === "landed").length;
   const failed = payload.cells.length - landed;
   return (
@@ -381,15 +377,17 @@ const StatusBanner: FC<{
                   .toUpperCase()}{" "}
                 · {c.contracts}×
               </span>
-              {c.status === "landed" && c.txSignature ? (
-                <a
-                  href={getSolscanTxUrl(c.txSignature, cluster)}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="tabular-nums text-l-muted no-underline transition-colors hover:text-l-text"
-                >
-                  {c.txSignature.slice(0, 8)}…{c.txSignature.slice(-6)} ↗
-                </a>
+              {c.status === "landed" ? (
+                <span className="flex items-center gap-2 tabular-nums text-l-muted">
+                  {c.txSignature && (
+                    <>
+                      <span>{c.txSignature.slice(0, 8)}…{c.txSignature.slice(-6)}</span>
+                      <SolscanLink kind="tx" id={c.txSignature} label="transaction" />
+                    </>
+                  )}
+                  {c.optionMint && <SolscanLink kind="token" id={c.optionMint} label="mint" />}
+                  {c.vaultPda && <SolscanLink kind="account" id={c.vaultPda} label="vault" />}
+                </span>
               ) : (
                 <span className="uppercase tracking-[0.14em] text-l-down">{c.error ?? "Failed"}</span>
               )}

@@ -7,7 +7,7 @@
 // =============================================================================
 
 import type { FC } from "react";
-import { getSolscanTxUrl, type Cluster } from "../../../utils/env";
+import { SolscanLink } from "../../../components/SolscanLink";
 import { SectionBand, Th, Td, EmptyLine, SkeletonRows, fmtUsd, signTone } from "./portfolioUi";
 import type { ActivityRow } from "./portfolioActivity";
 
@@ -21,8 +21,9 @@ const fmtTime = (ts: number) =>
 export const ActivitySection: FC<{
   rows: ActivityRow[];
   loading: boolean;
-  cluster: Cluster;
-}> = ({ rows, loading, cluster }) => (
+  collapsed: boolean;
+  onToggle: () => void;
+}> = ({ rows, loading, collapsed, onToggle }) => (
   <section className="mb-10">
     <SectionBand
       accent="up"
@@ -31,7 +32,11 @@ export const ActivitySection: FC<{
       count={rows.length}
       footnote="Recent on-chain activity — full history pending indexer."
       testid="activity-band"
+      collapsible
+      collapsed={collapsed}
+      onToggle={onToggle}
     />
+    {!collapsed && (
     <div className="overflow-x-auto">
       <table className="w-full min-w-[640px] border-collapse">
         <thead>
@@ -55,16 +60,11 @@ export const ActivitySection: FC<{
                 <Td align="right" tone={signTone(r.amount)}>
                   {r.amount == null ? "—" : `${r.amount > 0 ? "+" : r.amount < 0 ? "−" : ""}${fmtUsd(Math.abs(r.amount))}`}
                 </Td>
-                <td className="py-[7px] text-right">
-                  <a
-                    href={getSolscanTxUrl(r.sig, cluster)}
-                    target="_blank"
-                    rel="noreferrer"
-                    data-testid="activity-sig"
-                    className="font-mono-plex text-[11px] text-l-muted no-underline transition-colors hover:text-l-text"
-                  >
-                    {r.sig.slice(0, 6)}…{r.sig.slice(-4)} ↗
-                  </a>
+                <td className="py-[7px]" data-testid="activity-sig">
+                  <div className="flex items-center justify-end gap-1.5">
+                    <span className="font-mono-plex text-[11px] text-l-muted">{r.sig.slice(0, 6)}…{r.sig.slice(-4)}</span>
+                    <SolscanLink kind="tx" id={r.sig} label="transaction" />
+                  </div>
                 </td>
               </tr>
             ))
@@ -72,6 +72,7 @@ export const ActivitySection: FC<{
         </tbody>
       </table>
     </div>
+    )}
   </section>
 );
 

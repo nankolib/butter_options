@@ -33,6 +33,25 @@ export function getSbCreateEndpoint(): string | null {
   return v.replace(/\/+$/, "");
 }
 
+/**
+ * Mainnet RPC endpoint for the cross-cluster mint-symbol resolver (the ONLY
+ * mainnet read-path in the app). Reads `VITE_MAINNET_RPC_URL`; falls back to a
+ * BROWSER-CORS-FRIENDLY public default.
+ *
+ * WHY a special default: the Solana Labs public endpoint (api.mainnet-beta.
+ * solana.com) returns HTTP 403 to browser-origin requests (proven in-browser),
+ * so it cannot be used from the app even though it's in the CSP. `publicnode`
+ * answers 200 with `access-control-allow-origin: *`, is keyless, and needs no
+ * Vercel env to work — robust against the empty-env-var trap that bit
+ * VITE_RPC_URL. Set VITE_MAINNET_RPC_URL to a Helius mainnet URL for higher
+ * reliability (no CSP change — `*.helius-rpc.com` is already allowlisted).
+ * Whatever host is used MUST be present in the CSP connect-src (vercel.json).
+ */
+export function getMainnetRpcUrl(): string {
+  const v = import.meta.env.VITE_MAINNET_RPC_URL;
+  return typeof v === "string" && v.length > 0 ? v : "https://solana-rpc.publicnode.com";
+}
+
 // ============================================================================
 // Cluster inference & display helpers
 // ============================================================================

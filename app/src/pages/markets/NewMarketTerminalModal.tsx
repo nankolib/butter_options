@@ -93,6 +93,7 @@ type Resolve =
   | { kind: "no-feed"; symbol: string }
   | { kind: "not-found" }
   | { kind: "no-metadata" }
+  | { kind: "transport-error" }
   | { kind: "invalid" };
 
 // Inline availability of the on-chain identifier.
@@ -216,6 +217,10 @@ export const NewMarketTerminalModal: FC<Props> = ({ onClose, onCreated }) => {
       if (resolveSeq.current !== seq) return;
       if (res.kind === "not-found") {
         setResolve({ kind: "not-found" });
+        return;
+      }
+      if (res.kind === "transport-error") {
+        setResolve({ kind: "transport-error" });
         return;
       }
       if (res.kind === "no-metadata") {
@@ -743,6 +748,13 @@ const ResolveRow: FC<{ resolve: Resolve }> = ({ resolve }) => {
     return (
       <p className="mt-2 font-mono-plex text-[12px] text-l-muted" data-testid="resolve-state" data-state="not-found">
         Token not found.
+      </p>
+    );
+  }
+  if (resolve.kind === "transport-error") {
+    return (
+      <p className="mt-2 font-mono-plex text-[12px] text-l-muted" data-testid="resolve-state" data-state="transport-error">
+        Couldn't verify this token right now — retry.
       </p>
     );
   }

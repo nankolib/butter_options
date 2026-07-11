@@ -257,6 +257,33 @@ try {
     rec("mobile 390: bottom-sheet dock", "FAIL", firstLine(e));
   }
 
+  // ---- Browser-transport guard: the mainnet resolver host MUST answer 200 from
+  //      a browser ORIGIN (Node has no CORS/403 — this is the gap that shipped the
+  //      resolver bug: api.mainnet-beta.solana.com returns 403 to app-origin
+  //      traffic; publicnode answers 200). Network-dependent → SKIP if offline. ----
+  try {
+    const BONK = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263";
+    const r = await page.evaluate(async (mint) => {
+      const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getAccountInfo", params: [mint, { encoding: "base64" }] });
+      const probe = async (url) => {
+        try {
+          const resp = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body });
+          const j = await resp.json();
+          return { status: resp.status, hasAccount: !!j?.result?.value };
+        } catch (e) { return { status: 0, error: String(e).slice(0, 80) }; }
+      };
+      return {
+        publicnode: await probe("https://solana-rpc.publicnode.com"),
+        labs: await probe("https://api.mainnet-beta.solana.com"),
+      };
+    }, BONK);
+    const pubOk = r.publicnode.status === 200 && r.publicnode.hasAccount;
+    rec("mainnet transport: publicnode 200 from browser origin", pubOk ? "PASS" : "SKIP",
+      `publicnode=${JSON.stringify(r.publicnode)} labs=${JSON.stringify(r.labs)}`);
+  } catch (e) {
+    rec("mainnet transport: publicnode 200 from browser origin", "SKIP", "offline? " + firstLine(e));
+  }
+
   // ---- Data/network/wallet-dependent → deterministic SKIP ----
   // (INVALID is asserted above with no network; RESOLVED / NOT-FOUND / NO-FEED
   //  need live RPC — incl. the cross-cluster mainnet fallback — + the catalog.)

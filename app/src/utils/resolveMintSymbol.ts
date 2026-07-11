@@ -29,19 +29,16 @@
 import { Connection, PublicKey } from "@solana/web3.js";
 import { TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
 import { METAPLEX_METADATA_PROGRAM_ID } from "./constants";
-import { inferClusterFromUrl } from "./env";
+import { inferClusterFromUrl, getMainnetRpcUrl } from "./env";
 import { fetchOptionTokenMetadata } from "./tokenMetadata";
-
-// Public mainnet RPC for the cross-cluster fallback (read-only getAccountInfo +
-// metadata reads, no key, ~2 reads per paste). MUST be the CSP-allowlisted host
-// (connect-src in vercel.json) — api.mainnet-beta.solana.com is allowed;
-// api.solana.com is NOT, so do not swap it.
-const MAINNET_RPC = "https://api.mainnet-beta.solana.com";
 
 export type MintResolution =
   | { kind: "resolved"; symbol: string; name: string; source: "t22" | "metaplex" }
   | { kind: "not-found" }
-  | { kind: "no-metadata" };
+  | { kind: "no-metadata" }
+  // The mainnet probe itself could not be reached (transport error after retry) —
+  // distinct from a successful read that found no symbol. Retryable.
+  | { kind: "transport-error" };
 
 /** Parse an address string into a PublicKey, or null if it isn't a valid one.
  *  Callers use a null here to render the INVALID state (distinct from no-metadata). */
@@ -210,28 +207,39 @@ export async function resolveMintSymbol(
   connection: Connection,
   mint: PublicKey,
 ): Promise<MintResolution> {
+  // A read THREW (transport) — distinct from a clean answer. Retryable.
+  const transportFailed = (p: Probe) => p.kind === "rpc-error" || p.kind === "read-error";
+
   const appCluster = inferClusterFromUrl(connection.rpcEndpoint);
   const primary = await probeCluster(connection, mint, `app(${appCluster})`);
   if (primary.kind === "resolved") return asResolution(primary);
 
-  // App cluster gave no symbol. If it's already mainnet there's nothing to fall
-  // back to: absent → not-found, otherwise → no readable metadata.
+  // App cluster is already mainnet — nothing to fall back to.
   if (appCluster === "mainnet-beta") {
-    return primary.kind === "absent" ? { kind: "not-found" } : { kind: "no-metadata" };
+    if (primary.kind === "absent") return { kind: "not-found" };
+    if (transportFailed(primary)) return { kind: "transport-error" };
+    return { kind: "no-metadata" }; // clean no-symbol
   }
 
   // Cross-cluster fallback — the WHOLE sequence (mint + metadata reads) runs
-  // against mainnet. NOTE: we fall through on ANY non-resolve (absent, no-symbol,
+  // against mainnet. Fall through on ANY non-resolve (absent, no-symbol,
   // read-error, rpc-error), not just absent: devnet routinely carries bare CLONES
   // of popular mints (BONK exists on devnet with no metadata), so a symbol-less
   // app-cluster hit must not block the real mainnet metadata. Safe by construction
   // — the resolved symbol only selects a canonical catalog asset; the pasted mint
   // never reaches the chain.
-  const secondary = await probeCluster(new Connection(MAINNET_RPC, "confirmed"), mint, "mainnet");
+  const secondary = await probeCluster(new Connection(getMainnetRpcUrl(), "confirmed"), mint, "mainnet");
   if (secondary.kind === "resolved") return asResolution(secondary);
 
-  // Neither cluster produced a symbol. Not-found only if BOTH say the account is
-  // absent; otherwise it exists somewhere but carries no readable metadata.
-  if (primary.kind === "absent" && secondary.kind === "absent") return { kind: "not-found" };
-  return { kind: "no-metadata" };
+  // Mainnet is authoritative for symbol presence — but ONLY when its reads
+  // actually SUCCEEDED. A transport failure there must not masquerade as a
+  // definitive not-found / no-metadata; surface a retryable transport-error.
+  if (transportFailed(secondary)) return { kind: "transport-error" };
+  if (secondary.kind === "no-symbol") return { kind: "no-metadata" }; // exists on mainnet, genuinely no symbol
+  // secondary.kind === "absent": mainnet cleanly has no such account.
+  if (primary.kind === "absent") return { kind: "not-found" }; // absent on both, both reads clean
+  if (primary.kind === "no-symbol") return { kind: "no-metadata" }; // exists on app cluster w/o metadata
+  // primary transport-failed AND mainnet absent → we never got a clean app-side
+  // answer; don't claim not-found. Retryable.
+  return { kind: "transport-error" };
 }

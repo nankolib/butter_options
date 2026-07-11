@@ -87,7 +87,10 @@ const BUILTIN_ALLOWED_ORIGINS = [
   "https://opta.fyi",
   "https://www.opta.fyi",
 ];
-const CROSSBAR_URL = "https://crossbar.switchboard.xyz";
+// Stage 3: honor the self-hosted crossbar (OPTA_CROSSBAR_URL) so create-market
+// feed resolution routes through the VPS crossbar, not the public endpoint.
+// Mirrors sbOracleCrank.ts. Falls back to public when unset.
+const CROSSBAR_URL = process.env.OPTA_CROSSBAR_URL ?? "https://crossbar.switchboard.xyz";
 const ASSET_NAME_RE = /^[A-Z0-9]{1,16}$/;
 const HEX64_RE = /^[0-9a-f]{64}$/;
 const MAX_BODY_BYTES = 2048;

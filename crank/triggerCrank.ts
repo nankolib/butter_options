@@ -155,6 +155,10 @@ export interface TickReport {
   skippedOtm: number;
   skippedOverBudget: number;
   skippedQuoteUnavailable: number;
+  /** Stage 3: triggers whose parent market is Switchboard-sourced
+   *  (oracle_source==1) — out of keeper scope until an SB execute arm exists.
+   *  Counted, not fired: a wrong-spot fill would be worse than a no-op. */
+  skippedSbMarket: number;
   orderErrors: number;
   durationMs: number;
 }
@@ -218,6 +222,34 @@ export function evaluateTrigger(order: TriggerView, o: EvalOpts): Decision {
 // ---- Discovery / batched-read helpers (exported for unit tests) ------------
 
 const normHex = (h: string) => h.replace(/^0x/, "").toLowerCase();
+
+/**
+ * Stage 3 guard (exported for unit tests): build the per-market lookup maps for
+ * a tick, EXCLUDING Switchboard-sourced markets (oracle_source==1) from the
+ * Hermes feed set so their feedHash never enters the batched price request.
+ * Returns `sbMarkets` (their pubkeys) so the tick loop can skip their orders.
+ * execute_trigger HAS an SB arm, but this keeper builds a Pyth/Hermes read + a
+ * Pyth-only execute ctx — firing on an SB market would 404 the feed and assemble
+ * a wrong-spot / reverting tx. A skipped trigger is honest; a wrong fill is not.
+ */
+export function buildTriggerMarketMaps(
+  markets: { publicKey: PublicKey; account: any }[],
+): {
+  marketRec: Map<string, { publicKey: PublicKey; account: any }>;
+  marketFeed: Map<string, string>;
+  sbMarkets: Set<string>;
+} {
+  const marketRec = new Map<string, { publicKey: PublicKey; account: any }>();
+  const marketFeed = new Map<string, string>();
+  const sbMarkets = new Set<string>();
+  for (const m of markets) {
+    const pk = m.publicKey.toBase58();
+    marketRec.set(pk, m);
+    if ((m.account.oracleSource as number) === 1) { sbMarkets.add(pk); continue; }
+    marketFeed.set(pk, normHex(hexFromBytes(m.account.pythFeedId as number[])));
+  }
+  return { marketRec, marketFeed, sbMarkets };
+}
 
 /** Unique feed-hex set across live orders (the dedupeFeedIds idea, hex-keyed). */
 export function uniqueFeedHexes(
@@ -429,7 +461,7 @@ export async function tickOnce(
   const report: TickReport = {
     triggersFound: 0, fired: 0, skippedStaleFeed: 0, skippedConditionNotMet: 0,
     skippedWithinMargin: 0, skippedOtm: 0, skippedOverBudget: 0,
-    skippedQuoteUnavailable: 0, orderErrors: 0, durationMs: 0,
+    skippedQuoteUnavailable: 0, skippedSbMarket: 0, orderErrors: 0, durationMs: 0,
   };
 
   const orders = await deps.fetchTriggerOrders();
@@ -441,12 +473,9 @@ export async function tickOnce(
   }
 
   const [markets, vaults] = await Promise.all([deps.fetchMarkets(), deps.fetchVaults()]);
-  const marketRec = new Map<string, { publicKey: PublicKey; account: any }>();
-  const marketFeed = new Map<string, string>();
-  for (const m of markets) {
-    marketRec.set(m.publicKey.toBase58(), m);
-    marketFeed.set(m.publicKey.toBase58(), normHex(hexFromBytes(m.account.pythFeedId as number[])));
-  }
+  // Stage 3 guard: exclude Switchboard-sourced markets from the Hermes feed set
+  // and collect their pubkeys so the loop skips their orders (see helper).
+  const { marketRec, marketFeed, sbMarkets } = buildTriggerMarketMaps(markets);
   const vaultInfo = new Map<string, VaultInfo>();
   for (const v of vaults) vaultInfo.set(v.publicKey.toBase58(), toVaultInfo(v));
 
@@ -476,6 +505,9 @@ export async function tickOnce(
   for (let idx = 0; idx < views.length; idx++) {
     if (ctx.shouldShutdown()) break;
     const view = views[idx];
+    // Stage 3: skip triggers whose parent market is Switchboard-sourced (see the
+    // marketFeed build above). Counted so the skipped volume stays visible.
+    if (sbMarkets.has(view.market)) { report.skippedSbMarket++; continue; }
     try {
       const feedHex = marketFeed.get(view.market);
       const spot = feedHex ? prices.get(feedHex) : undefined;
@@ -528,6 +560,11 @@ export async function tickOnce(
     }
   }
 
+  if (report.skippedSbMarket > 0) {
+    ctx.log("info", "trigger tick: skipped Switchboard-sourced markets (out of keeper scope)", {
+      skippedSbMarket: report.skippedSbMarket,
+    });
+  }
   report.durationMs = Date.now() - startMs;
   ctx.log("info", "trigger tick complete", { ...report });
   return report;

@@ -85,7 +85,10 @@ const HERMES_BATCH = numEnv(process.env.OPTA_LIVENESS_HERMES_BATCH, 50);
 const DEAD_AFTER_MISSES = numEnv(process.env.OPTA_LIVENESS_DEAD_AFTER, 3);
 const SB_SIMULATE_ATTEMPTS = numEnv(process.env.OPTA_LIVENESS_SB_ATTEMPTS, 4);
 const PROBE_ALL_PYTH = (process.env.OPTA_LIVENESS_PROBE_ALL ?? "") === "1";
-const CROSSBAR_URL = "https://crossbar.switchboard.xyz";
+// Stage 3: honor the self-hosted crossbar (OPTA_CROSSBAR_URL) so ALL live SB
+// traffic — including this liveness resolver — routes through the VPS crossbar,
+// not the public endpoint. Mirrors sbOracleCrank.ts. Falls back to public.
+const CROSSBAR_URL = process.env.OPTA_CROSSBAR_URL ?? "https://crossbar.switchboard.xyz";
 const SHUTDOWN_CHECK_MS = 5000;
 
 const short = (e: unknown) => String((e as any)?.message ?? e).slice(0, 200);

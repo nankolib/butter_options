@@ -8,6 +8,7 @@
 // ============================================================================
 
 import assert from "node:assert/strict";
+import { PublicKey } from "@solana/web3.js";
 
 import {
   evaluateTrigger,
@@ -15,6 +16,7 @@ import {
   applySpreadFloor,
   uniqueFeedHexes,
   buildHermesMultiUrl,
+  buildTriggerMarketMaps,
   DEFAULT_FIRE_MARGIN_BPS,
   type TriggerView,
 } from "./triggerCrank";
@@ -152,6 +154,51 @@ test("dedupe: order whose market has no feed is excluded from the batch", () => 
   const marketFeed = new Map<string, string>([["mA", "aa".repeat(32)]]);
   const feeds = uniqueFeedHexes([{ market: "mA" }, { market: "mUNKNOWN" }], marketFeed);
   assert.equal(feeds.length, 1, "unknown-feed order contributes no id");
+});
+
+// ---- Stage 3 guard: buildTriggerMarketMaps (SB-skip) -----------------------
+
+/** Deterministic 32-byte value → PublicKey / feed_id number[]. */
+const bytes32 = (seed: number) => Array.from({ length: 32 }, (_, i) => (seed * 31 + i) & 0xff);
+const mkMarketRec = (source: number, feedSeed: number) => ({
+  publicKey: new PublicKey(Buffer.from(bytes32(feedSeed))),
+  account: { oracleSource: source, pythFeedId: bytes32(feedSeed) },
+});
+
+test("buildTriggerMarketMaps: SB market (oracle_source==1) excluded from feed set, tracked in sbMarkets", () => {
+  const pyth = mkMarketRec(0, 1);
+  const sb = mkMarketRec(1, 2);
+  const { marketRec, marketFeed, sbMarkets } = buildTriggerMarketMaps([pyth, sb]);
+  const pythPk = pyth.publicKey.toBase58();
+  const sbPk = sb.publicKey.toBase58();
+
+  // marketRec carries BOTH (the loop may still reference an SB rec elsewhere).
+  assert.equal(marketRec.size, 2, "both markets in marketRec");
+  // marketFeed carries ONLY the Pyth market → SB feedHash never hits Hermes.
+  assert.ok(marketFeed.has(pythPk), "Pyth market has a feed entry");
+  assert.ok(!marketFeed.has(sbPk), "SB market has NO feed entry (kept out of Hermes batch)");
+  // sbMarkets carries the SB pubkey so the loop skips its orders.
+  assert.ok(sbMarkets.has(sbPk), "SB market pubkey tracked for order-skip");
+  assert.ok(!sbMarkets.has(pythPk), "Pyth market not in the skip set");
+});
+
+test("buildTriggerMarketMaps: pure-Pyth set unaffected (empty sbMarkets, all feeds present)", () => {
+  const a = mkMarketRec(0, 1);
+  const b = mkMarketRec(0, 2);
+  const { marketFeed, sbMarkets } = buildTriggerMarketMaps([a, b]);
+  assert.equal(sbMarkets.size, 0, "no SB markets");
+  assert.equal(marketFeed.size, 2, "both Pyth feeds present");
+});
+
+test("SB feedHash never enters the batched Hermes request", () => {
+  // End-to-end of the guard's intent: build maps, then the exact dedupe the tick
+  // runs (uniqueFeedHexes over orders + marketFeed) must omit the SB feed.
+  const pyth = mkMarketRec(0, 1);
+  const sb = mkMarketRec(1, 2);
+  const { marketFeed } = buildTriggerMarketMaps([pyth, sb]);
+  const orders = [{ market: pyth.publicKey.toBase58() }, { market: sb.publicKey.toBase58() }];
+  const feeds = uniqueFeedHexes(orders, marketFeed);
+  assert.equal(feeds.length, 1, "only the Pyth feed is requested");
 });
 
 // ---- Runner ----------------------------------------------------------------

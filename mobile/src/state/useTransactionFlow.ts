@@ -315,7 +315,14 @@ export function useTransactionFlow({
       const pending = await intent.build();
       if (currentRun !== runId.current) return;
       if (pending.simulationError) {
-        throw new Error(`Simulation failed: ${pending.simulationError}`);
+        // A real on-chain simulation rejection: the program refused the tx, so
+        // for an atomic write nothing was deposited. This is the ONLY failure
+        // path where that reassurance is accurate — the build/sign client
+        // exceptions in the catch below never reach the chain.
+        const message = atomicFailureText(intent, `Simulation failed: ${pending.simulationError}`);
+        update((current) => ({ ...current, phase: "failed", error: message }));
+        showToast({ tone: "error", title: "Transaction failed", message });
+        return;
       }
 
       await ensureDevnetConnection(connection);
@@ -408,9 +415,11 @@ export function useTransactionFlow({
         showToast({ tone: "info", title: "Signature cancelled" });
         return;
       }
-      const message = atomicFailureText(intent, rawError);
-      update((current) => ({ ...current, phase: "failed", error: message }));
-      showToast({ tone: "error", title: "Transaction failed", message });
+      // A build-time or pre-sign client exception (nothing reached the chain).
+      // Surface it plainly — never the "Nothing was deposited." reassurance,
+      // which is reserved for the on-chain simulation-failure path above.
+      update((current) => ({ ...current, phase: "failed", error: rawError }));
+      showToast({ tone: "error", title: "Transaction failed", message: rawError });
     }
   }, [connection, settleResult, showToast, signTransaction, update]);
 

@@ -5,7 +5,9 @@ import {
   PublicKey,
   SYSVAR_RENT_PUBKEY,
   SystemProgram,
-  Transaction
+  Transaction,
+  TransactionMessage,
+  VersionedTransaction
 } from "@solana/web3.js";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -62,10 +64,19 @@ async function finalizeAndSimulate(
   const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
   tx.recentBlockhash = blockhash;
   tx.feePayer = feePayer;
-  const simulation = await connection.simulateTransaction(tx, {
-    sigVerify: false,
-    replaceRecentBlockhash: true
-  } as any);
+  // The { sigVerify, replaceRecentBlockhash } config is only valid for a
+  // VersionedTransaction — passing it with a legacy Transaction makes web3.js
+  // throw "Invalid arguments" before any RPC. Simulate a versioned compile of
+  // the same instructions; the legacy `tx` is still what MWA signs and submits.
+  const simMessage = new TransactionMessage({
+    payerKey: feePayer,
+    recentBlockhash: blockhash,
+    instructions: tx.instructions
+  }).compileToV0Message();
+  const simulation = await connection.simulateTransaction(
+    new VersionedTransaction(simMessage),
+    { sigVerify: false, replaceRecentBlockhash: true }
+  );
   const simulationError = simulation.value.err
     ? JSON.stringify(simulation.value.err)
     : null;

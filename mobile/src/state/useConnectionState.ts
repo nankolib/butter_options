@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { PublicKey } from "@solana/web3.js";
+import { PublicKey } from "@solana/web3.js";
 import type { ConnectionPhase } from "./models";
 import { sanitizeUserVisibleText } from "./displaySafety";
 
@@ -16,6 +16,18 @@ type WalletConnection = {
 function connectionErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message.trim()) return sanitizeUserVisibleText(error.message);
   return "Connection declined";
+}
+
+function normalizeAccount(account: WalletAccount | undefined): WalletAccount | null {
+  if (!account) return null;
+  const addr = account.address as unknown;
+  // A rehydrated session deserializes address as a base58 string (the wallet
+  // lib's cache reviver only revives "publicKey", not "address"), so coerce
+  // anything that isn't already a PublicKey back into one.
+  const address = addr && typeof (addr as PublicKey).toBase58 === "function"
+    ? (addr as PublicKey)
+    : new PublicKey(addr as string);
+  return { ...account, address };
 }
 
 export function useConnectionState(wallet: WalletConnection) {
@@ -59,7 +71,7 @@ export function useConnectionState(wallet: WalletConnection) {
   return {
     phase,
     error,
-    account: wallet.account ?? null,
+    account: normalizeAccount(wallet.account),
     connect,
     disconnect
   };

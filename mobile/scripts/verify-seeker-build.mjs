@@ -114,7 +114,10 @@ requireText(marketData.includes("getMetadataPointerState"), "Token-2022 metadata
 requireText(marketData.includes("deriveVaultResaleListing"), "Resale listing PDAs must be validated.");
 requireText(marketData.includes("MAX_CONFIDENCE_BPS"), "Live prices must enforce the protocol confidence bound.");
 requireText(marketData.includes("PRICE_FETCH_TIMEOUT_MS"), "Price requests must have a bounded timeout.");
-requireText(marketData.includes("market.account.oracleSource !== 0"), "Unsupported price-source markets must stay hidden from transactional screens.");
+requireText(
+  marketData.includes("market.account.oracleSource !== 0 && market.account.oracleSource !== 1"),
+  "Only source 0 (pull-oracle) and source 1 (on-chain vol-oracle) markets may reach transactional screens; any other source stays hidden."
+);
 
 const marketState = read(mobileRoot, "src", "state", "useMarketState.ts");
 requireText(marketState.includes("AUTO_REFRESH_MS"), "Live prices must refresh before the write gate becomes permanently stale.");

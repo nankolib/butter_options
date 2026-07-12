@@ -15,7 +15,8 @@ import {
   deriveVaultOptionMint,
   deriveVaultMintRecord,
   deriveVaultResaleListing,
-  deriveWriterPosition
+  deriveWriterPosition,
+  deriveVolOracle
 } from "./pdas";
 import { HERMES_BASE, PHASE2_CUTOFF_TIMESTAMP } from "../constants";
 import { hexFromBytes, usdcToNumber } from "../format";
@@ -95,8 +96,26 @@ const LIVE_PRICE_MAX_AGE_SECONDS = 120;
 const PRICE_FUTURE_TOLERANCE_SECONDS = 30;
 const PRICE_FETCH_TIMEOUT_MS = 4_000;
 const MAX_CONFIDENCE_BPS = 200;
+const ONCHAIN_SPOT_MAX_AGE_SECONDS = 7_200; // ~2h; mirrors the vol-oracle sample-gap tolerance
+const SOLMATH_SCALE = 1e12;
 
 type SpotQuote = { value: number; state: "live" | "stale" };
+
+async function fetchOnchainSpot(
+  program: ReturnType<typeof createOptaProgram>,
+  feedId: number[]
+): Promise<SpotQuote | null> {
+  const pda = deriveVolOracle(feedId, program.programId);
+  const record = await fetchDecodedAccount(program, "volOracle", pda);
+  if (!record) return null;
+  const value = record.account.lastSpotPriceScaled / SOLMATH_SCALE;
+  const lastTs = record.account.lastSampleTs;
+  if (!Number.isFinite(value) || value <= 0 || !Number.isFinite(lastTs) || lastTs <= 0) return null;
+  const age = Math.floor(Date.now() / 1000) - lastTs;
+  const state: "live" | "stale" =
+    age >= -PRICE_FUTURE_TOLERANCE_SECONDS && age <= ONCHAIN_SPOT_MAX_AGE_SECONDS ? "live" : "stale";
+  return { value, state };
+}
 
 async function fetchSpot(feedIdHex: string): Promise<SpotQuote | null> {
   const hex = feedIdHex.replace(/^0x/, "").toLowerCase();
@@ -150,10 +169,10 @@ export async function loadMarketSnapshot(connection: Connection): Promise<Market
   ]);
 
   const markets = rawMarkets.flatMap((market) => {
-    // The mobile price client currently supports only source 0. Markets routed
-    // through another source stay hidden from Trade/Write until their verified
-    // mobile quote adapter is implemented; read-only token metadata still works.
-    if (market.account.oracleSource !== 0) return [];
+    // Source 0 = pull-oracle HTTP quote; source 1 = on-chain vol-oracle spot,
+    // read below. Any other source stays hidden from Trade/Write until its
+    // verified mobile quote adapter is implemented; token metadata still works.
+    if (market.account.oracleSource !== 0 && market.account.oracleSource !== 1) return [];
     const rawName = market.account.assetName;
     if (typeof rawName !== "string" || !market.publicKey.equals(deriveMarket(rawName))) return [];
     const displayName = sanitizeAssetDisplayName(rawName);
@@ -194,15 +213,24 @@ export async function loadMarketSnapshot(connection: Connection): Promise<Market
     activeListings.push(listing);
   }
 
-  const feeds = new Map<string, string>();
+  const feeds = new Map<string, { source: number; feedHex: string; feedId: number[] }>();
   for (const market of markets) {
     const asset = market.account.assetName as string;
-    if (!feeds.has(asset)) feeds.set(asset, hexFromBytes(market.account.pythFeedId as number[]));
+    if (!feeds.has(asset)) {
+      const feedId = market.account.pythFeedId as number[];
+      feeds.set(asset, {
+        source: market.account.oracleSource as number,
+        feedHex: hexFromBytes(feedId),
+        feedId
+      });
+    }
   }
   const spotByAsset: Record<string, number> = {};
   const spotStatusByAsset: Record<string, "live" | "stale"> = {};
   await Promise.all(Array.from(feeds.entries()).map(async ([asset, feed]) => {
-    const quote = await fetchSpot(feed).catch(() => null);
+    const quote = feed.source === 1
+      ? await fetchOnchainSpot(program, feed.feedId).catch(() => null)
+      : await fetchSpot(feed.feedHex).catch(() => null);
     if (quote == null) {
       spotStatusByAsset[asset] = "stale";
     } else {

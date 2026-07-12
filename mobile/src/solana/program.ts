@@ -14,7 +14,8 @@ export type OptaAccountName =
   | "vaultResaleListing"
   | "writerPosition"
   | "protocolState"
-  | "epochConfig";
+  | "epochConfig"
+  | "volOracle";
 
 const IDL_ACCOUNT_NAMES: Readonly<Record<OptaAccountName, string>> = {
   optionsMarket: "OptionsMarket",
@@ -23,7 +24,8 @@ const IDL_ACCOUNT_NAMES: Readonly<Record<OptaAccountName, string>> = {
   vaultResaleListing: "VaultResaleListing",
   writerPosition: "WriterPosition",
   protocolState: "ProtocolState",
-  epochConfig: "EpochConfig"
+  epochConfig: "EpochConfig",
+  volOracle: "VolOracle"
 };
 
 export class OptaAccountReadError extends Error {
@@ -159,6 +161,8 @@ function decodeAccount(accountName: OptaAccountName, data: Buffer): any | null {
         return parseProtocolState(data);
       case "epochConfig":
         return parseEpochConfig(data);
+      case "volOracle":
+        return parseVolOracle(data);
       default:
         return null;
     }
@@ -183,6 +187,18 @@ function parseOptionsMarket(data: Buffer): any | null {
     oracleSource
   };
   return isValidOptionsMarket(account) ? account : null;
+}
+
+function parseVolOracle(data: Buffer): any | null {
+  // #[repr(C)] zero-copy VolOracle: 8-byte discriminator + fixed body.
+  // last_sample_ts / last_spot_price are i64 LE at absolute offsets 5832 / 5840
+  // (post-discriminator 5824 / 5832). Offsets cross-checked against the Anchor
+  // coder on live devnet before shipping. No interior padding precedes them.
+  if (data.length < 5848) return null;
+  const lastSampleTs = numberLe(data, 5832, 8);                 // ~1.7e9, safe as a number
+  const lastSpotPriceScaled = Number(bnLe(data, 5840, 8).toString()); // may exceed 2^53 -> via string, no throw
+  if (!Number.isFinite(lastSampleTs) || !Number.isFinite(lastSpotPriceScaled)) return null;
+  return { feedId: Array.from(data.subarray(40, 72)), lastSampleTs, lastSpotPriceScaled };
 }
 
 function parseSharedVault(data: Buffer): any | null {

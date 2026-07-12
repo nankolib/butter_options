@@ -39,7 +39,10 @@ function isStoredMode(value: string | null): value is ThemeMode {
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const scheme = useColorScheme();
-  const [preference, setPreference] = useState<ThemePreference>("system");
+  // Master brief section 1: the app defaults DARK on first launch. A user's
+  // explicit dark/light toggle is stored and rehydrated below; only that
+  // overrides this default.
+  const [preference, setPreference] = useState<ThemePreference>("dark");
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {

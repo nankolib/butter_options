@@ -107,6 +107,12 @@ function atomicFailureText(intent: TxIntent, message: string): string {
   return `${message} Nothing was deposited.`;
 }
 
+// A wallet-side rejection is a user choice, not a failure. It can only happen
+// before a signature exists, so it never collides with the landed-tx path.
+function isUserRejection(message: string): boolean {
+  return /\b(reject|declin|cancel|denied|dismiss|refus)/i.test(message);
+}
+
 function resultError(result: TransactionStatusResult): string {
   return sanitizeUserVisibleText(result.error || "Transaction failed on-chain");
 }
@@ -388,7 +394,21 @@ export function useTransactionFlow({
         });
         return;
       }
-      const message = atomicFailureText(intent, errorText(nextError));
+      const rawError = errorText(nextError);
+      if (isUserRejection(rawError)) {
+        // Neutral, non-destructive: return to review so the user can re-submit.
+        update((current) => ({
+          ...current,
+          phase: "review",
+          pending: null,
+          submitted: null,
+          signature: null,
+          error: null
+        }));
+        showToast({ tone: "info", title: "Signature cancelled" });
+        return;
+      }
+      const message = atomicFailureText(intent, rawError);
       update((current) => ({ ...current, phase: "failed", error: message }));
       showToast({ tone: "error", title: "Transaction failed", message });
     }

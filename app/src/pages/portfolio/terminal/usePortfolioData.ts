@@ -25,7 +25,7 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import { useProgram } from "../../../hooks/useProgram";
 import { safeFetchAll, invalidateAccountScans } from "../../../hooks/useFetchAccounts";
 import { useVaults } from "../../../hooks/useVaults";
-import { usePythPrices } from "../../../hooks/usePythPrices";
+import { useSpotPrices } from "../../../hooks/useSpotPrices";
 import { useTokenMetadata } from "../../../hooks/useTokenMetadata";
 import { TOKEN_2022_PROGRAM_ID } from "../../../utils/constants";
 import { hexFromBytes } from "../../../utils/format";
@@ -67,17 +67,21 @@ export function usePortfolioData() {
   const { vaults, vaultMints, myPositions, getUnclaimedPremium, refetch: refetchVaults } = useVaults();
 
   const feeds = useMemo(() => {
-    const out: { ticker: string; feedIdHex: string }[] = [];
+    const out: { ticker: string; feedIdHex: string; oracleSource: 0 | 1 }[] = [];
     const seen = new Set<string>();
     for (const m of markets) {
       const ticker = m.account.assetName as string;
       if (!ticker || seen.has(ticker)) continue;
       seen.add(ticker);
-      out.push({ ticker, feedIdHex: hexFromBytes(m.account.pythFeedId as number[]) });
+      out.push({
+        ticker,
+        feedIdHex: hexFromBytes(m.account.pythFeedId as number[]),
+        oracleSource: ((m.account.oracleSource as number) ?? 0) === 1 ? 1 : 0,
+      });
     }
     return out;
   }, [markets]);
-  const { prices: spotPrices, stale: pricesStale } = usePythPrices(feeds);
+  const { prices: spotPrices, stale: pricesStale } = useSpotPrices(feeds);
 
   /**
    * Invalidate-before-refetch. `invalidate=true` (the default from every action

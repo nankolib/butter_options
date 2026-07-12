@@ -34,6 +34,19 @@ export function getSbCreateEndpoint(): string | null {
 }
 
 /**
+ * Resolve the same-origin spot-simulate proxy base. Reads `VITE_XBAR_BASE`
+ * (e.g. `/xbar`). Returns `null` when unset/empty so callers cleanly fall back
+ * to the on-chain last-sample path instead of building a request against
+ * `undefined`. Same-origin by design (no CORS/CSP concern). A trailing slash is
+ * trimmed so `${base}/simulate/${feed}` never doubles up.
+ */
+export function getXbarBase(): string | null {
+  const v = import.meta.env.VITE_XBAR_BASE;
+  if (typeof v !== "string" || v.length === 0) return null;
+  return v.replace(/\/+$/, "");
+}
+
+/**
  * Mainnet RPC endpoint for the cross-cluster mint-symbol resolver (the ONLY
  * mainnet read-path in the app). Reads `VITE_MAINNET_RPC_URL`; falls back to a
  * BROWSER-CORS-FRIENDLY public default.

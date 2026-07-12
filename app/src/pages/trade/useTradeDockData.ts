@@ -26,7 +26,7 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import { useProgram } from "../../hooks/useProgram";
 import { safeFetchAll } from "../../hooks/useFetchAccounts";
 import { useVaults } from "../../hooks/useVaults";
-import { usePythPrices } from "../../hooks/usePythPrices";
+import { useSpotPrices } from "../../hooks/useSpotPrices";
 import { useTokenMetadata } from "../../hooks/useTokenMetadata";
 import { useBook, type BookOrder } from "../../hooks/useBook";
 import { DEVNET_USDC_MINT, TOKEN_2022_PROGRAM_ID } from "../../utils/constants";
@@ -133,17 +133,21 @@ export function useTradeDockData(): TradeDockData {
 
   // ---- spot prices (feeds derived from markets) ----
   const feeds = useMemo(() => {
-    const out: { ticker: string; feedIdHex: string }[] = [];
+    const out: { ticker: string; feedIdHex: string; oracleSource: 0 | 1 }[] = [];
     const seen = new Set<string>();
     for (const m of markets) {
       const ticker = m.account.assetName as string;
       if (!ticker || seen.has(ticker)) continue;
       seen.add(ticker);
-      out.push({ ticker, feedIdHex: hexFromBytes(m.account.pythFeedId as number[]) });
+      out.push({
+        ticker,
+        feedIdHex: hexFromBytes(m.account.pythFeedId as number[]),
+        oracleSource: ((m.account.oracleSource as number) ?? 0) === 1 ? 1 : 0,
+      });
     }
     return out;
   }, [markets]);
-  const { prices: spotPrices } = usePythPrices(feeds);
+  const { prices: spotPrices } = useSpotPrices(feeds);
 
   // ---- marketMap + token-metadata fallback (mirror PortfolioPage) ----
   const marketMap = useMemo(() => {

@@ -6,8 +6,9 @@ import { useConnection } from "@solana/wallet-adapter-react";
 import { useProgram } from "../../hooks/useProgram";
 import { inferClusterFromUrl, getSolscanTxUrl } from "../../utils/env";
 import { safeFetchAll } from "../../hooks/useFetchAccounts";
-import { usePythPrices } from "../../hooks/usePythPrices";
+import { useSpotPrices } from "../../hooks/useSpotPrices";
 import { useVolOracleStatus } from "../../hooks/useVolOracleStatus";
+import { canonicalAsset } from "../../utils/assetDisplay";
 import { usePaperPalette } from "../../hooks";
 import { hexFromBytes } from "../../utils/format";
 import { PaperGrain, HairlineRule } from "../../components/layout";
@@ -78,7 +79,7 @@ const WritePageLegacy: FC = () => {
   const assets = useMemo<AssetOption[]>(() => {
     const map = new Map<string, AssetOption>();
     for (const m of markets) {
-      const ticker = m.account.assetName as string;
+      const ticker = canonicalAsset(m.account.assetName);
       if (!ticker) continue;
       if (!map.has(ticker)) {
         map.set(ticker, { ticker, market: m });
@@ -87,17 +88,18 @@ const WritePageLegacy: FC = () => {
     return Array.from(map.values()).sort((a, b) => a.ticker.localeCompare(b.ticker));
   }, [markets]);
 
-  // Pass (ticker, feedIdHex) pairs to usePythPrices so it can batch-hit
-  // Hermes-Beta directly instead of mapping ticker → feed_id internally.
+  // Pass (ticker, feedIdHex, oracleSource) tuples to useSpotPrices so it can
+  // batch each market to its correct spot source.
   const feeds = useMemo(
     () =>
       assets.map((a) => ({
         ticker: a.ticker,
         feedIdHex: hexFromBytes(a.market.account.pythFeedId as number[]),
+        oracleSource: (((a.market.account.oracleSource as number) ?? 0) === 1 ? 1 : 0) as 0 | 1,
       })),
     [assets],
   );
-  const { prices: spotPrices, stale: pricesStale } = usePythPrices(feeds);
+  const { prices: spotPrices, stale: pricesStale } = useSpotPrices(feeds);
 
   // W1 vol-oracle coverage gate. Hourly polling crank leaves a race window
   // between create_market and the crank's initialize_vol_oracle; W1 surfaces

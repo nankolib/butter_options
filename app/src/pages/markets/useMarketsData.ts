@@ -3,7 +3,7 @@ import { PublicKey } from "@solana/web3.js";
 import { useProgram } from "../../hooks/useProgram";
 import { safeFetchAll } from "../../hooks/useFetchAccounts";
 import { useVaults } from "../../hooks/useVaults";
-import { usePythPrices } from "../../hooks/usePythPrices";
+import { useSpotPrices } from "../../hooks/useSpotPrices";
 import { applyVolSmile, getDefaultVolatility } from "../../utils/blackScholes";
 import { hexFromBytes, usdcToNumber } from "../../utils/format";
 import { canonicalAsset } from "../../utils/assetDisplay";
@@ -56,6 +56,8 @@ export type UseMarketsData = {
   rows: MarketRow[];
   summary: MarketsSummary;
   spotPrices: Record<string, number>;
+  /** Sample timestamp (unix secs) per asset, only for on-chain-fallback spot. */
+  asOf: Record<string, number>;
   loading: boolean;
   refetch: () => Promise<void>;
 };
@@ -126,9 +128,9 @@ export function useMarketsData(): UseMarketsData {
   }, [vaultMints]);
 
   // Feeds — one entry per (asset, feed_id) pair for assets with at least
-  // one live vault. usePythPrices batches them into one Hermes call.
+  // one live vault. useSpotPrices batches them by oracle source.
   const feeds = useMemo(() => {
-    const out: { ticker: string; feedIdHex: string }[] = [];
+    const out: { ticker: string; feedIdHex: string; oracleSource: 0 | 1 }[] = [];
     const seen = new Set<string>();
     for (const v of vaults) {
       const market = markets.find((m) =>
@@ -141,11 +143,12 @@ export function useMarketsData(): UseMarketsData {
       out.push({
         ticker,
         feedIdHex: hexFromBytes(market.account.pythFeedId as number[]),
+        oracleSource: ((market.account.oracleSource as number) ?? 0) === 1 ? 1 : 0,
       });
     }
     return out;
   }, [vaults, markets]);
-  const { prices: spotPrices } = usePythPrices(feeds);
+  const { prices: spotPrices, asOf: spotAsOf } = useSpotPrices(feeds);
 
   const rows = useMemo<MarketRow[]>(() => {
     const now = Math.floor(Date.now() / 1000);
@@ -233,5 +236,5 @@ export function useMarketsData(): UseMarketsData {
     };
   }, [rows, vaults, loading]);
 
-  return { rows, summary, spotPrices, loading, refetch };
+  return { rows, summary, spotPrices, asOf: spotAsOf ?? {}, loading, refetch };
 }

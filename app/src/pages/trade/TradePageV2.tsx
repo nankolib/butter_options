@@ -13,6 +13,7 @@ import { BuyModal } from "./BuyModal";
 import { useTradeData, type Offering } from "./useTradeData";
 import { useUnifiedChain } from "../../hooks/useUnifiedChain";
 import { calculateCallPremium, calculatePutPremium, getDefaultVolatility, applyVolSmile } from "../../utils/blackScholes";
+import { formatAsOfUtc } from "../../utils/format";
 
 // Lazy-load the chart-heavy surfaces so they leave the initial chunk.
 const PriceChart = lazy(() => import("./PriceChart").then((m) => ({ default: m.PriceChart })));
@@ -244,6 +245,9 @@ export const TradePageV2: FC = () => {
         <span className="font-mono-plex text-[15px] tabular-nums text-l-text">
           {td.spot != null ? `$${td.spot.toFixed(td.spot < 100 ? 4 : 2)}` : "—"}
         </span>
+        {td.spotAsOf != null && (
+          <span className="font-mono-plex text-[10px] tabular-nums text-l-muted">{formatAsOfUtc(td.spotAsOf)}</span>
+        )}
         {td.stale && <span className="font-mono-plex text-[9px] uppercase tracking-[0.12em] text-l-faint">stale</span>}
         <span className="ml-3 font-mono-plex text-[11px] tabular-nums text-l-muted">
           {td.selectedExpiry ? countdown(td.selectedExpiry) : ""}

@@ -1,5 +1,6 @@
 {
   "rewrites": [
+    { "source": "/xbar/:path*", "destination": "https://feeds.opta.fyi/:path*" },
     { "source": "/(.*)", "destination": "/index.html" }
   ],
   "headers": [

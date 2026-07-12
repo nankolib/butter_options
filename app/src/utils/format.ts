@@ -68,9 +68,22 @@ export function truncateAddress(address: string): string {
 }
 
 /**
+ * Format an on-chain sample timestamp (unix seconds) as a muted staleness
+ * stamp: `as of HH:MM UTC` (24h, zero-padded UTC hours:minutes). Used only for
+ * markets whose spot comes from the on-chain sample fallback; live-fed markets
+ * render no stamp. Generic wording — no data-source names.
+ */
+export function formatAsOfUtc(unixSecs: number): string {
+  const d = new Date(unixSecs * 1000);
+  const hh = String(d.getUTCHours()).padStart(2, "0");
+  const mm = String(d.getUTCMinutes()).padStart(2, "0");
+  return `as of ${hh}:${mm} UTC`;
+}
+
+/**
  * Convert a 32-byte feed_id (Anchor [u8; 32] = number[] | Uint8Array | Buffer)
- * to lowercase 64-char hex with NO `0x` prefix. Hermes API + our on-chain
- * registry both store/accept this canonical form.
+ * to lowercase 64-char hex with NO `0x` prefix. The pull-oracle API + our
+ * on-chain registry both store/accept this canonical form.
  */
 export function hexFromBytes(bytes: number[] | Uint8Array | Buffer): string {
   let out = "";

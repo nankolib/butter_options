@@ -1,0 +1,183 @@
+// =============================================================================
+// useSpotPrices.ts — source-aware spot prices (wraps usePythPrices)
+// =============================================================================
+//
+// A market carries an `oracle_source` byte. Source 0 markets price off the
+// existing off-chain pull path (usePythPrices, unchanged). Source 1 markets
+// price off a same-origin spot-simulate proxy when configured, else fall back
+// to the market's on-chain last recorded sample.
+//
+// This wrapper keeps the EXACT usePythPrices output contract
+//   { prices: Record<string, number>; loading; error; stale }
+// and ADDS a per-ticker `asOf?: Record<string, number>` (unix secs) populated
+// ONLY for markets whose spot came from the on-chain sample fallback — the UI
+// renders a muted "as of HH:MM UTC" beside those. For an input that is entirely
+// source-0, the returned object is byte-identical to calling usePythPrices
+// directly (prices/loading/error/stale pass through, asOf is undefined).
+//
+// Provenance rule: no oracle-vendor names in any user-visible string. The proxy
+// base is a neutral env var (VITE_XBAR_BASE); the on-chain sample is described
+// generically ("as of …").
+//
+// Caller shape: `Array<{ ticker, feedIdHex, oracleSource: 0 | 1 }>`. For a
+// source-1 market the 32-byte `feedIdHex` doubles as BOTH the proxy simulate key
+// AND the seed for the on-chain sample account, so one hex threads both paths.
+// =============================================================================
+
+import { useEffect, useMemo, useState } from "react";
+import { PublicKey } from "@solana/web3.js";
+import { Buffer } from "buffer";
+import { useConnection } from "@solana/wallet-adapter-react";
+import { usePythPrices } from "./usePythPrices";
+import { useProgram } from "./useProgram";
+import { VOL_ORACLE_SEED } from "../utils/constants";
+import { getXbarBase } from "../utils/env";
+import { parseSimulate, decodeVolSpot, resolveSbSpots, splitBySource, normFeed } from "./spotSources";
+
+const REFRESH_INTERVAL_MS = 30_000;
+const FETCH_TIMEOUT_MS = 4000;
+
+export type SpotRequest = {
+  /** Display key the price is returned under. */
+  ticker: string;
+  /** 64-char lowercase hex, no `0x` prefix. */
+  feedIdHex: string;
+  /** 0 = off-chain pull path; 1 = proxy-simulate with on-chain sample fallback. */
+  oracleSource: 0 | 1;
+};
+
+export type SpotPricesResult = {
+  prices: Record<string, number>;
+  loading: boolean;
+  error: string | null;
+  stale: boolean;
+  /** Sample timestamp (unix secs) per ticker, ONLY for on-chain-fallback markets. */
+  asOf?: Record<string, number>;
+};
+
+function deriveSamplePda(feedIdHex: string, programId: PublicKey): PublicKey {
+  const bytes = Buffer.from(normFeed(feedIdHex), "hex");
+  const [pda] = PublicKey.findProgramAddressSync(
+    [Buffer.from(VOL_ORACLE_SEED), bytes],
+    programId,
+  );
+  return pda;
+}
+
+/** Try the same-origin simulate proxy for one feed. Returns null on any
+ *  failure (unset base, non-200, timeout, empty/invalid results) so the caller
+ *  falls back to the on-chain sample. */
+async function fetchProxySpot(base: string, feedIdHex: string): Promise<number | null> {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const resp = await fetch(`${base}/simulate/${feedIdHex}`, { signal: ac.signal });
+    if (!resp.ok) return null;
+    return parseSimulate(await resp.json());
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export function useSpotPrices(entries: SpotRequest[]): SpotPricesResult {
+  // ---- Split by source. Both branches run every render (hooks rules). --------
+  const { pythFeeds, sbFeeds } = useMemo(() => {
+    return splitBySource(entries);
+  }, [entries]);
+
+  // Source-0 subset flows through the existing path BYTE-IDENTICALLY.
+  const pyth = usePythPrices(pythFeeds);
+
+  // ---- Source-1 subset: proxy-simulate with on-chain sample fallback --------
+  const { connection } = useConnection();
+  const { program } = useProgram();
+  const programId = program?.programId ?? null;
+
+  // Stable fingerprint so the effect only re-fires on membership change.
+  const sbKey = useMemo(
+    () => sbFeeds.map((f) => `${f.ticker}:${f.feedIdHex}`).sort().join(","),
+    [sbFeeds],
+  );
+
+  const [sbPrices, setSbPrices] = useState<Record<string, number>>({});
+  const [sbAsOf, setSbAsOf] = useState<Record<string, number>>({});
+  const [sbLoading, setSbLoading] = useState(false);
+  const [sbError, setSbError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (sbFeeds.length === 0) {
+      setSbPrices({});
+      setSbAsOf({});
+      setSbLoading(false);
+      setSbError(null);
+      return;
+    }
+    let cancelled = false;
+    setSbLoading(true);
+
+    // Batched on-chain sample read + decode. Empty Map when the program isn't
+    // ready yet (leaves those tickers absent, no error) — matches prior behavior.
+    const onChainDecode = async (
+      hexes: string[],
+    ): Promise<Map<string, { spot: number; asOf: number }>> => {
+      const out = new Map<string, { spot: number; asOf: number }>();
+      if (!programId) return out;
+      const pdas = hexes.map((h) => deriveSamplePda(h, programId));
+      const infos = await connection.getMultipleAccountsInfo(pdas, "confirmed");
+      for (let i = 0; i < hexes.length; i++) {
+        const info = infos[i];
+        if (!info) continue;
+        const d = decodeVolSpot(info.data as Uint8Array);
+        if (d) out.set(hexes[i], d);
+      }
+      return out;
+    };
+
+    const run = async () => {
+      const { prices, asOf, error } = await resolveSbSpots(
+        sbFeeds,
+        getXbarBase(),
+        fetchProxySpot,
+        onChainDecode,
+      );
+      if (!cancelled) {
+        setSbPrices(prices);
+        setSbAsOf(asOf);
+        setSbLoading(false);
+        setSbError(error);
+      }
+    };
+
+    run();
+    const id = setInterval(run, REFRESH_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+    // sbKey is the membership fingerprint; connection/programId are stable refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sbKey, connection, programId?.toBase58()]);
+
+  // ---- Merge. Pyth-only inputs return byte-identically. ----------------------
+  return useMemo(() => {
+    const hasSb = sbFeeds.length > 0;
+    if (!hasSb) {
+      return {
+        prices: pyth.prices,
+        loading: pyth.loading,
+        error: pyth.error,
+        stale: pyth.stale,
+      };
+    }
+    const asOf = Object.keys(sbAsOf).length > 0 ? sbAsOf : undefined;
+    return {
+      prices: { ...pyth.prices, ...sbPrices },
+      loading: pyth.loading || sbLoading,
+      error: pyth.error ?? sbError,
+      stale: pyth.stale,
+      asOf,
+    };
+  }, [pyth.prices, pyth.loading, pyth.error, pyth.stale, sbPrices, sbAsOf, sbLoading, sbError, sbFeeds.length]);
+}

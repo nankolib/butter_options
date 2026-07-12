@@ -17,6 +17,7 @@ import { useState } from "react";
 import { AMERICAN_ENABLED_UI } from "../../../utils/constants";
 import { tenorExpiry, type TenorLabel } from "../../../utils/tenors";
 import { WriteAssetSelect } from "./WriteAssetSelect";
+import { formatAsOfUtc } from "../../../utils/format";
 import { ALL_TENORS, type TenorMode, type WriteMode } from "./useWriteController";
 import type { WriterFormValues } from "../WriterForm";
 
@@ -30,6 +31,9 @@ type Props = {
   assets: string[];
   spotByTicker: Record<string, number | null | undefined>;
   spotForChosenAsset: number | null;
+  /** Sample timestamp (unix secs) for the chosen asset's spot when it comes from
+   *  the on-chain sample fallback; null for live-fed assets (no stamp). */
+  spotAsOfForChosenAsset: number | null;
   unseeded: ReadonlySet<string>;
   tenorMode: TenorMode;
   onTenorModeChange: (m: TenorMode) => void;
@@ -80,6 +84,7 @@ export const WriteContractPanel: FC<Props> = ({
   assets,
   spotByTicker,
   spotForChosenAsset,
+  spotAsOfForChosenAsset,
   unseeded,
   tenorMode,
   onTenorModeChange,
@@ -126,6 +131,9 @@ export const WriteContractPanel: FC<Props> = ({
           unseeded={unseeded}
           onChange={(a) => onValuesChange({ ...values, asset: a })}
         />
+        {spotAsOfForChosenAsset != null && (
+          <div className="mt-1 font-mono-plex text-[10px] text-l-muted">{formatAsOfUtc(spotAsOfForChosenAsset)}</div>
+        )}
       </Field>
 
       <Field label="Side">

@@ -24,9 +24,10 @@ import { useProgram } from "../../hooks/useProgram";
 import { useSurfaceMode } from "../../hooks/useSurfaceMode";
 import { SolscanLink } from "../../components/SolscanLink";
 import { safeFetchAll } from "../../hooks/useFetchAccounts";
-import { usePythPrices } from "../../hooks/usePythPrices";
+import { useSpotPrices } from "../../hooks/useSpotPrices";
 import { useVolOracleStatus } from "../../hooks/useVolOracleStatus";
 import { hexFromBytes } from "../../utils/format";
+import { canonicalAsset } from "../../utils/assetDisplay";
 import { TerminalAppBar } from "../../components/TerminalAppBar";
 import { refreshAfterMutation } from "../trade/orderRefresh";
 import { weeklyExpiry, type TenorLabel } from "../../utils/tenors";
@@ -105,7 +106,7 @@ export const WriteTerminalPage: FC = () => {
   const assets = useMemo<AssetOption[]>(() => {
     const map = new Map<string, AssetOption>();
     for (const m of markets) {
-      const ticker = m.account.assetName as string;
+      const ticker = canonicalAsset(m.account.assetName);
       if (!ticker) continue;
       if (!map.has(ticker)) map.set(ticker, { ticker, market: m });
     }
@@ -117,10 +118,11 @@ export const WriteTerminalPage: FC = () => {
       assets.map((a) => ({
         ticker: a.ticker,
         feedIdHex: hexFromBytes(a.market.account.pythFeedId as number[]),
+        oracleSource: (((a.market.account.oracleSource as number) ?? 0) === 1 ? 1 : 0) as 0 | 1,
       })),
     [assets],
   );
-  const { prices: spotPrices, stale: pricesStale } = usePythPrices(feeds);
+  const { prices: spotPrices, stale: pricesStale, asOf: spotAsOfMap } = useSpotPrices(feeds);
 
   const volOracleStatus = useVolOracleStatus(useMemo(() => feeds.map((f) => f.feedIdHex), [feeds]));
   const unseededTickers = useMemo<Set<string>>(() => {
@@ -134,6 +136,7 @@ export const WriteTerminalPage: FC = () => {
   const tickers = useMemo(() => assets.map((a) => a.ticker), [assets]);
   const chosen = useMemo(() => assets.find((a) => a.ticker === values.asset) ?? null, [assets, values.asset]);
   const spotForChosenAsset = values.asset ? spotPrices[values.asset] ?? null : null;
+  const spotAsOfForChosenAsset = values.asset ? spotAsOfMap?.[values.asset] ?? null : null;
 
   // Default the asset once markets load. Deep-link: /write?asset=NAME preselects
   // that asset when it exists in the live set (from the New-market success moment's
@@ -245,6 +248,7 @@ export const WriteTerminalPage: FC = () => {
                     assets={tickers}
                     spotByTicker={spotPrices}
                     spotForChosenAsset={spotForChosenAsset}
+                    spotAsOfForChosenAsset={spotAsOfForChosenAsset}
                     unseeded={unseededTickers}
                     tenorMode={tenorMode}
                     onTenorModeChange={setTenorMode}

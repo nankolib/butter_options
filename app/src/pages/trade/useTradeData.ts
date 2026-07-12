@@ -5,7 +5,7 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import { useProgram } from "../../hooks/useProgram";
 import { safeFetchAll } from "../../hooks/useFetchAccounts";
 import { useVaults } from "../../hooks/useVaults";
-import { usePythPrices } from "../../hooks/usePythPrices";
+import { useSpotPrices } from "../../hooks/useSpotPrices";
 import {
   applyVolSmile,
   calculateCallGreeks,
@@ -119,7 +119,10 @@ export type UseTradeData = {
   clearHighlightedStrike: () => void;
   /** Spot price for the currently selected asset. */
   spot: number | null;
-  /** True when displayed spot is sourced from cache > 60s old (Hermes outage). */
+  /** Sample timestamp (unix secs) for the selected asset's spot when it comes
+   *  from the on-chain sample fallback; null for live-fed assets. */
+  spotAsOf: number | null;
+  /** True when displayed spot is sourced from cache > 60s old (feed outage). */
   stale: boolean;
   /** ATM strike for the current chain — used for the rule + label. */
   atmStrike: number | null;
@@ -157,7 +160,7 @@ function sortAndPartition(arr: Offering[]): void {
 /**
  * Bundles all data the Trade page needs:
  *   - Markets, vaults, vault mints, positions
- *   - Pyth-fed spot prices
+ *   - pull-fed spot prices
  *   - Selected asset / expiry state
  *   - Computed chain rows + summary stats for the selection
  *
@@ -291,10 +294,11 @@ export function useTradeData(): UseTradeData {
     }
   }, [availableAssets, availableExpiries, searchParams]);
 
-  // Pyth spot prices for all assets with active vaults. Caller passes
-  // (ticker, feedIdHex) pairs so usePythPrices can hit Hermes directly.
+  // Spot prices for all assets with active vaults. Caller passes
+  // (ticker, feedIdHex, oracleSource) tuples so useSpotPrices routes each
+  // market to the correct source.
   const feeds = useMemo(() => {
-    const out: { ticker: string; feedIdHex: string }[] = [];
+    const out: { ticker: string; feedIdHex: string; oracleSource: 0 | 1 }[] = [];
     const seen = new Set<string>();
     for (const v of vaults) {
       if (v.account.isSettled) continue;
@@ -308,13 +312,15 @@ export function useTradeData(): UseTradeData {
       out.push({
         ticker,
         feedIdHex: hexFromBytes(market.account.pythFeedId as number[]),
+        oracleSource: ((market.account.oracleSource as number) ?? 0) === 1 ? 1 : 0,
       });
     }
     return out;
   }, [vaults, markets]);
-  const { prices: spotPrices, stale } = usePythPrices(feeds);
+  const { prices: spotPrices, stale, asOf: spotAsOfMap } = useSpotPrices(feeds);
 
   const spot = selectedAsset ? spotPrices[selectedAsset] ?? null : null;
+  const spotAsOf = selectedAsset ? spotAsOfMap?.[selectedAsset] ?? null : null;
 
   // Index resale listings by option_mint for O(1) per-cell lookup
   // during the chain row build. Each option_mint can have 0..N active
@@ -618,6 +624,7 @@ export function useTradeData(): UseTradeData {
     },
     clearHighlightedStrike,
     spot,
+    spotAsOf,
     stale,
     atmStrike,
     atmBaselineIv,

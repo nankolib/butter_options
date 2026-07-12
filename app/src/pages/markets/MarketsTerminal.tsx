@@ -4,6 +4,7 @@ import { type MarketRow, type UseMarketsData } from "./useMarketsData";
 import { PulseTiles } from "./PulseTiles";
 import { ContractInspector } from "./ContractInspector";
 import { MoneyAmount } from "../../components/MoneyAmount";
+import { formatAsOfUtc } from "../../utils/format";
 import {
   CLASS_TABS,
   aggregateAssets,
@@ -39,7 +40,7 @@ import {
  * flex-none and the table/tiles scroll inside.
  */
 export const MarketsTerminal: FC<{ data: UseMarketsData }> = ({ data }) => {
-  const { rows, summary, loading } = data;
+  const { rows, summary, asOf, loading } = data;
 
   const [view, setView] = useState<"assets" | "contracts">("assets");
   const [tab, setTab] = useState<ClassTab>("Crypto");
@@ -302,7 +303,18 @@ export const MarketsTerminal: FC<{ data: UseMarketsData }> = ({ data }) => {
                         style={{ gridTemplateColumns: A_COLS }}
                       >
                         <Cell className="font-sans text-[13px] font-medium text-l-text">{a.asset}</Cell>
-                        <Cell right>{a.spot != null ? fmtPrice(a.spot) : "—"}</Cell>
+                        <Cell right>
+                          {asOf[a.asset] != null ? (
+                            <span className="inline-flex flex-col items-end leading-none">
+                              <span>{a.spot != null ? fmtPrice(a.spot) : "—"}</span>
+                              <span className="mt-[2px] font-mono-plex text-[9px] text-l-muted">{formatAsOfUtc(asOf[a.asset])}</span>
+                            </span>
+                          ) : a.spot != null ? (
+                            fmtPrice(a.spot)
+                          ) : (
+                            "—"
+                          )}
+                        </Cell>
                         <Cell right muted>{a.atmIv != null ? fmtIv(a.atmIv) : "—"}</Cell>
                         <Cell right>{fmtInt(a.oiSum)}</Cell>
                         <Cell right>{fmtUsdCompact(a.vaultDepthSum)}</Cell>

@@ -2,6 +2,7 @@ import { PublicKey } from "@solana/web3.js";
 import BN from "bn.js";
 import {
   PROGRAM_ID,
+  MARKET_SEED,
   PROTOCOL_SEED,
   TREASURY_SEED,
   EPOCH_CONFIG_SEED,
@@ -12,11 +13,18 @@ import {
   VAULT_MINT_RECORD_SEED,
   VAULT_OPTION_MINT_SEED,
   VAULT_PURCHASE_ESCROW_SEED,
+  VAULT_RESALE_LISTING_SEED,
   VAULT_RESALE_ESCROW_SEED,
-  VOL_ORACLE_SEED,
-  type TOKEN_2022_PROGRAM_ID
+  VOL_ORACLE_SEED
 } from "../constants";
 import type { ExerciseStyle } from "../types";
+
+export function deriveMarket(assetName: string, programId = PROGRAM_ID): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(MARKET_SEED), Buffer.from(assetName)],
+    programId
+  )[0];
+}
 
 export function protocolStatePda(programId = PROGRAM_ID): PublicKey {
   return PublicKey.findProgramAddressSync([Buffer.from(PROTOCOL_SEED)], programId)[0];
@@ -86,6 +94,26 @@ export function deriveVaultOptionMint(
   )[0];
 }
 
+export function deriveCanonicalSeriesMint(
+  market: PublicKey,
+  strikePrice: BN,
+  expiry: BN,
+  optionType: number,
+  programId = PROGRAM_ID
+): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [
+      Buffer.from(VAULT_OPTION_MINT_SEED),
+      market.toBuffer(),
+      strikePrice.toArrayLike(Buffer, "le", 8),
+      expiry.toArrayLike(Buffer, "le", 8),
+      Buffer.from([optionType]),
+      Buffer.from([1])
+    ],
+    programId
+  )[0];
+}
+
 export function deriveVaultPurchaseEscrow(
   sharedVault: PublicKey,
   writer: PublicKey,
@@ -106,6 +134,17 @@ export function deriveVaultPurchaseEscrow(
 export function deriveVaultMintRecord(optionMint: PublicKey, programId = PROGRAM_ID): PublicKey {
   return PublicKey.findProgramAddressSync(
     [Buffer.from(VAULT_MINT_RECORD_SEED), optionMint.toBuffer()],
+    programId
+  )[0];
+}
+
+export function deriveVaultResaleListing(
+  optionMint: PublicKey,
+  seller: PublicKey,
+  programId = PROGRAM_ID
+): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(VAULT_RESALE_LISTING_SEED), optionMint.toBuffer(), seller.toBuffer()],
     programId
   )[0];
 }

@@ -18,6 +18,7 @@ export const TRANSFER_HOOK_PROGRAM_ID = new PublicKey(
 );
 
 export const PROTOCOL_SEED = "protocol_v2";
+export const MARKET_SEED = "market";
 export const TREASURY_SEED = "treasury_v2";
 export const EPOCH_CONFIG_SEED = "epoch_config";
 export const SHARED_VAULT_SEED = "shared_vault";
@@ -27,6 +28,7 @@ export const WRITER_POSITION_SEED = "writer_position";
 export const VAULT_MINT_RECORD_SEED = "vault_mint_record";
 export const VAULT_OPTION_MINT_SEED = "vault_option_mint";
 export const VAULT_PURCHASE_ESCROW_SEED = "vault_purchase_escrow";
+export const VAULT_RESALE_LISTING_SEED = "vault_resale_listing";
 export const VAULT_RESALE_ESCROW_SEED = "vault_resale_escrow";
 export const VOL_ORACLE_SEED = "vol_oracle";
 

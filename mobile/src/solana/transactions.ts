@@ -19,7 +19,15 @@ import {
   TRANSFER_HOOK_PROGRAM_ID
 } from "../constants";
 import { toUsdcBN } from "../format";
-import type { ExerciseStyle, Offering, OptionSide, PendingTx, WriteDraft } from "../types";
+import { sanitizeAssetDisplayName } from "../runtime/assetDisplay";
+import type {
+  ExerciseStyle,
+  Offering,
+  OptionSide,
+  PendingTx,
+  TransactionKind,
+  WriteDraft
+} from "../types";
 import {
   deriveExtraAccountMetaListPda,
   deriveHookStatePda,
@@ -35,8 +43,10 @@ import {
   protocolStatePda,
   treasuryPda
 } from "./pdas";
+import { fetchDecodedAccount } from "./program";
+import { ensureDevnetConnection } from "./cluster";
 
-const EXTRA_CU_400K = ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 });
+const EXTRA_CU_600K = ComputeBudgetProgram.setComputeUnitLimit({ units: 600_000 });
 const EXTRA_CU_800K = ComputeBudgetProgram.setComputeUnitLimit({ units: 800_000 });
 const EXTRA_CU_1_4M = ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 });
 
@@ -44,9 +54,12 @@ async function finalizeAndSimulate(
   connection: Connection,
   feePayer: PublicKey,
   tx: Transaction,
-  summary: string[]
+  summary: string[],
+  kind: TransactionKind,
+  resultAccounts?: PendingTx["resultAccounts"]
 ): Promise<PendingTx> {
-  const { blockhash } = await connection.getLatestBlockhash("confirmed");
+  await ensureDevnetConnection(connection);
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
   tx.recentBlockhash = blockhash;
   tx.feePayer = feePayer;
   const simulation = await connection.simulateTransaction(tx, {
@@ -56,7 +69,33 @@ async function finalizeAndSimulate(
   const simulationError = simulation.value.err
     ? JSON.stringify(simulation.value.err)
     : null;
-  return { transaction: tx, summary, simulationError };
+  return {
+    transaction: tx,
+    summary,
+    simulationError,
+    kind,
+    blockhash,
+    lastValidBlockHeight,
+    builtAt: Date.now(),
+    resultAccounts
+  };
+}
+
+type ProtocolStateAccount = { usdcMint: PublicKey };
+
+async function loadProtocolState(program: Program): Promise<{
+  publicKey: PublicKey;
+  account: ProtocolStateAccount;
+}> {
+  await ensureDevnetConnection(program.provider.connection);
+  const publicKey = protocolStatePda(program.programId);
+  const record = await fetchDecodedAccount<ProtocolStateAccount>(
+    program,
+    "protocolState",
+    publicKey
+  );
+  if (!record) throw new Error("Protocol state is not initialized.");
+  return record;
 }
 
 function optionTypeEnum(side: OptionSide): any {
@@ -91,15 +130,36 @@ function writeDerivations(draft: WriteDraft, writer: PublicKey, programId: Publi
   };
 }
 
-export async function buildWriteDepositTx(params: {
+export type AtomicWriteCapability =
+  | { supported: true }
+  | { supported: false; reason: string };
+
+/** Epoch-American writes use the canonical series/order rail, not per-writer direct minting. */
+export function atomicWriteCapability(
+  draft: Pick<WriteDraft, "vaultType" | "exerciseStyle">
+): AtomicWriteCapability {
+  if (draft.vaultType === "epoch" && draft.exerciseStyle === "american") {
+    return {
+      supported: false,
+      reason: "American epoch writes require the canonical series order flow, which is not wired in mobile yet."
+    };
+  }
+  return { supported: true };
+}
+
+export async function buildAtomicWriteTx(params: {
   program: Program;
   connection: Connection;
   writer: PublicKey;
   draft: WriteDraft;
 }): Promise<PendingTx> {
   const { program, connection, writer, draft } = params;
-  const protocolPda = protocolStatePda(program.programId);
-  const protocolState = await (program.account as any).protocolState.fetch(protocolPda);
+  const capability = atomicWriteCapability(draft);
+  if (!capability.supported) throw new Error(capability.reason);
+
+  const protocol = await loadProtocolState(program);
+  const protocolPda = protocol.publicKey;
+  const protocolState = protocol.account;
   const derived = writeDerivations(draft, writer, program.programId);
   const writerUsdcAccount = await getAssociatedTokenAddress(
     protocolState.usdcMint,
@@ -115,7 +175,7 @@ export async function buildWriteDepositTx(params: {
     TOKEN_PROGRAM_ID,
     ASSOCIATED_TOKEN_PROGRAM_ID
   );
-  const ix = await (program.methods as any)
+  const createAndDepositIx = await (program.methods as any)
     .createAndDeposit(
       derived.strike,
       derived.expiry,
@@ -141,38 +201,31 @@ export async function buildWriteDepositTx(params: {
     })
     .instruction();
 
-  const tx = new Transaction().add(EXTRA_CU_400K, createWriterUsdcAta, ix);
-  return finalizeAndSimulate(connection, writer, tx, [
-    "Writer stage 1 of 2: create/deposit",
-    `${draft.market.account.assetName as string} ${draft.side.toUpperCase()} ${draft.exerciseStyle.toUpperCase()}`,
-    `Strike ${draft.strike}`,
-    `Expiry ${new Date(draft.expiry * 1000).toUTCString()}`,
-    `Deposit ${draft.collateral.toFixed(2)} USDC collateral`,
-    "Creates the vault only if it does not already exist"
-  ]);
-}
-
-export async function buildWriteMintTx(params: {
-  program: Program;
-  connection: Connection;
-  writer: PublicKey;
-  draft: WriteDraft;
-}): Promise<PendingTx> {
-  const { program, connection, writer, draft } = params;
-  const protocolPda = protocolStatePda(program.programId);
-  const derived = writeDerivations(draft, writer, program.programId);
   const createdAt = new BN(Math.floor(Date.now() / 1000));
-  const optionMint = deriveVaultOptionMint(derived.sharedVault, writer, createdAt, program.programId);
-  const purchaseEscrow = deriveVaultPurchaseEscrow(derived.sharedVault, writer, createdAt, program.programId);
+  const optionMint = deriveVaultOptionMint(
+    derived.sharedVault,
+    writer,
+    createdAt,
+    program.programId
+  );
+  const purchaseEscrow = deriveVaultPurchaseEscrow(
+    derived.sharedVault,
+    writer,
+    createdAt,
+    program.programId
+  );
   const vaultMintRecord = deriveVaultMintRecord(optionMint, program.programId);
   const extraAccountMetaList = deriveExtraAccountMetaListPda(optionMint, TRANSFER_HOOK_PROGRAM_ID);
   const hookState = deriveHookStatePda(optionMint, TRANSFER_HOOK_PROGRAM_ID);
-  const feedId = Array.from(draft.market.account.pythFeedId as number[]);
-  const volOracle = deriveVolOracle(feedId, program.programId);
+  const volOracle = deriveVolOracle(
+    Array.from(draft.market.account.pythFeedId as number[]),
+    program.programId
+  );
   const isAmerican = draft.exerciseStyle === "american";
-  const premium = isAmerican ? new BN(1) : toUsdcBN(draft.premiumPerContract);
-  const ix = await (program.methods as any)
-    .mintFromVault(new BN(draft.contracts), premium, createdAt)
+  const asset = sanitizeAssetDisplayName(draft.market.account.assetName) ?? "ASSET";
+  const mintPremium = isAmerican ? new BN(1) : toUsdcBN(draft.premiumPerContract);
+  const mintIx = await (program.methods as any)
+    .mintFromVault(new BN(draft.contracts), mintPremium, createdAt)
     .accountsStrict({
       writer,
       sharedVault: derived.sharedVault,
@@ -192,16 +245,32 @@ export async function buildWriteMintTx(params: {
     })
     .instruction();
 
-  const tx = new Transaction().add(isAmerican ? EXTRA_CU_1_4M : EXTRA_CU_800K, ix);
-  return finalizeAndSimulate(connection, writer, tx, [
-    "Writer stage 2 of 2: mint option tokens",
-    `${draft.contracts} contracts`,
-    isAmerican
-      ? "American premium is computed on-chain during mint"
-      : `Premium ${draft.premiumPerContract.toFixed(2)} USDC per contract`,
-    `Option mint ${optionMint.toBase58().slice(0, 4)}_${optionMint.toBase58().slice(-4)}`,
-    "Token program: Token-2022 option mint with transfer hook metadata"
-  ]);
+  const computeBudget = isAmerican ? EXTRA_CU_1_4M : EXTRA_CU_600K;
+  const transaction = new Transaction().add(
+    computeBudget,
+    createWriterUsdcAta,
+    createAndDepositIx,
+    mintIx
+  );
+  const pending = await finalizeAndSimulate(
+    connection,
+    writer,
+    transaction,
+    [
+      `Write ${draft.contracts} contracts`,
+      `${asset} ${draft.side.toUpperCase()} ${draft.exerciseStyle.toUpperCase()}`,
+      `Strike ${draft.strike}`,
+      `Expiry ${new Date(draft.expiry * 1000).toUTCString()}`,
+      `Deposits ${draft.collateral.toFixed(2)} USDC collateral · one approval`,
+      "Atomic write: if any instruction fails, nothing is deposited",
+      "Collateral uses classic SPL Token; option mint and escrow use Token-2022"
+    ],
+    "write",
+    { vault: derived.sharedVault, optionMint }
+  );
+  pending.ctaLabel = "Sign write";
+  pending.successMessage = "Write submitted";
+  return pending;
 }
 
 export async function buildPrimaryPurchaseTx(params: {
@@ -212,9 +281,10 @@ export async function buildPrimaryPurchaseTx(params: {
   quantity: number;
 }): Promise<PendingTx> {
   const { program, connection, buyer, offering, quantity } = params;
-  const protocolPda = protocolStatePda(program.programId);
+  const protocol = await loadProtocolState(program);
+  const protocolPda = protocol.publicKey;
   const treasury = treasuryPda(program.programId);
-  const protocolState = await (program.account as any).protocolState.fetch(protocolPda);
+  const protocolState = protocol.account;
 
   const vault = offering.vault;
   const vaultMint = offering.vaultMint;
@@ -287,7 +357,7 @@ export async function buildPrimaryPurchaseTx(params: {
     `Strike ${offering.strike}`,
     `Max premium ${(offering.premium * quantity * 1.05).toFixed(2)} USDC`,
     "Token program: SPL USDC plus Token-2022 option mint"
-  ]);
+  ], "buy");
 }
 
 export async function buildResalePurchaseTx(params: {
@@ -305,9 +375,10 @@ export async function buildResalePurchaseTx(params: {
     throw new Error("You cannot buy your own listing");
   }
 
-  const protocolPda = protocolStatePda(program.programId);
+  const protocol = await loadProtocolState(program);
+  const protocolPda = protocol.publicKey;
   const treasury = treasuryPda(program.programId);
-  const protocolState = await (program.account as any).protocolState.fetch(protocolPda);
+  const protocolState = protocol.account;
   const optionMint = offering.vaultMint.account.optionMint as PublicKey;
   const resaleEscrow = deriveVaultResaleEscrow(offering.listing.publicKey, program.programId);
   const extraAccountMetaList = deriveExtraAccountMetaListPda(
@@ -384,5 +455,5 @@ export async function buildResalePurchaseTx(params: {
     `Seller ${offering.seller.toBase58().slice(0, 4)}_${offering.seller.toBase58().slice(-4)}`,
     `Exact premium ${(offering.premium * quantity).toFixed(2)} USDC`,
     "Token program: SPL USDC plus Token-2022 option mint"
-  ]);
+  ], "buy");
 }

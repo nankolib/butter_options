@@ -1,0 +1,5 @@
+# Generated Anchor IDL is emitted LF by the WSL build; the untracked
+# target/idl reference is LF. Pin the checked-in copies to raw LF so
+# core.autocrlf=true on Windows can't re-trip the handoff byte-identity gate.
+app/src/idl/*.json -text
+mobile/src/idl/*.json -text

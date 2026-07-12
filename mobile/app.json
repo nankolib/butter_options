@@ -6,21 +6,24 @@
     "icon": "./assets/opta-icon.png",
     "version": "0.1.0",
     "orientation": "portrait",
-    "userInterfaceStyle": "light",
-    "platforms": ["android"],
-    "assetBundlePatterns": ["**/*"],
+    "userInterfaceStyle": "automatic",
+    "platforms": [
+      "android"
+    ],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "android": {
       "package": "com.opta.seeker",
       "versionCode": 1,
+      "allowBackup": false,
       "adaptiveIcon": {
         "foregroundImage": "./assets/opta-icon.png",
-        "backgroundColor": "#0A0A08"
+        "backgroundColor": "#0C0C0A"
       }
     },
-    "extra": {
-      "eas": {
-        "projectId": "replace-with-eas-project-id"
-      }
-    }
+    "plugins": [
+      "expo-font"
+    ]
   }
 }

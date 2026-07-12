@@ -1,1195 +1,773 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator,
-  Alert,
-  Pressable,
-  RefreshControl,
-  SafeAreaView,
-  ScrollView,
+  Keyboard,
+  KeyboardAvoidingView,
+  Linking,
+  Platform,
   StatusBar,
   StyleSheet,
-  Text,
-  TextInput,
   View
 } from "react-native";
-import { MobileWalletProvider, useMobileWallet } from "@wallet-ui/react-native-web3js";
-import { PublicKey } from "@solana/web3.js";
-import { createOptaProgram } from "./solana/program";
-import { loadMarketSnapshot, loadWalletPositions } from "./solana/marketData";
+import * as Clipboard from "expo-clipboard";
+import * as NavigationBar from "expo-navigation-bar";
+import * as SystemUI from "expo-system-ui";
 import {
+  Fraunces_400Regular_Italic
+} from "@expo-google-fonts/fraunces";
+import {
+  IBMPlexMono_400Regular,
+  IBMPlexMono_500Medium
+} from "@expo-google-fonts/ibm-plex-mono";
+import {
+  Inter_400Regular,
+  Inter_500Medium
+} from "@expo-google-fonts/inter";
+import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
+import { MobileWalletProvider, useMobileWallet } from "@wallet-ui/react-native-web3js";
+import type { PublicKey, Transaction } from "@solana/web3.js";
+import { createOptaProgram } from "./solana/program";
+import {
+  atomicWriteCapability,
+  buildAtomicWriteTx,
   buildPrimaryPurchaseTx,
-  buildResalePurchaseTx,
-  buildWriteDepositTx,
-  buildWriteMintTx
+  buildResalePurchaseTx
 } from "./solana/transactions";
 import { EXPECTED_CLUSTER, OPTA_CHAIN, RPC_ENDPOINT } from "./constants";
-import { colors, shadow } from "./theme";
-import { countdown, money, shortAddress, shortDate } from "./format";
-import { collateralRequired, estimatePremium, nextFridayUtc8 } from "./pricing";
-import type { ExerciseStyle, MarketSnapshot, Offering, OptionSide, PendingTx, WalletPosition, WriteDraft } from "./types";
-
-type Tab = "trade" | "write" | "portfolio" | "safety";
-type Direction = "up" | "down";
+import { collateralRequired, estimatePremium } from "./pricing";
+import type { Offering, WalletPosition, WalletWriterPosition, WriteDraft } from "./types";
+import { ThemeProvider, useOptaFonts, useTheme } from "./hooks";
+import {
+  AppHeader,
+  InfoSheet,
+  TabBar,
+  TickerStrip,
+  Toast,
+  TxSheet,
+  type TerminalOffer
+} from "./ui";
+import { TradeScreen } from "./screens/TradeScreen";
+import { WriteScreen } from "./screens/WriteScreen";
+import { PortfolioScreen, type PortfolioRow } from "./screens/PortfolioScreen";
+import { ScreenStatePanel } from "./screens/shared";
+import { useConnectionState } from "./state/useConnectionState";
+import { useEpochTenors } from "./state/useEpochTenors";
+import { useMarketState } from "./state/useMarketState";
+import { useToastQueue } from "./state/useToastQueue";
+import { useTransactionFlow } from "./state/useTransactionFlow";
+import type { AppTab, EpochTenor, TradeSelection, WriteFormState } from "./state/models";
 
 const identity = {
   name: "Opta Seeker",
-  uri: "https://opta.fi",
-  icon: "favicon.png"
+  uri: "https://opta.fyi",
+  icon: "favicon.svg"
+};
+
+const OPTA_FONT_SOURCES = {
+  interRegular: Inter_400Regular,
+  interMedium: Inter_500Medium,
+  ibmPlexMonoRegular: IBMPlexMono_400Regular,
+  ibmPlexMonoMedium: IBMPlexMono_500Medium,
+  frauncesItalic: Fraunces_400Regular_Italic
+} as const;
+
+const TAB_ITEMS = [
+  { key: "trade", label: "Trade" },
+  { key: "write", label: "Write" },
+  { key: "portfolio", label: "Portfolio" }
+] as const;
+
+const INITIAL_TRADE: TradeSelection = {
+  asset: "",
+  expiry: 0,
+  side: "call",
+  quantity: 1,
+  offeringId: null
+};
+
+const INITIAL_WRITE: WriteFormState = {
+  asset: "",
+  side: "call",
+  exerciseStyle: "european",
+  vaultType: "epoch",
+  strike: "",
+  contracts: 1,
+  tenor: "weekly",
+  customExpiry: ""
 };
 
 export default function App() {
   return (
-    <MobileWalletProvider chain={OPTA_CHAIN} endpoint={RPC_ENDPOINT} identity={identity}>
-      <OptaSeekerApp />
-    </MobileWalletProvider>
+    <SafeAreaProvider>
+      <ThemeProvider>
+        <MobileWalletProvider chain={OPTA_CHAIN} endpoint={RPC_ENDPOINT} identity={identity}>
+          <OptaSeekerApp />
+        </MobileWalletProvider>
+      </ThemeProvider>
+    </SafeAreaProvider>
   );
 }
 
 function OptaSeekerApp() {
   const wallet = useMobileWallet();
-  const [tab, setTab] = useState<Tab>("trade");
-  const [snapshot, setSnapshot] = useState<MarketSnapshot | null>(null);
-  const [positions, setPositions] = useState<WalletPosition[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [asset, setAsset] = useState<string>("");
-  const [expiry, setExpiry] = useState<number>(0);
-  const [direction, setDirection] = useState<Direction>("up");
-  const [quantity, setQuantity] = useState("1");
-  const [selectedOffering, setSelectedOffering] = useState<Offering | null>(null);
-  const [pendingTx, setPendingTx] = useState<PendingTx | null>(null);
-  const [sending, setSending] = useState(false);
-
-  const connectedAddress = wallet.account?.address?.toBase58() ?? null;
-
-  const load = useCallback(async () => {
-    setError(null);
-    const next = await loadMarketSnapshot(wallet.connection);
-    setSnapshot(next);
-    if (!asset && next.assets.length > 0) {
-      setAsset(next.assets[0]);
-    }
-    if (wallet.account?.address) {
-      const owner = new PublicKey(wallet.account.address);
-      setPositions(await loadWalletPositions(wallet.connection, owner, next));
-    } else {
-      setPositions([]);
-    }
-  }, [wallet.connection, wallet.account?.address, asset]);
+  const { theme, mode, hydrated: themeHydrated } = useTheme();
+  const { loaded: fontsLoaded, error: fontError } = useOptaFonts(OPTA_FONT_SOURCES);
+  const insets = useSafeAreaInsets();
+  const [tab, setTab] = useState<AppTab>("trade");
+  const [infoOpen, setInfoOpen] = useState(false);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const [trade, setTrade] = useState<TradeSelection>(INITIAL_TRADE);
+  const [write, setWrite] = useState<WriteFormState>(INITIAL_WRITE);
+  const toasts = useToastQueue();
+  const connection = useConnectionState(wallet);
+  const owner = connection.account?.address ?? null;
+  const ownerRef = useRef<PublicKey | null>(owner);
+  ownerRef.current = owner;
+  const market = useMarketState(wallet.connection, owner);
+  const epoch = useEpochTenors(wallet.connection);
+  const topInset = Math.max(theme.space.m, insets.top);
+  const bottomInset = Math.max(theme.layout.gestureInset, insets.bottom);
 
   useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    load()
-      .catch((err) => {
-        if (!cancelled) setError(err?.message ?? String(err));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [load]);
+    if (!fontError) return;
+    console.error("Required Opta fonts failed to load.", fontError);
+    toasts.show({
+      tone: "error",
+      title: "Typography fallback active",
+      message: "Restart the app to retry the bundled fonts."
+    });
+  }, [fontError, toasts.show]);
 
-  const expiries = useMemo(
-    () => (snapshot && asset ? snapshot.expiriesByAsset[asset] ?? [] : []),
-    [snapshot, asset]
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    try {
+      NavigationBar.setStyle(mode);
+    } catch {
+      // The native resource theme remains the safe fallback.
+    }
+    void Promise.all([
+      SystemUI.setBackgroundColorAsync(theme.colors.bg),
+      NavigationBar.setButtonStyleAsync(mode === "dark" ? "light" : "dark")
+    ]).catch(() => {
+      // System bars fall back to the checked-in day/night Android resources.
+    });
+  }, [mode, theme.colors.bg]);
+
+  useEffect(() => {
+    const show = Keyboard.addListener("keyboardDidShow", () => setKeyboardVisible(true));
+    const hide = Keyboard.addListener("keyboardDidHide", () => setKeyboardVisible(false));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+
+  const signTransaction = useCallback(async (transaction: Transaction) => {
+    return wallet.signTransaction(transaction);
+  }, [wallet]);
+
+  const transaction = useTransactionFlow({
+    connection: wallet.connection,
+    signTransaction,
+    onConfirmed: market.refresh,
+    showToast: toasts.show
+  });
+
+  const marketAssets = useMemo(() => {
+    const names = new Set<string>();
+    for (const record of market.snapshot?.markets ?? []) {
+      const name = record.account.assetName;
+      if (typeof name === "string" && name) names.add(name);
+    }
+    for (const name of market.snapshot?.assets ?? []) {
+      if (name) names.add(name);
+    }
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+  }, [market.snapshot]);
+
+  useEffect(() => {
+    if (marketAssets.length === 0 || marketAssets.includes(trade.asset)) return;
+    setTrade((current) => ({
+      ...current,
+      asset: marketAssets[0],
+      expiry: 0,
+      offeringId: null
+    }));
+  }, [marketAssets, trade.asset]);
+
+  useEffect(() => {
+    if (marketAssets.length === 0 || marketAssets.includes(write.asset)) return;
+    setWrite((current) => ({ ...current, asset: trade.asset || marketAssets[0] }));
+  }, [marketAssets, trade.asset, write.asset]);
+
+  const tradeExpiries = useMemo(
+    () => market.snapshot?.expiriesByAsset[trade.asset] ?? [],
+    [market.snapshot, trade.asset]
   );
 
   useEffect(() => {
-    if (expiries.length > 0 && !expiries.includes(expiry)) {
-      setExpiry(expiries[0]);
+    if (tradeExpiries.length === 0) {
+      if (trade.expiry !== 0) setTrade((current) => ({ ...current, expiry: 0, offeringId: null }));
+      return;
     }
-  }, [expiries, expiry]);
+    if (!tradeExpiries.includes(trade.expiry)) {
+      setTrade((current) => ({ ...current, expiry: tradeExpiries[0], offeringId: null }));
+    }
+  }, [trade.expiry, tradeExpiries]);
 
-  const side = direction === "up" ? "call" : "put";
-  const visibleOfferings = useMemo(() => {
-    if (!snapshot || !asset || !expiry) return [];
-    return snapshot.offerings.filter(
-      (o) => o.asset === asset && o.expiry === expiry && o.side === side
-    );
-  }, [snapshot, asset, expiry, side]);
+  const visibleOfferings = useMemo(() => (
+    market.snapshot?.offerings.filter((offering) =>
+      offering.asset === trade.asset
+      && offering.expiry === trade.expiry
+      && offering.side === trade.side
+    ) ?? []
+  ), [market.snapshot, trade.asset, trade.expiry, trade.side]);
 
   useEffect(() => {
-    setSelectedOffering((current) => {
-      if (current && visibleOfferings.some((o) => o.id === current.id)) return current;
-      return visibleOfferings[0] ?? null;
-    });
-  }, [visibleOfferings]);
-
-  const onRefresh = async () => {
-    setRefreshing(true);
-    try {
-      await load();
-    } catch (err: any) {
-      setError(err?.message ?? String(err));
-    } finally {
-      setRefreshing(false);
+    const selectedStillVisible = visibleOfferings.some((offering) => offering.id === trade.offeringId);
+    const nextId = selectedStillVisible ? trade.offeringId : visibleOfferings[0]?.id ?? null;
+    if (nextId !== trade.offeringId) {
+      setTrade((current) => ({ ...current, offeringId: nextId }));
     }
-  };
+  }, [trade.offeringId, visibleOfferings]);
 
-  const beginReview = async () => {
-    if (!selectedOffering || !snapshot) return;
-    if (!wallet.account?.address) {
-      await wallet.connect();
+  const selectedOffering = useMemo(
+    () => visibleOfferings.find((offering) => offering.id === trade.offeringId) ?? null,
+    [trade.offeringId, visibleOfferings]
+  );
+  const maxTradeQuantity = Math.max(1, selectedOffering?.quantityAvailable ?? 1);
+
+  useEffect(() => {
+    if (trade.quantity <= maxTradeQuantity) return;
+    setTrade((current) => ({ ...current, quantity: maxTradeQuantity }));
+  }, [maxTradeQuantity, trade.quantity]);
+
+  useEffect(() => {
+    if (epoch.candidates.length === 0) return;
+    if (!epoch.candidates.some((candidate) => candidate.tenor === write.tenor)) {
+      setWrite((current) => ({ ...current, tenor: epoch.candidates[0].tenor }));
+    }
+  }, [epoch.candidates, write.tenor]);
+
+  // American writing stays hidden until the mobile client can present a fresh
+  // protocol quote and use the canonical series/WriterAsk rail end-to-end.
+  const americanWriteSupported = false;
+
+  useEffect(() => {
+    if (write.exerciseStyle === "american" && !americanWriteSupported) {
+      setWrite((current) => ({ ...current, exerciseStyle: "european" }));
+    }
+  }, [americanWriteSupported, write.exerciseStyle]);
+
+  const selectedWriteMarket = useMemo(
+    () => market.snapshot?.markets.find((record) => record.account.assetName === write.asset) ?? null,
+    [market.snapshot, write.asset]
+  );
+  const selectedTenor = epoch.candidates.find((candidate) => candidate.tenor === write.tenor) ?? null;
+  const parsedCustomExpiry = parseCustomExpiry(write.customExpiry);
+  const selectedWriteExpiry = write.vaultType === "epoch" ? selectedTenor?.expiry ?? null : parsedCustomExpiry;
+  const writeStrike = Number.parseFloat(write.strike);
+  const writeSpot = market.snapshot?.spotByAsset[write.asset] ?? null;
+  const writePriceLive = market.pricePhaseFor(write.asset) === "live";
+  const writePremium = write.exerciseStyle === "european" && writePriceLive
+    ? estimatePremium({
+        asset: write.asset,
+        side: write.side,
+        spot: writeSpot,
+        strike: writeStrike,
+        expiry: selectedWriteExpiry ?? 0
+      })
+    : null;
+  const writeCollateral = Number.isFinite(writeStrike)
+    ? collateralRequired(writeStrike, write.contracts)
+    : 0;
+  const writeStrikeError = write.strike.length > 0 && (!Number.isFinite(writeStrike) || writeStrike <= 0)
+    ? "Enter a valid strike"
+    : null;
+
+  const customExpiryError = write.vaultType === "custom" && write.customExpiry.length > 0
+    ? parsedCustomExpiry == null
+      ? "Use YYYY-MM-DD HH:mm in UTC"
+      : parsedCustomExpiry <= Math.floor(Date.now() / 1_000) + 300
+        ? "Choose a time at least five minutes ahead"
+        : null
+    : null;
+  const expiryReady = write.vaultType === "epoch"
+    ? !!selectedTenor
+    : parsedCustomExpiry != null && !customExpiryError;
+  const provisionalWriteDraft: WriteDraft | null = selectedWriteMarket && selectedWriteExpiry && expiryReady && writeStrike > 0
+    ? {
+        market: selectedWriteMarket,
+        side: write.side,
+        exerciseStyle: write.exerciseStyle,
+        strike: writeStrike,
+        expiry: selectedWriteExpiry,
+        contracts: write.contracts,
+        premiumPerContract: writePremium ?? 0,
+        collateral: writeCollateral,
+        vaultType: write.vaultType
+      }
+    : null;
+  const writeCapability = provisionalWriteDraft
+    ? atomicWriteCapability(provisionalWriteDraft)
+    : { supported: false as const, reason: "Complete the write form." };
+  const writeReady = !!provisionalWriteDraft
+    && writeCapability.supported
+    && market.phase === "loaded"
+    && (write.vaultType === "custom" || epoch.phase === "loaded")
+    && writePriceLive
+    && (write.exerciseStyle === "american" || (writePremium != null && writePremium > 0))
+    && writeCollateral > 0;
+
+  const connectWallet = useCallback(async () => {
+    const account = await connection.connect();
+    if (!account) {
+      toasts.show({ tone: "error", title: "Connection declined", message: "No wallet action was taken." });
+    }
+    return account;
+  }, [connection, toasts]);
+
+  const handleWalletPress = useCallback(async () => {
+    if (connection.phase === "connected") {
+      try {
+        await connection.disconnect();
+      } catch {
+        toasts.show({ tone: "error", title: "Couldn't disconnect", message: "Try again from your wallet." });
+      }
       return;
     }
-    const qty = Math.max(1, Number.parseInt(quantity, 10) || 1);
-    if (qty > selectedOffering.quantityAvailable) {
-      Alert.alert("Quantity too high", `Only ${selectedOffering.quantityAvailable} contracts are available from this source.`);
-      return;
-    }
-    const buyer = new PublicKey(wallet.account.address);
-    const program = createOptaProgram(wallet.connection);
-    try {
-      const pending =
-        selectedOffering.kind === "vault"
-          ? await buildPrimaryPurchaseTx({
+    await connectWallet();
+  }, [connectWallet, connection, toasts]);
+
+  const openBuyReview = useCallback(() => {
+    const buyer = ownerRef.current;
+    if (!buyer || !selectedOffering) return;
+    const quantity = Math.min(trade.quantity, selectedOffering.quantityAvailable);
+    const total = selectedOffering.premium * quantity;
+    transaction.openReview({
+      kind: "buy",
+      contractCount: quantity,
+      title: `Buy ${quantity} \u00d7 ${contractLabel(selectedOffering)}`,
+      submitLabel: `Buy ${quantity} ${quantity === 1 ? "contract" : "contracts"}`,
+      confirmedMessage: `${quantity} ${quantity === 1 ? "contract" : "contracts"} submitted.`,
+      rows: [
+        { label: "CONTRACT", value: contractLabel(selectedOffering) },
+        { label: "PREMIUM / CONTRACT", value: `${fixed(selectedOffering.premium, 4)} USDC` },
+        { label: "TOTAL", value: `${fixed(total, 4)} USDC` },
+        { label: "EXPIRY", value: expiryLabel(selectedOffering.expiry) }
+      ],
+      build: async () => {
+        const active = ownerRef.current;
+        if (!active || !active.equals(buyer)) throw new Error("Wallet changed. Review the transaction again.");
+        const program = createOptaProgram(wallet.connection);
+        return selectedOffering.kind === "vault"
+          ? buildPrimaryPurchaseTx({
               program,
               connection: wallet.connection,
               buyer,
               offering: selectedOffering,
-              quantity: qty
+              quantity
             })
-          : await buildResalePurchaseTx({
+          : buildResalePurchaseTx({
               program,
               connection: wallet.connection,
               buyer,
               offering: selectedOffering,
-              quantity: qty
+              quantity
             });
-      setPendingTx(pending);
-    } catch (err: any) {
-      Alert.alert("Could not build transaction", err?.message ?? String(err));
-    }
-  };
+      }
+    });
+  }, [selectedOffering, trade.quantity, transaction, wallet.connection]);
 
-  const beginWriteFlow = async (draft: WriteDraft) => {
-    if (!wallet.account?.address) {
-      await wallet.connect();
-      return;
-    }
-    const writer = new PublicKey(wallet.account.address);
-    const program = createOptaProgram(wallet.connection);
-    try {
-      const depositTx = await buildWriteDepositTx({
-        program,
-        connection: wallet.connection,
-        writer,
-        draft
-      });
-      depositTx.ctaLabel = "Sign deposit";
-      depositTx.afterSignature = async () => {
-        const mintTx = await buildWriteMintTx({
-          program,
+  const openWriteReview = useCallback(() => {
+    const writer = ownerRef.current;
+    if (!writer || !provisionalWriteDraft || !writeReady) return;
+    const draft = provisionalWriteDraft;
+    transaction.openReview({
+      kind: "write",
+      contractCount: draft.contracts,
+      title: `Write ${draft.contracts} \u00d7 ${contractLabelFromDraft(draft)}`,
+      submitLabel: `Write ${draft.contracts} ${draft.contracts === 1 ? "contract" : "contracts"}`,
+      confirmedMessage: `Position minted. ${fixed(draft.collateral, 2)} USDC collateral locked.`,
+      rows: [
+        { label: "CONTRACT", value: contractLabelFromDraft(draft) },
+        { label: "COLLATERAL", value: `${fixed(draft.collateral, 2)} USDC` },
+        draft.exerciseStyle === "american"
+          ? { label: "PREMIUM", value: "Calculated at approval" }
+          : { label: "EST. PREMIUM", value: `${fixed(draft.premiumPerContract * draft.contracts, 4)} USDC` },
+        { label: "EXPIRY", value: expiryLabel(draft.expiry) }
+      ],
+      build: async () => {
+        const active = ownerRef.current;
+        if (!active || !active.equals(writer)) throw new Error("Wallet changed. Review the transaction again.");
+        return buildAtomicWriteTx({
+          program: createOptaProgram(wallet.connection),
           connection: wallet.connection,
           writer,
           draft
         });
-        mintTx.ctaLabel = "Sign mint";
-        mintTx.afterSignature = async (signature) => {
-          await onRefresh();
-          Alert.alert("Write complete", `Option mint created.\n${signature}`);
-        };
-        setPendingTx(mintTx);
-      };
-      setPendingTx(depositTx);
-    } catch (err: any) {
-      Alert.alert("Could not build write transaction", err?.message ?? String(err));
-    }
-  };
-
-  const signPending = async () => {
-    if (!pendingTx) return;
-    if (pendingTx.simulationError) {
-      Alert.alert("Simulation failed", pendingTx.simulationError);
-      return;
-    }
-    setSending(true);
-    try {
-      const current = pendingTx;
-      const latest = await wallet.connection.getLatestBlockhashAndContext("confirmed");
-      current.transaction.recentBlockhash = latest.value.blockhash;
-      const simulation = await wallet.connection.simulateTransaction(current.transaction, {
-        sigVerify: false,
-        replaceRecentBlockhash: true
-      } as any);
-      if (simulation.value.err) {
-        Alert.alert("Simulation failed", JSON.stringify(simulation.value.err));
-        return;
       }
-      const signature = await wallet.signAndSendTransaction(current.transaction, latest.context.slot);
-      setPendingTx(null);
-      if (current.afterSignature) {
-        await current.afterSignature(String(signature));
-      } else {
-        await onRefresh();
-        Alert.alert(current.successMessage ?? "Transaction sent", String(signature));
-      }
-    } catch (err: any) {
-      Alert.alert("Wallet rejected or transaction failed", err?.message ?? String(err));
-    } finally {
-      setSending(false);
-    }
-  };
-
-  return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="dark-content" backgroundColor={colors.paper} />
-      <ScrollView
-        contentContainerStyle={styles.scroll}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.ink} />
-        }
-      >
-        <Header
-          connectedAddress={connectedAddress}
-          onConnect={() => wallet.connect()}
-          onDisconnect={() => wallet.disconnect()}
-        />
-
-        {loading ? (
-          <View style={styles.loading}>
-            <ActivityIndicator color={colors.ink} />
-            <Text style={styles.monoMuted}>Loading Opta devnet</Text>
-          </View>
-        ) : error ? (
-          <Card>
-            <Text style={styles.cardTitle}>Could not load markets</Text>
-            <Text style={styles.body}>{error}</Text>
-            <PrimaryButton label="Retry" onPress={onRefresh} />
-          </Card>
-        ) : (
-          <>
-            <Stats snapshot={snapshot} asset={asset} positions={positions} />
-            <TabBar tab={tab} setTab={setTab} />
-            {tab === "trade" && snapshot && (
-              <TradeScreen
-                snapshot={snapshot}
-                asset={asset}
-                setAsset={setAsset}
-                expiry={expiry}
-                setExpiry={setExpiry}
-                expiries={expiries}
-                direction={direction}
-                setDirection={setDirection}
-                quantity={quantity}
-                setQuantity={setQuantity}
-                offerings={visibleOfferings}
-                selectedOffering={selectedOffering}
-                setSelectedOffering={setSelectedOffering}
-                beginReview={beginReview}
-              />
-            )}
-            {tab === "write" && snapshot && (
-              <WriteScreen
-                snapshot={snapshot}
-                asset={asset}
-                connected={!!connectedAddress}
-                onConnect={() => wallet.connect()}
-                beginWriteFlow={beginWriteFlow}
-              />
-            )}
-            {tab === "portfolio" && (
-              <PortfolioScreen positions={positions} connected={!!connectedAddress} onConnect={() => wallet.connect()} />
-            )}
-            {tab === "safety" && <SafetyScreen />}
-          </>
-        )}
-      </ScrollView>
-
-      {pendingTx && (
-        <ReviewSheet
-          pendingTx={pendingTx}
-          sending={sending}
-          onCancel={() => setPendingTx(null)}
-          onSign={signPending}
-        />
-      )}
-    </SafeAreaView>
-  );
-}
-
-function Header({
-  connectedAddress,
-  onConnect,
-  onDisconnect
-}: {
-  connectedAddress: string | null;
-  onConnect: () => void;
-  onDisconnect: () => void;
-}) {
-  return (
-    <View style={styles.header}>
-      <View>
-        <Text style={styles.eyebrow}>Solana Seeker native</Text>
-        <Text style={styles.title}>opta.</Text>
-        <Text style={styles.subtitle}>Tokenized options in a mobile trading shell.</Text>
-      </View>
-      <Pressable
-        style={styles.walletChip}
-        onPress={connectedAddress ? onDisconnect : onConnect}
-      >
-        <Text style={styles.walletText}>
-          {connectedAddress ? shortAddress(connectedAddress) : "Connect"}
-        </Text>
-      </Pressable>
-    </View>
-  );
-}
-
-function Stats({
-  snapshot,
-  asset,
-  positions
-}: {
-  snapshot: MarketSnapshot | null;
-  asset: string;
-  positions: WalletPosition[];
-}) {
-  const spot = asset ? snapshot?.spotByAsset[asset] : null;
-  return (
-    <View style={styles.statsGrid}>
-      <Stat label="Cluster" value={EXPECTED_CLUSTER} sub="MWA wallet" />
-      <Stat label="Spot" value={money(spot)} sub={asset || "No asset"} />
-      <Stat label="Open offers" value={String(snapshot?.offerings.length ?? 0)} sub="Vault plus resale" />
-      <Stat label="Positions" value={String(positions.length)} sub="Token-2022 wallet" />
-    </View>
-  );
-}
-
-function TradeScreen(props: {
-  snapshot: MarketSnapshot;
-  asset: string;
-  setAsset: (asset: string) => void;
-  expiry: number;
-  setExpiry: (expiry: number) => void;
-  expiries: number[];
-  direction: Direction;
-  setDirection: (direction: Direction) => void;
-  quantity: string;
-  setQuantity: (quantity: string) => void;
-  offerings: Offering[];
-  selectedOffering: Offering | null;
-  setSelectedOffering: (offering: Offering) => void;
-  beginReview: () => void;
-}) {
-  const {
-    snapshot,
-    asset,
-    setAsset,
-    expiry,
-    setExpiry,
-    expiries,
-    direction,
-    setDirection,
-    quantity,
-    setQuantity,
-    offerings,
-    selectedOffering,
-    setSelectedOffering,
-    beginReview
-  } = props;
-  return (
-    <View style={styles.section}>
-      <Text style={styles.sectionTitle}>Trade</Text>
-      <Text style={styles.body}>Pick a direction, select live inventory, review simulation, then hand signing to the Seeker wallet.</Text>
-
-      <HorizontalChips
-        values={snapshot.assets}
-        selected={asset}
-        onSelect={setAsset}
-      />
-      <HorizontalChips
-        values={expiries.map((e) => String(e))}
-        selected={String(expiry)}
-        onSelect={(v) => setExpiry(Number(v))}
-        labelFor={(v) => `${shortDate(Number(v))} ${countdown(Number(v))}`}
-      />
-
-      <View style={styles.segment}>
-        <Toggle label="Up / Call" active={direction === "up"} onPress={() => setDirection("up")} tone="teal" />
-        <Toggle label="Down / Put" active={direction === "down"} onPress={() => setDirection("down")} tone="crimson" />
-      </View>
-
-      <View style={styles.quantityRow}>
-        <Text style={styles.label}>Contracts</Text>
-        <TextInput
-          value={quantity}
-          onChangeText={setQuantity}
-          keyboardType="number-pad"
-          style={styles.input}
-          placeholder="1"
-          placeholderTextColor={colors.inkMuted}
-        />
-      </View>
-
-      {offerings.length === 0 ? (
-        <Card>
-          <Text style={styles.cardTitle}>No mobile-fillable offer</Text>
-          <Text style={styles.body}>Try a different expiry or direction. The app only shows active vault and resale inventory.</Text>
-        </Card>
-      ) : (
-        <View style={styles.offerList}>
-          {offerings.slice(0, 8).map((offering) => (
-            <OfferingCard
-              key={offering.id}
-              offering={offering}
-              selected={selectedOffering?.id === offering.id}
-              onPress={() => setSelectedOffering(offering)}
-            />
-          ))}
-        </View>
-      )}
-
-      <PrimaryButton
-        label={selectedOffering ? "Review transaction" : "Select offer"}
-        onPress={beginReview}
-        disabled={!selectedOffering}
-      />
-    </View>
-  );
-}
-
-function WriteScreen({
-  snapshot,
-  asset,
-  connected,
-  onConnect,
-  beginWriteFlow
-}: {
-  snapshot: MarketSnapshot;
-  asset: string;
-  connected: boolean;
-  onConnect: () => void;
-  beginWriteFlow: (draft: WriteDraft) => void;
-}) {
-  const marketOptions = useMemo(() => {
-    const map = new Map<string, { ticker: string; market: MarketSnapshot["markets"][number] }>();
-    for (const market of snapshot.markets) {
-      const ticker = market.account.assetName as string;
-      if (ticker && !map.has(ticker)) map.set(ticker, { ticker, market });
-    }
-    return Array.from(map.values()).sort((a, b) => a.ticker.localeCompare(b.ticker));
-  }, [snapshot.markets]);
-  const [selectedAsset, setSelectedAsset] = useState(asset);
-  const [side, setSide] = useState<OptionSide>("call");
-  const [exerciseStyle, setExerciseStyle] = useState<ExerciseStyle>("european");
-  const [strike, setStrike] = useState("");
-  const [contracts, setContracts] = useState("1");
-  const [expiryMode, setExpiryMode] = useState<"friday" | "7d" | "30d">("friday");
-  const [premiumOverride, setPremiumOverride] = useState("");
-
-  useEffect(() => {
-    if (marketOptions.length === 0) return;
-    if (!selectedAsset || !marketOptions.some((item) => item.ticker === selectedAsset)) {
-      setSelectedAsset(asset && marketOptions.some((item) => item.ticker === asset)
-        ? asset
-        : marketOptions[0].ticker);
-    }
-  }, [asset, marketOptions, selectedAsset]);
-
-  const selected = marketOptions.find((item) => item.ticker === selectedAsset) ?? marketOptions[0];
-  const spot = selected ? snapshot.spotByAsset[selected.ticker] : null;
-  const strikeNum = Number.parseFloat(strike) || 0;
-  const contractsNum = Math.max(1, Number.parseInt(contracts, 10) || 1);
-  const expiry = useMemo(() => {
-    if (expiryMode === "friday") return nextFridayUtc8();
-    const days = expiryMode === "7d" ? 7 : 30;
-    return Math.floor(Date.now() / 1000) + days * 86400;
-  }, [expiryMode]);
-  const suggestedPremium = estimatePremium({
-    asset: selected?.ticker ?? "",
-    side,
-    spot,
-    strike: strikeNum,
-    expiry
-  });
-  const overridePremium = Number.parseFloat(premiumOverride) || 0;
-  const premiumPerContract = overridePremium > 0 ? overridePremium : suggestedPremium;
-  const collateral = collateralRequired(strikeNum, contractsNum);
-  const premiumReady = exerciseStyle === "american" || premiumPerContract > 0;
-  const ready = !!selected && strikeNum > 0 && contractsNum > 0 && collateral > 0 && premiumReady;
-
-  const submit = () => {
-    if (!connected) {
-      onConnect();
-      return;
-    }
-    if (!selected || !ready) {
-      Alert.alert("Write form incomplete", "Choose a market, strike, contract count, and premium.");
-      return;
-    }
-    beginWriteFlow({
-      market: selected.market,
-      side,
-      exerciseStyle,
-      strike: strikeNum,
-      expiry,
-      contracts: contractsNum,
-      premiumPerContract: Math.max(0.000001, premiumPerContract),
-      collateral,
-      vaultType: "epoch"
     });
+  }, [provisionalWriteDraft, transaction, wallet.connection, writeReady]);
+
+  const tradeOffers = useMemo<TerminalOffer[]>(() => visibleOfferings.map((offering) => ({
+    id: offering.id,
+    strike: fixed(offering.strike, 2),
+    premium: fixed(offering.premium, 4),
+    size: String(offering.quantityAvailable),
+    premiumTone: offering.side === "call" ? "up" : "down"
+  })), [visibleOfferings]);
+
+  const holdingRows = useMemo<PortfolioRow[]>(() => market.positions.map((position) => {
+    const base = holdingRow(position);
+    if (position.state === "metaUnavailable") {
+      return {
+        ...base,
+        state: "metaUnavailable" as const,
+        onRetryMetadata: () => {
+          void market.retryPosition(position).catch(() => {
+            toasts.show({ tone: "error", title: "Metadata still unavailable", message: "No wallet action was taken." });
+          });
+        }
+      };
+    }
+    return { ...base, state: position.state } as PortfolioRow;
+  }), [market, toasts]);
+
+  const writtenRows = useMemo<PortfolioRow[]>(() => market.writtenPositions.map((position) => {
+    const base = writtenRow(position);
+    if (position.state === "metaUnavailable") {
+      return {
+        ...base,
+        state: "metaUnavailable" as const,
+        onRetryMetadata: () => { void market.refresh(); }
+      };
+    }
+    return { ...base, state: position.state } as PortfolioRow;
+  }), [market]);
+
+  const tickerQuotes = useMemo(() => {
+    const ordered = [trade.asset, ...marketAssets.filter((asset) => asset !== trade.asset)];
+    return ordered.slice(0, 4).filter(Boolean).map((asset) => ({
+      symbol: asset,
+      price: formatSpot(market.snapshot?.spotByAsset[asset]),
+      changePct: market.priceChangeFor(asset),
+      state: market.pricePhaseFor(asset)
+    }));
+  }, [market, marketAssets, trade.asset]);
+
+  const copySignature = useCallback(async (signature: string) => {
+    try {
+      await Clipboard.setStringAsync(signature);
+      toasts.show({ tone: "success", title: "Signature copied" });
+    } catch {
+      toasts.show({ tone: "error", title: "Couldn't copy signature" });
+    }
+  }, [toasts]);
+
+  const openExplorer = useCallback(async (signature: string) => {
+    try {
+      await Linking.openURL(`https://solscan.io/tx/${encodeURIComponent(signature)}?cluster=devnet`);
+    } catch {
+      toasts.show({ tone: "error", title: "Couldn't open Explorer", message: "The signature remains available to copy." });
+    }
+  }, [toasts]);
+
+  const txSignature = transaction.state.signature;
+  const toastSignature = toasts.toast?.signature ?? null;
+  const closeTransactionSheet = () => {
+    if (transaction.state.phase === "review" || transaction.state.phase === "simulating") transaction.cancel();
+    else transaction.close();
   };
 
-  return (
-    <View style={styles.section}>
-      <Text style={styles.sectionTitle}>Write</Text>
-      <Text style={styles.body}>Create a vault, deposit USDC collateral, then mint Token-2022 option contracts with Seeker wallet approval.</Text>
-      {marketOptions.length > 0 ? (
-        <>
-          <HorizontalChips
-            values={marketOptions.map((item) => item.ticker)}
-            selected={selected?.ticker ?? ""}
-            onSelect={setSelectedAsset}
-          />
-          <View style={styles.segment}>
-            <Toggle label="Call" active={side === "call"} onPress={() => setSide("call")} tone="teal" />
-            <Toggle label="Put" active={side === "put"} onPress={() => setSide("put")} tone="crimson" />
-          </View>
-          <View style={styles.segment}>
-            <Toggle label="European" active={exerciseStyle === "european"} onPress={() => setExerciseStyle("european")} tone="teal" />
-            <Toggle label="American" active={exerciseStyle === "american"} onPress={() => setExerciseStyle("american")} tone="crimson" />
-          </View>
-          <View style={styles.formGrid}>
-            <View style={styles.formCell}>
-              <Text style={styles.label}>Strike USDC</Text>
-              <TextInput
-                value={strike}
-                onChangeText={setStrike}
-                keyboardType="decimal-pad"
-                style={styles.input}
-                placeholder={spot ? spot.toFixed(2) : "0.00"}
-                placeholderTextColor={colors.inkMuted}
-              />
-            </View>
-            <View style={styles.formCell}>
-              <Text style={styles.label}>Contracts</Text>
-              <TextInput
-                value={contracts}
-                onChangeText={setContracts}
-                keyboardType="number-pad"
-                style={styles.input}
-                placeholder="1"
-                placeholderTextColor={colors.inkMuted}
-              />
-            </View>
-          </View>
-          <HorizontalChips
-            values={["friday", "7d", "30d"]}
-            selected={expiryMode}
-            onSelect={(value) => setExpiryMode(value as "friday" | "7d" | "30d")}
-            labelFor={(value) => value === "friday" ? `Friday ${shortDate(nextFridayUtc8())}` : value.toUpperCase()}
-          />
-          <View style={styles.quantityRow}>
-            <Text style={styles.label}>Premium override</Text>
-            <TextInput
-              value={premiumOverride}
-              onChangeText={setPremiumOverride}
-              keyboardType="decimal-pad"
-              style={styles.input}
-              placeholder={suggestedPremium > 0 ? suggestedPremium.toFixed(2) : "Auto"}
-              placeholderTextColor={colors.inkMuted}
-            />
-          </View>
-          <Card>
-            <Text style={styles.cardTitle}>
-              {selected?.ticker} {side.toUpperCase()} ${strikeNum || "-"}
-            </Text>
-            <Text style={styles.body}>Spot: {money(spot)}</Text>
-            <Text style={styles.body}>Expiry: {shortDate(expiry)} ({countdown(expiry)})</Text>
-            <Text style={styles.body}>Collateral: {money(collateral)}</Text>
-            <Text style={styles.body}>
-              Premium: {exerciseStyle === "american"
-                ? "priced on-chain during mint"
-                : money(premiumPerContract)}
-            </Text>
-          </Card>
-          <PrimaryButton
-            label={connected ? "Review write" : "Connect wallet"}
-            onPress={submit}
-            disabled={connected && !ready}
-          />
-        </>
-      ) : (
-        <Card>
-          <Text style={styles.cardTitle}>No markets registered</Text>
-          <Text style={styles.body}>Create a market from the desktop app first, then return here to write mobile vaults.</Text>
-        </Card>
-      )}
-    </View>
-  );
-}
+  if (!themeHydrated || (!fontsLoaded && !fontError)) {
+    return <View style={[styles.root, { backgroundColor: theme.colors.bg }]} />;
+  }
 
-function PortfolioScreen({
-  positions,
-  connected,
-  onConnect
-}: {
-  positions: WalletPosition[];
-  connected: boolean;
-  onConnect: () => void;
-}) {
-  return (
-    <View style={styles.section}>
-      <Text style={styles.sectionTitle}>Portfolio</Text>
-      {!connected ? (
-        <Card>
-          <Text style={styles.cardTitle}>Connect Seeker wallet</Text>
-          <Text style={styles.body}>Your option token balances are read from Token-2022 accounts after connection.</Text>
-          <PrimaryButton label="Connect wallet" onPress={onConnect} />
-        </Card>
-      ) : positions.length === 0 ? (
-        <Card>
-          <Text style={styles.cardTitle}>No Opta option tokens found</Text>
-          <Text style={styles.body}>Bought contracts will appear here after confirmation.</Text>
-        </Card>
-      ) : (
-        positions.map((position) => (
-          <Card key={position.id}>
-            <Text style={styles.cardTitle}>
-              {position.asset} {position.side.toUpperCase()} ${position.strike}
-            </Text>
-            <Text style={styles.body}>Balance: {position.balance}</Text>
-            <Text style={styles.body}>Expiry: {shortDate(position.expiry)} ({countdown(position.expiry)})</Text>
-            <Text style={styles.body}>Cost basis: {money(position.premiumPaid)}</Text>
-          </Card>
-        ))
-      )}
-    </View>
-  );
-}
+  if (!transaction.hydrated) {
+    return (
+      <View style={[styles.root, { backgroundColor: theme.colors.bg }]}>
+        <StatusBar
+          backgroundColor={theme.colors.bg}
+          barStyle={mode === "dark" ? "light-content" : "dark-content"}
+        />
+        <ScreenStatePanel
+          tone={transaction.hydrationError ? "error" : "default"}
+          title={transaction.hydrationError ? "Couldn't restore transaction status." : "Restoring transaction status\u2026"}
+          message={transaction.hydrationError ?? "Checking for a previously submitted signature."}
+          actionLabel={transaction.hydrationError ? "Retry" : undefined}
+          onAction={transaction.hydrationError ? () => { void transaction.retryHydration(); } : undefined}
+        />
+      </View>
+    );
+  }
 
-function SafetyScreen() {
   return (
-    <View style={styles.section}>
-      <Text style={styles.sectionTitle}>Safety</Text>
-      {[
-        ["Cluster lock", "This app is configured for Opta devnet and the Seeker MWA chain solana:devnet."],
-        ["Simulation first", "The sign button is blocked when preflight simulation returns an error."],
-        ["No private keys", "Wallet approval happens inside the MWA wallet. The app never asks for a seed phrase or keypair."],
-        ["Token-2022 aware", "Buy transactions include option-token ATA creation, hook metadata, hook state, and compute budget bump."]
-      ].map(([title, body]) => (
-        <Card key={title}>
-          <Text style={styles.cardTitle}>{title}</Text>
-          <Text style={styles.body}>{body}</Text>
-        </Card>
-      ))}
-    </View>
-  );
-}
-
-function OfferingCard({
-  offering,
-  selected,
-  onPress
-}: {
-  offering: Offering;
-  selected: boolean;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      onPress={onPress}
-      style={[styles.offerCard, selected && styles.offerCardSelected]}
+    <KeyboardAvoidingView
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      style={[styles.root, { backgroundColor: theme.colors.bg }]}
     >
-      <View>
-        <Text style={styles.offerMeta}>
-          {offering.kind.toUpperCase()} / {offering.exerciseStyle.toUpperCase()}
-        </Text>
-        <Text style={styles.offerTitle}>
-          {offering.asset} {offering.side.toUpperCase()} ${offering.strike}
-        </Text>
-        <Text style={styles.body}>{shortDate(offering.expiry)} / {countdown(offering.expiry)}</Text>
-      </View>
-      <View style={styles.offerRight}>
-        <Text style={styles.price}>{money(offering.premium)}</Text>
-        <Text style={styles.offerMeta}>{offering.quantityAvailable} left</Text>
-      </View>
-    </Pressable>
-  );
-}
+      <StatusBar
+        backgroundColor={theme.colors.bg}
+        barStyle={mode === "dark" ? "light-content" : "dark-content"}
+      />
+      <AppHeader
+        clusterLabel={EXPECTED_CLUSTER.toUpperCase()}
+        connectedAddress={owner?.toBase58() ?? null}
+        connectionState={connection.phase}
+        onInfoPress={() => setInfoOpen(true)}
+        onWalletPress={() => { void handleWalletPress(); }}
+        topInset={topInset}
+      />
+      <TickerStrip quotes={tickerQuotes} loading={market.phase === "loading"} />
 
-function ReviewSheet({
-  pendingTx,
-  sending,
-  onCancel,
-  onSign
-}: {
-  pendingTx: PendingTx;
-  sending: boolean;
-  onCancel: () => void;
-  onSign: () => void;
-}) {
-  return (
-    <View style={styles.sheetBackdrop}>
-      <View style={styles.sheet}>
-        <Text style={styles.sectionTitle}>Review transaction</Text>
-        {pendingTx.summary.map((line) => (
-          <Text key={line} style={styles.body}>{line}</Text>
-        ))}
-        {pendingTx.simulationError ? (
-          <Text style={styles.warning}>Simulation failed: {pendingTx.simulationError}</Text>
-        ) : (
-          <Text style={styles.success}>Simulation passed. Wallet approval is next.</Text>
+      <View style={styles.screen}>
+        {tab === "trade" && (
+          <TradeScreen
+            assets={marketAssets.map((asset) => ({ value: asset, label: asset }))}
+            selectedAsset={trade.asset}
+            onSelectAsset={(asset) => setTrade((current) => ({ ...current, asset, expiry: 0, offeringId: null }))}
+            expiries={tradeExpiries.map((expiry) => ({ value: String(expiry), label: shortExpiry(expiry) }))}
+            selectedExpiry={trade.expiry ? String(trade.expiry) : ""}
+            onSelectExpiry={(expiry) => setTrade((current) => ({ ...current, expiry: Number(expiry), offeringId: null }))}
+            side={trade.side}
+            onSelectSide={(side) => setTrade((current) => ({ ...current, side, offeringId: null }))}
+            offers={tradeOffers}
+            selectedOfferId={trade.offeringId}
+            onSelectOffer={(offeringId) => {
+              const next = visibleOfferings.find((offering) => offering.id === offeringId);
+              setTrade((current) => ({
+                ...current,
+                offeringId,
+                quantity: Math.min(current.quantity, Math.max(1, next?.quantityAvailable ?? 1))
+              }));
+            }}
+            quantity={trade.quantity}
+            maxQuantity={maxTradeQuantity}
+            onQuantityChange={(quantity) => setTrade((current) => ({ ...current, quantity }))}
+            dataPhase={market.phase}
+            connectionPhase={connection.phase}
+            onConnect={() => { void connectWallet(); }}
+            onRetry={() => { void market.refresh(); }}
+            onWriteOne={() => {
+              const tradeSpot = market.snapshot?.spotByAsset[trade.asset];
+              setWrite((current) => ({
+                ...current,
+                asset: trade.asset || current.asset,
+                strike: current.strike || (tradeSpot ? fixed(tradeSpot, 2) : "")
+              }));
+              setTab("write");
+            }}
+            onReview={transaction.hasUnresolved ? transaction.reopenPending : openBuyReview}
+            transactionPending={transaction.hasUnresolved}
+            refreshing={market.refreshing}
+          />
         )}
-        <View style={styles.sheetActions}>
-          <SecondaryButton label="Cancel" onPress={onCancel} />
-          <PrimaryButton
-            label={sending ? "Sending..." : pendingTx.ctaLabel ?? "Sign in wallet"}
-            onPress={onSign}
-            disabled={sending || !!pendingTx.simulationError}
+
+        {tab === "write" && (
+          <WriteScreen
+            assets={marketAssets.map((asset) => ({ value: asset, label: asset }))}
+            selectedAsset={write.asset}
+            onSelectAsset={(asset) => setWrite((current) => ({ ...current, asset }))}
+            side={write.side}
+            onSelectSide={(side) => setWrite((current) => ({ ...current, side }))}
+            exerciseStyle={write.exerciseStyle}
+            americanSupported={americanWriteSupported}
+            onSelectExerciseStyle={(exerciseStyle) => setWrite((current) => ({ ...current, exerciseStyle }))}
+            vaultType={write.vaultType}
+            onSelectVaultType={(vaultType) => setWrite((current) => ({ ...current, vaultType }))}
+            strike={write.strike}
+            strikeError={writeStrikeError}
+            onStrikeChange={(strike) => setWrite((current) => ({ ...current, strike }))}
+            contracts={write.contracts}
+            onContractsChange={(contracts) => setWrite((current) => ({ ...current, contracts }))}
+            tenors={epoch.candidates.map((candidate) => ({
+              value: candidate.tenor,
+              label: `${tenorName(candidate.tenor)} \u00b7 ${shortExpiry(candidate.expiry)}`,
+              expiry: candidate.expiry
+            }))}
+            selectedTenor={write.tenor}
+            onSelectTenor={(tenor: EpochTenor) => setWrite((current) => ({ ...current, tenor }))}
+            customExpiry={write.customExpiry}
+            customExpiryError={customExpiryError}
+            onCustomExpiryChange={(customExpiry) => setWrite((current) => ({ ...current, customExpiry }))}
+            tenorPhase={epoch.phase}
+            onRetryTenors={() => { void epoch.reload(); }}
+            premiumPerContract={writePremium}
+            protocolQuoteFresh={false}
+            collateral={writeCollateral}
+            expiry={selectedWriteExpiry}
+            ready={writeReady}
+            dataPhase={market.phase}
+            connectionPhase={connection.phase}
+            onConnect={() => { void connectWallet(); }}
+            onRetryData={() => { void market.refresh(); }}
+            onReview={transaction.hasUnresolved ? transaction.reopenPending : openWriteReview}
+            transactionPending={transaction.hasUnresolved}
+            refreshing={market.refreshing}
           />
-        </View>
+        )}
+
+        {tab === "portfolio" && (
+          <PortfolioScreen
+            holdings={holdingRows}
+            written={writtenRows}
+            dataPhase={market.portfolioPhase}
+            connectionPhase={connection.phase}
+            onConnect={() => { void connectWallet(); }}
+            onRetry={() => { void market.refresh(); }}
+            refreshing={market.refreshing}
+          />
+        )}
       </View>
-    </View>
+
+      {!keyboardVisible && (
+        <TabBar
+          activeKey={tab}
+          bottomInset={bottomInset}
+          items={TAB_ITEMS}
+          onChange={(key) => setTab(key as AppTab)}
+        />
+      )}
+
+      <Toast
+        key={toasts.toast?.id ?? 0}
+        visible={!!toasts.toast}
+        tone={toasts.toast?.tone ?? "info"}
+        title={toasts.toast?.title ?? ""}
+        message={toasts.toast?.message}
+        signature={toastSignature}
+        onDismiss={toasts.dismiss}
+        onCopySignature={toastSignature ? () => { void copySignature(toastSignature); } : undefined}
+        onOpenExplorer={toastSignature ? () => { void openExplorer(toastSignature); } : undefined}
+        bottomInset={bottomInset}
+      />
+
+      <InfoSheet
+        visible={infoOpen}
+        onClose={() => setInfoOpen(false)}
+        bottomInset={bottomInset}
+        versionLabel={"Seeker v0.1.0 \u00b7 devnet"}
+        onThemeError={() => {
+          toasts.show({ tone: "error", title: "Couldn't save theme", message: "The current theme remains active." });
+        }}
+      />
+
+      <TxSheet
+        visible={transaction.visible && transaction.hydrated}
+        kind={transaction.state.intent?.kind ?? "buy"}
+        phase={transaction.state.phase}
+        contractCount={transaction.state.intent?.contractCount ?? 1}
+        title={transaction.state.intent?.title}
+        summary={transaction.state.intent?.rows ?? []}
+        signature={txSignature}
+        error={transaction.state.error}
+        bottomInset={bottomInset}
+        onApprove={transaction.state.phase === "review" ? () => { void transaction.submit(); } : undefined}
+        onClose={closeTransactionSheet}
+        onRetry={transaction.retryAvailable ? transaction.retry : undefined}
+        onCheckStatus={transaction.state.phase === "unknown" ? () => { void transaction.checkStatus(); } : undefined}
+        onCopySignature={txSignature ? () => { void copySignature(txSignature); } : undefined}
+        onOpenExplorer={txSignature ? () => { void openExplorer(txSignature); } : undefined}
+      />
+    </KeyboardAvoidingView>
   );
 }
 
-function TabBar({ tab, setTab }: { tab: Tab; setTab: (tab: Tab) => void }) {
-  const tabs: Tab[] = ["trade", "write", "portfolio", "safety"];
-  return (
-    <View style={styles.tabBar}>
-      {tabs.map((item) => (
-        <Pressable
-          key={item}
-          onPress={() => setTab(item)}
-          style={[styles.tab, tab === item && styles.tabActive]}
-        >
-          <Text style={[styles.tabText, tab === item && styles.tabTextActive]}>{item}</Text>
-        </Pressable>
-      ))}
-    </View>
-  );
+function contractLabel(offering: Offering): string {
+  return `${offering.asset} ${fixed(offering.strike, 2)} ${offering.side === "call" ? "C" : "P"}`;
 }
 
-function HorizontalChips({
-  values,
-  selected,
-  onSelect,
-  labelFor
-}: {
-  values: string[];
-  selected: string;
-  onSelect: (value: string) => void;
-  labelFor?: (value: string) => string;
-}) {
-  return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
-      {values.map((value) => (
-        <Pressable
-          key={value}
-          onPress={() => onSelect(value)}
-          style={[styles.chip, selected === value && styles.chipActive]}
-        >
-          <Text style={[styles.chipText, selected === value && styles.chipTextActive]}>
-            {labelFor ? labelFor(value) : value}
-          </Text>
-        </Pressable>
-      ))}
-    </ScrollView>
-  );
+function contractLabelFromDraft(draft: WriteDraft): string {
+  return `${String(draft.market.account.assetName)} ${fixed(draft.strike, 2)} ${draft.side === "call" ? "C" : "P"}`;
 }
 
-function Toggle({
-  label,
-  active,
-  onPress,
-  tone
-}: {
-  label: string;
-  active: boolean;
-  onPress: () => void;
-  tone: "teal" | "crimson";
-}) {
-  const activeColor = tone === "teal" ? colors.teal : colors.crimson;
-  return (
-    <Pressable
-      onPress={onPress}
-      style={[styles.toggle, active && { backgroundColor: activeColor, borderColor: activeColor }]}
-    >
-      <Text style={[styles.toggleText, active && styles.toggleTextActive]}>{label}</Text>
-    </Pressable>
-  );
+function fixed(value: number, digits: number): string {
+  if (!Number.isFinite(value)) return "\u2014";
+  return value.toLocaleString("en-US", {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits
+  });
 }
 
-function Stat({ label, value, sub }: { label: string; value: string; sub: string }) {
-  return (
-    <View style={styles.stat}>
-      <Text style={styles.label}>{label}</Text>
-      <Text style={styles.statValue}>{value}</Text>
-      <Text style={styles.statSub}>{sub}</Text>
-    </View>
-  );
+function formatSpot(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "\u2014";
+  return fixed(value, value >= 1_000 ? 0 : 2);
 }
 
-function Card({ children }: { children: React.ReactNode }) {
-  return <View style={styles.card}>{children}</View>;
+function shortExpiry(expiry: number): string {
+  return new Date(expiry * 1_000).toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    timeZone: "UTC"
+  });
 }
 
-function PrimaryButton({
-  label,
-  onPress,
-  disabled
-}: {
-  label: string;
-  onPress: () => void;
-  disabled?: boolean;
-}) {
-  return (
-    <Pressable
-      onPress={onPress}
-      disabled={disabled}
-      style={[styles.primaryButton, disabled && styles.disabled]}
-    >
-      <Text style={styles.primaryButtonText}>{label}</Text>
-    </Pressable>
-  );
+function expiryLabel(expiry: number): string {
+  const time = new Date(expiry * 1_000).toLocaleTimeString("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: "UTC"
+  });
+  return `${shortExpiry(expiry)} \u00b7 ${time} UTC`;
 }
 
-function SecondaryButton({ label, onPress }: { label: string; onPress: () => void }) {
-  return (
-    <Pressable onPress={onPress} style={styles.secondaryButton}>
-      <Text style={styles.secondaryButtonText}>{label}</Text>
-    </Pressable>
-  );
+function tenorName(tenor: EpochTenor): string {
+  return tenor.slice(0, 1).toUpperCase() + tenor.slice(1);
+}
+
+function parseCustomExpiry(value: string): number | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})$/.exec(value.trim());
+  if (!match) return null;
+  const [, yearText, monthText, dayText, hourText, minuteText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const date = new Date(Date.UTC(year, month - 1, day, hour, minute, 0, 0));
+  if (date.getUTCFullYear() !== year
+    || date.getUTCMonth() !== month - 1
+    || date.getUTCDate() !== day
+    || date.getUTCHours() !== hour
+    || date.getUTCMinutes() !== minute) {
+    return null;
+  }
+  return Math.floor(date.getTime() / 1_000);
+}
+
+function holdingRow(position: WalletPosition): Omit<PortfolioRow, "state" | "onRetryMetadata"> {
+  const totalMark = position.currentMark == null ? null : position.currentMark * position.balance;
+  return {
+    id: position.id,
+    title: position.state === "metaUnavailable"
+      ? `${position.mint.toBase58().slice(0, 6)}\u2026${position.mint.toBase58().slice(-4)}`
+      : `${position.asset} ${fixed(position.strike, 2)} ${position.side === "call" ? "C" : "P"}`,
+    subtitle: position.state === "metaUnavailable"
+      ? position.metadataError || "Couldn't load metadata"
+      : `${position.exerciseStyle === "american" ? "American" : "European"} \u00b7 ${shortExpiry(position.expiry)}`,
+    quantity: `${position.balance} \u00d7 long`,
+    value: totalMark == null ? "\u2014" : fixed(totalMark, 4),
+    valueCaption: totalMark == null ? "mark unavailable" : "est. mark"
+  };
+}
+
+function writtenRow(position: WalletWriterPosition): Omit<PortfolioRow, "state" | "onRetryMetadata"> {
+  return {
+    id: position.id,
+    title: position.state === "metaUnavailable"
+      ? `${position.position.toBase58().slice(0, 6)}\u2026${position.position.toBase58().slice(-4)}`
+      : `${position.asset} ${fixed(position.strike, 2)} ${position.side === "call" ? "C" : "P"}`,
+    subtitle: position.state === "metaUnavailable"
+      ? position.metadataError || "Couldn't load metadata"
+      : `Collateral ${fixed(position.collateralDeposited, 2)} USDC`,
+    quantity: `${position.optionsMinted} \u00d7 short`,
+    value: `recv ${fixed(position.premiumClaimed, 4)}`,
+    valueCaption: `${position.optionsSold} sold`
+  };
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: colors.paper
-  },
-  scroll: {
-    padding: 18,
-    paddingBottom: 56
-  },
-  header: {
-    paddingTop: 12,
-    paddingBottom: 18,
-    flexDirection: "row",
-    justifyContent: "space-between",
-    gap: 16
-  },
-  eyebrow: {
-    color: colors.inkMuted,
-    fontSize: 11,
-    fontWeight: "700",
-    textTransform: "uppercase",
-    letterSpacing: 1.4
-  },
-  title: {
-    color: colors.ink,
-    fontSize: 56,
-    lineHeight: 60,
-    fontWeight: "500",
-    fontStyle: "italic"
-  },
-  subtitle: {
-    color: colors.inkBody,
-    fontSize: 15,
-    lineHeight: 22,
-    maxWidth: 250
-  },
-  walletChip: {
-    height: 44,
-    paddingHorizontal: 14,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderColor: colors.ink,
-    borderRadius: 22
-  },
-  walletText: {
-    color: colors.ink,
-    fontSize: 11,
-    fontWeight: "800",
-    textTransform: "uppercase",
-    letterSpacing: 1.1
-  },
-  statsGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 10
-  },
-  stat: {
-    width: "48%",
-    borderWidth: 1,
-    borderColor: colors.rule,
-    padding: 14
-  },
-  label: {
-    color: colors.inkMuted,
-    fontSize: 10,
-    fontWeight: "800",
-    textTransform: "uppercase",
-    letterSpacing: 1.2
-  },
-  statValue: {
-    color: colors.ink,
-    marginTop: 10,
-    fontSize: 23,
-    fontWeight: "700"
-  },
-  statSub: {
-    color: colors.inkMuted,
-    marginTop: 4,
-    fontSize: 11,
-    textTransform: "uppercase",
-    letterSpacing: 0.9
-  },
-  tabBar: {
-    flexDirection: "row",
-    marginTop: 18,
-    borderWidth: 1,
-    borderColor: colors.rule,
-    borderRadius: 8,
-    overflow: "hidden"
-  },
-  tab: {
-    flex: 1,
-    minHeight: 42,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.paper
-  },
-  tabActive: {
-    backgroundColor: colors.ink
-  },
-  tabText: {
-    color: colors.inkMuted,
-    fontSize: 10,
-    fontWeight: "800",
-    textTransform: "uppercase",
-    letterSpacing: 0.8
-  },
-  tabTextActive: {
-    color: colors.paper
-  },
-  section: {
-    marginTop: 22
-  },
-  sectionTitle: {
-    color: colors.ink,
-    fontSize: 34,
-    lineHeight: 38,
-    fontWeight: "500"
-  },
-  body: {
-    color: colors.inkBody,
-    fontSize: 14,
-    lineHeight: 21,
-    marginTop: 8
-  },
-  monoMuted: {
-    color: colors.inkMuted,
-    marginTop: 12,
-    fontSize: 11,
-    fontWeight: "800",
-    textTransform: "uppercase",
-    letterSpacing: 1.1
-  },
-  chipRow: {
-    gap: 8,
-    paddingVertical: 12
-  },
-  chip: {
-    minHeight: 42,
-    paddingHorizontal: 14,
-    justifyContent: "center",
-    borderRadius: 21,
-    borderWidth: 1,
-    borderColor: colors.rule
-  },
-  chipActive: {
-    backgroundColor: colors.ink,
-    borderColor: colors.ink
-  },
-  chipText: {
-    color: colors.inkMuted,
-    fontSize: 11,
-    fontWeight: "800",
-    textTransform: "uppercase",
-    letterSpacing: 1
-  },
-  chipTextActive: {
-    color: colors.paper
-  },
-  segment: {
-    flexDirection: "row",
-    gap: 10,
-    marginTop: 4
-  },
-  toggle: {
-    flex: 1,
-    minHeight: 54,
-    borderWidth: 1,
-    borderColor: colors.rule,
-    borderRadius: 8,
-    alignItems: "center",
-    justifyContent: "center"
-  },
-  toggleText: {
-    color: colors.inkMuted,
-    fontSize: 12,
-    fontWeight: "900",
-    textTransform: "uppercase",
-    letterSpacing: 1
-  },
-  toggleTextActive: {
-    color: colors.paper
-  },
-  quantityRow: {
-    marginTop: 16
-  },
-  formGrid: {
-    flexDirection: "row",
-    gap: 10,
-    marginTop: 16
-  },
-  formCell: {
-    flex: 1
-  },
-  input: {
-    minHeight: 48,
-    borderWidth: 1,
-    borderColor: colors.ruleStrong,
-    borderRadius: 8,
-    marginTop: 8,
-    paddingHorizontal: 14,
-    color: colors.ink,
-    fontSize: 18,
-    fontWeight: "700"
-  },
-  offerList: {
-    gap: 10,
-    marginTop: 14
-  },
-  offerCard: {
-    borderWidth: 1,
-    borderColor: colors.rule,
-    backgroundColor: colors.paper,
-    padding: 14,
-    borderRadius: 8,
-    flexDirection: "row",
-    justifyContent: "space-between",
-    gap: 12
-  },
-  offerCardSelected: {
-    borderColor: colors.ink,
-    backgroundColor: colors.paper2
-  },
-  offerMeta: {
-    color: colors.inkMuted,
-    fontSize: 10,
-    fontWeight: "800",
-    textTransform: "uppercase",
-    letterSpacing: 1
-  },
-  offerTitle: {
-    color: colors.ink,
-    marginTop: 8,
-    fontSize: 20,
-    fontWeight: "700"
-  },
-  offerRight: {
-    alignItems: "flex-end",
-    justifyContent: "center"
-  },
-  price: {
-    color: colors.crimson,
-    fontSize: 20,
-    fontWeight: "800"
-  },
-  card: {
-    marginTop: 14,
-    padding: 16,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.rule,
-    backgroundColor: colors.paper,
-    ...shadow.card
-  },
-  cardTitle: {
-    color: colors.ink,
-    fontSize: 20,
-    fontWeight: "800"
-  },
-  primaryButton: {
-    marginTop: 16,
-    minHeight: 52,
-    borderRadius: 26,
-    backgroundColor: colors.ink,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 18
-  },
-  primaryButtonText: {
-    color: colors.paper,
-    fontSize: 12,
-    fontWeight: "900",
-    textTransform: "uppercase",
-    letterSpacing: 1.2
-  },
-  secondaryButton: {
-    minHeight: 52,
-    borderRadius: 26,
-    borderWidth: 1,
-    borderColor: colors.ruleStrong,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 18,
-    flex: 1
-  },
-  secondaryButtonText: {
-    color: colors.ink,
-    fontSize: 12,
-    fontWeight: "900",
-    textTransform: "uppercase",
-    letterSpacing: 1.2
-  },
-  disabled: {
-    opacity: 0.45
-  },
-  warning: {
-    marginTop: 12,
-    color: colors.crimson,
-    fontSize: 13,
-    lineHeight: 19,
-    fontWeight: "700"
-  },
-  success: {
-    marginTop: 12,
-    color: colors.teal,
-    fontSize: 13,
-    lineHeight: 19,
-    fontWeight: "800"
-  },
-  loading: {
-    marginTop: 80,
-    alignItems: "center"
-  },
-  sheetBackdrop: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    top: 0,
-    bottom: 0,
-    backgroundColor: "rgba(10,10,8,0.45)",
-    justifyContent: "flex-end"
-  },
-  sheet: {
-    backgroundColor: colors.paper,
-    padding: 20,
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18
-  },
-  sheetActions: {
-    flexDirection: "row",
-    gap: 10,
-    alignItems: "center"
-  }
+  root: { flex: 1 },
+  screen: { flex: 1, minHeight: 0 }
 });

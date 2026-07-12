@@ -51,7 +51,8 @@ import { hexFromBytes } from "@app/utils/format";
 import { VOL_ORACLE_SEED } from "@app/utils/constants";
 import { seedVolForAssetClass } from "@app/utils/seedVol";
 
-import { buildManagedQuoteUpdateIxs } from "./switchboardQuotePost";
+import { buildManagedQuoteUpdateIxs, type CapturedBuild } from "./switchboardQuotePost";
+import { buildSbSettlementRecord, archiveSbSettlement } from "./settlementArchive";
 import {
   lookupSbFeed, isSupportedSbFeed, listSupportedFeeds, buildOracleFeed,
   normFeedHash, type SbFeedEntry,
@@ -106,6 +107,8 @@ export interface SbSettleReport {
   settleTuplesPastWindow: number;   // expired but past the 300s window → reclaim path
   settled: number;                  // settled (or would-settle in dry-run)
   settleErrored: number;
+  archived: number;                 // confirmed settles whose attestation reached the JSONL
+  archiveErrored: number;           // confirmed settles whose archive missed a sink
 }
 
 export interface SbTickReport {
@@ -628,7 +631,7 @@ export async function settleCheckTick(
 ): Promise<SbSettleReport> {
   const report: SbSettleReport = {
     sbVaultsScanned: 0, settleTuplesInWindow: 0, settleTuplesPastWindow: 0,
-    settled: 0, settleErrored: 0,
+    settled: 0, settleErrored: 0, archived: 0, archiveErrored: 0,
   };
 
   const targets = new Map<string, ForcedSettle>(); // key = asset:expiry
@@ -671,6 +674,12 @@ export async function settleCheckTick(
     if (ctx.shouldShutdown()) break;
     await settleSbTuple(ctx, sb, t, report);
   }
+
+  // Settle-report log — surfaces settle + self-index counters for this pass.
+  ctx.log("info", "sb-oracle settle-check complete", {
+    settled: report.settled, settleErrored: report.settleErrored,
+    archived: report.archived, archiveErrored: report.archiveErrored,
+  });
   return report;
 }
 
@@ -709,14 +718,18 @@ async function settleSbTuple(
     if (ctx.shouldShutdown()) return;
 
     // (a) fetch a FRESH signed quote → self-packed ed25519 ix (same as push).
+    //     Keep `captured` (the verified oracle triples) in scope so a REAL
+    //     confirmed settle below can archive a re-verifiable attestation.
     let edIx: TransactionInstruction;
+    let captured: CapturedBuild | undefined;
     try {
-      const { ixs } = await buildManagedQuoteUpdateIxs(
+      const { ixs, captured: cap } = await buildManagedQuoteUpdateIxs(
         sb.qObj, sb.crossbar, feed, ctx.wallet.publicKey,
         { numSignatures: 2, instructionIdx: 1 });
       const found = ixs.find((ix) => ix.programId.toBase58() === edPid);
       if (!found) throw new Error("no ed25519 ix in managed-update output");
       edIx = found;
+      captured = cap;
     } catch (err) {
       ctx.log("info", "sb-oracle settle quote fetch/pack failed (re-fetch fresh)", {
         asset: t.asset, attempt, err: String(err).slice(0, 140),
@@ -785,6 +798,40 @@ async function settleSbTuple(
       const sig = await send(ctx, instructions);
       ctx.log("info", "sb-oracle settle sent", { asset: t.asset, expiry: t.expiry, sig });
       report.settled += 1;
+
+      // Self-index (Stage 3 Slice 3): archive a re-verifiable attestation for
+      // this REAL confirmed settle. NON-THROWING — a failure here never
+      // reverses or disrupts the settle; only the archive counters move.
+      try {
+        if (!captured) throw new Error("captured triples missing at archive time");
+        const sr: any = await ctx.program.account.settlementRecord.fetch(settlementPda);
+        const record = buildSbSettlementRecord({
+          asset: t.asset,
+          expiry: t.expiry,
+          edIxData: edIx.data,
+          captured,
+          feedHashHex: t.feedHashHex,
+          settlementPrice: Number(sr.settlementPrice),
+          // For an SB market pyth_publish_time is REPURPOSED to hold recent_slot.
+          recentSlot: Number(sr.pythPublishTime),
+          settleTxSig: sig,
+          queuePubkey: entry.queue.toBase58(),
+          programId: entry.quoteProgram.toBase58(),
+          marketPubkey: marketPda.toBase58(),
+          settlementRecordPubkey: settlementPda.toBase58(),
+          capturedAtIso: new Date().toISOString(),
+        });
+        const res = await archiveSbSettlement(record, {
+          log: (m, f) => ctx.log("warn", m, f),
+        });
+        if (res.jsonlOk) report.archived += 1;
+        if (!res.jsonlOk || !res.upstashOk) report.archiveErrored += 1;
+      } catch (archErr) {
+        report.archiveErrored += 1;
+        ctx.log("warn", "sb-oracle settle archive failed (non-fatal)", {
+          asset: t.asset, expiry: t.expiry, err: String(archErr).slice(0, 140),
+        });
+      }
     } catch (err) {
       ctx.log("info", "sb-oracle settle send failed (re-fetch fresh)", {
         asset: t.asset, attempt, err: String(err).slice(0, 140),

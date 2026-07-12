@@ -4,6 +4,20 @@ apply plugin: "com.facebook.react"
 
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
 
+// Self-custody release signing. keystore.properties (and the keystore itself) are
+// gitignored and live outside version control; env vars override for CI. A
+// production `release` build fails loudly if neither source is configured — it
+// must never silently fall back to the debug key.
+def keystorePropertiesFile = rootProject.file("keystore.properties")
+def keystoreProperties = new Properties()
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+def optaReleaseStoreFile = keystoreProperties['storeFile'] ?: System.getenv('OPTA_RELEASE_STORE_FILE')
+def optaReleaseStorePassword = keystoreProperties['storePassword'] ?: System.getenv('OPTA_RELEASE_STORE_PASSWORD')
+def optaReleaseKeyAlias = keystoreProperties['keyAlias'] ?: System.getenv('OPTA_RELEASE_KEY_ALIAS')
+def optaReleaseKeyPassword = keystoreProperties['keyPassword'] ?: System.getenv('OPTA_RELEASE_KEY_PASSWORD')
+
 /**
  * This is the configuration block to customize your React Native Android app.
  * By default you don't need to apply any configuration, just uncomment the lines you need.
@@ -92,14 +106,28 @@ android {
         applicationId 'com.opta.seeker'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "0.1.0"
+        versionCode 2
+        versionName "1.0.0"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }
+    signingConfigs {
+        release {
+            // Populated from keystore.properties / env only. If unconfigured, the
+            // fields stay null and a `release` assemble fails rather than shipping
+            // an unsigned or debug-signed store artifact.
+            if (optaReleaseStoreFile != null) {
+                storeFile file(optaReleaseStoreFile)
+                storePassword optaReleaseStorePassword
+                keyAlias optaReleaseKeyAlias
+                keyPassword optaReleaseKeyPassword
+            }
+        }
+    }
     buildTypes {
         release {
-            // Release signing is supplied by EAS/CI. Never fall back to the debug key.
+            // Self-custody release key (keystore.properties / env). Never the debug key.
+            signingConfig signingConfigs.release
             def enableShrinkResources = findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'false'
             shrinkResources enableShrinkResources.toBoolean()
             minifyEnabled enableMinifyInReleaseBuilds

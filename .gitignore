@@ -51,6 +51,11 @@ mobile/*.log
 mobile/seeker-*.png
 mobile/opta-release-*.png
 mobile/android/app/*.keystore
+# Release-signing secrets — keystore lives OUTSIDE the repo; properties file is machine-local.
+*.keystore
+*.jks
+keystore.properties
+mobile/android/keystore.properties
 
 # Public, non-secret mobile configuration template
 !mobile/.env.example

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, extname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -123,17 +123,96 @@ const marketState = read(mobileRoot, "src", "state", "useMarketState.ts");
 requireText(marketState.includes("AUTO_REFRESH_MS"), "Live prices must refresh before the write gate becomes permanently stale.");
 requireText(marketState.includes("portfolioPhase"), "Portfolio failures must not poison Trade and Write market state.");
 
+// ---- Permission surface: source declaration + merged/APK reality ----------
+// The shippable runtime set is exactly these three: INTERNET, ACCESS_NETWORK_STATE
+// (both transitive/kept) and the app-scoped RN dynamic-receiver permission.
+const ALLOWED_RUNTIME_PERMISSIONS = new Set([
+  "android.permission.INTERNET",
+  "android.permission.ACCESS_NETWORK_STATE",
+  "com.opta.seeker.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
+]);
+const STRIPPED_PERMISSIONS = [
+  "android.permission.READ_EXTERNAL_STORAGE",
+  "android.permission.WRITE_EXTERNAL_STORAGE",
+];
+
+function parsePermissions(xml) {
+  const granted = [];
+  const removed = [];
+  for (const match of xml.matchAll(/<uses-permission\s+([^>]*?)\/?>/g)) {
+    const attrs = match[1];
+    const name = /android:name="([^"]+)"/.exec(attrs)?.[1];
+    if (!name) continue;
+    if (/tools:node="remove"/.test(attrs)) removed.push(name);
+    else granted.push(name);
+  }
+  return { granted, removed };
+}
+
 const manifest = read(mobileRoot, "android", "app", "src", "main", "AndroidManifest.xml");
-const permissions = [...manifest.matchAll(/<uses-permission\s+android:name="([^"]+)"/g)].map((match) => match[1]);
-requireText(permissions.length === 1 && permissions[0] === "android.permission.INTERNET", "Main manifest may request only INTERNET.");
+const src = parsePermissions(manifest);
+requireText(/xmlns:tools="/.test(manifest), "Source manifest must declare xmlns:tools for permission removal.");
+requireText(
+  src.granted.length === 1 && src.granted[0] === "android.permission.INTERNET",
+  `Source manifest may grant only INTERNET (found: ${src.granted.join(", ") || "none"}).`
+);
+for (const perm of STRIPPED_PERMISSIONS) {
+  requireText(src.removed.includes(perm), `Source manifest must strip ${perm} via tools:node="remove".`);
+}
 requireText(/android:allowBackup="false"/.test(manifest), "Android backups must remain disabled.");
 requireText(/android:screenOrientation="portrait"/.test(manifest), "Native Android orientation must match app.json.");
 requireText(/<data android:scheme="opta-seeker"\/>/.test(manifest), "Native Android scheme must match app.json.");
 
+// Merged manifests (post-build intermediates) must reflect the strip exactly.
+const mergedRoot = resolve(mobileRoot, "android", "app", "build", "intermediates");
+let checkedMerged = 0;
+if (existsSync(mergedRoot)) {
+  const mergedManifests = sourceFiles(mergedRoot).filter(
+    (path) => /merged_manifest/.test(path) && path.endsWith("AndroidManifest.xml")
+  );
+  for (const path of mergedManifests) {
+    const { granted } = parsePermissions(read(path));
+    const rel = relative(mobileRoot, path);
+    for (const perm of STRIPPED_PERMISSIONS) {
+      requireText(!granted.includes(perm), `Merged manifest still grants ${perm}: ${rel}`);
+    }
+    for (const perm of granted) {
+      requireText(ALLOWED_RUNTIME_PERMISSIONS.has(perm), `Merged manifest grants unexpected permission ${perm}: ${rel}`);
+    }
+    checkedMerged += 1;
+  }
+}
+if (checkedMerged > 0) console.log(`PASS merged-manifest permission set (${checkedMerged} checked)`);
+
+// ---- Release signing: self-custody, never debug, no bundled secrets ---------
 const gradle = read(mobileRoot, "android", "app", "build.gradle");
-const releaseBlock = namedBlock(gradle, "release");
-requireText(releaseBlock != null, "Release build block is missing.");
-requireText(releaseBlock != null && !/signingConfig\s+signingConfigs\.debug/.test(releaseBlock), "Release must never fall back to debug signing.");
+const buildTypesBlock = namedBlock(gradle, "buildTypes");
+const releaseBuildType = buildTypesBlock ? namedBlock(buildTypesBlock, "release") : null;
+requireText(releaseBuildType != null, "Release build block is missing.");
+requireText(
+  releaseBuildType != null && /signingConfig\s+signingConfigs\.release/.test(releaseBuildType),
+  "Release build must use signingConfigs.release."
+);
+requireText(
+  releaseBuildType != null && !/signingConfig\s+signingConfigs\.debug/.test(releaseBuildType),
+  "Release must never fall back to debug signing."
+);
+const signingConfigsBlock = namedBlock(gradle, "signingConfigs");
+const signingRelease = signingConfigsBlock ? namedBlock(signingConfigsBlock, "release") : null;
+requireText(signingRelease != null, "signingConfigs.release block is missing.");
+requireText(
+  gradle.includes("rootProject.file(\"keystore.properties\")"),
+  "Release signing must load credentials from the gitignored keystore.properties."
+);
+// No plaintext store/key passwords committed in gradle.
+requireText(
+  !/(store|key)Password\s+["'][^"']+["']/.test(gradle),
+  "Release keystore passwords must never be hardcoded in build.gradle."
+);
+// Keystore artifacts must be gitignored.
+const rootGitignore = read(repoRoot, ".gitignore");
+requireText(/(^|\n)\*\.keystore(\s|$)/.test(rootGitignore) || /\*\.keystore/.test(rootGitignore), "Keystores (*.keystore) must be gitignored.");
+requireText(/keystore\.properties/.test(rootGitignore), "keystore.properties must be gitignored.");
 requireText(/review\s*\{[\s\S]*?debuggable\s+false[\s\S]*?signingConfig\s+signingConfigs\.debug/.test(gradle), "Review APK must bundle JS and use only the local review certificate.");
 requireText(/review\s*\{[\s\S]*?initWith\s+release[\s\S]*?matchingFallbacks\s*=\s*\['release'\]/.test(gradle), "Review APK must use release native dependencies, never dev-client debug fallbacks.");
 

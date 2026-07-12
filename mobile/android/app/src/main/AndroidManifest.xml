@@ -1,5 +1,10 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
   <uses-permission android:name="android.permission.INTERNET"/>
+  <!-- ACCESS_NETWORK_STATE is injected transitively by Mobile Wallet Adapter (kept). -->
+  <!-- READ/WRITE_EXTERNAL_STORAGE are pulled in transitively (AndroidX/Expo) but unused
+       by the Seeker surface — strip them from the merged manifest. -->
+  <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" tools:node="remove"/>
+  <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" tools:node="remove"/>
   <queries>
     <intent>
       <action android:name="android.intent.action.VIEW"/>

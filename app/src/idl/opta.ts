@@ -1393,6 +1393,104 @@ export type Opta = {
       "args": []
     },
     {
+      "name": "closeMarket",
+      "docs": [
+        "Admin-only. Closes an OptionsMarket PDA and returns its rent to the admin.",
+        "Used at the Pyth→Switchboard cutover to free a crypto asset's name PDA so",
+        "an SB-sourced market can be re-created under the SAME real name.",
+        "",
+        "NO on-chain child-check is possible: SharedVaults are independent PDAs",
+        "keyed by market.key() and the market holds no child counter, so proving",
+        "\"no open vaults\" would need unbounded remaining_accounts. Safety is",
+        "enforced OFF-CHAIN by scripts/preflight_close_market.ts (refuses to build",
+        "the tx if any live vault references the market). VolOracles (keyed by",
+        "feed_id) are NOT children and survive by design. Admin-trusted (devnet);",
+        "ships in the cutover deploy, INERT until then."
+      ],
+      "discriminator": [
+        88,
+        154,
+        248,
+        186,
+        48,
+        14,
+        123,
+        244
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "docs": [
+            "Admin — must equal protocol_state.admin (CRIT-3 deployer). Receives the",
+            "reclaimed rent (mut for the lamport credit from `close`)."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "protocolState",
+          "docs": [
+            "Used only to assert admin == protocol_state.admin."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "market",
+          "docs": [
+            "The OptionsMarket to close. Seed-pinned to the canonical PDA for",
+            "`asset_name` (so a stray/orphan OptionsMarket can't be substituted);",
+            "`close = admin` zeroes it and returns rent to the admin. A second close",
+            "reverts — the account no longer exists (AccountNotInitialized / seeds)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "assetName"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "assetName",
+          "type": "string"
+        }
+      ]
+    },
+    {
       "name": "closeSettledWriterAskVault",
       "docs": [
         "Exchange Phase 3 Slice D2a — reclaim a fully-drained writer-ask vault's",
@@ -3084,7 +3182,11 @@ export type Opta = {
         {
           "name": "makerOptionAccount",
           "docs": [
-            "Maker's option ATA — destination on bid fill (unused on resale fill)."
+            "Maker's option ATA — destination on bid fill (unused on resale fill).",
+            "order.owner and mint(0..32) must equal order.option_mint before the",
+            "transfer, so the taker cannot redirect the delivery to their own account.",
+            "A struct-level typed constraint isn't used: these are Token-2022 accounts",
+            "(owned by the Token-2022 program), which `Account<TokenAccount>` rejects."
           ],
           "writable": true
         },
@@ -6456,7 +6558,9 @@ export type Opta = {
         "both accumulators, sample_count, head, and last_spot/last_ts so the",
         "next push takes the seed branch (records spot, no return) and the",
         "7-day warmup re-engages from 0. feed_id (the PDA seed + Pyth identity)",
-        "is preserved. One oracle per call."
+        "is preserved. `seed_vol` REPAIRS the seed (H-1, Run-8): bounded to",
+        "[MIN,MAX] or 0 (no seed); the warmup after reset consults this value.",
+        "One oracle per call."
       ],
       "discriminator": [
         246,
@@ -6543,6 +6647,10 @@ export type Opta = {
               32
             ]
           }
+        },
+        {
+          "name": "seedVol",
+          "type": "i64"
         }
       ]
     },
@@ -8421,6 +8529,16 @@ export type Opta = {
       "code": 6076,
       "name": "vaultNotVoided",
       "msg": "Vault not voided — call initialize_void first"
+    },
+    {
+      "code": 6077,
+      "name": "makerOptionAccountInvalid",
+      "msg": "maker_option_account failed owner/mint pin (owner != order.owner or mint != order.option_mint)"
+    },
+    {
+      "code": 6078,
+      "name": "seedVolOutOfBounds",
+      "msg": "seed_vol out of bounds — must be 0 (no seed) or within [MIN_SEED_VOL, MAX_SEED_VOL]"
     }
   ],
   "types": [

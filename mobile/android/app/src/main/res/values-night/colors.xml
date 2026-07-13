@@ -1,0 +1,7 @@
+<resources>
+  <color name="splashscreen_background">#0C0C0A</color>
+  <color name="colorPrimary">#1AC6A5</color>
+  <color name="colorPrimaryDark">#0C0C0A</color>
+  <color name="status_bar_background">#0C0C0A</color>
+  <color name="navigation_bar_background">#0C0C0A</color>
+</resources>

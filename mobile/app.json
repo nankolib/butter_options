@@ -1,0 +1,29 @@
+{
+  "expo": {
+    "name": "opta.",
+    "slug": "opta-seeker",
+    "scheme": "opta-seeker",
+    "icon": "./assets/opta-icon.png",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "platforms": [
+      "android"
+    ],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "android": {
+      "package": "com.opta.seeker",
+      "versionCode": 2,
+      "allowBackup": false,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon-foreground.png",
+        "backgroundColor": "#0C0C0A"
+      }
+    },
+    "plugins": [
+      "expo-font"
+    ]
+  }
+}

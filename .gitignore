@@ -43,3 +43,19 @@ TODO.md
 # Python bytecode (e.g. from running scripts/gen_bs2002_refs.py)
 __pycache__/
 .opta-build/
+
+# Seeker mobile local/runtime artifacts
+mobile/.codex-run/
+mobile/.expo/
+mobile/*.log
+mobile/seeker-*.png
+mobile/opta-release-*.png
+mobile/android/app/*.keystore
+# Release-signing secrets — keystore lives OUTSIDE the repo; properties file is machine-local.
+*.keystore
+*.jks
+keystore.properties
+mobile/android/keystore.properties
+
+# Public, non-secret mobile configuration template
+!mobile/.env.example

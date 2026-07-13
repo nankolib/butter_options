@@ -48,6 +48,24 @@ export function normalizeAccountBytes(data: Buffer | Uint8Array): Buffer {
   return Buffer.from(data);
 }
 
+// A stalled RPC (web3.js sets no request timeout) must surface the existing
+// error -> Retry path, not hang the load on skeletons forever. Every account
+// scan/read races a hard timeout that rejects with a readable error.
+const SCAN_TIMEOUT_MS = 15_000;
+
+function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new OptaAccountReadError(`${label} timed out after ${SCAN_TIMEOUT_MS / 1000}s — the RPC is slow or unreachable.`)),
+      SCAN_TIMEOUT_MS
+    );
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); }
+    );
+  });
+}
+
 export async function safeFetchAll<T = any>(
   program: Program,
   accountName: OptaAccountName
@@ -56,14 +74,17 @@ export async function safeFetchAll<T = any>(
   const discriminator = accountDiscriminator(accountName);
   let rawAccounts: Awaited<ReturnType<Connection["getProgramAccounts"]>>;
   try {
-    rawAccounts = await program.provider.connection.getProgramAccounts(program.programId, {
-      filters: [{
-        memcmp: {
-          offset: 0,
-          bytes: bs58Encode(Buffer.from(discriminator))
-        }
-      }]
-    });
+    rawAccounts = await withTimeout(
+      program.provider.connection.getProgramAccounts(program.programId, {
+        filters: [{
+          memcmp: {
+            offset: 0,
+            bytes: bs58Encode(Buffer.from(discriminator))
+          }
+        }]
+      }),
+      `${accountName} scan`
+    );
   } catch (err) {
     throw new OptaAccountReadError(`Couldn't load ${accountName} accounts.`, err);
   }
@@ -101,7 +122,10 @@ export async function fetchDecodedAccount<T = any>(
   await ensureDevnetConnection(program.provider.connection);
   let info: Awaited<ReturnType<Connection["getAccountInfo"]>>;
   try {
-    info = await program.provider.connection.getAccountInfo(publicKey, "confirmed");
+    info = await withTimeout(
+      program.provider.connection.getAccountInfo(publicKey, "confirmed"),
+      `${accountName} account read`
+    );
   } catch (err) {
     throw new OptaAccountReadError(`Couldn't load ${accountName} account ${publicKey.toBase58()}.`, err);
   }

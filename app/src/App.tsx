@@ -13,6 +13,7 @@ import { PortfolioPage } from "./pages/portfolio";
 import { DocsLayout, DocsIndex, DocsSection } from "./pages/docs";
 import { Privacy } from "./pages/Privacy";
 import { Support } from "./pages/Support";
+import { Terms } from "./pages/Terms";
 
 /**
  * Routes that hide the persistent global Header.
@@ -38,7 +39,7 @@ import { Support } from "./pages/Support";
  * have migrated to AppNav. The global Header is now only shown on
  * routes not listed above (currently none).
  */
-const HEADER_HIDDEN_PATHS = ["/", "/docs", "/portfolio", "/markets", "/write", "/trade", "/marketplace", "/privacy", "/support"];
+const HEADER_HIDDEN_PATHS = ["/", "/docs", "/portfolio", "/markets", "/write", "/trade", "/marketplace", "/privacy", "/support", "/terms"];
 
 /**
  * True iff `path` exactly matches one of `patterns` or is a descendant
@@ -86,6 +87,7 @@ function AppShell() {
         <Route path="/portfolio" element={<PortfolioPage />} />
         <Route path="/privacy" element={<Privacy />} />
         <Route path="/support" element={<Support />} />
+        <Route path="/terms" element={<Terms />} />
         <Route path="/docs" element={<DocsLayout />}>
           <Route index element={<DocsIndex />} />
           <Route path=":sectionSlug" element={<DocsSection />} />

@@ -45,6 +45,7 @@
   },
   "devDependencies": {
     "@babel/core": "^7.28.0",
+    "@solana-mobile/dapp-store-cli": "1.0.0",
     "@types/bn.js": "^5.2.0",
     "@types/react": "~19.1.10",
     "babel-preset-expo": "~54.0.10",

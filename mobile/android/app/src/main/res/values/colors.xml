@@ -4,4 +4,5 @@
   <color name="colorPrimaryDark">#F1ECE2</color>
   <color name="status_bar_background">#F1ECE2</color>
   <color name="navigation_bar_background">#F1ECE2</color>
+  <color name="ic_launcher_background">#0C0C0A</color>
 </resources>

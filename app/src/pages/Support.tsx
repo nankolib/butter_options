@@ -7,9 +7,6 @@ import { AppNav } from "../components/AppNav";
 /**
  * Support — static paper-surface help page (dApp Store prerequisite).
  * No scroll reveals: content renders immediately at full opacity.
- *
- * FOUNDER_CONTACT below is a placeholder — replace with the real support
- * handle/link before store submission.
  */
 const Section: FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
   <section className="mb-12">
@@ -57,8 +54,16 @@ export const Support: FC = () => {
 
         <Section label="Contact">
           <p>
-            Questions, issues, or feedback? Reach the team at{" "}
-            <span className="font-mono text-[14px] text-ink">FOUNDER_CONTACT</span>.
+            Questions, issues, or feedback? Reach the team on{" "}
+            <a
+              href="https://x.com/optafinance"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-ink underline underline-offset-4 decoration-ink-muted hover:decoration-ink"
+            >
+              X @optafinance
+            </a>
+            .
           </p>
         </Section>
       </main>

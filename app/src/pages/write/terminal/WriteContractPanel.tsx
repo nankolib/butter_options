@@ -47,6 +47,7 @@ type Props = {
   marketHoursBlock: Gate;
   volOracleBlock: Gate;
   americanQuoteBlock: Gate;
+  writePausedBlock: Gate;
   ladderError: string | null;
 };
 
@@ -98,6 +99,7 @@ export const WriteContractPanel: FC<Props> = ({
   marketHoursBlock,
   volOracleBlock,
   americanQuoteBlock,
+  writePausedBlock,
   ladderError,
 }) => {
   const [advOpen, setAdvOpen] = useState(false);
@@ -286,6 +288,7 @@ export const WriteContractPanel: FC<Props> = ({
 
       {/* Inline gate states (terminal) */}
       {ladderError && <GateLine tone="down" label="Ladder">{ladderError}</GateLine>}
+      {writePausedBlock && <GateLine tone="down" label="Writes paused">{writePausedBlock.tooltip}</GateLine>}
       {marketHoursBlock && <GateLine tone="down" label="Market hours">{marketHoursBlock.tooltip}</GateLine>}
       {volOracleBlock && <GateLine tone="down" label="Oracle pending">{volOracleBlock.tooltip}</GateLine>}
       {americanQuoteBlock && <GateLine tone="down" label="On-chain quote">{americanQuoteBlock.tooltip}</GateLine>}

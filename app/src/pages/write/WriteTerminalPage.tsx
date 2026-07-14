@@ -262,6 +262,7 @@ export const WriteTerminalPage: FC = () => {
                     marketHoursBlock={ctrl.marketHoursBlock}
                     volOracleBlock={ctrl.volOracleBlock}
                     americanQuoteBlock={ctrl.americanQuoteBlock}
+                    writePausedBlock={ctrl.writePausedBlock}
                     ladderError={ctrl.ladderError}
                   />
                 </div>
@@ -314,7 +315,8 @@ export const WriteTerminalPage: FC = () => {
             disabled={connected && (ctrl.submitting || !ctrl.canSubmit)}
             title={
               connected
-                ? ctrl.ladderError ??
+                ? ctrl.writePausedBlock?.tooltip ??
+                  ctrl.ladderError ??
                   ctrl.americanQuoteBlock?.tooltip ??
                   ctrl.volOracleBlock?.tooltip ??
                   ctrl.marketHoursBlock?.tooltip ??

@@ -52,36 +52,29 @@ pub fn handle_exercise_from_vault(
     let settlement_price = vault.settlement_price;
     let strike_price = vault.strike_price;
 
-    // AM-MED-1: AMERICAN caps each contract at collateral_per_token (= strike)
-    // via the SAME helper as early exercise; EUROPEAN keeps the uncapped
-    // intrinsic (byte-identical to pre-cap — only the collateral_remaining clamp
-    // below applies). Mirrors auto_finalize_holders.
-    let payout_per_contract = match vault.exercise_style {
-        ExerciseStyle::American => exercise_capped_intrinsic(
-            vault.option_type,
-            settlement_price,
-            strike_price,
-            required_collateral_per_contract(strike_price, vault.option_type),
-        ),
-        ExerciseStyle::European => match vault.option_type {
-            OptionType::Call => {
-                if settlement_price > strike_price {
-                    settlement_price.checked_sub(strike_price)
-                        .ok_or(OptaError::MathOverflow)?
-                } else {
-                    0
-                }
-            }
-            OptionType::Put => {
-                if strike_price > settlement_price {
-                    strike_price.checked_sub(settlement_price)
-                        .ok_or(OptaError::MathOverflow)?
-                } else {
-                    0
-                }
-            }
-        },
-    };
+    // BUNDLE strike-cap (Run-9, EUR insolvency fix). BOTH exercise styles now
+    // route through the SAME exercise_capped_intrinsic helper = min(raw_intrinsic,
+    // collateral_per_token). Previously EUROPEAN used the uncapped intrinsic: a
+    // deep-ITM CALL settling above 2×strike paid settlement−strike (> strike =
+    // 1× collateral) PER CONTRACT, so the first FCFS claimant drained the shared
+    // pool at an over-collateralized rate and stranded later holders (the
+    // aggregate collateral_remaining clamp below only prevents underflow, not
+    // per-claimant over-draw). Capping each contract at collateral_per_token
+    // (= 1× strike) keeps the pool solvent for every claimant.
+    //   • AMERICAN: byte-identical — this is the exact helper + args the American
+    //     arm already called (verified equal in the American-unchanged gate test).
+    //   • EUROPEAN PUT: unaffected — strike−settlement ≤ strike = cap for all
+    //     settlement ≥ 0, so the cap never binds a PUT.
+    //   • EUROPEAN CALL: only settlement > 2×strike is changed (the insolvency
+    //     case); shallow-ITM/ATM/OTM are byte-identical.
+    // saturating_sub inside the helper floors OTM legs at 0 (same result the old
+    // checked_sub + `if` produced, minus the impossible-underflow error branch).
+    let payout_per_contract = exercise_capped_intrinsic(
+        vault.option_type,
+        settlement_price,
+        strike_price,
+        required_collateral_per_contract(strike_price, vault.option_type),
+    );
 
     require!(payout_per_contract > 0, OptaError::OptionNotInTheMoney);
 

@@ -51,6 +51,21 @@ pub fn handle_fill_order(ctx: Context<FillOrder>, fill_quantity: u64) -> Result<
     let order_key = ctx.accounts.order.key();
 
     // ---- 1. Pre-flight checks ---------------------------------------------
+    // BUNDLE self-trade guard (Run-9). Reject a taker filling their OWN resting
+    // order. Placed in the COMMON pre-flight so it covers BOTH the ResaleAsk and
+    // Bid arms uniformly AND runs before any token/USDC movement — an in-arm
+    // check placed after the arm's first transfer (ResaleAsk moves USDC at the
+    // top of its arm) would be too late. Mirrors fill_writer_ask.rs:63 and
+    // buy_v2_resale.rs:63; reuses CannotBuyOwnOption (6023) — no new error code.
+    // A self-fill is an economic no-op (you pay yourself, minus the protocol fee)
+    // whose only purpose is wash-trading / painting fake tape, so the book must
+    // reject it at the INSTRUCTION level (an FE display filter is not a security
+    // boundary). `order_owner` is the snapshot taken above from the validated
+    // order PDA; `maker` is pubkey-pinned to it at the struct level.
+    require!(
+        ctx.accounts.taker.key() != order_owner,
+        OptaError::CannotBuyOwnOption
+    );
     require!(
         clock.unix_timestamp < ctx.accounts.shared_vault.expiry,
         OptaError::VaultExpired

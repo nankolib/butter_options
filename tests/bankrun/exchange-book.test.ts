@@ -15,7 +15,7 @@
 //   4  cancel ask + cancel bid (pre-expiry) + cancel ask AFTER expiry (hook permits)
 //   5  rejects: WriterAsk, qty 0, over-qty, nonce collision, non-owner cancel,
 //      post on expired, fill on expired
-//   6  self-fill succeeds
+//   6  SELF-TRADE GUARD (Run-9): self-fill REVERTS on both arms (was: succeeds)
 //   7  sweep returns both kinds + closes PDAs; zero-balance grace path (pre-burn)
 //   8  events: OrderPosted / OrderFilled / OrderCancelled / OrderSwept fields
 // =============================================================================
@@ -296,13 +296,58 @@ describe("exchange book (Phase 1 — RestingOrder limit book)", function () {
     assert.isFalse(await exists(e, bid.order), "bid order closed on full fill");
   });
 
-  it("6 — self-fill succeeds (locked behavior)", async () => {
-    // seller posts an ask and fills it themselves.
+  // ==========================================================================
+  // 6 — SELF-TRADE GUARD (Run-9 bundle) — ASSERTION INVERTED vs pre-bundle
+  // --------------------------------------------------------------------------
+  // AUDIT TRAIL: pre-Run-9 this was a SINGLE test "6 — self-fill succeeds
+  // (locked behavior)" that asserted `r.result === null` (self-fill did NOT
+  // error) and the self-filled order CLOSED. That "locked behavior" is the
+  // exact wash-trading surface the Run-9 self-trade guard closes: fill_order
+  // now runs `require!(taker != order.owner, CannotBuyOwnOption)` in the COMMON
+  // pre-flight (covers BOTH the ResaleAsk and Bid arms, before any token/USDC
+  // movement). A self-fill is an economic no-op (pay yourself minus fee) whose
+  // only purpose is painting fake tape — rejected at the INSTRUCTION level (an
+  // FE display filter is not a security boundary). Finding: Run-9 "SELF-TRADE
+  // GUARD"; reuses CannotBuyOwnOption (6023), consistent with fill_writer_ask.rs
+  // + buy_v2_resale.rs. The assertion FLIPS: self-fill now REVERTS and the
+  // resting order SURVIVES untouched. Positive controls (taker != owner still
+  // fills) are tests 2a/3 above and 6c below.
+  // ==========================================================================
+  it("6 — self-fill on the ASK arm reverts CannotBuyOwnOption (was: succeeds)", async () => {
     const sellerUsdc = await usdcAta(e, seller.publicKey);
     const ask = await postOrder(seller, RESALE_ASK, usdc(2), 1, nextNonce(), sellerOptAta, sellerUsdc);
-    const r = await fillAsk(ask, seller.publicKey, 1, seller, sellerUsdc);
-    assert.isNull(r.result, "self-fill did not error");
-    assert.isFalse(await exists(e, ask.order), "self-filled order closed");
+    const r = await fillAsk(ask, seller.publicKey, 1, seller, sellerUsdc, /*expectError*/ true);
+    assert.isNotNull(r.result, "self-fill (ask) must now revert");
+    assert.isTrue(r.logs.join("\n").includes("CannotBuyOwnOption"), "error = CannotBuyOwnOption (6023)");
+    assert.isTrue(await exists(e, ask.order), "self-rejected order SURVIVES (untouched)");
+    assert.equal((await bal(e, ask.escrow)).toString(), "1", "ask escrow still holds the contract");
+    // cleanup: cancel the surviving ask so seller's option balance stays neutral.
+    await cancelOrder(seller, ask, sellerOptAta, sellerUsdc);
+    assert.isFalse(await exists(e, ask.order), "surviving ask cancelled in cleanup");
+  });
+
+  it("6b — self-fill on the BID arm reverts CannotBuyOwnOption", async () => {
+    const bidderUsdc = await usdcAta(e, bidder.publicKey);
+    const bid = await postOrder(bidder, BID, usdc(3), 1, nextNonce(), takerOptAta, bidderUsdc);
+    // bidder attempts to fill their OWN bid (taker == maker == bidder). The
+    // guard fires in pre-flight BEFORE the token-delivery leg, so bidder needs
+    // no option tokens for the revert to land.
+    const r = await fillBid(bid, bidder.publicKey, 1, bidder, bidderUsdc, /*expectError*/ true);
+    assert.isNotNull(r.result, "self-fill (bid) must revert");
+    assert.isTrue(r.logs.join("\n").includes("CannotBuyOwnOption"), "error = CannotBuyOwnOption (6023)");
+    assert.isTrue(await exists(e, bid.order), "self-rejected bid SURVIVES");
+    assert.equal((await bal(e, bid.escrow)).toString(), usdc(3).toString(), "bid escrow still holds price×qty USDC");
+    // cleanup: cancel the surviving bid so it doesn't linger into the sweep cases.
+    await cancelOrder(bidder, bid, takerOptAta, bidderUsdc);
+    assert.isFalse(await exists(e, bid.order), "surviving bid cancelled in cleanup");
+  });
+
+  it("6c — control: a third-party taker (taker != owner) still fills the ask", async () => {
+    const sellerUsdc = await usdcAta(e, seller.publicKey);
+    const ask = await postOrder(seller, RESALE_ASK, usdc(2), 1, nextNonce(), sellerOptAta, sellerUsdc);
+    const r = await fillAsk(ask, seller.publicKey, 1, taker, sellerUsdc);
+    assert.isNull(r.result, "third-party fill still succeeds (guard is owner-scoped)");
+    assert.isFalse(await exists(e, ask.order), "third-party-filled order closed");
   });
 
   it("4 — cancel ask + cancel bid (pre-expiry)", async () => {

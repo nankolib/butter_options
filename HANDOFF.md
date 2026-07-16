@@ -1,6 +1,33 @@
 # Opta — Engineer Handoff
 
-> **2026-07-15 (SESSION CLOSE — DRAIN + BUNDLE DEPLOY + TREASURY SWEEP DONE; CUTOVER + WAVE-1 ARMED FOR JUL-16) ▶ RESUME HERE** — supersedes ALL prior ▶ RESUME markers below (their content stays valid as history).
+> **2026-07-16 (SESSION CLOSE — SB CRYPTO CUTOVER + XAU EXECUTED, Blocks 1–2) ▶ RESUME HERE** — supersedes ALL prior ▶ RESUME markers below (their content stays valid as history).
+>
+> **WHAT SHIPPED (devnet, admin `5YRMuuoY`):** Four markets closed from Pyth and reborn as Switchboard (`oracle_source=1`) under **canonical names, same PDA, warm oracle inherited by feedHash** — the Pyth→SB crypto cutover (XRP/FARTCOIN/ETH) + the XAU gold migration. Warmup gate was GREEN (5/5 SB crypto vol oracles ≥168 @ ~10:00Z; anchor met exactly). One at a time, close→create as an uninterrupted sequence, verified between each.
+>
+> | Asset | Market PDA (unchanged) | feedHash (SB) | close sig | create sig | vol oracle @ verify |
+> |---|---|---|---|---|---|
+> | XRP | `3LjAQGDSZXYoEVgg4rfdU19BGtzjtdyxMShEeu3anRc3` | `a1c4ce28…8405f736` | `evC8pknq…aire3C` | `3sahzxRi…gr26E` | `Fm7i7sQd…h5Ko` sc=171 |
+> | FARTCOIN | `Em7EoNJztXXYhguCMZyVUbzCfSqQCmnddAXD6GGfB7rE` | `9612492e…7357a5f2` | `4Z5wyAbe…AMgcWD` | `2HSt3wHR…knAMq2` | `Gx9nCPhw…JGvN` sc=171 |
+> | ETH | `HouoTH9ZLxB3q1oCv7ZKH4o4vyRyCNYGiDReVDWeztFu` | `1d8f55a0…9349caa3` | `2Rc7bsH5…QWToRT` | `2BoNqwBY…25SpLAq` | `96DDVTbJ…drAB` sc=171 |
+> | XAU | `BX6rrhdd6EnYuHMNRceFHw2GCaQjXuA3rVhi4cmG3BYY` | `6c3c5cc7…1167355e` | `47nzA5DJ…FNnp9` | `5heyxBF4…CXkagW` | `AK8M6ZKb…TfFcF` sc=480 |
+>
+> All four verified: `oracle_source=1`, on-chain feedHash **byte-matches** the manifest, assetName canonical (no suffix/provenance), warm vol oracle resolves for the feedHash (crypto ~171, gold 480). Two create legs took a 2nd attempt (FARTCOIN: transient ed25519 message-consistency; ETH: transient signed-quote oracle-key mismatch) — the driver's fresh-quote retry landed both; public crossbar throughout, no die(21), no marketless window persisted.
+>
+> **ETH OVERRIDE RECORD (Ruling 1):** ETH's close was preflight-REFUSED by design (42 live child vaults). Immediately before close the driver re-decoded all referencing vaults: **63 referencing, 42 live, 42/42 all-zero shells** (`settled=false, voided=false, total_collateral=0, total_shares=0, vault_usdc=0`), **0 non-shell live** → founder-approved override applied, close proceeded. The 42 empty shells re-associate cosmetically with the reborn ETH SB market (nothing at stake). **XAU (Ruling 2):** in-session preflight → **3 referencing, 1 live, 1/1 all-zero shell** (the drained $4,500 gold husk `8DLZ` from the treasury sweep) → override applied.
+>
+> **CLOSE-OUT VERIFICATION:**
+>   - **Market sweep (read-only):** the SB (`oracle_source=1`) set is now **5** — XRP, FARTCOIN, ETH, XAU + the pre-existing test artifact **SBXAU** (`4pEmVTXd…`). The Pyth crypto (`source=0`) set dropped 10→7. **BTC (`G3PT11Zy…`, `e62df6c8…`) and SOL (`7ke68gTG…`, `ef0d8b6f…`) remain `oracle_source=0` Pyth — untouched** (BTC close ~Jul-19, SOL ~Aug-1).
+>   - **Known cosmetic:** XAU and the leftover **SBXAU** test market both carry gold feedHash `6c3c5cc7…` and share the one gold vol oracle (`AK8M6ZKb…`) — by-design (vol oracles are feedHash-keyed/shared); SBXAU display cleanup rides the design overhaul, not this session.
+>   - **Crank tick evidence (no deploy — VPS untouched):** the live crank already handles the reborn markets with **no overlay**. Hourly **vol-oracle tick** logs `marketsSkippedSb` (Slice-1 partition dropping SB markets from the Pyth push set — 1 pre-cutover=SBXAU; ticks to 5 at the next 14:00Z run); **sb-oracle warming tick** `feedsPushed:6 feedsErrored:0` (all crypto+gold SB feeds sampled — this is what warmed the reborn oracles 168→171 during the session); post-cutover **settle tick** `tuplesFound:6` are the pre-existing off-hours equity 404s (`errorsHermesNoUpdate`), the 4 SB markets correctly absent from the Pyth settle set; `finalizeVaultsErrors:0 reclaimErrors:0`. Crank wallet `5sHZ…` 24.31 SOL; crossbar container healthy.
+>   - **FE (Stage 3 Slice 2) = SHIPPED** (`c0eb003`, master+main): `app/src/hooks/useSpotPrices.ts` + `spotSources.ts` render SB-source (`oracleSource:1`) spot via the same-origin `/xbar/` proxy with an on-chain `last_spot_price` "as of HH:MM UTC" fallback → **the reborn markets already render spot in the web FE** (no FE change needed this session).
+>
+> **BLOCK 3 DEFERRED (meme mints — separate gated sub-arc):** JUP/JTO/WIF/BONK + Wave-1 are NOT touched. Reason surfaced this session: **no turnkey SB feed-mint tooling exists** in-repo — `buildSwitchboardCreateMarketTx` creates a market against an *already-minted* feedHash, but the Crossbar-store op that produces a feedHash has no script (Gate B's `35a5adc` mint was a one-shot). The Wave-1 manifest carries **no pre-committed meme feedHashes** (job defs only), so a hand-authored mint is unverifiable → catastrophic-if-wrong. Block 3 needs the mint path located/rebuilt + proven dry (mint → confirm feedHash → register → market ops) as its own gate.
+>
+> **DRIVER ARTIFACT:** `crank/_cutover_rebirth.ts` — untracked session script (convention of `smoke-create-sb-market.ts`). Parameterized close→create for ONE asset: pre-close scan replicates `preflight_close_market.ts`'s live rule (`!is_settled || usdc>0`) + the approved all-zero-shell override (STOPs on any non-shell live); direct `close_market` ix mirroring preflight byte-for-byte (preflight `--execute` can't be used — it REFUSEs the override cases); fresh-quote create retry ×10 with sim-gate; die(21) escalation never leaves an asset marketless. Reusable for BTC (~Jul-19) + SOL (~Aug-1), which are the SAME empty-shell class. Invocations recorded in-session.
+>
+> **RESUME NEXT:** (1) **Block 3 (Wave-1 memes)** once the SB feed-mint tooling is resolved. (2) **BTC close ~Jul-19** (`EaV3yxWb` settles Jul-18 → finalize → run `_cutover_rebirth.ts BTC baf182b5… 0 --execute`). (3) **SOL close ~Aug-1**. (4) **Wave-2 equity feeds** (Gate 1 locked — see ClickUp `86eya296r`; needs the honest-stale `quotes.opta.fyi` proxy before minting). ClickUp checkpoint this session: crypto+XAU cutover (file token, Engineering list).
+
+> **2026-07-15 (SESSION CLOSE — DRAIN + BUNDLE DEPLOY + TREASURY SWEEP DONE; CUTOVER + WAVE-1 ARMED FOR JUL-16)** — supersedes ALL prior ▶ RESUME markers below (their content stays valid as history).
 >
 > **▶ RESUME (Jul-16, ONE combined session; wakeup ~10:00–10:40Z, session-bound — if dead, invoke manually):**
 >   1. Verify all 5 SB crypto vol oracles ≥168 + fresh (anchor: 168 @ ~10:00Z).

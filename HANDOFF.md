@@ -1,6 +1,28 @@
 # Opta — Engineer Handoff
 
-> **2026-07-16 (SESSION CLOSE — SB CRYPTO CUTOVER + XAU EXECUTED, Blocks 1–2) ▶ RESUME HERE** — supersedes ALL prior ▶ RESUME markers below (their content stays valid as history).
+> **2026-07-16 (SESSION CLOSE — WAVE-1 MEME BIRTHS + HELIUS KEY ROTATION) ▶ RESUME HERE** — supersedes ALL prior ▶ RESUME markers below (their content stays valid as history).
+>
+> **[WAVE-1 MEME FEEDS MINTED + MARKETS BORN — Block 3]** JUP/JTO/WIF/BONK now live on Switchboard (devnet, admin `5YRMuuoY`). Rebuilt the missing SB feed-mint tooling and DRY-PROVED it against FARTCOIN's known hash (`9612492e…`) before any real mint — GUARD1 (local `computeOracleFeedId`) → `storeOracleFeed` /v2/store → GUARD2 (server feedId === local) → resolve. Registry `sbFeedData.ts` + `sbFeedRegistry.ts` on master+main **`fcd5d7e`**; all 10 feeds verified self-consistent (`buildOracleFeed→computeOracleFeedId === key`). Vercel prod deployed.
+>
+> | Asset | market PDA | feedHash / cid | vol oracle | seed | close→create sigs |
+> |---|---|---|---|---|---|
+> | JUP | `9zRB1AtkqpoDuqC4hhB6SiF1n9wbPmrz9BMq7arTQbGg` | `5f42a2a7…be0239f2` / `bafkreic7ik…rz6i` | `9KKKgiVbh2pk3dySQhbU1acsYfCrZkYdNqExBRRqPHf4` | 1.10e12 | close `2yBLfALq…` / create `2zueaHP2…` |
+> | JTO | `2EL5cnxnipXS1DWcQr2gzbbTKDrAgRnbdzqoULaJKpGF` | `bc8e0c27…121317ec4` / `bafkreif4ry…l6yq` | `4LmvanBuViCpWxX7uTXBPhML6PS7BhuCsQPboNGWQDEK` | 1.10e12 | seed `436ip1yD…` close `rQnGVa5g…` create `3dUgFdew…` |
+> | WIF | `7X7AuBsKZ5i15os6e4CnYaR3PrBH1gvAGDNq392r8jdS` | `c186e106…96801294a` / `bafkreigbq3…jjji` | `4CgaiuKR4yvRsQaLq3gTpoXDicLnA7EguVCYkwwqa1eN` | 1.40e12 | seed `5hZ5YaTe…` create `4ECVK1kC…` (BIRTH, no close) |
+> | BONK | `9GcsKprT4M2qDQQLoT4v3dcVmHthPSTCnoWneEGu4u7V` | `c062a25a…8660e32f` / `bafkreigamk…hdf4` | `KmxweFHhByiXKvTxy4w8eZRyXjVgbjDWTMPiTmSUDvR` | 1.40e12 | seed `3pky5v65…` close `arBt4ewn…` create `56cmDNxZ…` |
+>
+> - **JUP/JTO/BONK = MIGRATIONS** (already existed as 0-vault Pyth → preflight-rescanned 0 live → `close_market` Pyth → `create_market` SB, same PDA). **WIF = pure BIRTH** (PDA was free). All verified: `oracle_source=1`, feedHash byte-match, `assetName` canonical (no suffix), `seed_vol` reads back = manifest (JUP/JTO 1.10e12, WIF/BONK 1.40e12), `sample_count=0` → **warmup gate satisfied by the seed = tradeable at birth**.
+> - **Job defs = the deployed template** (Binance/Coinbase/Gate patterns copied verbatim from BTC-XRP/FARTCOIN, symbol substitution only). Each feed gateway-signed a 2-oracle quote at mint (liveness proven).
+> - **⚠️ CRANK OVERLAY PENDING (founder decision — NOT done):** the VPS sb crank (unchanged) discovers the 4 markets (`sbMarketsFound 5→9`) but **skips all 4 as `feedsSkippedUnsupported`** — it needs `sbFeedRegistry.ts` `JOBS_BY_FEED` (now on master `fcd5d7e`) deployed via a **surgical `crank/` path-overlay onto `13d6ab7`** (NEVER full checkout). `feedsErrored:0`, existing 6 feeds `feedsPushed:6` unaffected. Until overlaid the meme oracles run on `seed_vol` (tradeable; realized-vol samples don't accumulate). This is the ONLY remaining Wave-1 step.
+> - **Session drivers (untracked scratch, `crank/`):** `_mint_sb_feed.ts` (mint: GUARD1→store→GUARD2→resolve→liveness), `_birth_sb_market.ts` (seed vol oracle + migrate/create, sim-gate + fresh-quote retry), `_verify_registry_hashes.ts` (registry self-consistency).
+>
+> **[HELIUS DEVNET KEY ROTATED — post-leak]** Old key (leaked to a transcript via a `solana balance` CLI error URL) rotated + killed. Live path clean (`.env` `OPTA_RPC_URL` + nginx `set $args` both on the new key, hash-verified); `rpc.opta.fyi/devnet` + crank verified on the new key AFTER the kill (nothing rode the old key). ClickUp `86eyakzgk`.
+>   - **⚠️ CORRECTED NGINX MECHANISM (supersedes earlier "sourced from .env" phrasing):** the `rpc.opta.fyi` Helius key is a **DEPLOY-TIME HARDCODE** in the nginx conf's `set $args "api-key=…"` directive — nginx does **NOT** read it from `/opt/opta-crank/.env` at runtime. `.env` and the nginx conf are **two independent edits** on any future rotation.
+>   - **Hygiene follow-up (flagged, low-sev):** ~10 historical `/opt/opta-crank/.env.bak*` files hold OLD Helius keys (perms 600, not world-readable, not in git); `.env.bak3` is a documented rollback point. Separate authorized sweep recommended. Vercel `VITE_RPC_URL` flagged for a dashboard check (Helius URL? → rotate there / prefer the proxy).
+>
+> **RESUME NEXT:** (1) **Wave-1 crank overlay** — deploy `fcd5d7e`'s `crank/sbFeedRegistry.ts` to the VPS (surgical overlay onto `13d6ab7`) so the 4 meme oracles sample; verify `feedsSkippedUnsupported:0`, `feedsPushed:10`. (2) **BTC close ~Jul-19 / SOL ~Aug-1** (reuse `_cutover_rebirth.ts`; same empty-shell class). (3) **Wave-2 equity feeds** (Gate-1 locked, ClickUp `86eya296r`; needs the honest-stale `quotes.opta.fyi` proxy). ClickUp this session: Wave-1 meme births (file token, Engineering).
+
+> **2026-07-16 (SESSION CLOSE — SB CRYPTO CUTOVER + XAU EXECUTED, Blocks 1–2)** — supersedes ALL prior ▶ RESUME markers below (their content stays valid as history).
 >
 > **WHAT SHIPPED (devnet, admin `5YRMuuoY`):** Four markets closed from Pyth and reborn as Switchboard (`oracle_source=1`) under **canonical names, same PDA, warm oracle inherited by feedHash** — the Pyth→SB crypto cutover (XRP/FARTCOIN/ETH) + the XAU gold migration. Warmup gate was GREEN (5/5 SB crypto vol oracles ≥168 @ ~10:00Z; anchor met exactly). One at a time, close→create as an uninterrupted sequence, verified between each.
 >

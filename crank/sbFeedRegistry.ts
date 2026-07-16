@@ -89,6 +89,26 @@ const JOBS_BY_FEED: Record<string, Array<Record<string, unknown>>> = {
     { tasks: [{ httpTask: { url: "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=FARTCOIN_USDT" } }, { jsonParseTask: { path: "$[0].last" } }] },
     { tasks: [{ httpTask: { url: "https://api.mexc.com/api/v3/ticker/price?symbol=FARTCOINUSDT" } }, { jsonParseTask: { path: "$.price" } }] },
   ],
+  // JUP/USD — Binance + Gate (Wave-1 meme birth 2026-07-16)
+  "5f42a2a7b0b52a26774d3554b4d58cb5b997079379b5b94649d34451be0239f2": [
+    { tasks: [{ httpTask: { url: "https://api.binance.com/api/v3/ticker/price?symbol=JUPUSDT" } }, { jsonParseTask: { path: "$.price" } }] },
+    { tasks: [{ httpTask: { url: "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=JUP_USDT" } }, { jsonParseTask: { path: "$[0].last" } }] },
+  ],
+  // JTO/USD — Binance + Gate
+  "bc8e0c273c458ee54aadd7d18875c2d3164a4acb424680c0a2d5f6a121317ec4": [
+    { tasks: [{ httpTask: { url: "https://api.binance.com/api/v3/ticker/price?symbol=JTOUSDT" } }, { jsonParseTask: { path: "$.price" } }] },
+    { tasks: [{ httpTask: { url: "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=JTO_USDT" } }, { jsonParseTask: { path: "$[0].last" } }] },
+  ],
+  // WIF/USD — Binance + Gate (Coinbase WIF-USD rejected per manifest)
+  "c186e1064610e8f14330734e4492e65dd6d141da371f1f94419c96296801294a": [
+    { tasks: [{ httpTask: { url: "https://api.binance.com/api/v3/ticker/price?symbol=WIFUSDT" } }, { jsonParseTask: { path: "$.price" } }] },
+    { tasks: [{ httpTask: { url: "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=WIF_USDT" } }, { jsonParseTask: { path: "$[0].last" } }] },
+  ],
+  // BONK/USD — Binance + Coinbase
+  "c062a25a824803dd5b88661f0b6dec5b6bc2bfc2ec385f2e053b83e58660e32f": [
+    { tasks: [{ httpTask: { url: "https://api.binance.com/api/v3/ticker/price?symbol=BONKUSDT" } }, { jsonParseTask: { path: "$.price" } }] },
+    { tasks: [{ httpTask: { url: "https://api.exchange.coinbase.com/products/BONK-USD/ticker" } }, { jsonParseTask: { path: "$.price" } }] },
+  ],
 };
 
 // Map each pure-data base58 string → the live SDK constant, asserting equality

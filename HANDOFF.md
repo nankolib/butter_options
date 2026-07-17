@@ -1,6 +1,30 @@
 # Opta — Engineer Handoff
 
-> **2026-07-16 (SESSION CLOSE — P0 WEB-TRANSPORT FIX + WAVE-1 MEME CRANK OVERLAY LIVE) ▶ RESUME HERE** — supersedes ALL prior ▶ RESUME markers below (their content stays valid as history).
+> **2026-07-17 (WAVE-2 STEP 0.5 — quotes.opta.fyi HONEST-STALE PROXY LIVE + 11 EQUITY FEEDHASHES FROZEN; STEP 1-5 SPLIT TO MONDAY) ▶ RESUME HERE** — supersedes ALL prior ▶ RESUME markers below.
+>
+> **▶ MONDAY 2026-07-20 13:30Z (NYSE open) — WAVE-2 STEP 1→5** against the proxy proven in BOTH states. Entry gate = the 11 frozen feedHashes (ClickUp `86eyb0xjz`, table below). Sequence: STEP 1 mint+register 11 feeds (verify quotes vs reference, flag >0.1%) → STEP 2 `initialize_vol_oracle` ×11 (approved seeds; verify src=1, seed reads back, sc=0; get_option_price spot-check 2 tickers) → STEP 3 markets ONE AT A TIME (7 migrate via husk rule `voided && vault_usdc==0`, reuse `crank/_cutover_rebirth.ts`; 4 birth GOOGL/AMZN/AMD/COIN; any NON-shell live vault → STOP) → STEP 4 crank overlay (add 11 to `sbFeedData.ts`+`sbFeedRegistry.ts`, surgical crank/ overlay — remember the overlay surface now includes `app/src/utils/sbFeedData.ts`, a `crank/`-only checkout re-skips them) → STEP 5 close. Naming clean — TSLA is TSLA.
+>
+> **[quotes.opta.fyi LIVE]** The equity feeds' Finnhub-key proxy (Wave-2's blocking prerequisite) is built + browser-verified. nginx TLS → loopback **opta-quotes** Node svc (`127.0.0.1:8090`, dedicated user, systemd, 15s cache `QUOTES_CACHE_TTL`). **Honest-stale, both legs 503-on-stale:** Finnhub fresh iff `c>0 && (now-t)≤180s`; Yahoo fresh iff `regularMarketPrice>0 && now∈currentTradingPeriod.regular[start,end] && (now-regularMarketTime)≤180s`. **CORRECTION vs the approved design:** Yahoo's `/v8/chart` has NO `marketState` (that's the `/quote` endpoint) — swapped for the `currentTradingPeriod` window + print-age (better; no feedHash impact). `minJobResponses=2` → one stale leg fails the whole feed (median never degrades to one stale source). Key server-side `/opt/opta-quotes/.env` (`FINNHUB_KEY`, root:root 600), never in repo/URL/logs. Committed `deploy/nginx/quotes.opta.fyi.conf` + `deploy/quotes/{quotes-svc.js,opta-quotes.service}` (**09020cf**). Verified: loopback + public HTTPS + **real headless-Chrome** both legs fresh in-hours (AAPL/TSLA agree <0.1%).
+>
+> **[11 EQUITY FEEDHASHES — FROZEN, Monday's mint targets]** Job def (all): Finnhub `https://quotes.opta.fyi/finnhub/quote?symbol=X`→`$.c` + Yahoo `https://quotes.opta.fyi/yahoo/chart/X`→`$.chart.result[0].meta.regularMarketPrice`; `symbol=X/USD`, `minOracleSamples=2`, `minJobResponses=2`, `maxJobRangePct=5e9`, class=equity, source=SB. **ZERO edits — any URL change re-mints every hash.**
+>
+> | Ticker | feedHash | seed | path | PDA (migrate) |
+> |---|---|---|---|---|
+> | MSFT | `b13e5f030af9a49150591b6cbce83810184331e5b6a0eae8b303a49153496c56` | 0.30 | migrate | `GoHsfVCh…PyDM` |
+> | AAPL | `d0ab87e8218247d61f3b60e0d9c7e9dc93f691f30849552e0923aa8acd15fdc8` | 0.32 | migrate | `CFftqXKc…BCcp` |
+> | GOOGL | `c47268fa603180997ab954702ef058dcf56d97f597085d095278dfffd37c9103` | 0.35 | birth | — |
+> | AMZN | `bf3190ce3b040d25d1af35c66461fe8fee2f7dd4c83e72e5c13dcc89929abf3f` | 0.35 | birth | — |
+> | META | `56bb4c5863ad44b5c59d75cce27d170f8c05e50b9698c9a27480bc7c47f11570` | 0.40 | migrate | `49haznfS…bf5E` |
+> | NVDA | `5378913080bd823885beb8cc37d55842d438e2198f8ce711b7385b527a542bdf` | 0.55 | migrate | `EXib8CVy…1j9C` |
+> | AMD | `28fcb07fb1301a399cbe35b809cd8ffa45a22f5bd4e3a15845b4fca219846668` | 0.55 | birth | — |
+> | TSLA | `24f5404db181873fead6fd9ad15c7edc2265e8b7a494b3168055fa3bfbb3ced3` | 0.60 | migrate | `4SQc6d79…1Vtm` |
+> | COIN | `60e0a2d31235e2e3c7414635f3bf0c14c671098ef953b0823d380913d627c868` | 0.75 | birth | — |
+> | MSTR | `5dc7af42f5237fb2d39aa65374c91234da9a92ba940ac9a5613b51d59d9a830a` | 0.90 | migrate | `BKAY8rNy…3XiT` |
+> | CRCL | `077acbc9a679e4660b8ace50be067bd08a443f1ea7c0a48b4b6e444c23c17040` | 0.95 | migrate | `5h4vkFFA…q8xa` |
+>
+> **[WEEKEND TASK]** Capture the off-hours honest-stale proof into the session record: after 20:00Z Fri the public endpoint should return **503 both legs** (market closed) and the feed produce no value. Session hash script (untracked): `crank/_equity_feed_hashes.ts`. ClickUp: `86eyb0xjz`.
+
+> **2026-07-16 (SESSION CLOSE — P0 WEB-TRANSPORT FIX + WAVE-1 MEME CRANK OVERLAY LIVE)** — supersedes ALL prior ▶ RESUME markers below (their content stays valid as history).
 >
 > **[P0 PROD-WEB OUTAGE — FIXED]** After `VITE_RPC_URL` was repointed to `https://rpc.opta.fyi/devnet`, opta.fyi/trade showed a full-page "couldn't reach devnet." Three stacked failures (all four suspects checked read-only): **(1) CSP (primary)** — `connect-src` lacked `rpc.opta.fyi` (`'self'` ≠ the rpc subdomain; `*.helius-rpc.com` doesn't match it) → browser blocked every RPC fetch *before it left*; **proof:** nginx access log had ZERO `Mozilla` UAs (only mobile `okhttp`). **(2) CORS (latent)** — preflight `Allow-Headers` was `Content-Type` only (web3.js sends `solana-client`) + duplicate `ACAO` (nginx `https://opta.fyi` + Helius `*`). **(3) rate-limit (latent)** — `burst=40` < the ~138-market first-paint scan. Env injection was fine (bundle used the proxy, no `clusterApiUrl` fallback).
 >   - **FIX (all three):** CSP `+https://rpc.opta.fyi` in **`app/vercel.json`** (master+main **`996c93a`**, Vercel prod). NOTE: `opta-headers.conf` is **dead for opta.fyi** — `opta.fyi.conf` no longer includes it, Vercel owns the header (opta.fyi returns 1 CSP header). VPS nginx `rpc.opta.fyi`: preflight `Allow-Headers "Content-Type, solana-client"` + `proxy_hide_header` ×3 (single ACAO) + `burst 40→200 nodelay`; `nginx -t` + reload; backup `rpc.opta.fyi.bak-p0-1784226336`. ClickUp `86eyap2mm`.

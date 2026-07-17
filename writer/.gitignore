@@ -1,0 +1,6 @@
+node_modules/
+dist/
+idl/
+*.log
+_probe_*.js
+_airdrop.js

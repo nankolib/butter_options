@@ -1,0 +1,53 @@
+# =============================================================================
+# /etc/systemd/system/opta-writer.service
+# =============================================================================
+# Standalone sibling of opta-crank (NOT a crank side-loop): independent kill
+# switch, isolation from the settlement crank, its own gas+USDC wallet, and its
+# own MemoryMax. Runs the precompiled build (node dist/main.js — no ts-node) to
+# keep heap low on the shared 1.9 GB box.
+#
+# Secrets live ONLY on the VPS: OPTA_WRITER_KEYPAIR points at a gas-only keypair
+# under /opt/opta-writer/secrets/ (generate on the box, chmod 600). NEVER the
+# admin key (5YRMuuoY) and NEVER the crank key (5sHZ…).
+#
+# Restart/deploy: systemctl restart opta-writer --no-block, then poll one tick's
+# structured log. Never journalctl -f.
+# =============================================================================
+
+[Unit]
+Description=Opta devnet market-maker (WriterAsk board animator)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/opta-writer/writer
+ExecStart=/usr/bin/node dist/main.js
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=120
+
+# --- memory (see writer/deploy/README-memorymax.md; box = 1958 MB total) ---
+MemoryMax=350M
+
+# --- config (edit the values on the box; keep secrets in /opt/opta-writer/secrets) ---
+# OPTA_WRITER_ENABLED starts 0 (observe-only). Flip to 1 only at the founder-gated
+# go-live after the canary preview.
+Environment=OPTA_RPC_URL=REPLACE_WITH_HELIUS_DEVNET_URL
+Environment=OPTA_WRITER_KEYPAIR=/opt/opta-writer/secrets/writer-keypair.json
+Environment=OPTA_WRITER_IDL=/opt/opta-writer/writer/idl/opta.json
+Environment=OPTA_WRITER_ENABLED=0
+Environment=OPTA_WRITER_ASSETS=SOL
+Environment=OPTA_WRITER_MAX_CELLS=3
+Environment=OPTA_WRITER_TICK_MS=300000
+Environment=OPTA_WRITER_LOW_BALANCE_WARN_SOL=1.0
+
+# --- sandbox (mirror opta-crank) ---
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/opta-writer
+
+[Install]
+WantedBy=multi-user.target

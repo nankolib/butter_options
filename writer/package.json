@@ -1,0 +1,33 @@
+{
+  "name": "opta-writer",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Autonomous devnet market-maker for Opta — writes canonical American series + posts WriterAsks so every live market shows a price. Read the spec header in src/main.ts.",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "build": "tsc && node scripts/copy-idl.js",
+    "start": "node dist/main.js",
+    "typecheck": "tsc --noEmit",
+    "dev": "ts-node -r tsconfig-paths/register src/main.ts"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "^0.32.1",
+    "@solana/spl-token": "^0.4.14",
+    "@solana/web3.js": "^1.98.4",
+    "bn.js": "^5.2.3"
+  },
+  "overrides": {
+    "rpc-websockets": "9.3.7",
+    "@solana/web3.js": "^1.98.4"
+  },
+  "devDependencies": {
+    "@types/bn.js": "^5.2.0",
+    "@types/node": "^24.12.0",
+    "ts-node": "^10.9.2",
+    "tsconfig-paths": "^4.2.0",
+    "typescript": "~5.9.3"
+  }
+}

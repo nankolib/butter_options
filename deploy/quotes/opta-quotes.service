@@ -1,0 +1,24 @@
+[Unit]
+Description=Opta honest-stale equity quote proxy (loopback 127.0.0.1:8090)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Least-privilege dedicated system user (systemd reads EnvironmentFile before the
+# privilege drop, so the key is still available to the process).
+User=opta-quotes
+Group=opta-quotes
+# Finnhub key lives here (founder writes FINNHUB_KEY=... via nano); never in the repo.
+EnvironmentFile=/opt/opta-quotes/.env
+ExecStart=/usr/bin/node /opt/opta-quotes/quotes-svc.js
+Restart=on-failure
+RestartSec=5
+# Loopback-only, no privileged port; harden.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/opta-quotes
+
+[Install]
+WantedBy=multi-user.target

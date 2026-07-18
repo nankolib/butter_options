@@ -1549,3 +1549,24 @@ Roadmap framing (Phase 4+): full implied vol oracle aggregating multi-venue opti
 - **Programs ID:** opta `CtzJ4MJYX6BFvF4g67i5C24tQuwRn6ddKkaE5L84z9Cq`, transfer hook `83EW6a9o9P5CmGUkQKvVZvsz6v6Dgztiw5M4tVjfZMAG`.
 - **Branches:** master + main mirrored at every commit (`master:main` refspec); both at `5b2cbf8` (Stage-I remediation; range `e55db39..5b2cbf8`).
 - **Biggest gotcha:** the protocol runs on Solana devnet but uses Pyth's mainnet feeds. "On mainnet" ≠ "Solana mainnet" — protocol is devnet; only the price oracle endpoint is production.
+
+---
+
+## Off-hours oracle proof — quotes.opta.fyi 503 both legs (2026-07-18 15:49Z, Sat)
+
+Captured over REAL public TLS transport (not the 127.0.0.1 loopback svc): off-hours,
+both `quotes.opta.fyi` legs return HTTP 503 and produce NO value. This is the
+oracle-layer backstop the `opta-writer` bot relies on for equity market-hours
+(alongside the client `isMarketHours` gate) — off-session equity writes fail clean.
+
+Time of capture: Sat 2026-07-18 15:49Z (NYSE closed, weekend). Symbols TSLA/AAPL/NVDA,
+identical result on all three:
+
+- finnhub leg  `GET /finnhub/quote?symbol=SYM`  -> **503**  `{"stale":true,"ageS":~71393}`
+- yahoo leg    `GET /yahoo/chart/SYM`           -> **503**  `{"stale":true,"inRegular":false,"ageS":~71394}`
+
+`ageS ~71,393s (~19.8h)` = since Fri ~20:00Z NYSE close. FRESH_MAX (180s) exceeded on
+both legs; Yahoo additionally `inRegular:false`. No `regularMarketPrice`/`c` field is
+returned -> the SB equity feed gets no signed value off-hours (`minJobResponses=2`, so
+one stale leg fails the whole feed) -> equity settle/quote has no input until the
+session reopens. Proves the "fail clean, not cryptic" off-hours enforcement end-to-end.

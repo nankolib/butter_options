@@ -1583,3 +1583,20 @@ both legs; Yahoo additionally `inRegular:false`. No `regularMarketPrice`/`c` fie
 returned -> the SB equity feed gets no signed value off-hours (`minJobResponses=2`, so
 one stale leg fails the whole feed) -> equity settle/quote has no input until the
 session reopens. Proves the "fail clean, not cryptic" off-hours enforcement end-to-end.
+
+---
+
+## Wave-2B Gate 1 — SPCX + HOOD locked + QUOTES_CACHE_TTL 20s (2026-07-18)
+
+**Manifest signed off** (computed off the FROZEN quotes.opta.fyi scheme, zero edits; recipe self-verified by recomputing all 11 frozen hashes byte-for-byte):
+
+| Ticker | feedHash (64-hex, lowercase, no 0x) | seed σ | basis |
+|---|---|---|---|
+| SPCX | `fd7a0b9ea922e14e18944f8105b151df922487da9b1b2ed5ad52150924ed413f` | 1.00 | fresh Nasdaq IPO (Jun 12 2026), thin history → seed HOT; `reset_vol_oracle` = mid-warmup repair lever |
+| HOOD | `9801bc9a0cc3eceb1ec4dfb964186a426883bb89a670c5968879b6e2c31b7c8b` | 0.65 | full history since 2021 IPO; high-beta fintech, realized-derived, just under COIN (0.75) |
+
+- Both **PURE BIRTHS** (assetClass=2): zero `SPCX`/`HOOD` refs in app/crank/registries/frozen-11 → no market-PDA or vol-oracle-PDA collision. Birth via `crank/_birth_sb_market.ts` (skip migrate/close leg), then `initialize_vol_oracle` with the locked seeds. Writer bot discovery auto-picks them up next tick once scale-up is live.
+- HOOD has an upstream Pyth feed we deliberately do NOT use (SB-only, per the Pyth freeze).
+- **Execution:** Monday, immediately after the 11 land — same session if clean, else standalone 2b.
+
+**QUOTES_CACHE_TTL bumped 15s → 20s** (preemptive rate lever) on the VPS `opta-quotes` service. Finnhub tier confirmed FREE (60/min real). 13 tickers now refresh at 3×/min = **39 Finnhub calls/min** (was 52/60). Applied: `QUOTES_CACHE_TTL=20000` in `/opt/opta-quotes/.env` + `systemctl restart opta-quotes`; verified `/healthz` 200, effective process env = 20000, public endpoint serving (off-hours 503 as expected). Bump back toward 15s only if Wave-2c shrinks the set.

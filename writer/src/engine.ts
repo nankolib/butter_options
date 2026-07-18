@@ -83,6 +83,11 @@ export class WriterEngine {
     let quoteBudget = this.cfg.dryRun ? Infinity : freeUsdc;
 
     for (const market of markets) {
+      // HARD GUARD (permanent policy): freeze ALL new activity on Pyth-source
+      // markets (oracle_source=0). New positions on a Pyth market create
+      // live-holder drag on its SB cutover. No vaults/series/asks/fills there
+      // until its SB migration completes. This is code, not just env.
+      if (market.oracleSource === 0) { log.info("pyth-frozen-skip", { asset: market.assetName }); continue; }
       const oracle = await readOracle(this.chain.program, market.pythFeedId, nowSec);
       if (!oracle.ready) {
         log.info("market-skip", { asset: market.assetName, reason: oracle.reason, samples: oracle.samples });
@@ -179,6 +184,9 @@ export class WriterEngine {
   }
 
   private async post(cell: TargetCell, market: MarketInfo, seriesMint: PublicKey, askMicro: BN, nowSec: number): Promise<boolean> {
+    // Defense-in-depth: never post on a Pyth-source market even if the loop
+    // guard is bypassed (see pyth-frozen-skip). Permanent freeze policy.
+    if (market.oracleSource === 0) { log.error("pyth-guard-block", { asset: cell.assetName }); return false; }
     const vault = vaultAmericanPda(market.publicKey, BigInt(cell.strikeMicro.toString()), cell.expiryTs, cell.optIdx);
     const record = mintRecordPda(seriesMint);
     const collateral = cell.strikeDollars * cell.qty;

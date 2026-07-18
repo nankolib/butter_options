@@ -42,7 +42,24 @@ const tokenAmount = (data: Buffer | Uint8Array) => Buffer.from(data).readBigUInt
 async function main() {
   const asset = process.argv[2];
   const execute = process.argv.includes("--execute");
-  if (!asset || asset.startsWith("--")) { console.error("usage: preflight_close_market.ts <ASSET_NAME> [--execute]"); process.exit(2); }
+  if (!asset || asset.startsWith("--")) { console.error("usage: preflight_close_market.ts <ASSET_NAME> [--execute] [--override=<vaultPubkey>:<ruling>]…"); process.exit(2); }
+
+  // Founder-ruling overrides: --override=<vaultPubkey>:<ruling text>  (repeatable).
+  // A deliberate, LOGGED decision to close over a specific still-blocking vault
+  // (e.g. EWwhESru = intentional orphan, $ recoverable via the Aug-7 void hatch).
+  // NEVER a blanket skip: each override names an EXACT vault pubkey AND records a
+  // non-empty ruling; a bare `--override=<pk>` (no ruling) is rejected.
+  const overrides = new Map<string, string>();
+  for (const a of process.argv) {
+    if (!a.startsWith("--override=")) continue;
+    const raw = a.slice("--override=".length);
+    const i = raw.indexOf(":");
+    if (i < 0 || !raw.slice(i + 1).trim()) {
+      console.error(`ABORT: --override must be <vaultPubkey>:<ruling text> — a bare skip is not allowed: "${a}"`);
+      process.exit(2);
+    }
+    overrides.set(raw.slice(0, i).trim(), raw.slice(i + 1).trim());
+  }
 
   const rpcUrl = process.env.RPC_URL ?? process.env.OPTA_RPC_URL ?? "https://api.devnet.solana.com";
   const conn = new Connection(rpcUrl, "confirmed");
@@ -123,11 +140,18 @@ async function main() {
       : "inert (empty shell → orphanable)";
     children.push({ pk, blocker, reason, settled: !!v.isSettled, strike: Number(v.strikePrice?.toString?.() ?? 0) / 1e6, expiry: Number(v.expiry?.toString?.() ?? 0), ot: "put" in (v.optionType ?? {}) ? "Put" : "Call" });
   }
-  const blockers = children.filter((c) => c.blocker);
+  const allBlockers = children.filter((c) => c.blocker);
   const inert = children.filter((c) => !c.blocker);
-  console.log(`\nSharedVaults referencing market: ${children.length}  (BLOCKERS: ${blockers.length}, inert-orphanable: ${inert.length})`);
+  const overridden = allBlockers.filter((c) => overrides.has(c.pk));
+  const blockers = allBlockers.filter((c) => !overrides.has(c.pk)); // non-overridden = real refusal set
+  // A ruling that names a vault which is NOT currently a blocker is stale — surface it, ignore it.
+  for (const [pk, ruling] of overrides) {
+    if (!allBlockers.some((c) => c.pk === pk)) console.error(`  [warn] --override names ${pk} but it is NOT a current blocker — ruling ignored: "${ruling}"`);
+  }
+  console.log(`\nSharedVaults referencing market: ${children.length}  (BLOCKERS: ${allBlockers.length} [${blockers.length} refusing, ${overridden.length} overridden], inert-orphanable: ${inert.length})`);
   for (const c of children) {
-    console.log(`  ${c.blocker ? "BLOCK" : "inert"}  ${c.ot} $${c.strike}  exp=${c.expiry}  settled=${c.settled}  ${c.reason}  ${c.pk}`);
+    const tag = !c.blocker ? "inert" : overrides.has(c.pk) ? "OVR* " : "BLOCK";
+    console.log(`  ${tag}  ${c.ot} $${c.strike}  exp=${c.expiry}  settled=${c.settled}  ${c.reason}  ${c.pk}`);
   }
 
   // ---- 3. informational: SettlementRecords + VolOracle survive --------------
@@ -143,13 +167,25 @@ async function main() {
   } catch { /* best-effort */ }
 
   // ---- 4. verdict -----------------------------------------------------------
+  // Overridden blockers are recorded in a LEDGER (the ruling is the audit trail),
+  // then excluded from the refusal set. Real (non-overridden) blockers still REFUSE.
+  if (overridden.length > 0) {
+    console.log(`\n===== FOUNDER-RULING OVERRIDE LEDGER (${overridden.length}) =====`);
+    for (const c of overridden) {
+      console.log(`  OVERRIDE  ${c.pk}  (${c.reason})`);
+      console.log(`            ruling: ${overrides.get(c.pk)}`);
+    }
+  }
   if (blockers.length > 0) {
-    console.error(`\nREFUSE: ${blockers.length} vault(s) hold funds or a live position on ${asset} — settle / drain / discharge them before closing. Tx NOT built.`);
+    console.error(`\nREFUSE: ${blockers.length} non-overridden vault(s) hold funds or a live position on ${asset} — settle / drain / discharge them before closing. Tx NOT built.`);
     for (const c of blockers) console.error(`   BLOCK ${c.pk}  ${c.reason}`);
     process.exit(1);
   }
   if (inert.length > 0) {
     console.log(`\n[note] ${inert.length} inert vault(s) will be ORPHANED under the SB rebirth (same market PDA) — $0 funds, no holders/writers/backers. Safe.`);
+  }
+  if (overridden.length > 0) {
+    console.log(`\n[note] ${overridden.length} still-blocking vault(s) closed over by EXPLICIT founder ruling (see ledger above) — recoverable per the recorded decision.`);
   }
   console.log(`\n✅ SAFE TO CLOSE: no vault holds funds or a live position on ${asset}.`);
 

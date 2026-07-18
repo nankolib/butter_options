@@ -21,7 +21,7 @@ export interface WriterConfig {
   enabled: boolean;          // OPTA_WRITER_ENABLED — false = observe-only (no chain writes)
   dryRun: boolean;           // OPTA_WRITER_DRY_RUN — true = build plan + log, never send tx
   assets: string[] | null;   // OPTA_WRITER_ASSETS CSV allow-list; null = all discovered
-  maxCellsThisRun: number;   // OPTA_WRITER_MAX_CELLS — global cap on NEW asks per run (0 = uncapped)
+  maxCellsThisRun: number;   // OPTA_WRITER_MAX_CELLS — cap on TOTAL live asks (canary; 0 = uncapped)
 
   // --- ladder / caps ---
   maxCellsPerAsset: number;  // OPTA_WRITER_MAX_CELLS_PER_ASSET (default 20)

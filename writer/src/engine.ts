@@ -150,7 +150,11 @@ export class WriterEngine {
         // New post — respect caps + USDC budget.
         if (liveGlobal >= this.cfg.globalVaultCap) { log.info("cap-global", { cap: this.cfg.globalVaultCap }); continue; }
         if (assetLive >= this.cfg.maxCellsPerAsset) continue;
-        if (this.cfg.maxCellsThisRun > 0 && postedThisRun >= this.cfg.maxCellsThisRun) continue;
+        // MAX_CELLS caps TOTAL live asks (existing on-chain + new), not per-tick
+        // new posts — else the ladder grows every tick. liveGlobal starts at the
+        // wallet's current order count and increments per post, so once the cap
+        // is reached the bot only reprices, never adds.
+        if (this.cfg.maxCellsThisRun > 0 && liveGlobal >= this.cfg.maxCellsThisRun) continue;
         const collateral = cell.strikeDollars * cell.qty;
         if (collateral > quoteBudget) { log.warn("usdc-budget-skip", { asset: cell.assetName, need: collateral, free: quoteBudget }); continue; }
 

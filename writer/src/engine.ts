@@ -28,8 +28,20 @@ import { isMarketHours } from "./marketHours";
 
 const EQUITY_MIN_LEAD_SECS = 24 * 3600; // don't post an equity ask expiring within a day
 
+/** Resting asks whose vault resolves to `marketPk58` — the asks to PULL when that
+ *  market's oracle is not fresh (see reconcile's !oracle.ready branch). Pure +
+ *  map-driven so it unit-tests without RPC. */
+export function ordersOnMarket(
+  orders: MyOrder[],
+  marketPk58: string,
+  vaultToMarket: Map<string, string>,
+): MyOrder[] {
+  return orders.filter((o) => vaultToMarket.get(o.vault.toBase58()) === marketPk58);
+}
+
 export class WriterEngine {
   private readonly failCounts = new Map<string, number>(); // seriesMint58 -> consecutive quote failures
+  private readonly vaultMarket = new Map<string, string>(); // vault58 -> market58 (immutable; cached across ticks)
   private readonly buildCtx: BuildCtx;
 
   constructor(
@@ -48,6 +60,23 @@ export class WriterEngine {
 
   private inScope(m: MarketInfo): boolean {
     return this.cfg.assets == null || this.cfg.assets.includes(m.assetName.toUpperCase());
+  }
+
+  /** Populate the vault58 -> market58 cache for any orders whose vault we have not
+   *  resolved yet. One batched read per tick (only NEW vaults); a vault's market is
+   *  immutable, so it is cached for the process lifetime. */
+  private async resolveVaultMarkets(orders: MyOrder[]): Promise<void> {
+    const missing = [...new Set(orders.map((o) => o.vault.toBase58()))].filter((v) => !this.vaultMarket.has(v));
+    if (missing.length === 0) return;
+    try {
+      const accts = await (this.chain.program.account as any).sharedVault.fetchMultiple(missing.map((v) => new PublicKey(v)));
+      missing.forEach((v, i) => {
+        const a: any = accts[i];
+        if (a?.market) this.vaultMarket.set(v, new PublicKey(a.market).toBase58());
+      });
+    } catch (e: any) {
+      log.warn("resolve-vault-markets-fail", { err: String(e?.message ?? e).slice(0, 160) });
+    }
   }
 
   async reconcile(nowMs: number): Promise<void> {
@@ -73,6 +102,8 @@ export class WriterEngine {
       const prev = ordersBySeries.get(k);
       if (!prev || o.nonce > prev.nonce) ordersBySeries.set(k, o); // keep the newest per series
     }
+    // Resolve order -> vault -> market so a stale market's asks can be pulled below.
+    await this.resolveVaultMarkets(myOrders);
 
     let liveGlobal = myOrders.length;
     let postedThisRun = 0;
@@ -90,7 +121,18 @@ export class WriterEngine {
       if (market.oracleSource === 0) { log.info("pyth-frozen-skip", { asset: market.assetName }); continue; }
       const oracle = await readOracle(this.chain.program, market.pythFeedId, nowSec);
       if (!oracle.ready) {
-        log.info("market-skip", { asset: market.assetName, reason: oracle.reason, samples: oracle.samples });
+        // STALE-PULL (fix): a not-ready oracle means the rested ask price can't be
+        // trusted AND takers can't fill it (get_option_price gate) — but
+        // fill_writer_ask does NOT read the oracle, so an ask left resting off a
+        // dead/stale oracle is free money for a picker-off (e.g. a Friday-priced
+        // equity ask over a weekend gap). PULL this market's resting asks; don't
+        // just skip. Idempotent: once cancelled the orders are gone, so subsequent
+        // stale ticks find nothing → no per-tick churn (cancel confirms in ~2s, well
+        // under the tick interval). Equity boards go oracle-stale nightly by design
+        // (proxy 503) → this is the intended cancel-at-close / repost-at-open cadence.
+        const toPull = ordersOnMarket(myOrders, market.publicKey.toBase58(), this.vaultMarket);
+        for (const o of toPull) await this.pull(o.optionMint, o, `oracle-not-ready:${oracle.reason}`);
+        log.info("market-skip", { asset: market.assetName, reason: oracle.reason, samples: oracle.samples, pulledStale: toPull.length });
         continue;
       }
       const tier = classifyTier(market, this.cfg);

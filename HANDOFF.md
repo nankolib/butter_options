@@ -1,5 +1,20 @@
 # Opta — Engineer Handoff
 
+> **2026-07-20 (WRITER slow-first-reconcile — DIAGNOSIS. Structural, not a canary bug. Fix is greenlight-gated w/ scale-up.)**
+>
+> **[FINDING]** At the current canary scale (`OPTA_WRITER_ASSETS=XRP`, `MAX_CELLS=3`) there is NO slow first reconcile and the bot is healthy: ~12–13 ticks/hour (5-min `tickMs`), 0 strands, quoteFailed 0–1, liveOrders steady at 3. The 3 XRP asks PERSIST on-chain across restarts, so even a post-restart first tick just reprices (fast). The slowness is a **cold-board-at-scale** property, not reproducible at canary.
+>
+> **[ROOT CAUSE — structural, `engine.ts` `reconcile()`]** The tick is fully SEQUENTIAL and awaited op-by-op:
+> - **Read path (every tick):** `readOracle` is one RPC PER in-scope market (loop `:122`), then `fetchQuote` is one simulate PER cell (`:166`) — all in series. Cost scales with markets × cells.
+> - **Post path (first cold tick only):** each missing cell posts via `post()` = 2 `accountExists` + one multi-ix create-series/create-vault/post-ask tx + confirm, awaited one at a time. Measured write cadence on the canary: **~0.7s/tx** (6 write-txs in ~4s).
+> - Subsequent ticks don't post (asks exist) → fast; only the FIRST cold tick pays the full posting storm, which is why it's uniquely slow.
+>
+> **[SCALE EXTRAPOLATION]** Monday's full board (all crypto/meme + 11 new equities ≈ tens of markets × ~4–6 cells) cold-started in ONE tick with `MAX_CELLS` uncapped: read path ≈ (markets + markets×cells) sequential RPCs ≈ ~1 min; post path ≈ (asks) × ~1–2s (create-series/vault txs are heavier) ≈ several minutes. First full-board tick ≈ **4–7 min**, exceeding the 5-min `tickMs`.
+>
+> **[MITIGATIONS]** (a) **Config, no code, already supported:** keep a per-run post cap (`OPTA_WRITER_MAX_CELLS=N`) on scale-up so the cold board fills incrementally over several ticks instead of one multi-minute first tick — `liveGlobal >= maxCellsThisRun` (`:199`) already chunks it. (b) **Code (greenlight-gated — it edits the LIVE MM bot + pairs with the scale-up):** bound-parallelize the READ path — `readOracle` across markets and `fetchQuote` across a market's cells via `Promise.all` with a ~8-wide pool — cuts per-tick read time ~8× and benefits every tick, not just the first. Keep posts sequential (nonce/confirm ordering) or a small ~3-wide pool. (c) **Secondary gas nit:** age-triggered reprice cancel+reposts even on trivial drift (observed 0.021416→0.021368, 0.05%); on an age-only trigger, skip the repost when |drift| < a small epsilon to save 2 txs/ask/cycle.
+>
+> **[ACTION]** No code shipped — the writer is live and its optimization is a scale-up-coupled change. RECOMMENDATION for the scale-up session: apply mitigation (a) immediately (set `MAX_CELLS` so the cold board fills over ~N ticks), and land (b) as a reviewed engine change with a unit test before removing the cap. ⚠ Both are founder-gated (live-bot change).
+
 > **2026-07-20 (FE ROBUSTNESS TRIO — ✅ FIXED + verified. Pre-Monday board polish.)**
 >
 > **[1 · disconnected-viewer quote — FIXED, browser-verified]** Every NOT-connected visitor saw "—"/"No live quote" on the American Protocol-quote centerpiece even with a fresh oracle. Root cause (evidence, not guess — `crank/_probe_quote_payer.ts` against live devnet): `optionPriceQuote.ts`'s sim fee-payer fell back to `PublicKey.default` (System Program, owned by NativeLoader) → the RPC still LOADS the fee payer → **InvalidAccountForFee**; a random pubkey → **AccountNotFound**; only a real funded on-curve account decodes. `ContractInspector` auto-fires the RFQ on focus regardless of wallet, so disconnected visitors always hit it. FIX: new `SIMULATION_FEE_PAYER` constant (devnet deployer, funded/stable; `VITE_SIM_FEE_PAYER` override) used when no wallet is connected. Browser-verified: `scripts/check-disconnected-quote.mjs` drives a DISCONNECTED headless Chrome to /trade?asset=SOL, focuses an American row → centerpiece resolves to a $ premium (was "—").

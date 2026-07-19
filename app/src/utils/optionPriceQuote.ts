@@ -31,7 +31,7 @@ import {
 } from "@solana/web3.js";
 import BN from "bn.js";
 import type { Opta } from "../idl/opta";
-import { VOL_ORACLE_SEED } from "./constants";
+import { VOL_ORACLE_SEED, SIMULATION_FEE_PAYER } from "./constants";
 import { toUsdcBN } from "./format";
 
 /** solmath fixed-point scale (1e12) used by vol_used_scaled / spot_used_scaled. */
@@ -261,12 +261,17 @@ export async function fetchOptionPriceQuote(
     .instruction();
 
   const connection = program.provider.connection;
-  // Simulation-only fee payer — sigVerify:false skips signature + balance
-  // checks, so any valid pubkey works (no connected wallet needed).
+  // Simulation-only fee payer. sigVerify:false skips signature + balance checks,
+  // but the RPC still LOADS this account: PublicKey.default (System Program) →
+  // InvalidAccountForFee, and a non-existent pubkey → AccountNotFound — either
+  // makes a DISCONNECTED viewer see "No live quote" even with a fresh oracle. So
+  // when no wallet is connected, fall back to a real funded account, NOT
+  // PublicKey.default. (Verified against devnet: default/System/PDA →
+  // InvalidAccountForFee, random → AccountNotFound, funded acct → decodes.)
   const payer: PublicKey =
     (program.provider as any).wallet?.publicKey ??
     (program.provider as any).publicKey ??
-    PublicKey.default;
+    SIMULATION_FEE_PAYER;
   const { blockhash } = await connection.getLatestBlockhash("confirmed");
   const message = new TransactionMessage({
     payerKey: payer,

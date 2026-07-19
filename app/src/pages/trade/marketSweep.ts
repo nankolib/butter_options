@@ -25,92 +25,16 @@ import {
   loadOrderCtx, buildFillOrderIx, buildFillWriterAskIx, buildPegFillIx,
   type SeriesRef, type FillableOrder, type FillIxs,
 } from "./orderFlows";
-
-export type SweepSource = "peg" | "resaleAsk" | "writerAsk" | "bid";
-
-export interface SweepLevel {
-  source: SweepSource;
-  price: number;          // per-contract USDC
-  capacity: number;       // contracts fillable at this level
-  order?: FillableOrder;  // resting levels only (resaleAsk / writerAsk / bid)
-}
-export interface SweepLeg extends SweepLevel { qty: number }
-
-export type SweepStop = "filled" | "slippage" | "maxLevels" | "depth";
-export interface SweepPlan {
-  legs: SweepLeg[];
-  requestedQty: number;
-  filledQty: number;
-  avgPrice: number | null;
-  stop: SweepStop;
-}
-
-const MAX_LEVELS = 4;
-
-// ---- Level builders (shared by market sweep + limit crossing) ---------------
-const asFillable = (o: BookOrder): FillableOrder =>
-  ({ pubkey: o.pubkey, owner: o.owner, optionMint: o.optionMint, vault: o.vault, kind: o.kind });
-
-/** Ask side (buy): resting resale+writer asks (not the taker's) + the vault peg
- *  when priced with capacity. */
-export function buildAskLevels(
-  orders: BookOrder[], optionMint: string, taker: string,
-  pegAsk: number | null, pegCapacity: number,
-): SweepLevel[] {
-  const levels: SweepLevel[] = orders
-    .filter((o) => o.optionMint === optionMint && o.kind !== "bid" && o.owner !== taker)
-    .map((o) => ({ source: o.kind === "writerAsk" ? "writerAsk" : "resaleAsk", price: o.price, capacity: o.qty, order: asFillable(o) }));
-  if (pegAsk != null && pegCapacity > 0) levels.push({ source: "peg", price: pegAsk, capacity: pegCapacity });
-  return levels;
-}
-
-/** Bid side (sell): resting bids (not the taker's). No peg on the sell side. */
-export function buildBidLevels(orders: BookOrder[], optionMint: string, taker: string): SweepLevel[] {
-  return orders
-    .filter((o) => o.optionMint === optionMint && o.kind === "bid" && o.owner !== taker)
-    .map((o) => ({ source: "bid", price: o.price, capacity: o.qty, order: asFillable(o) }));
-}
-
-/** Pure planner: order the levels, walk them under the ceiling, cap at 4 levels.
- *  `priceCeiling` (marketable limits) is an absolute per-contract cap; otherwise
- *  the ceiling derives from `slippagePct` vs the best level. */
-export function planSweep(args: {
-  side: "buy" | "sell";
-  qty: number;
-  levels: SweepLevel[];
-  slippagePct: number;
-  priceCeiling?: number;
-}): SweepPlan {
-  const { side, qty, slippagePct, priceCeiling } = args;
-  const sorted = [...args.levels]
-    .filter((l) => l.capacity > 0 && l.price > 0)
-    .sort((a, b) => (side === "buy" ? a.price - b.price : b.price - a.price));
-
-  const ref = sorted[0]?.price ?? null;
-  const ceiling = priceCeiling != null
-    ? priceCeiling
-    : ref == null ? null
-    : side === "buy" ? ref * (1 + slippagePct / 100) : ref * (1 - slippagePct / 100);
-
-  let remaining = qty;
-  const legs: SweepLeg[] = [];
-  let stop: SweepStop = "depth";
-  for (const lvl of sorted) {
-    if (legs.length >= MAX_LEVELS) { stop = "maxLevels"; break; }
-    const breach = ceiling != null &&
-      (side === "buy" ? lvl.price > ceiling * (1 + 1e-9) : lvl.price < ceiling * (1 - 1e-9));
-    if (breach) { stop = "slippage"; break; }
-    const legQty = Math.min(remaining, lvl.capacity);
-    if (legQty <= 0) continue;
-    legs.push({ ...lvl, qty: legQty });
-    remaining -= legQty;
-    if (remaining <= 0) { stop = "filled"; break; }
-  }
-
-  const filledQty = qty - remaining;
-  const avgPrice = filledQty > 0 ? legs.reduce((s, l) => s + l.price * l.qty, 0) / filledQty : null;
-  return { legs, requestedQty: qty, filledQty, avgPrice, stop };
-}
+// Pure planners live in sweepPlan.ts (no anchor/web3 deps → unit-testable). Keep
+// them re-exported here so existing `from "./marketSweep"` imports are unchanged.
+import {
+  buildAskLevels, buildBidLevels, planSweep, buyRoutesToPeg,
+  type SweepSource, type SweepLevel, type SweepLeg, type SweepStop, type SweepPlan,
+} from "./sweepPlan";
+export {
+  buildAskLevels, buildBidLevels, planSweep, buyRoutesToPeg,
+  type SweepSource, type SweepLevel, type SweepLeg, type SweepStop, type SweepPlan,
+};
 
 /** Compose the plan's legs into ONE legacy tx (deduped ATA pre-ixs + a single CU
  *  limit) and send. The peg leg's max_premium is the TOTAL ceiling (qty ×

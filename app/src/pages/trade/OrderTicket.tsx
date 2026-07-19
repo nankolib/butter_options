@@ -1,5 +1,5 @@
 import type { FC, ReactNode } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { PublicKey } from "@solana/web3.js";
 import posthog from "posthog-js";
@@ -9,7 +9,7 @@ import { useBook, type BookOrder } from "../../hooks/useBook";
 import { usePegFill, usePostOrder, useFillOrder, useFillWriterAsk } from "../../hooks/useOrderFlows";
 import { deriveOrderPubkey } from "./orderFlows";
 import { refreshAfterMutation } from "./orderRefresh";
-import { planSweep, executeSweep, buildAskLevels, buildBidLevels, crossLimit } from "./marketSweep";
+import { planSweep, executeSweep, buildAskLevels, buildBidLevels, crossLimit, buyRoutesToPeg } from "./marketSweep";
 import { calculateCallGreeks, calculatePutGreeks, getDefaultVolatility, applyVolSmile } from "../../utils/blackScholes";
 import { TOKEN_2022_PROGRAM_ID, MARKET_SEED, PROGRAM_ID, DEVNET_USDC_MINT } from "../../utils/constants";
 import {
@@ -99,9 +99,22 @@ export const OrderTicket: FC<{
   // Follow a caller-driven side change (deep-link / row reselect).
   useEffect(() => { if (initialSide) setSide(initialSide); }, [initialSide]);
 
-  // Reset the RFQ when the focused contract changes; seed from the caller's
-  // one-shot quote when provided (inspector on-open RFQ).
-  useEffect(() => { setRfq(seedQuote); setRfqError(null); }, [row.vault, row.optionType, row.strike, seedQuote]);
+  // Keep the latest inspector seed WITHOUT making it a dep of the reset effect —
+  // a churning seedQuote must not re-fire the reset and CLOBBER a user-requested
+  // rfq. (Ref writes during render are safe; a ref is not state.)
+  const seedRef = useRef(seedQuote);
+  seedRef.current = seedQuote;
+  // Reset the RFQ only when the focused CONTRACT changes, seeding from the
+  // caller's one-shot quote as it stands at that moment.
+  useEffect(() => {
+    setRfq(seedRef.current ?? null);
+    setRfqError(null);
+  }, [row.vault, row.optionType, row.strike]);
+  // Adopt a late-arriving seed for the SAME contract only while we have no quote
+  // yet — never overwrite a user-obtained rfq.
+  useEffect(() => {
+    if (seedQuote) setRfq((cur) => cur ?? seedQuote);
+  }, [seedQuote]);
 
   // On-chain quote-on-demand: fire get_option_price for this series (American
   // only). Short-TTL cached by mint; never auto-fires — button-triggered.
@@ -363,10 +376,26 @@ export const OrderTicket: FC<{
 
   const limitGate = (!isWrite && type === "limit" && !(limitPrice > 0)) ? "Set a limit price" : null;
 
-  // H-05: American rows must trade on a FRESH on-chain quote, never the EUR
-  // model. Hard-block Buy (market/limit) and Write until the RFQ resolves fresh.
+  // Does a BUY route to the vault PEG (model-priced) rather than filling purely
+  // from resting maker asks? Only a peg-minting fill needs a fresh on-chain quote;
+  // a fill that lands entirely on resting writer/resale asks executes at the
+  // makers' FIXED prices and needs no model quote. Plan the sweep against resting
+  // asks ONLY (peg excluded): if it can't cover the requested qty, the order
+  // spills to the peg → model-priced → a fresh quote is required. This un-gates
+  // writer-ask book fills while still guarding peg-minting buys.
+  const meB58 = publicKey?.toBase58() ?? "";
+  const buyNeedsPeg = useMemo(
+    () =>
+      side === "buy" && useOnChainQuote && !!row.optionMint &&
+      buyRoutesToPeg({ orders, optionMint: row.optionMint, taker: meB58, type: type === "limit" ? "limit" : "market", limitPrice, qty, slippagePct }),
+    [side, useOnChainQuote, row.optionMint, orders, meB58, type, limitPrice, qty, slippagePct],
+  );
+
+  // H-05: gate a MODEL-PRICED American commitment on a FRESH on-chain quote (never
+  // the EUR model): a peg-routed buy, or a Write (posts against peg fair value). A
+  // buy that fills purely on resting maker asks is NOT model-priced → never gated.
   const amerFresh = quoteFreshness(rfqLoading, rfqError, rfq);
-  const needsFreshAmerQuote = useOnChainQuote && (side === "buy" || side === "write");
+  const needsFreshAmerQuote = useOnChainQuote && (side === "write" || buyNeedsPeg);
   const amerQuoteGate = needsFreshAmerQuote && !amerFresh.isFresh
     ? (amerFresh.statusReason ?? "Request an on-chain quote to continue")
     : null;

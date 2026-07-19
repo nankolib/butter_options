@@ -54,6 +54,20 @@ export const TRANSFER_HOOK_PROGRAM_ID = new PublicKey(
 // promote all four together when moving to mainnet. See file header.
 export const EXPECTED_CLUSTER: "devnet" | "mainnet-beta" = "devnet";
 
+// Fee payer for READ-ONLY get_option_price simulations when NO wallet is
+// connected. It is never signed or charged (sigVerify:false), but the RPC still
+// LOADS the fee-payer account: a non-existent pubkey → AccountNotFound, and an
+// off-curve/program-owned one (incl. PublicKey.default = System Program) →
+// InvalidAccountForFee. Both make disconnected visitors see "No live quote".
+// So this MUST be a real, funded, on-curve, system-owned account. The devnet
+// deployer/admin fits (public key, always funded, stable). Override per cluster
+// with VITE_SIM_FEE_PAYER. Lockstep note: on mainnet promotion this must point
+// at a funded mainnet account. See [[reference_lockstep_constants]].
+export const SIMULATION_FEE_PAYER = new PublicKey(
+  (import.meta as any).env?.VITE_SIM_FEE_PAYER ??
+    "5YRMuuoY3P7z5GeRAAQND7BxgNdmPSa6CSPCJLca1zZk",
+);
+
 // PDA seeds (must match the Rust program)
 export const PROTOCOL_SEED = "protocol_v2";
 export const TREASURY_SEED = "treasury_v2";

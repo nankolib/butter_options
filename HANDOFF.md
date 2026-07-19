@@ -1,5 +1,15 @@
 # Opta — Engineer Handoff
 
+> **2026-07-20 (FE ROBUSTNESS TRIO — ✅ FIXED + verified. Pre-Monday board polish.)**
+>
+> **[1 · disconnected-viewer quote — FIXED, browser-verified]** Every NOT-connected visitor saw "—"/"No live quote" on the American Protocol-quote centerpiece even with a fresh oracle. Root cause (evidence, not guess — `crank/_probe_quote_payer.ts` against live devnet): `optionPriceQuote.ts`'s sim fee-payer fell back to `PublicKey.default` (System Program, owned by NativeLoader) → the RPC still LOADS the fee payer → **InvalidAccountForFee**; a random pubkey → **AccountNotFound**; only a real funded on-curve account decodes. `ContractInspector` auto-fires the RFQ on focus regardless of wallet, so disconnected visitors always hit it. FIX: new `SIMULATION_FEE_PAYER` constant (devnet deployer, funded/stable; `VITE_SIM_FEE_PAYER` override) used when no wallet is connected. Browser-verified: `scripts/check-disconnected-quote.mjs` drives a DISCONNECTED headless Chrome to /trade?asset=SOL, focuses an American row → centerpiece resolves to a $ premium (was "—").
+>
+> **[2 · seedQuote clobber — FIXED]** `OrderTicket.tsx` re-seeded `rfq` from the inspector's `seedQuote` on EVERY seedQuote change (it was in the reset effect's deps), so a churning seedQuote clobbered a user-requested quote. FIX: reset only on CONTRACT-identity change (seed read via a ref, not a dep); a late seedQuote for the same contract is adopted only while `rfq` is still null — never overwrites a user quote. (React-deps fix; no headless wallet harness exists to browser-drive the connected path.)
+>
+> **[3 · over-gated book fill — FIXED, unit-tested]** `needsFreshAmerQuote` gated EVERY American buy on a fresh model quote — including a fill landing entirely on a resting WRITER-ASK at the maker's fixed price (no model quote needed), so book fills were blocked whenever the oracle warmed/stalled. FIX: the fresh-quote gate now applies to a buy only when it ROUTES TO THE PEG (model-priced). Extracted the pure predicate `buyRoutesToPeg` into `app/src/pages/trade/sweepPlan.ts` (split the pure planners out of `marketSweep.ts`'s anchor/web3 executor graph). Plans the sweep against resting asks ONLY (peg excluded): covers qty → maker-priced → un-gated; spills past book depth → peg → still gated. `sweepPlan.test.ts` 8/8 against the real `planSweep`. Write stays gated (posts against peg fair value; unchanged, out of the reported scope).
+>
+> **[NOTE — build-vs-tsc]** `npm run build` (rolldown) caught an `OrderType`→`"market"|"limit"` narrowing that `tsc --noEmit` passed — per the standing rule, FE final verify is `cd app && npm run build`, not tsc alone.
+
 > **2026-07-19 (SOL/BTC SB DOUBLE CUTOVER — ✅ COMPLETE. Both crypto markets now oracle_source=1.)**
 >
 > **[DONE — devnet]** The two Pyth crypto markets are reborn on Switchboard, in order BTC then SOL, each an atomic `close_market → create_market(SB)` via `crank/_cutover_rebirth.ts`.

@@ -1,5 +1,16 @@
 # Opta — Engineer Handoff
 
+> **2026-07-20 (WAVE-2 STEP 2 ✅ — 11 equity vol oracles SEEDED. STEP 3 pre-scanned: 6/7 clean, NVDA blocked on $0.000001 dust.)**
+>
+> **[STEP 2 DONE — `917830b`]** `initialize_vol_oracle` ×11 with the approved manifest seeds, one at a time via `_birth_sb_market.ts <T> --seed-only` (new flag: creates the oracle and STOPS; markets stay for STEP 3). **All 11 verified on-chain: `oracle_source=1`, `seed_vol` reads back === manifest, `sample_count=0`** → warmup gate satisfied by the seed = tradeable at birth. Seeds ×1e12: MSFT `3e11` `9Q4CXgPK…` · AAPL `3.2e11` `8TYhhZYg…` · GOOGL `3.5e11` `HdUkkcwj…` · AMZN `3.5e11` `5vLxyZp4…` · META `4e11` `7aEcm8SD…` · NVDA `5.5e11` `14HHRRPR…` · AMD `5.5e11` `2xVktAmf…` · TSLA `6e11` `36UKPKor…` · COIN `7.5e11` `97mfTNGF…` · MSTR `9e11` `FLZBdTZk…` · CRCL `9.5e11` `2z6oJMck…`
+>
+> **[⚠ SEQUENCING CORRECTION — get_option_price spot-check DEFERRED into STEP 3]** It **cannot** run in STEP 2: the program binds `vol_oracle` to `market.pyth_feed_id`, so pairing a new SB oracle with a still-Pyth market fails **ConstraintSeeds (2006)** (verified on both AAPL and TSLA). The plausibility check (vol_used===seed, spot_used≈proxy, premium inside an ATM band — not merely "returns a number") runs **immediately after AAPL + TSLA migrate**, which is a stronger end-to-end proof. Probe: `crank/_probe_eq_gop.ts`.
+>
+> **[STEP 3 PRE-SCAN — read-only, hardened `_cutover_rebirth.ts`]** All 7 migration targets scanned; **all 7 vol oracles EXIST**; **6/7 CLEAN**:
+> - MSFT / AAPL / MSTR — CLEAN (1 empty shell each) · META / CRCL — CLEAN (0 referencing) · TSLA — CLEAN (4 shells)
+> - **NVDA — HARD STOP (correctly).** Vault `6bm8c9GUCGjcEv8mNAWGsdn5Wp61yByp5o5BwwLGSoid` (`settled=false voided=true`, strike $220, expiry 1778832000) holds **exactly 1 micro-USDC = $0.000001** rounding dust; `total_collateral=0`, `total_shares=0`, **no holders/writers/backers**, and the ATA owner is the vault PDA itself. **`hasUserClaim=false` — zero third-party exposure.** Needs a founder ruling: `--override=6bm8c9GU…:<ruling>` to orphan the dust, or drain-then-migrate.
+> - **Birth PDAs verified FREE** (GOOGL `3cdMsczK…`, AMZN `Aon1iP5W…`, AMD `CCQSTPwG…`, COIN `HVAwbCBF…`; Wave-2b SPCX `7hVcCiJf…`, HOOD `C6ge3zpm…`) — genuine births, no hidden closes.
+
 > **2026-07-20 (WAVE-2 STEP 1 ✅ — all 11 equity SB feeds MINTED + registered. Entry gate satisfied; STEP 2 pending greenlight.)**
 >
 > **[STEP 1 DONE]** All 11 Wave-2 equity feeds stored on Crossbar with the full guard chain per ticker: **GUARD1** (local `computeOracleFeedId`) → **STORE** → **GUARD2** (server feedId === local === **frozen manifest hash**) → **RESOLVE** (fetch-back, jobs=2) → **LIVENESS** (gateway signed, 2 signatures, ed25519 present). **11/11 GUARD2 PASS — zero hash drift**, so the locked manifest (ClickUp `86eyb0xjz`) is intact. Tooling: equity defs added to `crank/_mint_sb_feed.ts`, using builders **byte-identical** to `crank/_equity_feed_hashes.ts` (the generator that froze the hashes) — re-proved 11/11 before any store.

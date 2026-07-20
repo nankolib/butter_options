@@ -28,9 +28,6 @@ import { isMarketHours } from "./marketHours";
 
 const EQUITY_MIN_LEAD_SECS = 24 * 3600; // don't post an equity ask expiring within a day
 
-/** Resting asks whose vault resolves to `marketPk58` — the asks to PULL when that
- *  market's oracle is not fresh (see reconcile's !oracle.ready branch). Pure +
- *  map-driven so it unit-tests without RPC. */
 /** HARD denylist decision (pure). Evaluated BEFORE the allow-list so an exclusion
  *  survives dropping OPTA_WRITER_ASSETS (assets=null / full board) — a permanent
  *  exclusion must never live in the allow-list alone, or it silently returns the
@@ -58,6 +55,9 @@ export function scopeReason(
   return null;
 }
 
+/** Resting asks whose vault resolves to `marketPk58` — the asks to PULL when that
+ *  market's oracle is not fresh (see reconcile's !oracle.ready branch). Pure +
+ *  map-driven so it unit-tests without RPC. */
 export function ordersOnMarket(
   orders: MyOrder[],
   marketPk58: string,

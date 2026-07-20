@@ -1,5 +1,31 @@
 # Opta — Engineer Handoff
 
+> **2026-07-20/21 (WAVE-2 STEP 3 ✅ COMPLETE — ALL 11 EQUITY MARKETS ON SWITCHBOARD. Board is equity-complete.)**
+>
+> **[STEP 3 DONE]** 7 migrations (hardened `_cutover_rebirth.ts`, one at a time, `hasUserClaim` = hard stop) + 4 pure births (`_birth_sb_market.ts`). Every create landed **first attempt** once the registry prerequisite was in place — the fix held. Independent on-chain verify (`crank/_probe_wave2_verify.ts`): **ALL 11 OK** — `assetName` canonical, `oracle_source=1`, feedHash **byte-matches** frozen manifest, `asset_class=2`, registry-resolvable, vol oracle present **at the market-derived PDA** with `source=1` + manifest seed, `sample_count=0` (tradeable at birth via seed).
+>
+> | Ticker | path | market PDA | vol oracle | seed |
+> |---|---|---|---|---|
+> | MSFT | migrate* | `GoHsfVCh…PyDM` | `9Q4CXgPK…` | 0.30 |
+> | AAPL | migrate | `CFftqXKc…BCcp` | `8TYhhZYg…` | 0.32 |
+> | GOOGL | birth | `3cdMsczK…uuN7` | `HdUkkcwj…` | 0.35 |
+> | AMZN | birth | `Aon1iP5W…jMr7` | `5vLxyZp4…` | 0.35 |
+> | META | migrate | `49haznfS…bf5E` | `7aEcm8SD…` | 0.40 |
+> | NVDA | migrate+ovr | `EXib8CVy…1j9C` | `14HHRRPR…` | 0.55 |
+> | AMD | birth | `CCQSTPwG…Jm5b` | `2xVktAmf…` | 0.55 |
+> | TSLA | migrate | `4SQc6d79…1Vtm` | `36UKPKor…` | 0.60 |
+> | COIN | birth | `HVAwbCBF…YPZv` | `97mfTNGF…` | 0.75 |
+> | MSTR | migrate | `BKAY8rNy…3XiT` | `FLZBdTZk…` | 0.90 |
+> | CRCL | migrate | `5h4vkFFA…q8xa` | `2z6oJMck…` | 0.95 |
+>
+> `*` MSFT completed via the birth driver after the marketless incident (see below) — **parity-verified byte-equivalent** to cutover-tool output, so the board has no divergent migration.
+>
+> **[NVDA OVERRIDE — ledgered]** Closed over vault `6bm8c9GU…` under founder ruling: *"voided vault, $0.000001 rounding dust, ATA owned by the vault PDA itself, zero holders/writers/backers, hasUserClaim=false. No third-party or recoverable founder value. Orphaned by founder ruling 2026-07-20; dust unrecoverable by design. Tool behavior correct — hard-stop on any value is the intended calibration."* Scan recorded `userClaimOverrides=0`.
+>
+> **[get_option_price SANITY — plausibility, not just non-error]** MSFT $398 ATM ~30d → **$14.5148**, `vol_used=30.00%` === seed, `spot_used=$398.12` (proxy $397.7). AAPL $325 ATM → **$12.7123**, `vol_used=32.00%` === seed, spot $325.32. TSLA $374 ATM → **$25.1755**, `vol_used=60.00%` === seed, spot $371.82. All premiums inside the ATM band → **SANE**.
+>
+> **[▶ NEXT]** STEP 4 = **crank overlay / tick verification ONLY** (the registry half was pulled forward as the incident fix). Then STEP 5 Wave-2b births (SPCX `7hVcCiJf…`, HOOD `C6ge3zpm…`, both PDAs verified FREE) → board = 13. **Equity writer funding (~$440k) is a SEPARATE founder-gated block AFTER births** — and note `OPTA_WRITER_EXCLUDE_CLASSES=2,4` keeps equities off the writer board until that lands.
+
 > **2026-07-20 (⚠ MSFT MARKETLESS INCIDENT — recovered. STEP-ORDER DEFECT: registry registration is a PREREQUISITE of equity migrations.)**
 >
 > **[INCIDENT]** STEP 3's first migration (MSFT) closed successfully, then **all 10 create attempts threw `feedHash … not in SB registry`** (`crank/switchboardCreateMarket.ts:80` — the create leg resolves jobs via `lookupSbFeed`). MSFT sat **MARKETLESS ~2 minutes**. Recovered out-of-band via `_birth_sb_market.ts MSFT` (embedded defs, registry-independent) — created first attempt. **No user funds were ever at risk**: the sole referencing vault was an empty shell, zero live positions. The chain correctly halted before AAPL/TSLA, so only one asset was exposed.

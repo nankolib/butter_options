@@ -1732,3 +1732,43 @@ session reopens. Proves the "fail clean, not cryptic" off-hours enforcement end-
 - **Execution:** Monday, immediately after the 11 land — same session if clean, else standalone 2b.
 
 **QUOTES_CACHE_TTL bumped 15s → 20s** (preemptive rate lever) on the VPS `opta-quotes` service. Finnhub tier confirmed FREE (60/min real). 13 tickers now refresh at 3×/min = **39 Finnhub calls/min** (was 52/60). Applied: `QUOTES_CACHE_TTL=20000` in `/opt/opta-quotes/.env` + `systemctl restart opta-quotes`; verified `/healthz` 200, effective process env = 20000, public endpoint serving (off-hours 503 as expected). Bump back toward 15s only if Wave-2c shrinks the set.
+
+---
+
+## PERMANENT RULES from the 2026-07-20 full-board session
+
+**RULE 1 — DEPLOY VERIFICATION. Never hot-patch the box.**
+Every VPS deploy MUST assert that git `HEAD` *and* a boot-log marker match the
+intended commit. Do not trust `git pull` output or a green `npm run build`.
+
+Tonight's failure mode: someone edited `/opt/opta-crank/writer/src/engine.ts`
+directly on the VPS (stale-pull fix, `.bak` left alongside). That local
+modification silently **blocked every subsequent `git pull`** ("local changes
+would be overwritten … Aborting") while `npm run build` still reported success —
+because it recompiled the *stale* source. HEAD sat at `117176a` for two days, so
+`globalVaultCap=500` and the committed stale-pull fix were **never actually
+live**. The deploy reported green and did nothing.
+
+Detection that worked: a boot-log field that only exists in the new build.
+Remediation: diff the hot-patch vs `origin/main` FIRST (confirm nothing
+VPS-only would be lost), `git checkout -- <file>`, then pull + rebuild + restart
+and re-assert the marker.
+
+**RULE 2 — Cap allocation is enumeration-order dependent.**
+`MAX_CELLS` / `globalVaultCap` are throttles, NOT prioritizers. Whichever markets
+`getProgramAccounts` returns first consume the cap. Proven live: at cap 55 the
+board filled JTO 20 / WIF 15 / XRP 12 (BTC/ETH/SOL got nothing); at cap 100 it
+filled JUP 20 / SOL 20 / WIF 5. Never rely on a cap to prioritize a market or to
+starve a class — and note the USDC budget is ONE shared pool that only skips a
+cell when that single cell exceeds the whole remaining balance, so it does not
+ring-fence a per-class buffer either.
+**Class/ticker denylists (`OPTA_WRITER_EXCLUDE_CLASSES` / `OPTA_WRITER_ASSETS_EXCLUDE`)
+are the only real scoping mechanism.** They are evaluated before the allow-list and
+survive `assets=null`.
+
+### Full-board state at end of session
+`assets=null`, exclude `SBXAU` + classes `2,4`. Board saturated at **180 asks =
+9 SB assets x 20** — the binding cap is `maxCellsPerAsset=20`, NOT `MAX_CELLS`
+(so "200 crypto" is really 180). All src=1; Pyth guard skipping EURUSD/HYPE/RAY/
+UKOILSPOT/USDPKR/USOILSPOT/XAG. SBXAU verified 0 orders on-chain (single gold book
+via XAU). USDC $1,535,631 locked / $139,367 free. SOL 4.94. strand=0 throughout.

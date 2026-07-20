@@ -1,5 +1,33 @@
 # Opta — Engineer Handoff
 
+> **2026-07-20 (WRITER SCALE-UP PREP — full-board USDC math @ current SB spots + funding block. FOUNDER-GATED @ funding, tomorrow AM PKT.)**
+>
+> **Decision (founder):** staged cap raise (option a); NO read-path parallelization before Monday; (b) engine parallelize + (c) age-reprice gas nit deferred post-Monday.
+>
+> **[FULL-BOARD COLLATERAL — recomputed at CURRENT SB oracle spots, NOT the stale $5M estimate]** `crank/_probe_fullboard_collateral.ts` replicates the writer's exact ladder (20 cells/mkt = 5 strikes×2 tenors×2 sides; `collateral = strike×qty`, `qty=clamp(round(tn/strike),1,MAX)`; `tn`=$2000 major / $500 meme — env.ts defaults, VPS overrides only ENABLED/ASSETS/MAX_CELLS). Devnet SB feeds are PEGS (BTC $64.7k not ~$118k, SOL $76 not $180) so the number is far below the old guess:
+>
+> | SB market | class | spot | 20-cell collateral |
+> |---|---|---|---|
+> | **BTC** | crypto | $64,668 | **$1,293,200** (qty=1: tn $2000 < strike → each cell locks a full ~$58–71k strike) |
+> | SBXAU | commodity | $3,987 | $79,800 |
+> | XAU | commodity | $3,987 | $79,800 |
+> | XRP | crypto | $1.095 | $39,998 |
+> | SOL | crypto | $76.10 | $39,983 |
+> | ETH | crypto | $1,870 | $37,400 |
+> | JTO / WIF / FARTCOIN / JUP | crypto(meme) | — | ~$10,000 each |
+> | BONK | crypto(meme) | $0.0000033 | $5,580 |
+>
+> **SB board total = $1,615,761** (11 markets, 220 asks). **BTC is 80% of the board.** Writer holds **$18,997 USDC / 4.767 SOL** → **mint delta ≈ $1,596,764**.
+>
+> **[FUNDING BLOCK — `scripts/_exec_fund_writer.mjs`, SIMULATE-clean (err:null)]** Admin `5YRMuuoY` IS the USDC mint authority (verified). Mints USDC to the writer's ATA `Gsy6Vo5Qg6GkwZ1XYUQCe8yFiZje6tRJTKSkpEMS9Dwr` + optional SOL top-up. Defaults: mint **$1,750,000** (board + ~$130k drift/staging buffer), **+5 SOL** (cold board locks ≈1.7 SOL of recoverable account rent across 220 vaults/mints/orders; writer's 4.767 would survive but +5 gives headroom). SIMULATE-by-default; `OPTA_FUND_SEND=1` to fire; devnet genesis-guarded; admin key read in place, never printed. Run (WSL, repo root):
+> `NODE_PATH=…/app/node_modules OPTA_RPC_URL="$(cat ~/.opta-rpc-helius)" node scripts/_exec_fund_writer.mjs` (add `OPTA_FUND_SEND=1`).
+>
+> **[STAGING — on funded, per decision]** MAX_CELLS caps TOTAL live asks, and the writer posts up to that cap in ONE tick — so "fill over 3–4 ticks" = bump `OPTA_WRITER_MAX_CELLS` BETWEEN restarts, watching tick duration + strand count. Suggested ramp: **Stage 1 crypto majors** `OPTA_WRITER_ASSETS=BTC,ETH,SOL,XRP` (80 asks, $1,410,581 — BTC dominates), MAX_CELLS 3→30→55→80 across ~4 ticks (~20 posts/tick ≈ ~45s/tick at the measured ~2s/new-cell). **Stage 2** add `,JTO,WIF,FARTCOIN,JUP,BONK,XAU` and raise to the full 220. Watch `strand` in the heartbeat (should stay 0).
+>
+> **[⚠ TWO FLAGS]** (1) **Double XAU:** both `SBXAU` (4pEmVTXd) and `XAU` (BX6rrhdd) are SB → the full board double-posts XAU ($159,600 for two identical markets). SCOPE ONE OUT (leave SBXAU off `OPTA_WRITER_ASSETS`, or close the smoke artifact) before uncapping. (2) **globalVaultCap=250** covers the 220-ask SB board ✓, but Monday's equities add ~260 Pyth cells → 480 total > 250 → RAISE `OPTA_WRITER_GLOBAL_VAULT_CAP` (~500) before/with the equity board or it truncates ATM-first.
+>
+> **[MONDAY EQUITY ADD — separate funding]** The 7 Pyth equities migrating (TSLA/MSFT/CRCL/AAPL/MSTR/NVDA/META) add **+$279,587** at current spots once SB-birthed; the 4 births (GOOGL/AMZN/AMD/COIN) add ~$160k → **~$440k Monday**, fundable in a second mint (same script, bump `OPTA_FUND_USDC`). Equities need NO writer code action — discovery auto-includes them post-birth; the LIVE PROOF to watch is the equity market-hours gate + stale-pull on the board's first NYSE close (cancel-at-close / repost-at-open).
+
 > **2026-07-20 (WRITER slow-first-reconcile — DIAGNOSIS. Structural, not a canary bug. Fix is greenlight-gated w/ scale-up.)**
 >
 > **[FINDING]** At the current canary scale (`OPTA_WRITER_ASSETS=XRP`, `MAX_CELLS=3`) there is NO slow first reconcile and the bot is healthy: ~12–13 ticks/hour (5-min `tickMs`), 0 strands, quoteFailed 0–1, liveOrders steady at 3. The 3 XRP asks PERSIST on-chain across restarts, so even a post-restart first tick just reprices (fast). The slowness is a **cold-board-at-scale** property, not reproducible at canary.

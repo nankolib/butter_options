@@ -50,6 +50,7 @@ import * as path from "path";
 import type { Opta } from "@app/idl/opta";
 import { buildSwitchboardCreateMarketTx } from "./switchboardCreateMarket";
 import { classifyVaultShell } from "./vaultShellRule";
+import { lookupSbFeed } from "./sbFeedRegistry";
 
 // ---- constants -------------------------------------------------------------
 const PROGRAM_ID = new PublicKey("CtzJ4MJYX6BFvF4g67i5C24tQuwRn6ddKkaE5L84z9Cq");
@@ -155,15 +156,39 @@ async function main(): Promise<void> {
 
   // ---- 0. idempotency + replacing-Pyth assertion ---------------------------
   const existing = await connection.getAccountInfo(marketPda);
-  if (!existing) die(10, `market PDA ${marketPda.toBase58()} does not exist — nothing to close (wrong asset?)`);
-  const mBefore: any = await program.account.optionsMarket.fetch(marketPda);
-  if (mBefore.oracleSource === ORACLE_SOURCE_SWITCHBOARD) {
-    L(`[skip] ${asset} already oracle_source=SB — already reborn. PDA=${marketPda.toBase58()}`);
-    process.exit(0);
+  // MARKETLESS RECOVERY: an absent PDA means a PRIOR run closed the market but
+  // its create leg never landed (the die(21) state) — the asset is marketless and
+  // the ONLY correct action is to go straight to create. Previously this path
+  // die(10)'d, which made the die(21) escalation advice ("re-run, it's
+  // idempotent") impossible to follow and stranded the asset. Real incident:
+  // MSFT 2026-07-20 (create threw "not in SB registry"; recovered out-of-band).
+  const recoverMarketless = !existing;
+  if (recoverMarketless) {
+    if (!execute) {
+      L(`[recover] ${asset} is MARKETLESS (PDA ${marketPda.toBase58()} absent) — a prior close landed but create did not.`);
+      L(`(dry run — no --execute). Would: create_market ${asset} source=SB feedHash=${feedHashHex.slice(0, 10)}… (create-only — no market exists to be closed)`);
+      process.exit(0);
+    }
+    L(`[recover] ⚠ ${asset} is MARKETLESS (PDA absent) — prior close landed, create did not. Skipping scan+close; going STRAIGHT TO CREATE.`);
+  } else {
+    const mBefore: any = await program.account.optionsMarket.fetch(marketPda);
+    if (mBefore.oracleSource === ORACLE_SOURCE_SWITCHBOARD) {
+      L(`[skip] ${asset} already oracle_source=SB — already reborn. PDA=${marketPda.toBase58()}`);
+      process.exit(0);
+    }
+    if (mBefore.assetName !== asset) die(11, `PDA decodes assetName='${mBefore.assetName}', expected '${asset}'`);
+    L(`[pre] market ${asset} exists: oracle_source=${mBefore.oracleSource} (Pyth) class=${mBefore.assetClass}`);
   }
-  if (mBefore.assetName !== asset) die(11, `PDA decodes assetName='${mBefore.assetName}', expected '${asset}'`);
-  L(`[pre] market ${asset} exists: oracle_source=${mBefore.oracleSource} (Pyth) class=${mBefore.assetClass}`);
 
+  // PREREQUISITE GATE: the create leg resolves jobs from the SB registry
+  // (switchboardCreateMarket.ts). If the feedHash isn't registered, create throws
+  // AFTER the close has landed → marketless. Fail BEFORE touching the market.
+  if (!lookupSbFeed(feedHashHex)) {
+    die(12, `feedHash ${feedHashHex.slice(0, 12)}… is NOT in the SB registry — create_market would throw AFTER the close and strand ${asset} marketless. Register it (crank/sbFeedRegistry.ts + app/src/utils/sbFeedData.ts) first.`);
+  }
+
+  // ---- 1+2. scan + close — SKIPPED ENTIRELY in marketless recovery ----------
+  if (!recoverMarketless) {
   // ---- 1. pre-close safety scan (preflight rule + shell override) ----------
   const vDisc = (program.coder.accounts as any).memcmp("sharedVault") as { offset: number; bytes: string };
   const raw = await connection.getProgramAccounts(PROGRAM_ID, { filters: [{ memcmp: { offset: vDisc.offset, bytes: vDisc.bytes } }] });
@@ -258,6 +283,7 @@ async function main(): Promise<void> {
     if (gone) die(20, `close confirmed (sig=${sig}) but market PDA still present — aborting before create`);
     L(JSON.stringify({ ev: "closed", asset, sig, marketPda: marketPda.toBase58() }));
   }
+  } // end if (!recoverMarketless)
 
   // ---- 3. CREATE (retry with fresh signed quote until it lands) -------------
   const sbProgram = await AnchorUtils.loadProgramFromConnection(connection, wallet, ON_DEMAND_DEVNET_PID);
@@ -292,8 +318,11 @@ async function main(): Promise<void> {
     }
   }
   if (!createSig) {
-    die(21, `ESCALATE: ${asset} CLOSED but create failed in ${MAX_CREATE_ATTEMPTS} attempts — asset is MARKETLESS. ` +
-      `Re-run this driver immediately (idempotent: it will skip the close since the PDA is gone and go straight to create).`);
+    die(21, `ESCALATE: ${asset} CLOSED but create failed in ${MAX_CREATE_ATTEMPTS} attempts — asset is MARKETLESS.\n` +
+      `  RECOVERY (verified, not aspirational): re-run this EXACT command. The PDA is now absent, so the driver takes the\n` +
+      `  marketless-recovery branch — it skips the scan+close and goes straight to create. See _test_marketless_recovery.sh.\n` +
+      `  If create keeps failing, the cause is upstream of this driver (e.g. the feedHash resolving but its gateway quote\n` +
+      `  failing); ${asset} stays marketless until create lands — do NOT close anything else.`);
   }
 
   // ---- 4. VERIFY -----------------------------------------------------------

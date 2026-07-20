@@ -101,40 +101,33 @@ export const SB_FEED_DATA: SbFeedDatum[] = [
     quoteProgramPubkey: QUOTE_PROGRAM_ID_B58,
     minOracleSamples: 2,
   },
-  // Wave-1 meme births (2026-07-16): JUP/JTO = Binance+Gate; WIF = Binance+Gate;
-  // BONK = Binance+Coinbase. feedHash minted + dry-proven against FARTCOIN's hash.
-  {
-    feedHashHex: "5f42a2a7b0b52a26774d3554b4d58cb5b997079379b5b94649d34451be0239f2",
-    symbol: "JUP/USD",
-    suggestedAssetClass: 0, // crypto
+  // ---- Wave-2 equities (locked manifest, minted 2026-07-20; ClickUp 86eyb0xjz).
+  // symbol is PART OF THE HASH — never edit. Registration is a PREREQUISITE of the
+  // equity migrations: _cutover_rebirth's create path throws "not in SB registry"
+  // (switchboardCreateMarket.ts:80) and would leave the asset MARKETLESS (found
+  // live on MSFT). sbFeedRegistry.ts asserts each hash reproduces at module load.
+  ...(
+    [
+      ["MSFT", "b13e5f030af9a49150591b6cbce83810184331e5b6a0eae8b303a49153496c56"],
+      ["AAPL", "d0ab87e8218247d61f3b60e0d9c7e9dc93f691f30849552e0923aa8acd15fdc8"],
+      ["GOOGL", "c47268fa603180997ab954702ef058dcf56d97f597085d095278dfffd37c9103"],
+      ["AMZN", "bf3190ce3b040d25d1af35c66461fe8fee2f7dd4c83e72e5c13dcc89929abf3f"],
+      ["META", "56bb4c5863ad44b5c59d75cce27d170f8c05e50b9698c9a27480bc7c47f11570"],
+      ["NVDA", "5378913080bd823885beb8cc37d55842d438e2198f8ce711b7385b527a542bdf"],
+      ["AMD", "28fcb07fb1301a399cbe35b809cd8ffa45a22f5bd4e3a15845b4fca219846668"],
+      ["TSLA", "24f5404db181873fead6fd9ad15c7edc2265e8b7a494b3168055fa3bfbb3ced3"],
+      ["COIN", "60e0a2d31235e2e3c7414635f3bf0c14c671098ef953b0823d380913d627c868"],
+      ["MSTR", "5dc7af42f5237fb2d39aa65374c91234da9a92ba940ac9a5613b51d59d9a830a"],
+      ["CRCL", "077acbc9a679e4660b8ace50be067bd08a443f1ea7c0a48b4b6e444c23c17040"],
+    ] as const
+  ).map(([t, feedHashHex]): SbFeedDatum => ({
+    feedHashHex,
+    symbol: `${t}/USD`,
+    suggestedAssetClass: 2, // equity
     queuePubkey: ON_DEMAND_DEVNET_QUEUE_B58,
     quoteProgramPubkey: QUOTE_PROGRAM_ID_B58,
     minOracleSamples: 2,
-  },
-  {
-    feedHashHex: "bc8e0c273c458ee54aadd7d18875c2d3164a4acb424680c0a2d5f6a121317ec4",
-    symbol: "JTO/USD",
-    suggestedAssetClass: 0, // crypto
-    queuePubkey: ON_DEMAND_DEVNET_QUEUE_B58,
-    quoteProgramPubkey: QUOTE_PROGRAM_ID_B58,
-    minOracleSamples: 2,
-  },
-  {
-    feedHashHex: "c186e1064610e8f14330734e4492e65dd6d141da371f1f94419c96296801294a",
-    symbol: "WIF/USD",
-    suggestedAssetClass: 0, // crypto
-    queuePubkey: ON_DEMAND_DEVNET_QUEUE_B58,
-    quoteProgramPubkey: QUOTE_PROGRAM_ID_B58,
-    minOracleSamples: 2,
-  },
-  {
-    feedHashHex: "c062a25a824803dd5b88661f0b6dec5b6bc2bfc2ec385f2e053b83e58660e32f",
-    symbol: "BONK/USD",
-    suggestedAssetClass: 0, // crypto
-    queuePubkey: ON_DEMAND_DEVNET_QUEUE_B58,
-    quoteProgramPubkey: QUOTE_PROGRAM_ID_B58,
-    minOracleSamples: 2,
-  },
+  })),
 ];
 
 /** Normalize a feedHash (strip 0x, lowercase) for keying / lookup. */

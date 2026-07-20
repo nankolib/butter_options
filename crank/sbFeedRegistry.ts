@@ -24,7 +24,7 @@
 // ============================================================================
 
 import { PublicKey } from "@solana/web3.js";
-import { OracleFeed, OracleJob } from "@switchboard-xyz/common";
+import { OracleFeed, OracleJob, FeedHash } from "@switchboard-xyz/common";
 import {
   ON_DEMAND_DEVNET_QUEUE,
   QUOTE_PROGRAM_ID,
@@ -89,27 +89,36 @@ const JOBS_BY_FEED: Record<string, Array<Record<string, unknown>>> = {
     { tasks: [{ httpTask: { url: "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=FARTCOIN_USDT" } }, { jsonParseTask: { path: "$[0].last" } }] },
     { tasks: [{ httpTask: { url: "https://api.mexc.com/api/v3/ticker/price?symbol=FARTCOINUSDT" } }, { jsonParseTask: { path: "$.price" } }] },
   ],
-  // JUP/USD — Binance + Gate (Wave-1 meme birth 2026-07-16)
-  "5f42a2a7b0b52a26774d3554b4d58cb5b997079379b5b94649d34451be0239f2": [
-    { tasks: [{ httpTask: { url: "https://api.binance.com/api/v3/ticker/price?symbol=JUPUSDT" } }, { jsonParseTask: { path: "$.price" } }] },
-    { tasks: [{ httpTask: { url: "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=JUP_USDT" } }, { jsonParseTask: { path: "$[0].last" } }] },
-  ],
-  // JTO/USD — Binance + Gate
-  "bc8e0c273c458ee54aadd7d18875c2d3164a4acb424680c0a2d5f6a121317ec4": [
-    { tasks: [{ httpTask: { url: "https://api.binance.com/api/v3/ticker/price?symbol=JTOUSDT" } }, { jsonParseTask: { path: "$.price" } }] },
-    { tasks: [{ httpTask: { url: "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=JTO_USDT" } }, { jsonParseTask: { path: "$[0].last" } }] },
-  ],
-  // WIF/USD — Binance + Gate (Coinbase WIF-USD rejected per manifest)
-  "c186e1064610e8f14330734e4492e65dd6d141da371f1f94419c96296801294a": [
-    { tasks: [{ httpTask: { url: "https://api.binance.com/api/v3/ticker/price?symbol=WIFUSDT" } }, { jsonParseTask: { path: "$.price" } }] },
-    { tasks: [{ httpTask: { url: "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=WIF_USDT" } }, { jsonParseTask: { path: "$[0].last" } }] },
-  ],
-  // BONK/USD — Binance + Coinbase
-  "c062a25a824803dd5b88661f0b6dec5b6bc2bfc2ec385f2e053b83e58660e32f": [
-    { tasks: [{ httpTask: { url: "https://api.binance.com/api/v3/ticker/price?symbol=BONKUSDT" } }, { jsonParseTask: { path: "$.price" } }] },
-    { tasks: [{ httpTask: { url: "https://api.exchange.coinbase.com/products/BONK-USD/ticker" } }, { jsonParseTask: { path: "$.price" } }] },
-  ],
+  // ---- Wave-2 equities — quotes.opta.fyi (Finnhub + Yahoo). Builders are
+  // byte-identical to crank/_equity_feed_hashes.ts (the generator that froze the
+  // manifest). The parity guard below re-derives every hash at module load. ----
+  ...eqJobs(),
 };
+
+/** Finnhub+Yahoo job pair per equity ticker, keyed by its FROZEN feedHash. */
+function eqJobs(): Record<string, Array<Record<string, unknown>>> {
+  const rows: Array<[string, string]> = [
+    ["MSFT", "b13e5f030af9a49150591b6cbce83810184331e5b6a0eae8b303a49153496c56"],
+    ["AAPL", "d0ab87e8218247d61f3b60e0d9c7e9dc93f691f30849552e0923aa8acd15fdc8"],
+    ["GOOGL", "c47268fa603180997ab954702ef058dcf56d97f597085d095278dfffd37c9103"],
+    ["AMZN", "bf3190ce3b040d25d1af35c66461fe8fee2f7dd4c83e72e5c13dcc89929abf3f"],
+    ["META", "56bb4c5863ad44b5c59d75cce27d170f8c05e50b9698c9a27480bc7c47f11570"],
+    ["NVDA", "5378913080bd823885beb8cc37d55842d438e2198f8ce711b7385b527a542bdf"],
+    ["AMD", "28fcb07fb1301a399cbe35b809cd8ffa45a22f5bd4e3a15845b4fca219846668"],
+    ["TSLA", "24f5404db181873fead6fd9ad15c7edc2265e8b7a494b3168055fa3bfbb3ced3"],
+    ["COIN", "60e0a2d31235e2e3c7414635f3bf0c14c671098ef953b0823d380913d627c868"],
+    ["MSTR", "5dc7af42f5237fb2d39aa65374c91234da9a92ba940ac9a5613b51d59d9a830a"],
+    ["CRCL", "077acbc9a679e4660b8ace50be067bd08a443f1ea7c0a48b4b6e444c23c17040"],
+  ];
+  const out: Record<string, Array<Record<string, unknown>>> = {};
+  for (const [t, h] of rows) {
+    out[h] = [
+      { tasks: [{ httpTask: { url: `https://quotes.opta.fyi/finnhub/quote?symbol=${t}` } }, { jsonParseTask: { path: "$.c" } }] },
+      { tasks: [{ httpTask: { url: `https://quotes.opta.fyi/yahoo/chart/${t}` } }, { jsonParseTask: { path: "$.chart.result[0].meta.regularMarketPrice" } }] },
+    ];
+  }
+  return out;
+}
 
 // Map each pure-data base58 string → the live SDK constant, asserting equality
 // so a future SDK constant change fails the crank LOUDLY instead of drifting.
@@ -148,6 +157,31 @@ function entryFromDatum(d: SbFeedDatum): SbFeedEntry {
 const REGISTRY: Map<string, SbFeedEntry> = new Map(
   SB_FEED_DATA.map((d) => [normSbFeedHash(d.feedHashHex), entryFromDatum(d)]),
 );
+
+// ---- PARITY GUARD (fail-loud, module load) --------------------------------
+// Every entry's jobs+symbol MUST re-derive its own feedHash key. This is the
+// GUARD1 assertion applied to the registry itself: a reordered job, an edited
+// URL/path, or a changed symbol silently mints a DIFFERENT feed — which would
+// make the crank fetch quotes for the wrong feed and make create_market build an
+// unusable quote. Drift dies here, not in production.
+export function assertRegistryHashParity(): { checked: number; ok: string[] } {
+  const ok: string[] = [];
+  const bad: string[] = [];
+  for (const [key, entry] of REGISTRY) {
+    const derived = normSbFeedHash(
+      Buffer.from(FeedHash.computeOracleFeedId(buildOracleFeed(entry))).toString("hex"),
+    );
+    if (derived === key) ok.push(entry.symbol);
+    else bad.push(`${entry.symbol}: key=${key.slice(0, 12)}… derived=${derived.slice(0, 12)}…`);
+  }
+  if (bad.length > 0) {
+    throw new Error(
+      `sbFeedRegistry PARITY FAILURE — ${bad.length}/${REGISTRY.size} entries do not reproduce their feedHash:\n  ${bad.join("\n  ")}`,
+    );
+  }
+  return { checked: REGISTRY.size, ok };
+}
+assertRegistryHashParity();
 
 /** Normalize a feedHash (strip 0x, lowercase) for registry keying. Thin
  *  re-export of the shared pure-data normalizer so existing callers

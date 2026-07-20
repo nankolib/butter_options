@@ -1,5 +1,19 @@
 # Opta — Engineer Handoff
 
+> **2026-07-20 (⚠ MSFT MARKETLESS INCIDENT — recovered. STEP-ORDER DEFECT: registry registration is a PREREQUISITE of equity migrations.)**
+>
+> **[INCIDENT]** STEP 3's first migration (MSFT) closed successfully, then **all 10 create attempts threw `feedHash … not in SB registry`** (`crank/switchboardCreateMarket.ts:80` — the create leg resolves jobs via `lookupSbFeed`). MSFT sat **MARKETLESS ~2 minutes**. Recovered out-of-band via `_birth_sb_market.ts MSFT` (embedded defs, registry-independent) — created first attempt. **No user funds were ever at risk**: the sole referencing vault was an empty shell, zero live positions. The chain correctly halted before AAPL/TSLA, so only one asset was exposed.
+>
+> **[⚠ STEP-ORDER DEFECT — the real lesson]** **SB-registry registration is a PREREQUISITE of any equity migration, not STEP 4 follow-on work.** The Wave-2 plan ordered it after the migrations; had we continued, **all 7 equities would have gone marketless in turn.** STEP 4's remaining scope after this = **crank overlay / tick verification only** (the registry half is now done).
+>
+> **[SECOND DEFECT — recovery advice was fiction]** `die(21)` told the operator to "re-run this driver (idempotent: it skips the close and goes straight to create)", but step 0 `die(10)`'d on the absent PDA, making that impossible. The escalation described behavior that did not exist.
+>
+> **[FIXES — all verified]**
+> - **(a) Registry + parity guard.** All 11 equity feeds registered (`app/src/utils/sbFeedData.ts` data + `crank/sbFeedRegistry.ts` jobs). New **`assertRegistryHashParity()` runs at module load and THROWS on drift** — every entry's `symbol`+jobs must re-derive its own feedHash key (GUARD1 applied to the registry itself). `_verify_registry_hashes.ts` gate: **17/17 parity OK, 11/11 equity feeds resolvable → "GATE PASSED"**.
+> - **(b) Recovery patched + tested.** Absent PDA now takes a **marketless-recovery branch** (skip scan+close → straight to create) instead of `die(10)`. Added a **prerequisite gate**: an unregistered feedHash now **`die(12)` BEFORE any close**, so this incident class cannot recur. `_test_marketless_recovery.sh` **7/7 PASS** — reproduces the marketless state (absent PDA) and proves recovery, and proves the gate refuses to close. Escalation text now matches real behavior.
+> - **(c) MSFT parity — no divergent migration.** `_probe_msft_parity.ts` **8/8 OK**: `assetName='MSFT'`, `oracle_source=1`, feedHash **byte-matches** manifest, `asset_class=2`, resolves in registry, vol oracle exists **at the market-derived PDA** (`9Q4CXgPK…`) with `source=1`, `seed_vol=300000000000`. **Byte-equivalent to cutover-tool output.**
+> - **First equity quote on the board is SANE:** MSFT $398 ATM CALL ~30d → **premium $14.5148** (ATM approx $13.70, band $6.85–$27.39), **`vol_used=30.00%` === seed**, **`spot_used=$398.12`** vs proxy $397.7 (<3%).
+
 > **2026-07-20 (WAVE-2 STEP 2 ✅ — 11 equity vol oracles SEEDED. STEP 3 pre-scanned: 6/7 clean, NVDA blocked on $0.000001 dust.)**
 >
 > **[STEP 2 DONE — `917830b`]** `initialize_vol_oracle` ×11 with the approved manifest seeds, one at a time via `_birth_sb_market.ts <T> --seed-only` (new flag: creates the oracle and STOPS; markets stay for STEP 3). **All 11 verified on-chain: `oracle_source=1`, `seed_vol` reads back === manifest, `sample_count=0`** → warmup gate satisfied by the seed = tradeable at birth. Seeds ×1e12: MSFT `3e11` `9Q4CXgPK…` · AAPL `3.2e11` `8TYhhZYg…` · GOOGL `3.5e11` `HdUkkcwj…` · AMZN `3.5e11` `5vLxyZp4…` · META `4e11` `7aEcm8SD…` · NVDA `5.5e11` `14HHRRPR…` · AMD `5.5e11` `2xVktAmf…` · TSLA `6e11` `36UKPKor…` · COIN `7.5e11` `97mfTNGF…` · MSTR `9e11` `FLZBdTZk…` · CRCL `9.5e11` `2z6oJMck…`

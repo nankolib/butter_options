@@ -1,5 +1,16 @@
 # Opta — Engineer Handoff
 
+> **2026-07-20 (SCALE-UP FLAGS DECIDED — SBXAU scoped out, globalVaultCap→500 committed. FINAL funding line below.)**
+>
+> **[FLAG 1 — SBXAU scoped OUT]** `XAU` (BX6rrhdd) is canonical → single XAU exposure. `SBXAU` (4pEmVTXd) stays OFF `OPTA_WRITER_ASSETS` (do NOT close the market artifact now — it rides the **Aug-7 cleanup**). Board drops by $79,800 → **net SB board = $1,535,961** (10 markets, 200 asks).
+> **[FLAG 2 — globalVaultCap → 500, COMMITTED]** `writer/src/env.ts` default 250→500 (covers ~480 with Monday equities; MAX_CELLS stays the real throttle). Takes live effect on the scale-up redeploy (rebuild dist), or set `OPTA_WRITER_GLOBAL_VAULT_CAP=500` in `/opt/opta-writer/.env` for an immediate restart.
+> **[✅ FINAL FUNDING LINE — founder runs tomorrow AM PKT, WSL, repo root]** `scripts/_exec_fund_writer.mjs` default is now **mint $1,650,000 + 5 SOL** (net-SBXAU board $1,535,961 + ~$133k buffer → writer ATA ≈ $1,668,997). SIMULATE re-verified clean (err:null).
+> ```
+> NODE_PATH=…/app/node_modules OPTA_RPC_URL="$(cat ~/.opta-rpc-helius)" node scripts/_exec_fund_writer.mjs               # SIMULATE
+> NODE_PATH=…/app/node_modules OPTA_RPC_URL="$(cat ~/.opta-rpc-helius)" OPTA_FUND_SEND=1 node scripts/_exec_fund_writer.mjs   # SEND
+> ```
+> Then Stage 1: `OPTA_WRITER_ASSETS=BTC,ETH,SOL,XRP`, ramp `OPTA_WRITER_MAX_CELLS` 3→30→55→80 across restarts (strand=0 watched); Stage 2 add `,JTO,WIF,FARTCOIN,JUP,BONK,XAU` (NOT SBXAU) → full 200-ask board. **Monday equity mint (~$440k) is a SEPARATE founder-gated block — do NOT fold into tomorrow's mint.**
+
 > **2026-07-20 (WRITER SCALE-UP PREP — full-board USDC math @ current SB spots + funding block. FOUNDER-GATED @ funding, tomorrow AM PKT.)**
 >
 > **Decision (founder):** staged cap raise (option a); NO read-path parallelization before Monday; (b) engine parallelize + (c) age-reprice gas nit deferred post-Monday.

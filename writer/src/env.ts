@@ -25,7 +25,7 @@ export interface WriterConfig {
 
   // --- ladder / caps ---
   maxCellsPerAsset: number;  // OPTA_WRITER_MAX_CELLS_PER_ASSET (default 20)
-  globalVaultCap: number;    // OPTA_WRITER_GLOBAL_VAULT_CAP (default 250)
+  globalVaultCap: number;    // OPTA_WRITER_GLOBAL_VAULT_CAP (default 500 — full SB board ~200 asks + Monday equities ~260 ≈ 480; MAX_CELLS is the real throttle)
   targetNotionalMajor: number; // OPTA_WRITER_TARGET_NOTIONAL_MAJOR USD (default 2000)
   targetNotionalMeme: number;  // OPTA_WRITER_TARGET_NOTIONAL_MEME USD (default 500)
 
@@ -110,7 +110,7 @@ export function loadConfig(): WriterConfig {
     assets,
     maxCellsThisRun: num(process.env.OPTA_WRITER_MAX_CELLS, 0),
     maxCellsPerAsset: num(process.env.OPTA_WRITER_MAX_CELLS_PER_ASSET, 20),
-    globalVaultCap: num(process.env.OPTA_WRITER_GLOBAL_VAULT_CAP, 250),
+    globalVaultCap: num(process.env.OPTA_WRITER_GLOBAL_VAULT_CAP, 500),
     targetNotionalMajor: num(process.env.OPTA_WRITER_TARGET_NOTIONAL_MAJOR, 2000),
     targetNotionalMeme: num(process.env.OPTA_WRITER_TARGET_NOTIONAL_MEME, 500),
     repriceDriftBps: num(process.env.OPTA_WRITER_REPRICE_DRIFT_BPS, 300),

@@ -4,13 +4,15 @@
 // Signs with the admin keypair (WSL-only /home/nanko/.config/solana/id.json) —
 // read in place, never printed. SIMULATE by default; OPTA_FUND_SEND=1 to send.
 //
-// Sizing (from crank/_probe_fullboard_collateral.ts at current SB spots):
-//   SB board full collateral (11 SB markets × 20 cells) ≈ $1,615,761
-//   BTC alone ≈ $1,293,200 (qty clamps to 1: tn $2000 < $64.7k strike)
-//   Writer currently holds ≈ $18,997 USDC → delta ≈ $1,596,764.
-// Defaults mint $1,750,000 (board + ~$130k buffer for spot drift/staging) and
-// top up +5 SOL (cold board locks ≈1.7 SOL of account rent across 220 vaults/
-// mints/orders; rent is recoverable on close). Override via env.
+// Sizing (from crank/_probe_fullboard_collateral.ts at current SB spots), with
+// SBXAU SCOPED OUT (XAU BX6rrhdd is canonical → single XAU exposure):
+//   SB board net collateral (10 SB markets × 20 cells) ≈ $1,535,961
+//     ( = $1,615,761 full − $79,800 SBXAU ). BTC alone ≈ $1,293,200.
+//   Writer holds ≈ $18,997 USDC → mint $1,650,000 → ATA ≈ $1,668,997
+//     (board + ~$133k buffer for spot drift / staging re-posts).
+// Also tops up +5 SOL (cold board locks ≈1.5 SOL of recoverable account rent
+// across ~200 vaults/mints/orders). Monday's equity mint (~$440k) is SEPARATE —
+// do NOT fold it in here. Override amounts via env.
 //
 // Run in WSL (from repo root):
 //   NODE_PATH=/mnt/d/claude\ everything/butter_options/app/node_modules \
@@ -25,7 +27,7 @@ const SEND = process.env.OPTA_FUND_SEND === "1";
 const KEYPATH = process.env.ADMIN_KEYPATH || "/home/nanko/.config/solana/id.json";
 const USDC_MINT = new PublicKey("AytU5HUQRew9VdUdrzQuZvZ7s14pHLiYjAF5WqdK3oxL");
 const WRITER = new PublicKey("HgafDv195BtNc8X4uvNoRuGcUra5PuUwDJgHeKHvgFiS");
-const USDC_AMOUNT = Number(process.env.OPTA_FUND_USDC ?? "1750000");   // human USDC to MINT
+const USDC_AMOUNT = Number(process.env.OPTA_FUND_USDC ?? "1650000");   // human USDC to MINT (board net SBXAU + buffer)
 const SOL_TOPUP = Number(process.env.OPTA_FUND_SOL ?? "5");           // human SOL to transfer (0 = skip)
 const LPS = 1_000_000_000;
 const sol = (l) => (l / LPS).toFixed(6);

@@ -31,6 +31,33 @@ const EQUITY_MIN_LEAD_SECS = 24 * 3600; // don't post an equity ask expiring wit
 /** Resting asks whose vault resolves to `marketPk58` — the asks to PULL when that
  *  market's oracle is not fresh (see reconcile's !oracle.ready branch). Pure +
  *  map-driven so it unit-tests without RPC. */
+/** HARD denylist decision (pure). Evaluated BEFORE the allow-list so an exclusion
+ *  survives dropping OPTA_WRITER_ASSETS (assets=null / full board) — a permanent
+ *  exclusion must never live in the allow-list alone, or it silently returns the
+ *  moment the allow-list is dropped. Returns the reason, or null if allowed. */
+export function denyReason(
+  m: { assetName: string; assetClass: number },
+  assetsExclude: string[],
+  excludeClasses: number[],
+): string | null {
+  if (assetsExclude.includes(m.assetName.toUpperCase())) return "ticker-denylist";
+  if (excludeClasses.includes(m.assetClass)) return `class-denylist:${m.assetClass}`;
+  return null;
+}
+
+/** Full scope decision (pure): denylists win, then the optional allow-list. */
+export function scopeReason(
+  m: { assetName: string; assetClass: number },
+  assets: string[] | null,
+  assetsExclude: string[],
+  excludeClasses: number[],
+): string | null {
+  const deny = denyReason(m, assetsExclude, excludeClasses);
+  if (deny) return deny;
+  if (assets != null && !assets.includes(m.assetName.toUpperCase())) return "not-in-allowlist";
+  return null;
+}
+
 export function ordersOnMarket(
   orders: MyOrder[],
   marketPk58: string,
@@ -58,8 +85,12 @@ export class WriterEngine {
     };
   }
 
+  private denied(m: MarketInfo): string | null {
+    return denyReason(m, this.cfg.assetsExclude, this.cfg.excludeClasses);
+  }
+
   private inScope(m: MarketInfo): boolean {
-    return this.cfg.assets == null || this.cfg.assets.includes(m.assetName.toUpperCase());
+    return scopeReason(m, this.cfg.assets, this.cfg.assetsExclude, this.cfg.excludeClasses) === null;
   }
 
   /** Populate the vault58 -> market58 cache for any orders whose vault we have not
@@ -233,6 +264,10 @@ export class WriterEngine {
     // Defense-in-depth: never post on a Pyth-source market even if the loop
     // guard is bypassed (see pyth-frozen-skip). Permanent freeze policy.
     if (market.oracleSource === 0) { log.error("pyth-guard-block", { asset: cell.assetName }); return false; }
+    // Defense-in-depth: a denylisted market must never post even if the scope
+    // filter is bypassed. Mirrors the Pyth guard.
+    const deny = this.denied(market);
+    if (deny) { log.error("denylist-block", { asset: cell.assetName, reason: deny }); return false; }
     const vault = vaultAmericanPda(market.publicKey, BigInt(cell.strikeMicro.toString()), cell.expiryTs, cell.optIdx);
     const record = mintRecordPda(seriesMint);
     const collateral = cell.strikeDollars * cell.qty;

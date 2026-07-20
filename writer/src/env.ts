@@ -21,6 +21,11 @@ export interface WriterConfig {
   enabled: boolean;          // OPTA_WRITER_ENABLED — false = observe-only (no chain writes)
   dryRun: boolean;           // OPTA_WRITER_DRY_RUN — true = build plan + log, never send tx
   assets: string[] | null;   // OPTA_WRITER_ASSETS CSV allow-list; null = all discovered
+  // HARD denylists — these WIN over the allow-list and stay in force when
+  // assets=null (full board). A permanent exclusion belongs here, never in the
+  // allow-list, so it cannot silently return the moment the allow-list is dropped.
+  assetsExclude: string[];   // OPTA_WRITER_ASSETS_EXCLUDE CSV tickers (e.g. SBXAU — double-XAU exposure)
+  excludeClasses: number[];  // OPTA_WRITER_EXCLUDE_CLASSES CSV asset_class (e.g. 2,4 = equity/ETF until their funding block lands)
   maxCellsThisRun: number;   // OPTA_WRITER_MAX_CELLS — cap on TOTAL live asks (canary; 0 = uncapped)
 
   // --- ladder / caps ---
@@ -101,6 +106,11 @@ export function loadConfig(): WriterConfig {
     ? assetsRaw.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean)
     : null;
 
+  const assetsExclude = (process.env.OPTA_WRITER_ASSETS_EXCLUDE || "")
+    .split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
+  const excludeClasses = (process.env.OPTA_WRITER_EXCLUDE_CLASSES || "")
+    .split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n));
+
   return {
     rpcUrl,
     idlPath,
@@ -108,6 +118,8 @@ export function loadConfig(): WriterConfig {
     enabled: bool(process.env.OPTA_WRITER_ENABLED, false), // default OFF — must be explicitly enabled
     dryRun: bool(process.env.OPTA_WRITER_DRY_RUN, false),
     assets,
+    assetsExclude,
+    excludeClasses,
     maxCellsThisRun: num(process.env.OPTA_WRITER_MAX_CELLS, 0),
     maxCellsPerAsset: num(process.env.OPTA_WRITER_MAX_CELLS_PER_ASSET, 20),
     globalVaultCap: num(process.env.OPTA_WRITER_GLOBAL_VAULT_CAP, 500),

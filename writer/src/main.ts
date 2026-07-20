@@ -35,6 +35,10 @@ async function main(): Promise<void> {
     wallet: cfg.wallet.publicKey.toBase58(),
     mode: cfg.dryRun ? "DRY-RUN" : cfg.enabled ? "LIVE" : "OBSERVE-ONLY",
     assets: cfg.assets ?? "all",
+    // Surfaced so a full-board flip can be verified to still carry its hard
+    // exclusions (denylist wins over the allow-list and survives assets=null).
+    assetsExclude: cfg.assetsExclude.length ? cfg.assetsExclude : "none",
+    excludeClasses: cfg.excludeClasses.length ? cfg.excludeClasses : "none",
     maxCellsThisRun: cfg.maxCellsThisRun || "uncapped",
     tickMs: cfg.tickMs,
   });

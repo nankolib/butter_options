@@ -1,5 +1,29 @@
 # Opta — Engineer Handoff
 
+> **2026-07-20 (WAVE-2 STEP 1 ✅ — all 11 equity SB feeds MINTED + registered. Entry gate satisfied; STEP 2 pending greenlight.)**
+>
+> **[STEP 1 DONE]** All 11 Wave-2 equity feeds stored on Crossbar with the full guard chain per ticker: **GUARD1** (local `computeOracleFeedId`) → **STORE** → **GUARD2** (server feedId === local === **frozen manifest hash**) → **RESOLVE** (fetch-back, jobs=2) → **LIVENESS** (gateway signed, 2 signatures, ed25519 present). **11/11 GUARD2 PASS — zero hash drift**, so the locked manifest (ClickUp `86eyb0xjz`) is intact. Tooling: equity defs added to `crank/_mint_sb_feed.ts`, using builders **byte-identical** to `crank/_equity_feed_hashes.ts` (the generator that froze the hashes) — re-proved 11/11 before any store.
+>
+> | Ticker | seed | path | feedHash (frozen = minted) | CID | dev (finnhub vs yahoo) |
+> |---|---|---|---|---|---|
+> | MSFT | 0.30 | migrate | `b13e5f03…` | `bafkreifrhzpqgc…` | 0.020% |
+> | AAPL | 0.32 | migrate | `d0ab87e8…` | `bafkreigqvod6qi…` | 0.037% |
+> | GOOGL | 0.35 | birth | `c47268fa…` | `bafkreigeojupuy…` | 0.014% |
+> | AMZN | 0.35 | birth | `bf3190ce…` | `bafkreif7ggim4o…` | 0.088% |
+> | META | 0.40 | migrate | `56bb4c58…` | `bafkreicwxngfqy…` | 0.163% → resampled 0.05–0.07% (transient) |
+> | NVDA | 0.55 | migrate | `53789130…` | `bafkreictpcitba…` | 0.039% |
+> | AMD | 0.55 | birth | `28fcb07f…` | `bafkreibi7syh7m…` | 0.063% |
+> | TSLA | 0.60 | migrate | `24f5404d…` | `bafkreibe6vae3m…` | 0.009% |
+> | COIN | 0.75 | birth | `60e0a2d3…` | `bafkreida4crnge…` | 0.082% |
+> | MSTR | 0.90 | migrate | `5dc7af42…` | `bafkreic5y6xuf5…` | 0.010% |
+> | CRCL | 0.95 | migrate | `077acbc9…` | `bafkreiahplf4tj…` | **0.19–0.33% (widest)** |
+>
+> **[NOTE 1 — CRCL is the widest-spread ticker; WATCH]** CRCL's two legs persistently disagree ~0.19–0.33% (re-sampled 3×) — a thin-listing characteristic, not a proxy fault; well inside `maxJobRangePct=5%` with a 2-source median, and its **0.95 seed already prices it as the board's most uncertain name**. Action: watch its oracle marks vs reference over week 1; **if persistently biased, `reset_vol_oracle` is the lever.**
+>
+> **[NOTE 2 — the 0.1% deviation bar is MISCALIBRATED for equities]** It is tighter than ordinary inter-source tick noise: the AAPL control itself hit 0.106% on one sample, and META spiked 0.163% once then settled at 0.05–0.07%. **Recalibrate future waves to ~0.25% transient / 0.5% systematic** so every mint doesn't re-litigate tick noise.
+>
+> **[STEP 2 READY]** All 11 vol-oracle PDAs verified **ABSENT** on-chain → clean init, no idempotency conflicts. Seeds scale ×1e12 (0.30 → `300000000000`), `assetClass=2`, `source=1`.
+
 > **2026-07-20 (SCALE-UP FLAGS DECIDED — SBXAU scoped out, globalVaultCap→500 committed. FINAL funding line below.)**
 >
 > **[FLAG 1 — SBXAU scoped OUT]** `XAU` (BX6rrhdd) is canonical → single XAU exposure. `SBXAU` (4pEmVTXd) stays OFF `OPTA_WRITER_ASSETS` (do NOT close the market artifact now — it rides the **Aug-7 cleanup**). Board drops by $79,800 → **net SB board = $1,535,961** (10 markets, 200 asks).

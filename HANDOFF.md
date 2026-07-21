@@ -104,6 +104,75 @@ to be **SETTLED**, so run **after the Jul-24 and Jul-31 settlements**, folded in
   against a confirmed 60/min free tier.
 
 ---
+
+## SESSION CLOSE ADDENDUM — 2026-07-21 (Wave-2 / crank-side session; tab retired)
+
+> Complements §1–7 above (writer/MM session). That block is authoritative for the
+> writer, funding math, and rent/shells root cause — **not repeated here.** This
+> addendum records only the equity/crank-side facts a fresh reader would otherwise
+> miss. Full narrative detail is in the dated blocks below.
+
+### A. Equity board state (done, verified)
+All **11 equity markets are live on Switchboard** and independently re-verified
+on-chain (`crank/_probe_wave2_verify.ts` → ALL 11 OK): canonical `assetName`,
+`oracle_source=1`, feedHash byte-matches the frozen manifest, `asset_class=2`,
+registry-resolvable, vol oracle present **at the market-derived PDA** with
+`source=1` + manifest seed, `sample_count=0` (tradeable at birth via seed).
+7 migrations + 4 births. `get_option_price` proven SANE on MSFT/AAPL/TSLA
+(`vol_used` === seed exactly; `spot_used` ≈ proxy; premium inside an ATM band).
+
+### B. Crank state
+Deployed with RULE-1 HEAD assertion; boot marker `supported: 10 → 17` proves the
+equity registry live **in-process**. Crypto sampling verified unaffected
+(`sc=244`, ~25 min freshness). Equity feeds are attempted and fail cleanly
+(honest-stale, bounded 8 retries, 0 crashes) until the 13:30Z open.
+
+### C. Open crank-side items NOT covered in §2
+1. **Hourly "warming tick" has pushed NOTHING since Mon 14:02Z** — `feedsPushed:0`,
+   error `packEd25519Ix: all triples must share an identical message`. **Pre-existing**
+   (predates all Wave-2 work) and **NOT service-affecting**: the ~30-min main push
+   loop is what actually samples (proven by `sc=244`). It burns 2–3 min/hour for
+   nothing. Own sub-arc — do not conflate with equity staleness.
+2. **Quantify stale-retry noise (queued for today AM).** The warming tick went
+   124s → 196s when equities joined (~92 failed fetches/tick, 8 retries/feed).
+   **Decision rule:** if that materially delays *crypto* sampling, a market-hours
+   gate on the crank moves up the list; if it is only log spam, it waits.
+3. **PERMANENT RULE — no `import.meta` in any `app/src/utils` module the crank
+   imports.** It is an ESM-only *syntax* marker: its mere presence makes Node treat
+   the file as ESM, and the crank imports `@app/*` under CJS/ts-node. This
+   crash-looped the crank (`exports is not defined in ES module scope`) for ~10 min
+   on Jul-21. FE-only idioms belong in FE-only modules (`env.ts` already uses it and
+   is never imported by the crank). Fixed in `1898c23`.
+4. **PERMANENT RULE — SB-registry registration is a PREREQUISITE of any equity
+   migration**, never STEP-4 follow-on work. `_cutover_rebirth`'s create leg resolves
+   jobs via `lookupSbFeed` and throws *after* the close has landed → asset goes
+   MARKETLESS (happened to MSFT). The tool now `die(12)`s on an unregistered
+   feedHash **before** touching the market, and an absent PDA takes a
+   marketless-recovery branch (skip scan+close → straight to create).
+
+### D. Tool inventory (all read-only unless noted)
+| Tool | Proves / does |
+|---|---|
+| `crank/_probe_wave2_verify.ts` | 11-row equity board verify (the STEP-3 acceptance table) |
+| `crank/_verify_registry_hashes.ts` | registry parity (every entry re-derives its own feedHash) + 11/11 equity resolvable — **run before any migration** |
+| `crank/_test_marketless_recovery.sh` | 7/7: absent-PDA recovery + unregistered-feedHash refuses to close |
+| `crank/_probe_sb_freshness.ts` | per-feed `sample_count` + freshness (the equity sample-count proof for 13:30Z) |
+| `crank/_probe_eq_gop.ts`, `_probe_msft_parity.ts` | `get_option_price` plausibility (vol===seed, spot≈proxy, premium in ATM band) |
+| `crank/_probe_fullboard_collateral.ts` | full-board USDC collateral at live SB spots (the funding-STOP USDC term) |
+| `crank/_probe_writer_orders.ts` | live writer asks **by asset** (board census) |
+| `crank/_probe_writer_bal.ts` | writer SOL + USDC (burn measurement) |
+| `crank/_probe_xrp_strikes.ts` | distinct strikes per asset — **the strike-hysteresis / shells proof** (>5 strikes on one asset = wobble minting series) |
+| `scripts/_exec_fund_writer.mjs` | **WRITES** — mint USDC + SOL top-up. SIMULATE by default; `OPTA_FUND_SEND=1` to fire |
+
+`_probe_xrp_strikes.ts` is the cheapest way to close §2a's open question: after the
+cap is raised, a stable distinct-strike count per asset (5) is direct evidence the
+hysteresis holds; a climbing count means wobble is still minting series.
+
+### E. Session-owned background tasks
+**None.** No pollers, watchers, crons, or scheduled wakeups were created by this
+session. All monitors are VPS-side and persist independently (see §6).
+
+---
 # Opta — Engineer Handoff
 
 > **2026-07-21 (WAVE-2 STEP 4 ✅ crank live on 17 feeds. ⚠ TWO INCIDENTS: crank ESM regression (fixed) + WRITER OUT OF GAS (open, sizes tomorrow's block).)**

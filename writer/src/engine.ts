@@ -28,6 +28,25 @@ import { isMarketHours } from "./marketHours";
 
 const EQUITY_MIN_LEAD_SECS = 24 * 3600; // don't post an equity ask expiring within a day
 
+/** REPRICE ε-SKIP threshold: an AGE-triggered reprice whose new price moves less
+ *  than this fraction of the resting premium is not worth 2 txs of gas. 1%. */
+const REPRICE_EPSILON = 0.01;
+
+export type RepriceAction = "reprice" | "skip-epsilon" | "hold";
+
+/**
+ * Pure reprice decision. A DRIFT-triggered reprice is never skipped — that is a
+ * real price move the book must reflect. Only the AGE path is ε-gated: the
+ * canary was burning 2 txs per cycle to move 0.021416 → 0.021368 (0.05%).
+ */
+export function repriceDecision(
+  drift: number, ageMs: number, driftBps: number, maxAgeMs: number, epsilon: number,
+): RepriceAction {
+  if (drift * 10_000 > driftBps) return "reprice";
+  if (ageMs > maxAgeMs) return drift >= epsilon ? "reprice" : "skip-epsilon";
+  return "hold";
+}
+
 /** HARD denylist decision (pure). Evaluated BEFORE the allow-list so an exclusion
  *  survives dropping OPTA_WRITER_ASSETS (assets=null / full board) — a permanent
  *  exclusion must never live in the allow-list alone, or it silently returns the
@@ -69,6 +88,7 @@ export function ordersOnMarket(
 export class WriterEngine {
   private readonly failCounts = new Map<string, number>(); // seriesMint58 -> consecutive quote failures
   private readonly vaultMarket = new Map<string, string>(); // vault58 -> market58 (immutable; cached across ticks)
+  private readonly vaultStrike = new Map<string, number>(); // vault58 -> strike (human USDC); anchors strike hysteresis
   private readonly buildCtx: BuildCtx;
 
   constructor(
@@ -95,7 +115,8 @@ export class WriterEngine {
 
   /** Populate the vault58 -> market58 cache for any orders whose vault we have not
    *  resolved yet. One batched read per tick (only NEW vaults); a vault's market is
-   *  immutable, so it is cached for the process lifetime. */
+   *  immutable, so it is cached for the process lifetime. Also caches the vault's
+   *  STRIKE (same fetch, no extra RPC) — that feeds strike hysteresis. */
   private async resolveVaultMarkets(orders: MyOrder[]): Promise<void> {
     const missing = [...new Set(orders.map((o) => o.vault.toBase58()))].filter((v) => !this.vaultMarket.has(v));
     if (missing.length === 0) return;
@@ -104,10 +125,24 @@ export class WriterEngine {
       missing.forEach((v, i) => {
         const a: any = accts[i];
         if (a?.market) this.vaultMarket.set(v, new PublicKey(a.market).toBase58());
+        if (a?.strikePrice != null) this.vaultStrike.set(v, Number(a.strikePrice.toString()) / 1e6);
       });
     } catch (e: any) {
       log.warn("resolve-vault-markets-fail", { err: String(e?.message ?? e).slice(0, 160) });
     }
+  }
+
+  /** Distinct strikes this market currently has live asks on — the anchor set for
+   *  strike hysteresis (see ladder.stickyStrike). */
+  private existingStrikesFor(orders: MyOrder[], marketPk58: string): number[] {
+    const out = new Set<number>();
+    for (const o of orders) {
+      const v = o.vault.toBase58();
+      if (this.vaultMarket.get(v) !== marketPk58) continue;
+      const s = this.vaultStrike.get(v);
+      if (s != null && s > 0) out.add(s);
+    }
+    return [...out];
   }
 
   async reconcile(nowMs: number): Promise<void> {
@@ -171,6 +206,9 @@ export class WriterEngine {
         market, spot: oracle.spot, tier, nowMs,
         epochMinLeadSecs: this.chain.epochMinLeadSecs,
         equityMinLeadSecs: EQUITY_MIN_LEAD_SECS,
+        // STRIKE HYSTERESIS anchor: retain a live strike while spot wobbles
+        // inside its deadband, instead of minting a new series every tick.
+        existingStrikes: this.existingStrikesFor(myOrders, market.publicKey.toBase58()),
       });
 
       let assetLive = perAssetLive.get(market.assetName) ?? 0;
@@ -214,8 +252,21 @@ export class WriterEngine {
           const restPrice = Number(existing.priceMicro) / 1e6;
           const drift = restPrice > 0 ? Math.abs(askPremium - restPrice) / restPrice : 1;
           const age = existing.createdAtMs > 0 ? nowMs - existing.createdAtMs : Infinity;
-          if (drift * 10_000 > this.cfg.repriceDriftBps || age > this.cfg.repriceMaxAgeMs) {
+          const action = repriceDecision(
+            drift, age, this.cfg.repriceDriftBps, this.cfg.repriceMaxAgeMs, REPRICE_EPSILON,
+          );
+          // REPRICE ε-SKIP: an AGE-triggered reprice is cancel+repost = 2 txs. When
+          // the new price is materially identical (< REPRICE_EPSILON of the resting
+          // premium) those 2 txs buy nothing but gas — the canary was reposting on
+          // moves like 0.021416 → 0.021368 (0.05%) every cycle. Drift-triggered
+          // reprices are NEVER skipped; only the age path is ε-gated.
+          if (action === "reprice") {
             await this.reprice(cell, market, seriesMint, existing, askMicro, nowSec);
+          } else if (action === "skip-epsilon") {
+            log.info("reprice-skip-epsilon", {
+              asset: cell.assetName, strike: cell.strikeDollars, side: cell.side,
+              driftPct: +(drift * 100).toFixed(4), epsilonPct: REPRICE_EPSILON * 100,
+            });
           }
           continue;
         }

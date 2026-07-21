@@ -60,6 +60,41 @@ export function roundSig(x: number, sig = 3): number {
   return Math.round(x * mag) / mag;
 }
 
+/** The absolute size of one `roundSig` quantum at magnitude x (3 sig figs →
+ *  x≈1.09 ⇒ 0.01; x≈65000 ⇒ 100). */
+export function roundSigStep(x: number, sig = 3): number {
+  if (x <= 0) return 0;
+  return Math.pow(10, Math.floor(Math.log10(x)) - (sig - 1));
+}
+
+// STRIKE HYSTERESIS deadband, as a fraction of one roundSig step.
+// WHY NOT 0.5: the rounding boundary ALREADY sits at half a step (1.095 is the
+// midpoint between 1.09 and 1.10), so a ±half-step band reproduces the rounding
+// decision exactly and yields NO hysteresis — the wobble still flips. 0.75 of a
+// step puts the switch threshold beyond the midpoint, creating a real deadband:
+// an existing strike is retained until spot moves 0.75 of a step away from it.
+const STICKY_BAND_STEPS = 0.75;
+
+/**
+ * STRIKE HYSTERESIS. Spot wobbling across a `roundSig` boundary used to mint a
+ * NEW series every tick (1.0949→1.09, 1.0951→1.10), orphaning the old one — the
+ * dominant source of writer transaction churn (533 orphan-series pulls in 6h,
+ * ~1.55 SOL/h). Keep an EXISTING strike whenever the raw target is still within
+ * the deadband of it; only adopt the freshly-rounded strike on a genuine move.
+ */
+export function stickyStrike(rawTarget: number, existingStrikes: readonly number[]): number {
+  const fresh = roundSig(rawTarget, 3);
+  if (existingStrikes.length === 0) return fresh;
+  const band = roundSigStep(rawTarget, 3) * STICKY_BAND_STEPS;
+  let best: number | null = null;
+  let bestDist = Infinity;
+  for (const e of existingStrikes) {
+    const d = Math.abs(rawTarget - e);
+    if (d <= band && d < bestDist) { best = e; bestDist = d; }
+  }
+  return best ?? fresh;
+}
+
 function clampQty(strikeDollars: number, targetNotional: number): number {
   const q = Math.round(targetNotional / strikeDollars);
   return Math.min(HARD_MAX_QTY, Math.max(1, q));
@@ -87,6 +122,10 @@ export interface LadderInput {
   nowMs: number;
   epochMinLeadSecs: number; // EpochConfig.min_epoch_duration_days × 86400 (crypto)
   equityMinLeadSecs: number; // small buffer so equity asks aren't near-instant expiry
+  /** Strikes this market ALREADY has live asks on. Enables strike hysteresis:
+   *  a wobble across a roundSig boundary retains the existing strike instead of
+   *  minting a new series. Empty/omitted = no hysteresis (cold board). */
+  existingStrikes?: readonly number[];
 }
 
 /** Build the full target ladder for one asset, ATM-first. */
@@ -104,8 +143,10 @@ export function buildLadder(inp: LadderInput): TargetCell[] {
   ];
 
   const cells: TargetCell[] = [];
+  const existing = inp.existingStrikes ?? [];
   for (const mult of STRIKE_MULTIPLIERS) {
-    const strikeDollars = roundSig(spot * mult, 3);
+    // Hysteresis: retain an existing strike while spot stays inside its deadband.
+    const strikeDollars = stickyStrike(spot * mult, existing);
     if (strikeDollars <= 0) continue;
     const strikeMicro = toUsdcBN(strikeDollars);
     const qty = clampQty(strikeDollars, tier.targetNotional);

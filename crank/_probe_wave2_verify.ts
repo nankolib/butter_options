@@ -21,6 +21,9 @@ const M: Array<[string, string, string, string]> = [
   ["COIN", "60e0a2d31235e2e3c7414635f3bf0c14c671098ef953b0823d380913d627c868", "750000000000", "birth"],
   ["MSTR", "5dc7af42f5237fb2d39aa65374c91234da9a92ba940ac9a5613b51d59d9a830a", "900000000000", "migrate"],
   ["CRCL", "077acbc9a679e4660b8ace50be067bd08a443f1ea7c0a48b4b6e444c23c17040", "950000000000", "migrate"],
+  // ---- Wave-2b (2026-07-21) ----
+  ["SPCX", "fd7a0b9ea922e14e18944f8105b151df922487da9b1b2ed5ad52150924ed413f", "1000000000000", "birth"],
+  ["HOOD", "9801bc9a0cc3eceb1ec4dfb964186a426883bb89a670c5968879b6e2c31b7c8b", "650000000000", "birth"],
 ];
 
 (async () => {
@@ -41,6 +44,6 @@ const M: Array<[string, string, string, string]> = [
     if (!ok) bad++;
     console.log(`${t.padEnd(6)} | ${pathLbl.padEnd(11)} | ${mkt.toBase58()} | ${m.oracleSource}   | ${got === feed ? "MATCH   " : "MISMATCH"} | ${m.assetClass}     | ${vo.toBase58().slice(0, 12)}…            | ${o?.seedVol?.toString?.() === seed ? "ok  " : "BAD "} | ${o ? Number(o.sampleCount) : "-"}  | ${ok ? "OK" : "FAIL"}`);
   }
-  console.log(`\n${bad === 0 ? "ALL 11 VERIFIED — board is Switchboard equity-complete" : bad + " FAILURES"}`);
+  console.log(`\n${bad === 0 ? `ALL ${M.length} VERIFIED — board is Switchboard equity-complete` : bad + " FAILURES"}`);
   process.exit(bad === 0 ? 0 : 1);
 })().catch((e) => { console.log("ERR", e.stack ?? e.message); process.exit(1); });

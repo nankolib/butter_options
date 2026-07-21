@@ -94,6 +94,9 @@ export function useMarketsData(): UseMarketsData {
   const [markets, setMarkets] = useState<MarketAccount[]>([]);
   // vault58 -> USDC escrowed behind live resting WriterAsks on that vault.
   const [escrowByVault, setEscrowByVault] = useState<Map<string, number>>(new Map());
+  // vault58 set with at least one LIVE resting ask (writerAsk or resaleAsk).
+  // Drives the "active markets" liveness filter — see the summary memo.
+  const [askVaults, setAskVaults] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
 
   const refetch = useCallback(async () => {
@@ -113,12 +116,18 @@ export function useMarketsData(): UseMarketsData {
     try {
       const book = await fetchBook(program.provider.connection, program.programId);
       const m = new Map<string, number>();
+      const live = new Set<string>();
       for (const o of book) {
-        if (o.kind !== "writerAsk") continue;
-        const escrow = o.qty * o.collateralPerContract;
-        if (escrow > 0) m.set(o.vault, (m.get(o.vault) ?? 0) + escrow);
+        // Escrow is WriterAsk-only: resaleAsk/bid carry no collateral_per_contract.
+        if (o.kind === "writerAsk") {
+          const escrow = o.qty * o.collateralPerContract;
+          if (escrow > 0) m.set(o.vault, (m.get(o.vault) ?? 0) + escrow);
+        }
+        // Liveness counts either ask kind — a resale ask is a real live quote.
+        if ((o.kind === "writerAsk" || o.kind === "resaleAsk") && o.qty > 0) live.add(o.vault);
       }
       setEscrowByVault(m);
+      setAskVaults(live);
     } catch (err) {
       console.error("Writer-ask escrow fetch failed", err);
     } finally {
@@ -244,9 +253,18 @@ export function useMarketsData(): UseMarketsData {
     let totalPremia = 0;
     const underlyingsSet = new Set<string>();
 
+    // ACTIVE MARKETS = markets that are actually TRADEABLE, not lifetime mints.
+    // "open && not expired" alone counts every SharedVault ever created, and the
+    // writer's pre-churn-fix strike wobble left ~1,100 zero-pool shells on chain
+    // (see the 2026-07-21 churn arc) — they are unexpired and unsettled, so the
+    // headline read 1198 for a board of ~379 real cells. A market is live only if
+    // someone can trade it NOW: at least one resting ask, or existing open
+    // interest. Both inputs are already client-side (book fetch + OI aggregation),
+    // so this costs no extra RPC.
     for (const r of rows) {
       totalOi += r.openInterest;
-      if (r.status === "open" && r.expiry > now) {
+      const tradeable = askVaults.has(r.publicKey.toBase58()) || r.openInterest > 0;
+      if (r.status === "open" && r.expiry > now && tradeable) {
         activeMarkets += 1;
         underlyingsSet.add(r.asset);
       }
@@ -273,7 +291,7 @@ export function useMarketsData(): UseMarketsData {
       premiaWritten: totalPremia,
       loaded: !loading,
     };
-  }, [rows, vaults, loading, escrowByVault]);
+  }, [rows, vaults, loading, escrowByVault, askVaults]);
 
   return { rows, summary, spotPrices, asOf: spotAsOf ?? {}, loading, refetch };
 }

@@ -98,6 +98,17 @@ try {
   const bookVal = strip ? money(strip.text.replace(/book depth[^0-9$]*/i, "")) : 0;
   record("book depth > 0 (escrow surfaced)", bookVal > 0, `parsed=${bookVal}`);
 
+  // ACTIVE MARKETS must count TRADEABLE markets, not lifetime mints. Pre-fix the
+  // headline read 1198 (≈1,100 zero-pool churn shells + the real board); the live
+  // board is ~379. Assert it is in a sane band and nowhere near the mint count.
+  const activeText = await page.evaluate(() => {
+    const cells = [...document.querySelectorAll("div")].filter((d) => /active markets/i.test(d.innerText || ""));
+    return cells.length ? cells[cells.length - 1].innerText.replace(/\s+/g, " ").trim() : "";
+  });
+  const activeVal = Number((activeText.match(/(\d[\d,]*)\s*$/)?.[1] ?? "0").replace(/,/g, ""));
+  record("ACTIVE MARKETS excludes churn shells", activeVal > 0 && activeVal < 800,
+    `"${activeText}" parsed=${activeVal} (expect ~379-level, not ~1198)`);
+
   const vaultText = await page.evaluate(() => {
     const cells = [...document.querySelectorAll("div")].filter((d) => /vault tvl/i.test(d.innerText || ""));
     return cells.length ? cells[cells.length - 1].innerText.replace(/\s+/g, " ").trim() : "";

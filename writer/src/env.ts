@@ -68,6 +68,29 @@ function die(msg: string): never {
   process.exit(1);
 }
 
+/**
+ * Parse a CSV of asset_class numbers (OPTA_WRITER_EXCLUDE_CLASSES).
+ *
+ * MUST drop empty segments BEFORE Number(). `Number("") === 0` and
+ * `Number.isFinite(0) === true`, so the previous
+ * `.split(",").map(Number).filter(Number.isFinite)` turned an EMPTY or UNSET
+ * variable into `[0]` — silently deny-listing asset_class 0 (crypto/memes), the
+ * entire live crypto board, at the exact moment an operator tried to CLEAR the
+ * denylist. Caught 2026-07-21 during the equity lift; the VPS `.env` still
+ * carries a `=99` sentinel from that workaround, which can be dropped on the
+ * next deliberate writer restart now that empty parses correctly.
+ *
+ * Empty / unset / whitespace / all-garbage => [] (exclude nothing).
+ */
+export function parseClassList(raw: string | undefined | null): number[] {
+  return (raw ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)                       // <- the fix: "" never reaches Number()
+    .map(Number)
+    .filter((n) => Number.isFinite(n));
+}
+
 function loadKeypair(p: string): Keypair {
   let raw: string;
   try {
@@ -108,8 +131,8 @@ export function loadConfig(): WriterConfig {
 
   const assetsExclude = (process.env.OPTA_WRITER_ASSETS_EXCLUDE || "")
     .split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
-  const excludeClasses = (process.env.OPTA_WRITER_EXCLUDE_CLASSES || "")
-    .split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n));
+
+  const excludeClasses = parseClassList(process.env.OPTA_WRITER_EXCLUDE_CLASSES);
 
   return {
     rpcUrl,

@@ -1,3 +1,109 @@
+# SESSION CLOSE — 2026-07-21 11:40Z (writer/market-maker session)
+
+> Written for a reader with ZERO session memory. Everything below is current as of
+> the timestamp above. Older sections further down remain valid history.
+
+## 1. What exists now: the `opta-writer` market-maker bot
+
+Autonomous devnet MM that keeps the board quoted. Per live, quote-ready market it
+writes a canonical American series + 0-pool vault and rests a **WriterAsk**.
+**Write-only** — it posts/cancels, never fills, so the 6014 self-trade guard is
+unreachable. A future taker bot MUST use a different wallet.
+
+- Code: `writer/` (standalone tsc→dist, Node 20). On `main`.
+- VPS `144.202.58.6`: code at `/opt/opta-crank/writer` (co-located so the IDL path
+  resolves), systemd `opta-writer.service` (User=opta, MemoryMax=350M, RSS ~35MB).
+- Config: `/opt/opta-writer/.env`. Keypair `/opt/opta-writer/secrets/writer-keypair.json`
+  (VPS-only, chown opta, never in chat/repo).
+- **Wallet `HgafDv195BtNc8X4uvNoRuGcUra5PuUwDJgHeKHvgFiS`** — gas+USDC only, no authority.
+  Funded by founder (SOL via devnet faucet; USDC minted by admin `5YRMuuoY`).
+
+### Live state at close
+`orders: 20 · sol: 7.811 · freeUsdc: $1,634,994 · shells: 657`
+Config: `ENABLED=1`, `ASSETS=` (empty ⇒ **full board**), `ASSETS_EXCLUDE=SBXAU`,
+`EXCLUDE_CLASSES=2,4`, `MAX_CELLS=15`, `TICK=300s`.
+Board is *intentionally* small: cap 15 blocks new posts, so it shed the pre-fix
+off-ladder backlog (120 → 76 → 20) without reposting. This is expected, not a fault.
+
+## 2. In-flight / unfinished
+
+**a) Churn fix is deployed but only HALF-PROVEN.** Commit `d1d0471`, 12 unit tests.
+- *Reprice ε-skip*: **PROVEN working** — 236 skips/hour observed, each an avoided
+  cancel+repost pair. Only the AGE path is ε-gated (1%); drift reprices never skip.
+- *Strike hysteresis*: **NOT yet proven.** With `MAX_CELLS=15` nothing can post, so
+  no new series can mint regardless. `shells: 657` has not moved, but that is
+  *trivially* true. **A valid shells/h reading requires the cap to be raised.**
+  Baseline to diff against: **657**.
+
+**b) Equity board is frozen** by `EXCLUDE_CLASSES=2,4` pending funding (below).
+
+**c) Rent reclaim queued** (see §5) — ~3 SOL+, not actionable until after settlements.
+
+## 3. TODAY (Tue 2026-07-21) — queued 13:30Z sequence
+
+1. **Equity sample-counts climbing** + a live-sample `get_option_price` on an equity feed.
+2. **Wave-2b births: SPCX + HOOD** → equity board 13. Manifest is LOCKED:
+   - `SPCX` feedHash `fd7a0b9ea922e14e18944f8105b151df922487da9b1b2ed5ad52150924ed413f`, seed **1.00** (fresh Nasdaq IPO Jun-12, thin history ⇒ seeded HOT; `reset_vol_oracle` is the admin-only mid-warmup repair lever)
+   - `HOOD` feedHash `9801bc9a0cc3eceb1ec4dfb964186a426883bb89a670c5968879b6e2c31b7c8b`, seed **0.65** (full history since 2021 IPO)
+   - Both **pure births**, `assetClass=2`, via `crank/_birth_sb_market.ts` (skip the migrate/close leg), then `initialize_vol_oracle` with the locked seeds. Hashes were computed off the FROZEN quotes.opta.fyi scheme and self-verified by recomputing all 11 existing hashes byte-for-byte.
+3. **Churn-fix burn measurement → FUNDING STOP → lift classes 2,4 → MAX_CELLS ~470.**
+
+## 4. FUNDING STOP — math state (approved, one term still unmeasured)
+
+- **USDC: $550k approved.** Measured at live spots (Mon Jul-20): **$519,405** for
+  13 tickers × 20 cells = 260 cells; $550k adds drift buffer. NOTE the older
+  "~$440k" figure was the **11**-ticker number — SPCX+HOOD add ~$80k.
+- **SOL line = (measured post-fix burn/h × 48h) + 6.5 + buffer.**
+  `6.5` = 260 equity cells × 0.024 SOL cold-board rent. **burn/h is still
+  UNMEASURED — it is today's first deliverable.** Pre-fix reference was ~1.55 SOL/h
+  (untenable: 48h ⇒ 74 SOL). If the fix lands ~90%, expect ≈17 SOL total.
+- **Report alongside it: shells-created-per-hour** (must be ~0 outside genuine spot
+  moves). Burn/h alone only shows the bleed *slowed*; shells/h ~0 proves it **dead**.
+  Only meaningful once the cap is raised — see §2a.
+- Sequence after funding lands: lift `EXCLUDE_CLASSES` (drop 2,4; **keep SBXAU
+  forever**) → `MAX_CELLS=470`. Full board is 180 crypto + 260 equity = **440**
+  (not 470 — 470 is deliberate non-binding headroom inside `globalVaultCap=500`).
+
+## 5. Why the wallet drained (root cause — do not re-diagnose)
+
+The bot burned ~9 SOL itself, as **permanent account rent**, not fees. Strike wobble
+across a `roundSig` boundary minted a NEW series+vault every tick. A cancel refunds
+**only** the order+escrow rent (~0.004); the series mint/record/hook accounts and the
+vault+vault_usdc are **never closed by a cancel** (~0.020/wobble, permanent).
+Result: **657 writer-created SharedVaults, all empty 0-pool shells**, for a board that
+never exceeded ~180. Reclaim via `close_settled_writer_ask_vault` — requires the vault
+to be **SETTLED**, so run **after the Jul-24 and Jul-31 settlements**, folded into the
+**Aug-7 void-sweep** session (~3 SOL+).
+
+## 6. Monitors — all VPS-side, persist without any session
+
+- systemd: `opta-writer.service` (350M), `opta-crank.service` (400M), `opta-quotes.service`
+- cron: `*/30 * * * * node /opt/opta-writer/snapshot.js` → `/opt/opta-writer/observe.log`
+  (records orders / sol / freeUsdc / orderPks / **shells**)
+- Writer emits hourly `heartbeat` + `reprice`/`strand`/`post` events to journald.
+- **No session-owned pollers or watchers exist.** Nothing to kill.
+
+## 7. Gotchas a fresh session will otherwise re-learn the hard way
+
+- **RULE 1** — assert `HEAD` + a boot-log marker after EVERY deploy. Never hot-patch
+  the box: a hot-patched `engine.ts` silently blocked every `git pull` for two days
+  while builds reported green.
+- **RULE 2** — `MAX_CELLS`/`globalVaultCap` are throttles, NOT prioritizers; allocation
+  is enumeration-order dependent. Denylists are the only real scoping mechanism.
+  The real binding cap is `maxCellsPerAsset=20` (9 SB assets × 20 = **180**, not 200).
+- **RULE 3** — no loose WIP in this SHARED tree; treat unauthored tree state as
+  untrusted (typecheck + suites before building on it).
+- Pre-commit compile gate runs `tsc --noEmit` when `writer/src/*.ts` or `crank/*.ts`
+  is staged. It **warn-skips where node_modules is absent** — notably the origin/main
+  worktree used for HANDOFF commits — so typecheck LOCALLY before copying files there.
+- HANDOFF edits ship ONLY via an `origin/main` worktree (a hook blocks them on `codex/*`).
+- `writer/` shows permanent **CRLF phantom diffs**; check with `diff --strip-trailing-cr`
+  before believing there is uncommitted work.
+- **Pyth freeze is permanent**: `oracle_source=0` markets are hard-skipped in code.
+- quotes proxy: `QUOTES_CACHE_TTL=20000` (20s) ⇒ 13 tickers at 39 Finnhub calls/min
+  against a confirmed 60/min free tier.
+
+---
 # Opta — Engineer Handoff
 
 > **2026-07-21 (WAVE-2 STEP 4 ✅ crank live on 17 feeds. ⚠ TWO INCIDENTS: crank ESM regression (fixed) + WRITER OUT OF GAS (open, sizes tomorrow's block).)**

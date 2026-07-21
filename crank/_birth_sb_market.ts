@@ -81,6 +81,10 @@ function eqDefs(): Record<string, { symbol: string; feedHash: string; seed: stri
     ["COIN",  "60e0a2d31235e2e3c7414635f3bf0c14c671098ef953b0823d380913d627c868", "750000000000"],
     ["MSTR",  "5dc7af42f5237fb2d39aa65374c91234da9a92ba940ac9a5613b51d59d9a830a", "900000000000"],
     ["CRCL",  "077acbc9a679e4660b8ace50be067bd08a443f1ea7c0a48b4b6e444c23c17040", "950000000000"],
+    // ---- Wave-2b (locked manifest, 2026-07-21). SPCX seeded HOT (1.00): fresh
+    // Nasdaq IPO Jun-12, thin history. HOOD 0.65: full history since 2021. ----
+    ["SPCX",  "fd7a0b9ea922e14e18944f8105b151df922487da9b1b2ed5ad52150924ed413f", "1000000000000"],
+    ["HOOD",  "9801bc9a0cc3eceb1ec4dfb964186a426883bb89a670c5968879b6e2c31b7c8b", "650000000000"],
   ];
   const out: any = {};
   for (const [t, feedHash, seed] of rows) {

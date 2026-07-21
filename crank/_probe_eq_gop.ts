@@ -14,6 +14,9 @@ const PAYER = new PublicKey("5YRMuuoY3P7z5GeRAAQND7BxgNdmPSa6CSPCJLca1zZk");
 const T: Record<string, { feedHash: string; seed: number; spot: number }> = {
   AAPL: { feedHash: "d0ab87e8218247d61f3b60e0d9c7e9dc93f691f30849552e0923aa8acd15fdc8", seed: 0.32, spot: 324.6 },
   TSLA: { feedHash: "24f5404db181873fead6fd9ad15c7edc2265e8b7a494b3168055fa3bfbb3ced3", seed: 0.60, spot: 374.0 },
+  // ---- Wave-2b (2026-07-21). Spots are live-quote refs at time of birth. ----
+  SPCX: { feedHash: "fd7a0b9ea922e14e18944f8105b151df922487da9b1b2ed5ad52150924ed413f", seed: 1.00, spot: 125.18 },
+  HOOD: { feedHash: "9801bc9a0cc3eceb1ec4dfb964186a426883bb89a670c5968879b6e2c31b7c8b", seed: 0.65, spot: 105.57 },
 };
 
 (async () => {

@@ -25,6 +25,7 @@ import { loadConfig, redactRpc } from "./env";
 import { initChain, getBalanceSol } from "./chain";
 import { WriterEngine } from "./engine";
 import { Heartbeat, log } from "./log";
+import { HYST_FRAC, RUNG_FRAC, hystBand } from "./ladder";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -41,6 +42,19 @@ async function main(): Promise<void> {
     excludeClasses: cfg.excludeClasses.length ? cfg.excludeClasses : "none",
     maxCellsThisRun: cfg.maxCellsThisRun || "uncapped",
     tickMs: cfg.tickMs,
+    // RULE-1 build marker: the deployed churn-fix generation must be assertable
+    // from the boot line alone. v1 shipped without one, so a hot-patch/stale
+    // build could only be caught by inference from disk HEAD + live events.
+    churnFix: "v2",
+    hystFrac: HYST_FRAC,
+    // Band is scale-free in v2 (HYST_FRAC x RUNG_FRAC x spot), so it is a flat
+    // percentage of spot on every asset — quoted here at representative spots
+    // so the deployed band is legible without re-deriving it.
+    bandPctOfSpot: +(HYST_FRAC * RUNG_FRAC * 100).toFixed(3),
+    bandAtBoot: Object.fromEntries(
+      ([["BTC", 66658], ["ETH", 1926], ["SOL", 77.87], ["XRP", 1.1489], ["FARTCOIN", 0.13897], ["XAU", 4064]] as const)
+        .map(([a, s]) => [a, +hystBand(s).toPrecision(4)]),
+    ),
   });
 
   const chain = await initChain(cfg);

@@ -89,6 +89,7 @@ export class WriterEngine {
   private readonly failCounts = new Map<string, number>(); // seriesMint58 -> consecutive quote failures
   private readonly vaultMarket = new Map<string, string>(); // vault58 -> market58 (immutable; cached across ticks)
   private readonly vaultStrike = new Map<string, number>(); // vault58 -> strike (human USDC); anchors strike hysteresis
+  private readonly vaultExpiry = new Map<string, number>(); // vault58 -> expiry (unix s); keys the anchors PER TENOR
   private readonly buildCtx: BuildCtx;
 
   constructor(
@@ -126,23 +127,30 @@ export class WriterEngine {
         const a: any = accts[i];
         if (a?.market) this.vaultMarket.set(v, new PublicKey(a.market).toBase58());
         if (a?.strikePrice != null) this.vaultStrike.set(v, Number(a.strikePrice.toString()) / 1e6);
+        if (a?.expiry != null) this.vaultExpiry.set(v, Number(a.expiry.toString()));
       });
     } catch (e: any) {
       log.warn("resolve-vault-markets-fail", { err: String(e?.message ?? e).slice(0, 160) });
     }
   }
 
-  /** Distinct strikes this market currently has live asks on — the anchor set for
-   *  strike hysteresis (see ladder.stickyStrike). */
-  private existingStrikesFor(orders: MyOrder[], marketPk58: string): number[] {
-    const out = new Set<number>();
+  /** Distinct strikes this market currently has live asks on, KEYED BY EXPIRY —
+   *  the anchor set for strike hysteresis (see ladder.stickyStrike). Keyed per
+   *  expiry because the series PDA is (market, strike, expiry, side): a strike
+   *  anchored only on the monthly cannot spare the weekly a fresh mint, so
+   *  letting it satisfy the weekly's target reports "kept" and mints anyway. */
+  private existingStrikesFor(orders: MyOrder[], marketPk58: string): Map<number, number[]> {
+    const byExpiry = new Map<number, Set<number>>();
     for (const o of orders) {
       const v = o.vault.toBase58();
       if (this.vaultMarket.get(v) !== marketPk58) continue;
       const s = this.vaultStrike.get(v);
-      if (s != null && s > 0) out.add(s);
+      const e = this.vaultExpiry.get(v);
+      if (s == null || !(s > 0) || e == null || !(e > 0)) continue;
+      if (!byExpiry.has(e)) byExpiry.set(e, new Set());
+      byExpiry.get(e)!.add(s);
     }
-    return [...out];
+    return new Map([...byExpiry].map(([e, set]) => [e, [...set]]));
   }
 
   async reconcile(nowMs: number): Promise<void> {
@@ -206,9 +214,10 @@ export class WriterEngine {
         market, spot: oracle.spot, tier, nowMs,
         epochMinLeadSecs: this.chain.epochMinLeadSecs,
         equityMinLeadSecs: EQUITY_MIN_LEAD_SECS,
-        // STRIKE HYSTERESIS anchor: retain a live strike while spot wobbles
-        // inside its deadband, instead of minting a new series every tick.
-        existingStrikes: this.existingStrikesFor(myOrders, market.publicKey.toBase58()),
+        // STRIKE HYSTERESIS anchors, PER EXPIRY: retain a live strike while spot
+        // stays inside the deadband (v2: half a 5% rung), instead of minting a
+        // new series every tick.
+        existingStrikesByExpiry: this.existingStrikesFor(myOrders, market.publicKey.toBase58()),
       });
 
       let assetLive = perAssetLive.get(market.assetName) ?? 0;
@@ -329,6 +338,17 @@ export class WriterEngine {
     };
     // Dry-run: log the intended ask and count it (so caps shape the preview).
     if (!this.writable()) { log.info("dry-run-post", plan); return true; }
+
+    // PRE-MINT BUDGET GATE. The tick-start `quoteBudget` is an estimate that
+    // drifts as fills/cancels land mid-tick; minting a series+vault (~0.0201 SOL
+    // of PERMANENT rent) and only then failing post_order on insufficient USDC
+    // leaves a 0-pool shell behind forever. Re-read the balance immediately
+    // before we would build ANY init ix, and skip the cell instead.
+    const freeNow = await getFreeUsdc(this.chain);
+    if (collateral > freeNow) {
+      log.warn("usdc-budget-skip", { asset: cell.assetName, need: collateral, free: freeNow, at: "pre-mint" });
+      return false;
+    }
 
     const needSeries = !(await accountExists(this.chain, record));
     const needVault = !(await accountExists(this.chain, vault));

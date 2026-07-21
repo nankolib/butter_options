@@ -19,7 +19,7 @@ import { Program } from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import * as fs from "fs";
 import * as path from "path";
-import { roundSig, roundSigStep, stickyStrike } from "../src/ladder";
+import { roundSig, roundSigStep, stickyStrike, hystBand } from "../src/ladder";
 
 const PROG = new PublicKey("CtzJ4MJYX6BFvF4g67i5C24tQuwRn6ddKkaE5L84z9Cq");
 const W = new PublicKey("HgafDv195BtNc8X4uvNoRuGcUra5PuUwDJgHeKHvgFiS");
@@ -68,15 +68,15 @@ const f = (x: number) => (x >= 1000 ? x.toFixed(0) : x >= 1 ? x.toFixed(4) : x.t
     const spot = vo ? Number((vo.lastSpotPrice ?? vo.lastSpot).toString()) / 1e12 : 0;
     const existing = [...(byMarket.get(mktPda.toBase58()) ?? new Set<number>())].sort((a, b) => a - b);
     const step = roundSigStep(spot, 3);
-    const band = step * 0.75;
+    const band = hystBand(spot); // v2: HYST_FRAC * RUNG_FRAC * spot
 
-    console.log(`\n### ${asset}  spot=${f(spot)}  roundSigStep=${f(step)}  band(0.75*step)=${f(band)}`);
+    console.log(`\n### ${asset}  spot=${f(spot)}  roundSigStep(v1 anchor)=${f(step)}  band=${f(band)}  (${((band / spot) * 100).toFixed(3)}% of spot)`);
     console.log(`    existing strikes (live on-chain asks): [${existing.map(f).join(", ")}]`);
     console.log(`    ${"mult".padEnd(6)}${"rawTarget".padStart(12)}${"pre-hyst".padStart(12)}${"post-hyst".padStart(12)}  decision`);
     for (const mult of STRIKE_MULTIPLIERS) {
       const raw = spot * mult;
       const pre = roundSig(raw, 3);
-      const post = stickyStrike(raw, existing);
+      const post = stickyStrike(raw, existing, spot);
       let why: string;
       if (existing.length === 0) why = "no anchors -> fresh";
       else {
@@ -90,17 +90,17 @@ const f = (x: number) => (x >= 1000 ? x.toFixed(0) : x >= 1 ? x.toFixed(4) : x.t
     }
 
     // ---- sweep spot +/-1.5% in 10bp steps: where does each rung flip? ----
-    console.log(`    --- sweep spot +/-1.5% @10bp: rung flip thresholds ---`);
+    console.log(`    --- sweep spot +/-4.0% @10bp: rung flip thresholds ---`);
     for (const mult of STRIKE_MULTIPLIERS) {
       const flips: string[] = [];
       let prev: number | null = null;
-      for (let bp = -150; bp <= 150; bp += 10) {
+      for (let bp = -400; bp <= 400; bp += 10) {
         const s = spot * (1 + bp / 10000);
-        const chosen = stickyStrike(s * mult, existing);
+        const chosen = stickyStrike(s * mult, existing, s);
         if (prev !== null && chosen !== prev) flips.push(`${bp >= 0 ? "+" : ""}${bp}bp: ${f(prev)}->${f(chosen)}`);
         prev = chosen;
       }
-      console.log(`    mult ${String(mult).padEnd(5)} ${flips.length === 0 ? "STABLE across +/-1.5%" : flips.join("  |  ")}`);
+      console.log(`    mult ${String(mult).padEnd(5)} ${flips.length === 0 ? "STABLE across +/-4.0%" : flips.join("  |  ")}`);
     }
   }
 })().catch((e) => console.log("ERR", e.stack ?? e.message));

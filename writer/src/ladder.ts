@@ -67,25 +67,43 @@ export function roundSigStep(x: number, sig = 3): number {
   return Math.pow(10, Math.floor(Math.log10(x)) - (sig - 1));
 }
 
-// STRIKE HYSTERESIS deadband, as a fraction of one roundSig step.
-// WHY NOT 0.5: the rounding boundary ALREADY sits at half a step (1.095 is the
-// midpoint between 1.09 and 1.10), so a ±half-step band reproduces the rounding
-// decision exactly and yields NO hysteresis — the wobble still flips. 0.75 of a
-// step puts the switch threshold beyond the midpoint, creating a real deadband:
-// an existing strike is retained until spot moves 0.75 of a step away from it.
-const STICKY_BAND_STEPS = 0.75;
+// ---- STRIKE HYSTERESIS v2 ---------------------------------------------------
+// v1 anchored the deadband to `roundSigStep` — the 3-SIG-FIG DISPLAY-ROUNDING
+// QUANTUM. That is the wrong unit. Rungs are spaced at 5% of spot, so the band
+// came out 8x-53x NARROWER than one rung, and its width as a fraction of spot
+// swung ~10x with the leading digit of the price (0.096% for SOL at 77.87 vs
+// 0.653% for XRP at 1.1489). It suppressed the quantum wobble it was tested
+// against and nothing else: any ordinary ~0.1% drift re-centred BTC's and SOL's
+// whole ladder, minting a new series+vault per rung at ~0.0201 SOL each,
+// permanently (+52 shells/h, ~0.95 SOL/h measured 2026-07-21 13:32-15:30Z).
+//
+// v2 anchors the band to the RUNG SPACING instead, so it is scale-free and
+// identical in percentage terms on every asset:
+//   rungSpacing = RUNG_FRAC * spot          (the STRIKE_MULTIPLIERS gap)
+//   band        = HYST_FRAC * rungSpacing   = 0.025 * spot  → flips at ~+/-2.5%
+// `roundSig` still quantizes the strike grid; it just no longer sets the band.
+export const RUNG_FRAC = 0.05;
+export const HYST_FRAC = 0.5;
+
+/** Hysteresis deadband in absolute price units: HYST_FRAC of one 5% rung. */
+export function hystBand(spot: number): number {
+  return spot > 0 ? HYST_FRAC * RUNG_FRAC * spot : 0;
+}
 
 /**
- * STRIKE HYSTERESIS. Spot wobbling across a `roundSig` boundary used to mint a
- * NEW series every tick (1.0949→1.09, 1.0951→1.10), orphaning the old one — the
- * dominant source of writer transaction churn (533 orphan-series pulls in 6h,
- * ~1.55 SOL/h). Keep an EXISTING strike whenever the raw target is still within
- * the deadband of it; only adopt the freshly-rounded strike on a genuine move.
+ * STRIKE HYSTERESIS. Keep an EXISTING strike whenever the raw target is still
+ * within the deadband of it; only adopt the freshly-rounded strike on a genuine
+ * move. `spot` sizes the band (defaults to rawTarget, exact for the ATM rung) so
+ * every rung on an asset shares one band rather than scaling with the wing.
  */
-export function stickyStrike(rawTarget: number, existingStrikes: readonly number[]): number {
+export function stickyStrike(
+  rawTarget: number,
+  existingStrikes: readonly number[],
+  spot: number = rawTarget,
+): number {
   const fresh = roundSig(rawTarget, 3);
   if (existingStrikes.length === 0) return fresh;
-  const band = roundSigStep(rawTarget, 3) * STICKY_BAND_STEPS;
+  const band = hystBand(spot);
   let best: number | null = null;
   let bestDist = Infinity;
   for (const e of existingStrikes) {
@@ -122,10 +140,13 @@ export interface LadderInput {
   nowMs: number;
   epochMinLeadSecs: number; // EpochConfig.min_epoch_duration_days × 86400 (crypto)
   equityMinLeadSecs: number; // small buffer so equity asks aren't near-instant expiry
-  /** Strikes this market ALREADY has live asks on. Enables strike hysteresis:
-   *  a wobble across a roundSig boundary retains the existing strike instead of
-   *  minting a new series. Empty/omitted = no hysteresis (cold board). */
-  existingStrikes?: readonly number[];
+  /** Strikes this market ALREADY has live asks on, KEYED BY EXPIRY. Enables
+   *  strike hysteresis without cross-tenor aliasing: a series PDA is
+   *  (market, strike, expiry, side), so an anchor held only on the MONTHLY must
+   *  never satisfy the WEEKLY's target — v1 collapsed both tenors into one set,
+   *  reported "kept" and then minted anyway because the expiry differed.
+   *  Empty/omitted = no hysteresis (cold board). */
+  existingStrikesByExpiry?: ReadonlyMap<number, readonly number[]>;
 }
 
 /** Build the full target ladder for one asset, ATM-first. */
@@ -143,15 +164,18 @@ export function buildLadder(inp: LadderInput): TargetCell[] {
   ];
 
   const cells: TargetCell[] = [];
-  const existing = inp.existingStrikes ?? [];
+  const byExpiry = inp.existingStrikesByExpiry;
   for (const mult of STRIKE_MULTIPLIERS) {
-    // Hysteresis: retain an existing strike while spot stays inside its deadband.
-    const strikeDollars = stickyStrike(spot * mult, existing);
-    if (strikeDollars <= 0) continue;
-    const strikeMicro = toUsdcBN(strikeDollars);
-    const qty = clampQty(strikeDollars, tier.targetNotional);
+    const rawTarget = spot * mult;
     for (const t of tenors) {
       if (t.ts <= Math.floor(nowMs / 1000)) continue; // defensive
+      // Hysteresis is resolved PER EXPIRY: only anchors on THIS tenor can
+      // retain a strike, because the series PDA is keyed by expiry too.
+      const anchors = byExpiry?.get(t.ts) ?? [];
+      const strikeDollars = stickyStrike(rawTarget, anchors, spot);
+      if (strikeDollars <= 0) continue;
+      const strikeMicro = toUsdcBN(strikeDollars);
+      const qty = clampQty(strikeDollars, tier.targetNotional);
       for (const side of ["call", "put"] as const) {
         cells.push({
           assetName: market.assetName,

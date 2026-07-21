@@ -1,7 +1,206 @@
+# SESSION CLOSE — 2026-07-21 20:30Z (DAY CLOSE — churn v2 + funding + equity board)
+
+> Written for a reader with ZERO session memory. **This block SUPERSEDES the
+> 11:40Z §1–7 block and the Wave-2 addendum below it** — both remain as history,
+> but where they disagree with this block, THIS block is current. Anything not
+> re-stated here (rent-reclaim backlog, RULE 1/2/3, monitor inventory) is still
+> live from those sections.
+
+## 1. CHURN V2 — the day's headline. Fixed and PROVEN.
+
+**Root cause (do not re-diagnose).** The strike-hysteresis deadband was anchored
+to `roundSigStep` — the 3-significant-figure **display-rounding quantum** — while
+ladder rungs are spaced at **5% of spot** (`STRIKE_MULTIPLIERS`). Two consequences:
+the band was **8×–53× narrower than one rung**, and its width *as a fraction of
+spot* swung ~10× with the leading digit of the price (a mantissa accident: SOL at
+77.87 → 0.096% of spot; XRP at 1.1489 → 0.653%). So any ordinary ~0.1% drift
+re-centred the BTC and SOL ladders, minting a **new series + vault per rung at
+~0.0201 SOL of PERMANENT rent**. v1's ε-skip fixed only the *age*-triggered
+reprice path; the strike path was never gated in economically meaningful units.
+
+**Fix (commit `9701eec`, live):**
+- Band = `HYST_FRAC(0.5) × RUNG_FRAC(0.05) × spot` = **2.5% of spot**, scale-free
+  and identical on every asset. `roundSigStep` no longer touches the band.
+- **Per-expiry anchors** — `existingStrikesFor` is keyed by expiry and
+  `stickyStrike` moved inside the tenor loop. A monthly-only anchor used to
+  satisfy a weekly target, report "kept", and then mint anyway because the series
+  PDA is `(market, strike, expiry, side)`.
+- **Pre-mint budget gate** — free USDC is re-read immediately before ANY init ix;
+  insufficient ⇒ `usdc-budget-skip`, never mint-then-strand.
+- **Boot marker** now carries `churnFix:"v2"`, `hystFrac`, `bandPctOfSpot`,
+  `bandAtBoot` — closes the RULE-1 gap where v1 shipped with no assertable marker.
+
+**Proof (17:00Z→20:00Z, 379-cell board):** shells **1107 → 1111 = +4 = 1.33/h**
+(kill threshold 30/h); burn **0.029 SOL/h** (threshold 1.5/h); strand **0**.
+Normalised **0.0000765 SOL/h/cell** vs **0.0080** pre-fix at 119 cells ⇒ **~100×**.
+
+**⚠ orderPk overlap is RETIRED as a metric.** It measured 20–36% all evening,
+which looks bad and is meaningless: every reprice mints a **new `RestingOrder`
+PDA** because the nonce is the timestamp, so pubkeys rotate on ordinary
+repricing even when the series is reused (and the cancel refunds that rent).
+The pre-fix signature was 0% overlap *coinciding with a shells jump*.
+**Judge the writer on `shells/h` and `burn/h` only.**
+
+Harness `writer/scripts/_ladder_repro.ts` (offline, imports the real code paths)
+reproduces flip thresholds on live spot: v1 flipped BTC/SOL at ±10–20bp, v2 flips
+all six assets at ~±2.3–2.8%. Writer suite **37/37**.
+
+## 2. FUNDING STOP — EXECUTED
+
+- **SOL:** +25 founder `DnExEYnZ…` → writer, sig
+  `WGpbtEoBHenLo76aw5vJKn8PTGRr91ffftstxGmz8UMEs4CWrEy6T8QGf12oaWLBsBdFyoip68WDH46Xc5xb71n`.
+  (An earlier +20 landed at 13:33Z, sig `2fgXsWGf…`.)
+- **USDC:** +$550,000 admin mint (founder-executed), sig
+  `5hkJZU59tVH8ZtaJaaiFCkV3dXokwa7cvudGKao8CXAnjycsS5XehNnUbcsRfP8hvzG3Wa76iYofUY2g8oDfy1nq`.
+- **Peak board 379 cells** (119 crypto + 260 equity), **$2,061,801.33 locked**.
+  Conservation exact to the cent:
+  `free 163,196.528 + locked 2,061,801.33 = 685,694.128 + 1,539,303.73`.
+  Census tool: `crank/_probe_locked_usdc.ts`.
+
+## 3. EQUITY LIFT — and a LANDMINE that is still armed
+
+`EXCLUDE_CLASSES` **cannot be emptied on the running build.** `Number("") === 0`
+and `Number.isFinite(0)` is true, so an empty *or removed* variable parses to
+**`[0]`** — silently deny-listing asset_class 0, i.e. the entire live crypto
+board, at the exact moment an operator tries to CLEAR the denylist. (`assetsExclude`
+never had this bug — it uses `.filter(Boolean)`.)
+
+- The live writer runs the **sentinel `OPTA_WRITER_EXCLUDE_CLASSES=99`** (a class
+  that does not exist ⇒ excludes nothing). **DO NOT "correct" the 99.**
+- `parseClassList` fix + 7 regression tests shipped in **`656a743`** but the
+  running process is on **`9701eec`**, so the fix is **NOT live**.
+- **Order of operations:** next *deliberate* writer restart picks up `656a743`;
+  only THEN may `.env` be emptied. Not before.
+
+## 4. CANCEL-AT-CLOSE IS DESIGN — corrects an earlier expectation
+
+At **20:04Z the writer pulled all 260 equity asks with `reason:"market-closed"`**,
+releasing **$396,941 USDC and +0.79 SOL** of order/escrow rent. This is NOT an
+anomaly: `engine.ts:231-239` deliberately pulls off-session equity asks *"so it
+can't be filled at a stale off-hours price"*, and `engine.ts:196-198` names the
+**cancel-at-close / repost-at-open** cadence explicitly. An earlier session note
+expecting equity asks to "rest untouched" overnight was wrong.
+
+**Series PDAs persist, so the repost mints NOTHING** — the reuse path
+(`engine.ts` `needSeries`/`needVault`) skips both inits when the PDA exists.
+
+**⇒ TOMORROW 13:30Z VERIFICATION: expect 260 reposts across 13 tickers and
+shells FLAT.** If a ticker fails to repost, the first suspect is **MSFT logging
+`oracle-not-initialized, samples:0` at 20:10Z** (rather than `oracle-stale`) —
+noted, not investigated.
+
+## 5. WAVE-2B — SPCX + HOOD live
+
+Pure births, `asset_class=2`, `oracle_source=1`, feedHash byte-matched, seed
+read back exact, `sample_count=0` at birth then **both sampled ≥1**.
+
+| | market PDA | vol oracle PDA | seed |
+|---|---|---|---|
+| SPCX | `7hVcCiJfESuKEL1EzfsHJshuNRqgjMUsq3iUAUWxfiTS` | `DMxHh7yMzbQ6Q6WQBzvtZsbYRPsx3cCKeeDCE5NLZ4Se` | 1.00 |
+| HOOD | `C6ge3zpmchKzdTtyduyE2zJd6ipycvurNquzkMEbMpQL` | `ErFJZnemkXBTqc3D66LVTCycuQzZApxFxyvjxsqSLXZp` | 0.65 |
+
+Equity board **13 tickers**; crank boot marker **`supported:19`** (6 crypto + 13
+equity). Crossbar STORE passed the 4-gate chain (GUARD1 local == locked → STORE →
+GUARD2 server == local == locked → RESOLVE jobs=2 → LIVENESS 2 sigs + ed25519).
+`get_option_price` SANE: SPCX `vol_used = 100.00%` === seed, spot $125.30 vs live
+$125.18, premium $14.6407 in band.
+
+**The locked manifest hashes are now REPRODUCIBLE IN-REPO** — `crank/_equity_feed_hashes.ts`
+re-derives all 13 byte-exact (they previously existed only as prose literals).
+Gates: `_verify_registry_hashes.ts` **19/19 parity, 13/13 resolvable**;
+`_probe_wave2_verify.ts` **ALL 13 VERIFIED**.
+
+## 6. FRONTEND — three fixes, live on opta.fyi
+
+- **13-ticker registry.** `assetDisplay.ts`'s hardcoded `EQUITIES` set lagged at 6,
+  so 8 tickers grouped under "Other" in the Trade dropdown / Write selector.
+  Markets **tabs were already correct** — they key off the on-chain numeric
+  `asset_class` (`marketsView.classToTab`), a separate path.
+- **BOOK DEPTH stat.** Writer-ask escrow was invisible: **$2.099M escrow vs
+  $3,013 vault TVL**. Now its own header cell + inspector stat, derived from the
+  existing batched `fetchBook` (one `getProgramAccounts`, zero new RPC).
+  **These are different claims — never merge them into one TVL number.**
+- **ACTIVE MARKETS 1198 → 384.** It was counting every unexpired vault ever
+  minted, including ~1,100 churn shells. Now filtered to tradeable (≥1 resting
+  ask OR open interest). `underlyings` uses the same filter for consistency.
+
+Gate: `scripts/check-equity-registry-depth.mjs` — 8 browser-context checks,
+passing locally AND in remote mode (`GATE_BASE=https://opta.fyi`).
+
+## 7. RECORD CORRECTIONS (earlier notes were wrong)
+
+- **Crypto sampling is HOURLY (60 min ±1), not "~30-min".** Measured across 12
+  consecutive ticks and corroborated by `sample_count` +16 over 16h. The
+  "~30-min main push loop" in older blocks is wrong. Successful pushes land in
+  the **mid-hour retry at ~:13–:15**; the hourly warming tick still errors
+  (`packEd25519Ix`, pre-existing, not service-affecting).
+- **JUP / JTO / WIF / BONK are NOT in the crank SB registry.** `supported:19` =
+  6 crypto + 13 equity. They log `oracle-stale, samples:67` and are skipped, so
+  the **crypto board ceiling is 120 (6 × 20), not 180.** Re-registration is
+  tomorrow's arc.
+- **Equity off-hours behaviour** — see §4; asks are cancelled by design.
+- Equity stale-retry noise does **not** delay crypto sampling: the warming tick
+  grew 124s → 189s but finishes ~10 min before the crypto push window. A
+  market-hours gate on the crank stays LOW priority (log spam only).
+
+## 8. STATE AT CLOSE (2026-07-21 20:30Z)
+
+| | |
+|---|---|
+| writer | `9701eec` (churn v2), up since 16:48:28Z, RSS ~57M/350M |
+| board | **118 asks, crypto only** (equities cancelled at close, by design) |
+| shells | **1111** · SOL **43.8128** · free USDC **$562,042.388** |
+| writer `.env` | `MAX_CELLS=470`, `ASSETS_EXCLUDE=SBXAU` (**forever**), `EXCLUDE_CLASSES=99` (sentinel) |
+| crank | `supported:19`, RSS ~168M/400M, HEAD `d1d0471` + surgical Wave-2b paths |
+| kill-watch | **self-terminated 20:07:46Z** — no session-owned pollers survive (§6 holds) |
+
+Leftover file `/opt/opta-writer/killwatch.sh` is inert (not scheduled, not running).
+
+**T4 read ~07:00Z is now pure verification off the 20:00Z baseline**, and it is
+**crypto-only overnight** (equities are cancelled until 13:30Z). Expect shells to
+stay at 1111 and burn to stay ≈0.03 SOL/h.
+
+## 9. TOMORROW'S QUEUE (in order)
+
+1. **07:00Z T4 read** — shells/h + burn/h off the 20:00Z baseline (crypto-only).
+2. **13:30Z repost verification** — 260 reposts across 13 tickers, shells FLAT;
+   watch MSFT (§4).
+3. **Deliberate writer restart** — folds in `656a743`, then drop the `=99`
+   sentinel from `.env` (in that order, never before).
+4. **Meme re-registration arc** — JUP/JTO/WIF/BONK back into the SB registry,
+   crypto board 120 → 180.
+5. **Exchange build resumes** thereafter.
+
+**Aug-7 void-sweep unchanged** (rent reclaim on settled writer-ask vaults; the
+shell count is now ~1111, so the reclaim is materially larger than the earlier
+~3 SOL estimate). FE dropdown/registry + book depth are already live — nothing
+queued there.
+
+## 10. TODAY'S COMMITS (in order) + checkpoints
+
+| sha | what |
+|---|---|
+| `5e2ed5e` | wave-2b: register SPCX+HOOD feeds (locked manifest) |
+| `93025a2` | wave-2b: extend gates to 13 tickers |
+| `94b0ad6` | wave-2b: birth/mint defs + gop probe refs |
+| `973bc99` | tooling: writer locked-USDC census probe |
+| `cea9e11` | tooling: ladder hysteresis repro harness |
+| `9701eec` | **writer churn v2** — rung-fraction hysteresis + per-expiry anchors + pre-mint budget gate |
+| `1f64b1f` | fe: 13-ticker equity registry + writer-ask escrow in market depth |
+| `9f170bd` | fe: gate supports GATE_BASE for post-deploy verification |
+| `306d817` | fe: active-markets counts tradeable markets, not lifetime mints |
+| `656a743` | **writer: excludeClasses parse fix** — empty/missing env ⇒ `[]` not `[0]` (NOT live) |
+
+ClickUp (Opta › Engineering, list `901818332352`): `86eyc7rfn` Wave-2b live ·
+`86eyc8m0x` churn v2 live · `86eyc9cef` funding STOP + equity board.
+
+---
+
 # SESSION CLOSE — 2026-07-21 11:40Z (writer/market-maker session)
 
 > Written for a reader with ZERO session memory. Everything below is current as of
 > the timestamp above. Older sections further down remain valid history.
+> **SUPERSEDED by the 20:30Z day-close block above** — retained as history.
 
 ## 1. What exists now: the `opta-writer` market-maker bot
 

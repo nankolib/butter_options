@@ -119,6 +119,10 @@ export const SB_FEED_DATA: SbFeedDatum[] = [
       ["COIN", "60e0a2d31235e2e3c7414635f3bf0c14c671098ef953b0823d380913d627c868"],
       ["MSTR", "5dc7af42f5237fb2d39aa65374c91234da9a92ba940ac9a5613b51d59d9a830a"],
       ["CRCL", "077acbc9a679e4660b8ace50be067bd08a443f1ea7c0a48b4b6e444c23c17040"],
+      // Wave-2b (locked manifest, 2026-07-21) — same frozen scheme, hashes
+      // re-derived byte-exact by crank/_equity_feed_hashes.ts before landing.
+      ["SPCX", "fd7a0b9ea922e14e18944f8105b151df922487da9b1b2ed5ad52150924ed413f"],
+      ["HOOD", "9801bc9a0cc3eceb1ec4dfb964186a426883bb89a670c5968879b6e2c31b7c8b"],
     ] as const
   ).map(([t, feedHashHex]): SbFeedDatum => ({
     feedHashHex,

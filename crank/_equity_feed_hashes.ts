@@ -1,4 +1,5 @@
-// Compute + lock the 11 Wave-2 equity feedHashes from the FROZEN quotes.opta.fyi
+// Compute + lock the 13 equity feedHashes (11 Wave-2 + Wave-2b SPCX/HOOD) from
+// the FROZEN quotes.opta.fyi
 // URL scheme (GATE-A section C, browser-verified live). Pure function of the URL
 // strings — no live proxy needed. Read-only, no network.
 //   Finnhub: https://quotes.opta.fyi/finnhub/quote?symbol=X  -> $.c
@@ -10,8 +11,8 @@ const finnhub = (x: string) => ({ tasks: [{ httpTask: { url: `https://quotes.opt
 const yahoo = (x: string) => ({ tasks: [{ httpTask: { url: `https://quotes.opta.fyi/yahoo/chart/${x}` } }, { jsonParseTask: { path: "$.chart.result[0].meta.regularMarketPrice" } }] });
 
 // Locked Gate-1 order (seed shown for the table).
-const SEED: Record<string, string> = { MSFT: "0.30", AAPL: "0.32", GOOGL: "0.35", AMZN: "0.35", META: "0.40", NVDA: "0.55", AMD: "0.55", TSLA: "0.60", COIN: "0.75", MSTR: "0.90", CRCL: "0.95" };
-const TICKERS = ["AAPL", "TSLA", "MSFT", "NVDA", "MSTR", "GOOGL", "AMZN", "AMD", "COIN", "META", "CRCL"];
+const SEED: Record<string, string> = { MSFT: "0.30", AAPL: "0.32", GOOGL: "0.35", AMZN: "0.35", META: "0.40", NVDA: "0.55", AMD: "0.55", TSLA: "0.60", COIN: "0.75", MSTR: "0.90", CRCL: "0.95", SPCX: "1.00", HOOD: "0.65" };
+const TICKERS = ["AAPL", "TSLA", "MSFT", "NVDA", "MSTR", "GOOGL", "AMZN", "AMD", "COIN", "META", "CRCL", "SPCX", "HOOD"];
 
 function buildFeed(x: string): OracleFeed {
   return OracleFeed.fromObject({

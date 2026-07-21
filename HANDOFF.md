@@ -1817,3 +1817,52 @@ survive `assets=null`.
 (so "200 crypto" is really 180). All src=1; Pyth guard skipping EURUSD/HYPE/RAY/
 UKOILSPOT/USDPKR/USOILSPOT/XAG. SBXAU verified 0 orders on-chain (single gold book
 via XAU). USDC $1,535,631 locked / $139,367 free. SOL 4.94. strand=0 throughout.
+
+---
+
+## RULE 3 — no loose WIP in the shared tree; unauthored state is untrusted (2026-07-21)
+
+This clone's working tree is shared by multiple concurrent agent sessions. Loose
+uncommitted edits are indistinguishable from finished work.
+
+1. **Never leave uncommitted WIP in the shared tree.** Commit it to a branch or
+   `git stash` it. If it is not committed, another session cannot tell it is
+   half-done.
+2. **Treat tree state you did not author as UNTRUSTED.** Before building on it or
+   committing it: `tsc --noEmit` **and** run the suites. Do not assume it compiles.
+
+**Incident that produced this rule.** The writer churn fix (strike hysteresis +
+reprice ε-skip) was found as uncommitted WIP in the shared tree. It **did not
+compile** — `vaultStrike` undeclared, `REPRICE_EPSILON` undefined — and
+`existingStrikes` was never passed to `buildLadder`, so the hysteresis was
+entirely **inert**. It was nearly shipped. Note the commit gate never failed:
+`git log -S` confirms those symbols appear in exactly one commit (`d1d0471`), so
+the broken code was never committed and never reached the box. The gap was loose
+WIP, not a bypassed gate.
+
+**Enforcement — pre-commit compile gate** (`.git/hooks/pre-commit`, local to this
+clone, therefore covering every session that uses it). Staging `writer/src/*.ts`
+or `crank/*.ts` runs `tsc --noEmit` in that project and BLOCKS the commit on
+failure (`git commit --no-verify` to override deliberately). Verified both ways:
+green tree passes; an injected type error blocks with the diagnostic.
+`crank/bs58.d.ts` was added so `crank` type-checks clean (bs58 v4 ships no types)
+— a red gate would have blocked every session's crank commits.
+
+**Known limitation:** the gate skips (warns) where `node_modules` is absent —
+notably the `origin/main` worktree used for HANDOFF/main commits. So the primary
+discipline stands: type-check and run the suites in the local tree BEFORE copying
+files into the worktree to commit.
+
+### Queued: rent-reclaim sweep (Aug-7 void-sweep session)
+Writer churn minted **657 empty 0-pool SharedVault shells** (board never exceeded
+~180). A cancel refunds only the order+escrow rent; the series mint/record/hook
+accounts and the vault+vault_usdc are never closed by it — ~0.020 SOL per wobble,
+permanently. That, not fees, is what drained the writer wallet (~9 SOL).
+`close_settled_writer_ask_vault` can reclaim the vault rent but requires the vault
+to be SETTLED — so run it **after the Jul-24 and Jul-31 settlements**, folded into
+the Aug-7 void-sweep session so all scavenging happens in one sitting (~3 SOL+).
+
+### Funding-STOP metric (added)
+Alongside measured burn SOL/h, report **shells-created-per-hour post-fix** — it
+should be ~0 outside genuine spot moves. Burn/h alone shows the bleed *slowed*;
+shells/h ~0 is the direct proof the permanent-rent bleed is **dead**.

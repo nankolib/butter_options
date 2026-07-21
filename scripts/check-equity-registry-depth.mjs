@@ -28,7 +28,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const APP_DIR = resolve(__dirname, "..", "app");
 const DIST = resolve(APP_DIR, "dist");
 const PORT = 4321;
-const BASE = `http://127.0.0.1:${PORT}`;
+// GATE_BASE=https://opta.fyi runs the SAME assertions against the deployed site
+// instead of the local dist (post-deploy verification). Local dist is the default.
+const REMOTE = process.env.GATE_BASE || "";
+const BASE = REMOTE || `http://127.0.0.1:${PORT}`;
 
 const EQUITIES = ["AAPL", "AMD", "AMZN", "COIN", "CRCL", "GOOGL", "HOOD", "META", "MSFT", "MSTR", "NVDA", "SPCX", "TSLA"];
 
@@ -67,10 +70,14 @@ const money = (s) => Number(String(s).replace(/[^0-9.]/g, "")) * (/m/i.test(s) ?
 
 let browser;
 try {
-  await readFile(join(DIST, "index.html")).catch(() => {
-    throw new Error("app/dist not found — run `cd app && npm run build` first");
-  });
-  await new Promise((r) => server.listen(PORT, "127.0.0.1", r));
+  if (!REMOTE) {
+    await readFile(join(DIST, "index.html")).catch(() => {
+      throw new Error("app/dist not found — run `cd app && npm run build` first");
+    });
+    await new Promise((r) => server.listen(PORT, "127.0.0.1", r));
+  } else {
+    console.log(`(remote mode: asserting against ${REMOTE})`);
+  }
   browser = await chromium.launch({ channel: "chrome", headless: true });
   const page = await browser.newPage({ viewport: { width: 1440, height: 950 } });
 

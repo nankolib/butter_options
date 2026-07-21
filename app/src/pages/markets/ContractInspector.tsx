@@ -572,6 +572,9 @@ const ModalInspector: FC<{ row: MarketRow; onClose: () => void }> = ({ row, onCl
           {[
             ["Open interest", fmtInt(row.openInterest)],
             ["Vault depth", fmtUsdCompact(row.vaultTvl ?? 0)],
+            // Distinct from vault depth: per-order maker collateral escrowed
+            // behind live resting writer asks on this contract.
+            ["Book depth", fmtUsdCompact(row.bookDepth ?? 0)],
             ["Spot", row.spot != null ? fmtPrice(row.spot) : "—"],
           ].map(([k, v]) => (
             <div key={k} className="flex flex-col gap-[3px]">

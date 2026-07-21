@@ -7,6 +7,7 @@ import { useSpotPrices } from "../../hooks/useSpotPrices";
 import { applyVolSmile, getDefaultVolatility } from "../../utils/blackScholes";
 import { hexFromBytes, usdcToNumber } from "../../utils/format";
 import { canonicalAsset } from "../../utils/assetDisplay";
+import { fetchBook } from "../../utils/exchangeData";
 
 export type MarketStatus = "open" | "settled" | "expired";
 
@@ -38,6 +39,12 @@ export type MarketRow = {
   settlementPrice: number | null;
   /** Cumulative net premium collected by this vault (USDC). No per-day indexer. */
   premiaWritten: number;
+  /** USDC escrowed behind LIVE resting WriterAsks on this vault
+   *  (sum of quantity_remaining x collateral_per_contract). This is maker
+   *  collateral held per-order in the ask escrow — it is NOT part of the vault's
+   *  own pool, so it must never be summed into vaultTvl. Reported separately as
+   *  "book depth". */
+  bookDepth: number;
   /** Always true post-P1 — vault rows are v2 by definition. Kept for
    *  call-site compatibility with the existing MarketsTable. */
   isV2: boolean;
@@ -47,7 +54,12 @@ export type MarketsSummary = {
   activeMarkets: number;
   underlyings: number;
   openInterest: number;
+  /** Sum of SharedVault.total_collateral — pooled writer deposits only. */
   vaultTvl: number;
+  /** Sum of USDC escrowed behind live resting WriterAsks. Kept SEPARATE from
+   *  vaultTvl: pooled deposits and per-order ask escrow are different claims and
+   *  merging them would overstate either number. */
+  bookDepth: number;
   premiaWritten: number;
   loaded: boolean;
 };
@@ -80,6 +92,8 @@ export function useMarketsData(): UseMarketsData {
   const { program } = useProgram();
   const { vaults, vaultMints } = useVaults();
   const [markets, setMarkets] = useState<MarketAccount[]>([]);
+  // vault58 -> USDC escrowed behind live resting WriterAsks on that vault.
+  const [escrowByVault, setEscrowByVault] = useState<Map<string, number>>(new Map());
   const [loading, setLoading] = useState(true);
 
   const refetch = useCallback(async () => {
@@ -90,6 +104,23 @@ export function useMarketsData(): UseMarketsData {
       setMarkets(mkts as MarketAccount[]);
     } catch (err) {
       console.error("Markets fetch failed", err);
+    }
+    // Writer-ask escrow. ONE batched getProgramAccounts (discriminator memcmp)
+    // via the shared book fetcher — never a per-ask account fetch. Every field
+    // needed (vault, qty, collateral_per_contract) is on the RestingOrder
+    // itself, so no vault round-trips either. Failure here must not blank the
+    // page: escrow degrades to 0 and vault TVL still renders.
+    try {
+      const book = await fetchBook(program.provider.connection, program.programId);
+      const m = new Map<string, number>();
+      for (const o of book) {
+        if (o.kind !== "writerAsk") continue;
+        const escrow = o.qty * o.collateralPerContract;
+        if (escrow > 0) m.set(o.vault, (m.get(o.vault) ?? 0) + escrow);
+      }
+      setEscrowByVault(m);
+    } catch (err) {
+      console.error("Writer-ask escrow fetch failed", err);
     } finally {
       setLoading(false);
     }
@@ -198,11 +229,12 @@ export function useMarketsData(): UseMarketsData {
         exerciseStyle,
         settlementPrice,
         premiaWritten,
+        bookDepth: escrowByVault.get(v.publicKey.toBase58()) ?? 0,
         isV2: true,
       });
     }
     return out;
-  }, [vaults, assetByMarket, oiByVault, spotPrices]);
+  }, [vaults, assetByMarket, oiByVault, spotPrices, escrowByVault]);
 
   const summary = useMemo<MarketsSummary>(() => {
     const now = Math.floor(Date.now() / 1000);
@@ -226,15 +258,22 @@ export function useMarketsData(): UseMarketsData {
       if (premia) totalPremia += usdcToNumber(premia);
     }
 
+    // Book depth is summed over the escrow map directly, NOT over `rows` — rows
+    // are filtered (hidden provenance seeds, undecodable vaults), and the header
+    // aggregate must reconcile against the on-chain total.
+    let totalBookDepth = 0;
+    for (const v of escrowByVault.values()) totalBookDepth += v;
+
     return {
       activeMarkets,
       underlyings: underlyingsSet.size,
       openInterest: totalOi,
       vaultTvl: totalTvl,
+      bookDepth: totalBookDepth,
       premiaWritten: totalPremia,
       loaded: !loading,
     };
-  }, [rows, vaults, loading]);
+  }, [rows, vaults, loading, escrowByVault]);
 
   return { rows, summary, spotPrices, asOf: spotAsOf ?? {}, loading, refetch };
 }

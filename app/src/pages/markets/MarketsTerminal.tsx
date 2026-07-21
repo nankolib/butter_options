@@ -148,6 +148,9 @@ export const MarketsTerminal: FC<{ data: UseMarketsData }> = ({ data }) => {
         <StripCell label="Active markets" value={summary.loaded ? String(summary.activeMarkets) : "—"} />
         <StripCell label="Open interest · live" value={summary.loaded ? fmtInt(liveOi) : "—"} />
         <StripCell label="Vault TVL" value={summary.loaded ? <MoneyAmount value={summary.vaultTvl} /> : "—"} />
+        {/* Kept as its OWN cell, never folded into Vault TVL: pooled vault
+            deposits and per-order writer-ask escrow are different claims. */}
+        <StripCell label="Book depth · resting asks" value={summary.loaded ? <MoneyAmount value={summary.bookDepth} /> : "—"} testId="strip-book-depth" />
         <StripCell label="Premia · cumulative" value={summary.loaded ? <MoneyAmount value={summary.premiaWritten} /> : "—"} last />
       </div>
 
@@ -405,8 +408,8 @@ export const MarketsTerminal: FC<{ data: UseMarketsData }> = ({ data }) => {
 
 // ---- small presentational pieces -------------------------------------------
 
-const StripCell: FC<{ label: string; value: ReactNode; last?: boolean }> = ({ label, value, last }) => (
-  <div className={`flex items-baseline gap-2 whitespace-nowrap pr-5 ${last ? "" : "mr-5 border-r border-l-hair"}`}>
+const StripCell: FC<{ label: string; value: ReactNode; last?: boolean; testId?: string }> = ({ label, value, last, testId }) => (
+  <div data-testid={testId} className={`flex items-baseline gap-2 whitespace-nowrap pr-5 ${last ? "" : "mr-5 border-r border-l-hair"}`}>
     <span className="font-mono-plex text-[9px] uppercase tracking-[0.14em] text-l-muted">{label}</span>
     <span className="font-mono-plex text-[13px] tabular-nums text-l-text">{value}</span>
   </div>

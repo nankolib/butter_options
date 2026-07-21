@@ -42,7 +42,16 @@ export function canonicalAsset(symbol: string | undefined | null): string | null
 /** Asset class for grouping/labels. Kept beside the display map so both are canonical. */
 export type AssetClass = "Crypto" | "Equities" | "Commodities" | "FX" | "Other";
 const CRYPTO = new Set(["BTC", "ETH", "SOL", "XRP", "FARTCOIN"]);
-const EQUITIES = new Set(["AAPL", "MSFT", "NVDA", "MSTR", "TSLA", "CRCL"]);
+// The full Switchboard equity board (asset_class 2 on-chain). Wave-2 shipped 11
+// on 2026-07-20 and Wave-2b added SPCX + HOOD on 2026-07-21; this set lagged at
+// 6, so the eight newest tickers grouped under "Other" in the Trade dropdown and
+// Write selector. NOTE this set only drives GROUPING — discovery is on-chain, and
+// the Markets page tabs key off the numeric asset_class (marketsView.classToTab),
+// which is why those tabs were already correct. Keep in sync with a new listing.
+const EQUITIES = new Set([
+  "AAPL", "MSFT", "NVDA", "MSTR", "TSLA", "CRCL",
+  "GOOGL", "AMZN", "AMD", "COIN", "META", "SPCX", "HOOD",
+]);
 const COMMODITIES = new Set(["XAU", "XAG", "WTI", "BRENT"]);
 
 export function assetClassOf(displaySymbol: string): AssetClass {

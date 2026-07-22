@@ -67,6 +67,51 @@ export function roundSigStep(x: number, sig = 3): number {
   return Math.pow(10, Math.floor(Math.log10(x)) - (sig - 1));
 }
 
+// ---- ABSOLUTE STRIKE GRID (equity only, asset_class 2) ----------------------
+// Equity strikes were spot-relative (spot × {0.90..1.10}, roundSig-rounded), so
+// the cancel-at-close / repost-at-open cycle recentred the whole ladder on the
+// overnight spot and minted a fresh series+vault for every cell (~+260 shells,
+// ~5.6 SOL per NYSE open, measured 2026-07-22). A fixed absolute grid makes the
+// STRIKE VALUE itself stable: a move smaller than one gridStep snaps to the same
+// grid points → the (market, strike, expiry, side) PDAs already exist on-chain →
+// needSeries/needVault are false → the repost reuses instead of minting. Crypto
+// keeps its spot-relative + stickyStrike path (untouched — see buildLadder).
+export const EQUITY_LADDER_N = 5;
+
+/** Deterministic per-ticker grid step, keyed to spot magnitude. */
+export function gridStep(spot: number): number {
+  if (spot < 50) return 1;
+  if (spot < 100) return 2.5;
+  if (spot < 250) return 5;
+  if (spot < 500) return 10;
+  if (spot < 1000) return 25;
+  return 50;
+}
+
+/** Snap to the nearest grid point (half-up on the midpoint, JS Math.round). */
+export function snapToGrid(x: number, step: number): number {
+  if (step <= 0) return x;
+  return Math.round(x / step) * step;
+}
+
+/**
+ * The N grid points nearest ATM: the snapped-ATM grid point and (N-1)/2 steps
+ * on each side. Stateless — same spot (within ±½ step) always yields the same
+ * set, which is what gives cross-day PDA reuse. Drops any non-positive strike.
+ */
+export function equityGridStrikes(spot: number, n = EQUITY_LADDER_N): number[] {
+  if (spot <= 0) return [];
+  const step = gridStep(spot);
+  const atm = snapToGrid(spot, step);
+  const half = (n - 1) / 2;
+  const out: number[] = [];
+  for (let i = -half; i <= half; i++) {
+    const s = +(atm + i * step).toFixed(4); // clean fp artifacts (e.g. 2.5 steps)
+    if (s > 0) out.push(s);
+  }
+  return out;
+}
+
 // ---- STRIKE HYSTERESIS v2 ---------------------------------------------------
 // v1 anchored the deadband to `roundSigStep` — the 3-SIG-FIG DISPLAY-ROUNDING
 // QUANTUM. That is the wrong unit. Rungs are spaced at 5% of spot, so the band
@@ -164,33 +209,55 @@ export function buildLadder(inp: LadderInput): TargetCell[] {
   ];
 
   const cells: TargetCell[] = [];
-  const byExpiry = inp.existingStrikesByExpiry;
-  for (const mult of STRIKE_MULTIPLIERS) {
-    const rawTarget = spot * mult;
-    for (const t of tenors) {
-      if (t.ts <= Math.floor(nowMs / 1000)) continue; // defensive
-      // Hysteresis is resolved PER EXPIRY: only anchors on THIS tenor can
-      // retain a strike, because the series PDA is keyed by expiry too.
-      const anchors = byExpiry?.get(t.ts) ?? [];
-      const strikeDollars = stickyStrike(rawTarget, anchors, spot);
-      if (strikeDollars <= 0) continue;
-      const strikeMicro = toUsdcBN(strikeDollars);
-      const qty = clampQty(strikeDollars, tier.targetNotional);
-      for (const side of ["call", "put"] as const) {
-        cells.push({
-          assetName: market.assetName,
-          market: market.publicKey,
-          side,
-          optIdx: side === "call" ? OPT_CALL : OPT_PUT,
-          vaultKind: kind,
-          strikeDollars,
-          strikeMicro,
-          expiryTs: t.ts,
-          tenorLabel: t.label,
-          qty,
-          spreadBps: tier.spreadBps,
-          atmDistance: Math.abs(mult - 1),
-        });
+  const nowSec = Math.floor(nowMs / 1000);
+
+  // Shared cell emitter — identical fields on both paths; keeps them in lockstep.
+  const emit = (strikeDollars: number, atmDistance: number, t: { label: "weekly" | "monthly"; ts: number }) => {
+    if (strikeDollars <= 0) return;
+    const strikeMicro = toUsdcBN(strikeDollars);
+    const qty = clampQty(strikeDollars, tier.targetNotional);
+    for (const side of ["call", "put"] as const) {
+      cells.push({
+        assetName: market.assetName,
+        market: market.publicKey,
+        side,
+        optIdx: side === "call" ? OPT_CALL : OPT_PUT,
+        vaultKind: kind,
+        strikeDollars,
+        strikeMicro,
+        expiryTs: t.ts,
+        tenorLabel: t.label,
+        qty,
+        spreadBps: tier.spreadBps,
+        atmDistance,
+      });
+    }
+  };
+
+  if (market.assetClass === 2) {
+    // EQUITY: stateless absolute grid — N grid points nearest ATM, identical for
+    // every expiry (no per-expiry hysteresis, so a cold post-cancel board still
+    // re-derives the SAME strikes → cross-day PDA reuse). ATM-first by |strike−spot|.
+    for (const strikeDollars of equityGridStrikes(spot, EQUITY_LADDER_N)) {
+      const atmDistance = spot > 0 ? Math.abs(strikeDollars - spot) / spot : 0;
+      for (const t of tenors) {
+        if (t.ts <= nowSec) continue; // defensive
+        emit(strikeDollars, atmDistance, t);
+      }
+    }
+  } else {
+    // NON-EQUITY (crypto/metals/fx/etf): spot-relative rungs + per-expiry strike
+    // hysteresis. UNCHANGED — the just-proven 24/7 board must not move.
+    const byExpiry = inp.existingStrikesByExpiry;
+    for (const mult of STRIKE_MULTIPLIERS) {
+      const rawTarget = spot * mult;
+      for (const t of tenors) {
+        if (t.ts <= nowSec) continue; // defensive
+        // Hysteresis is resolved PER EXPIRY: only anchors on THIS tenor can
+        // retain a strike, because the series PDA is keyed by expiry too.
+        const anchors = byExpiry?.get(t.ts) ?? [];
+        const strikeDollars = stickyStrike(rawTarget, anchors, spot);
+        emit(strikeDollars, Math.abs(mult - 1), t);
       }
     }
   }

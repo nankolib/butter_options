@@ -101,6 +101,41 @@ export const SB_FEED_DATA: SbFeedDatum[] = [
     quoteProgramPubkey: QUOTE_PROGRAM_ID_B58,
     minOracleSamples: 2,
   },
+  // Wave-1 meme births (2026-07-16, re-registered 2026-07-22): JUP/JTO/WIF =
+  // Binance+Gate; BONK = Binance+Coinbase. feedHash minted + dry-proven against
+  // FARTCOIN's hash; on-chain markets src=SB, feedMatch=true (verified 2026-07-22).
+  {
+    feedHashHex: "5f42a2a7b0b52a26774d3554b4d58cb5b997079379b5b94649d34451be0239f2",
+    symbol: "JUP/USD",
+    suggestedAssetClass: 0, // crypto
+    queuePubkey: ON_DEMAND_DEVNET_QUEUE_B58,
+    quoteProgramPubkey: QUOTE_PROGRAM_ID_B58,
+    minOracleSamples: 2,
+  },
+  {
+    feedHashHex: "bc8e0c273c458ee54aadd7d18875c2d3164a4acb424680c0a2d5f6a121317ec4",
+    symbol: "JTO/USD",
+    suggestedAssetClass: 0, // crypto
+    queuePubkey: ON_DEMAND_DEVNET_QUEUE_B58,
+    quoteProgramPubkey: QUOTE_PROGRAM_ID_B58,
+    minOracleSamples: 2,
+  },
+  {
+    feedHashHex: "c186e1064610e8f14330734e4492e65dd6d141da371f1f94419c96296801294a",
+    symbol: "WIF/USD",
+    suggestedAssetClass: 0, // crypto
+    queuePubkey: ON_DEMAND_DEVNET_QUEUE_B58,
+    quoteProgramPubkey: QUOTE_PROGRAM_ID_B58,
+    minOracleSamples: 2,
+  },
+  {
+    feedHashHex: "c062a25a824803dd5b88661f0b6dec5b6bc2bfc2ec385f2e053b83e58660e32f",
+    symbol: "BONK/USD",
+    suggestedAssetClass: 0, // crypto
+    queuePubkey: ON_DEMAND_DEVNET_QUEUE_B58,
+    quoteProgramPubkey: QUOTE_PROGRAM_ID_B58,
+    minOracleSamples: 2,
+  },
   // ---- Wave-2 equities (locked manifest, minted 2026-07-20; ClickUp 86eyb0xjz).
   // symbol is PART OF THE HASH — never edit. Registration is a PREREQUISITE of the
   // equity migrations: _cutover_rebirth's create path throws "not in SB registry"

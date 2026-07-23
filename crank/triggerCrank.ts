@@ -54,6 +54,7 @@ import {
   mkBackoff, backoffOn429, backoffOnOk, classifyHermesError, type BackoffState,
   DEFAULT_BACKOFF_BASE_MS, DEFAULT_BACKOFF_CEILING_MS,
 } from "./hermesBackoff";
+import { SPL_SYSVAR_SLOT_HASHES_ID, SPL_SYSVAR_INSTRUCTIONS_ID } from "@switchboard-xyz/on-demand";
 
 // ---- Trigger PDA seeds (constants.ts is FE-stale — define crank-local; these
 //      MUST match programs/opta/src/state/trigger_order.rs) -------------------
@@ -65,6 +66,32 @@ export const DEFAULT_TRIGGER_TICK_MS = 15_000; // 15s — stops can't fire 5 min
 export const DEFAULT_FIRE_MARGIN_BPS = 50; // 0.50% — headroom over measured SOL spot↔EMA gap (calm p90 ~16bps, move-peak ~33bps; P3.4 characterization)
 export const DEFAULT_FEED_STALE_SECS = 120; // a Hermes price older than this = stale
 export const EXECUTE_CU_LIMIT = 400_000; // BUY+BS-2002 path; the keeper IS the caller
+
+// ---- Phase A: Switchboard arm ---------------------------------------------
+// The on-chain execute_trigger ALREADY routes by market.oracle_source (a Pyth
+// arm and an SB arm). This keeper was the half that opted out: it built a
+// Pyth/Hermes read + a Pyth-only ctx and skipped every oracle_source==1 market.
+// Post-migration that is the ENTIRE tradeable board (recon 2026-07-22: 24 SB
+// markets vs 7 Pyth, all 7 non-board FX/commodity), so the keeper was firing for
+// nobody. This flag turns the SB arm on; OFF reproduces the prior behaviour
+// byte-for-byte (SB markets skipped) so the Pyth arm can never regress.
+export const TRIGGER_SB_ENABLED =
+  (process.env.OPTA_TRIGGER_SB_ENABLED ?? "").trim() === "1";
+/** Crossbar is the SB WATCH tape (batched, mirrors the batched-Hermes design).
+ *  The on-chain re-validation still re-reads a verified quote at fire time — the
+ *  watch tape only decides WHEN to try, never what price is used. */
+export const DEFAULT_CROSSBAR_URL =
+  process.env.OPTA_CROSSBAR_URL ?? "https://crossbar.switchboard.xyz";
+
+/** Resolve a feedHash → its SB On-Demand queue via the registry. Undefined for a
+ *  Pyth feed or an unregistered hash (the fire path then throws explicitly). */
+export function sbQueueFor(feedHex: string): PublicKey | undefined {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { lookupSbFeed } = require("./sbFeedRegistry") as typeof import("./sbFeedRegistry");
+    return lookupSbFeed(feedHex)?.queue;
+  } catch { return undefined; }
+}
 const SHUTDOWN_CHECK_MS = 5000; // interruptible-sleep granularity
 
 const CRANK_IDL_PATH = path.resolve(__dirname, "idl/opta.json");
@@ -75,6 +102,8 @@ const EXECUTE_ACCOUNT_ROLES = [
   "option_mint", "price_update", "vol_oracle", "protocol_state", "treasury",
   "trigger_escrow", "holder_option_ata", "owner_usdc_account", "owner_wallet",
   "vault_usdc_account", "token_program", "token_2022_program", "system_program",
+  // Phase A: the SB arm's three optional accounts (null on the Pyth path).
+  "sb_queue", "sb_slothashes", "sb_instructions",
 ];
 
 // ---- Types -----------------------------------------------------------------
@@ -234,6 +263,7 @@ const normHex = (h: string) => h.replace(/^0x/, "").toLowerCase();
  */
 export function buildTriggerMarketMaps(
   markets: { publicKey: PublicKey; account: any }[],
+  sbEnabled: boolean = TRIGGER_SB_ENABLED,
 ): {
   marketRec: Map<string, { publicKey: PublicKey; account: any }>;
   marketFeed: Map<string, string>;
@@ -245,10 +275,36 @@ export function buildTriggerMarketMaps(
   for (const m of markets) {
     const pk = m.publicKey.toBase58();
     marketRec.set(pk, m);
-    if ((m.account.oracleSource as number) === 1) { sbMarkets.add(pk); continue; }
+    const isSb = (m.account.oracleSource as number) === 1;
+    if (isSb) {
+      sbMarkets.add(pk);
+      // Flag OFF → prior behaviour verbatim: never enters the feed set, tick
+      // skips it. Flag ON → routed like any other feed; `sbMarkets` becomes a
+      // ROUTING tag (which tape to read / which ctx to assemble), not a denylist.
+      if (!sbEnabled) continue;
+    }
+    // For an SB market `pyth_feed_id` holds the SB feedHash (verified on-chain:
+    // market.pyth_feed_id === registry feedHash for all 24 SB markets).
     marketFeed.set(pk, normHex(hexFromBytes(m.account.pythFeedId as number[])));
   }
   return { marketRec, marketFeed, sbMarkets };
+}
+
+/** Split a tick's feed set by tape, so each is read from its own source:
+ *  Pyth → batched Hermes; Switchboard → batched Crossbar simulate. */
+export function splitFeedsByTape(
+  orders: { market: string }[],
+  marketFeed: Map<string, string>,
+  sbMarkets: Set<string>,
+): { pythFeeds: string[]; sbFeeds: string[] } {
+  const pyth = new Set<string>();
+  const sb = new Set<string>();
+  for (const o of orders) {
+    const f = marketFeed.get(o.market);
+    if (!f) continue;
+    (sbMarkets.has(o.market) ? sb : pyth).add(normHex(f));
+  }
+  return { pythFeeds: [...pyth], sbFeeds: [...sb] };
 }
 
 /** Unique feed-hex set across live orders (the dedupeFeedIds idea, hex-keyed). */
@@ -278,12 +334,15 @@ export interface TickDeps {
   fetchMarkets: () => Promise<{ publicKey: PublicKey; account: any }[]>;
   fetchVaults: () => Promise<{ publicKey: PublicKey; account: any }[]>;
   readPrices: (feedHexes: string[]) => Promise<Map<string, SpotEntry>>;
+  /** Switchboard WATCH tape (Crossbar simulate). Optional so existing callers
+   *  and the Pyth-only tests need no change; absent ⇒ no SB spots. */
+  readSbPrices?: (feedHexes: string[]) => Promise<Map<string, SpotEntry>>;
   quotePegTotalUsdc: (
     marketRec: { publicKey: PublicKey; account: any }, vi: VaultInfo, quantity: bigint,
   ) => Promise<bigint>;
   /** Production sender. NEVER called when dryRun — kept injectable so tests can
    *  assert it stays untouched in dry-run. */
-  send: (view: TriggerView, feedHex: string) => Promise<string>;
+  send: (view: TriggerView, feedHex: string, isSb?: boolean) => Promise<string>;
   nowSec: () => number;
 }
 
@@ -354,13 +413,19 @@ export function toVaultInfo(d: { publicKey: PublicKey; account: any }): VaultInf
 export function assembleExecuteAccounts(
   view: TriggerView, feedIdBytes: Buffer, usdcMint: PublicKey,
   caller: PublicKey, priceUpdate: PublicKey, programId: PublicKey,
-): Record<string, PublicKey> {
+  sb?: { queue: PublicKey } | null,
+): Record<string, PublicKey | null> {
   const triggerOrder = new PublicKey(view.pubkey);
   const optionMint = new PublicKey(view.optionMint);
   const vault = new PublicKey(view.vault);
   const owner = new PublicKey(view.owner);
   const seed = (s: string, extra: Buffer[] = []) =>
     PublicKey.findProgramAddressSync([Buffer.from(s), ...extra], programId)[0];
+  // Anchor 0.32 optional accounts are passed as `null`, never omitted. Exactly
+  // ONE tape is populated: Pyth → priceUpdate set / sb* null; Switchboard →
+  // priceUpdate null / the three sb* set. This mirrors the single match site in
+  // execute_trigger.rs (routed by market.oracle_source).
+  const isSb = !!sb;
   return {
     caller,
     triggerOrder,
@@ -368,7 +433,7 @@ export function assembleExecuteAccounts(
     sharedVault: vault,
     vaultMintRecord: seed(VAULT_MINT_RECORD_SEED, [optionMint.toBuffer()]),
     optionMint,
-    priceUpdate,
+    priceUpdate: isSb ? null : priceUpdate,
     volOracle: seed(VOL_ORACLE_SEED, [feedIdBytes]),
     protocolState: seed(PROTOCOL_SEED),
     treasury: seed(TREASURY_SEED),
@@ -380,14 +445,50 @@ export function assembleExecuteAccounts(
     tokenProgram: TOKEN_PROGRAM_ID,
     token2022Program: TOKEN_2022_PROGRAM_ID,
     systemProgram: SystemProgram.programId,
+    sbQueue: isSb ? sb!.queue : null,
+    sbSlothashes: isSb ? SPL_SYSVAR_SLOT_HASHES_ID : null,
+    sbInstructions: isSb ? SPL_SYSVAR_INSTRUCTIONS_ID : null,
   };
 }
 
 /** Build the execute_trigger instruction (offline — no RPC). */
 export async function buildExecuteTriggerIx(
-  program: anchor.Program<any>, accounts: Record<string, PublicKey>,
+  program: anchor.Program<any>, accounts: Record<string, PublicKey | null>,
 ): Promise<TransactionInstruction> {
   return program.methods.executeTrigger().accountsStrict(accounts).instruction();
+}
+
+/**
+ * Batched Switchboard WATCH read via Crossbar simulate — the SB twin of
+ * `readPricesBatched` (one request, N feedHashes). Crossbar returns the same
+ * aggregated value the signed quote will carry, so it is the right tape for
+ * deciding WHEN to fire; the authoritative price is still re-read on-chain from
+ * a verified quote inside execute_trigger. Failures are non-fatal: an empty map
+ * just means "no SB spot this tick" → those triggers skip as stale_feed.
+ */
+export async function readSbPricesBatched(
+  feedHexes: string[],
+  crossbar: { simulateFeeds: (h: string[]) => Promise<any[]> },
+  nowSec: number,
+): Promise<Map<string, SpotEntry>> {
+  const out = new Map<string, SpotEntry>();
+  if (feedHexes.length === 0) return out;
+  const res = await crossbar.simulateFeeds(feedHexes.map((h) => `0x${normHex(h)}`));
+  for (const r of res ?? []) {
+    // Crossbar's response key is `feedId` (hex, no 0x) and `results` are STRINGS
+    // — verified against the live endpoint 2026-07-22:
+    //   {feedId:"5f42a2a7…", feedName:"JUP/USD", results:["0.19320000","0.19283"]}
+    const hex = normHex(String(r?.feedId ?? r?.feedHash ?? r?.feed ?? ""));
+    // Per-job results → median (the same aggregation the signed quote carries).
+    const vals = (r?.results ?? []).map(Number).filter((n: number) => Number.isFinite(n) && n > 0);
+    if (!hex || vals.length === 0) continue;
+    vals.sort((a: number, b: number) => a - b);
+    const median = vals[Math.floor(vals.length / 2)];
+    // Crossbar has no publish timestamp per feed; it is a live pull, so stamp it
+    // `now` — staleness for SB is enforced on-chain (150-slot quote max_age).
+    out.set(hex, { priceFloat: median, publishTime: nowSec });
+  }
+  return out;
 }
 
 // ============================================================================
@@ -418,11 +519,13 @@ export function loadTriggerProgram(connection: Connection, wallet: SignerWallet)
 async function fireTrigger(
   ctx: TriggerCrankContext, program: anchor.Program<any>, view: TriggerView,
   feedHex: string, cfg: TickConfig, extra: Record<string, unknown>, deps: TickDeps,
+  isSb: boolean = false, sbQueue?: PublicKey,
 ): Promise<void> {
   if (cfg.dryRun) {
     const feedIdBytes = Buffer.from(normHex(feedHex), "hex");
     const accounts = assembleExecuteAccounts(
       view, feedIdBytes, cfg.usdcMint, cfg.callerPubkey, PublicKey.default, cfg.programId,
+      isSb && sbQueue ? { queue: sbQueue } : null,
     );
     const ix = await buildExecuteTriggerIx(program, accounts);
     ctx.log("info", "DRY-RUN would send execute_trigger", {
@@ -431,11 +534,18 @@ async function fireTrigger(
       kind: view.kind,
       owner: view.owner,
       computeUnitLimit: EXECUTE_CU_LIMIT,
-      txPlan: [
-        `ComputeBudget.setComputeUnitLimit(${EXECUTE_CU_LIMIT})`,
-        "pyth post_update_atomic(fresh VAA)",
-        "execute_trigger",
-      ],
+      tape: isSb ? "switchboard" : "pyth",
+      txPlan: isSb
+        ? [
+            `ComputeBudget.setComputeUnitLimit(${EXECUTE_CU_LIMIT})`,
+            "ed25519 verify(signed SB quote, ix idx 1)",
+            "execute_trigger(price_update:null, sb_queue/slothashes/instructions)",
+          ]
+        : [
+            `ComputeBudget.setComputeUnitLimit(${EXECUTE_CU_LIMIT})`,
+            "pyth post_update_atomic(fresh VAA)",
+            "execute_trigger",
+          ],
       accounts: ix.keys.map((k, i) => ({
         i, role: EXECUTE_ACCOUNT_ROLES[i] ?? "?", pubkey: k.pubkey.toBase58(),
         signer: k.isSigner, writable: k.isWritable,
@@ -445,8 +555,10 @@ async function fireTrigger(
     });
     return;
   }
-  const sig = await deps.send(view, feedHex);
-  ctx.log("info", "execute_trigger sent", { event: "fired", trigger: view.pubkey, kind: view.kind, sig });
+  const sig = await deps.send(view, feedHex, isSb);
+  ctx.log("info", "execute_trigger sent", {
+    event: "fired", trigger: view.pubkey, kind: view.kind, tape: isSb ? "switchboard" : "pyth", sig,
+  });
 }
 
 // ============================================================================
@@ -480,7 +592,11 @@ export async function tickOnce(
   for (const v of vaults) vaultInfo.set(v.publicKey.toBase58(), toVaultInfo(v));
 
   const views = orders.map(toView);
-  const feedHexes = uniqueFeedHexes(views, marketFeed);
+  // Pyth feeds go to Hermes; SB feeds go to Crossbar. When the SB flag is OFF
+  // `marketFeed` has no SB entries at all, so `sbFeeds` is empty and this is the
+  // prior single-tape behaviour verbatim.
+  const { pythFeeds, sbFeeds } = splitFeedsByTape(views, marketFeed, sbMarkets);
+  const feedHexes = pythFeeds;
 
   // ---- BATCHED Hermes read (one request) with AIMD backoff ----------------
   await sleepInterruptibly(state.backoff.currentMs, ctx.shouldShutdown); // pace
@@ -488,6 +604,17 @@ export async function tickOnce(
   let prices: Map<string, SpotEntry>;
   try {
     prices = await deps.readPrices(feedHexes);
+    // SB tape (additive, own source): a Crossbar failure must not poison the
+    // Pyth arm, so it is caught separately and degrades to "no SB spot".
+    if (sbFeeds.length > 0 && deps.readSbPrices) {
+      try {
+        for (const [k, v] of await deps.readSbPrices(sbFeeds)) prices.set(k, v);
+      } catch (sbErr) {
+        ctx.log("warn", "sb crossbar read failed (SB triggers skip this tick)", {
+          feeds: sbFeeds.length, err: String(sbErr).slice(0, 140),
+        });
+      }
+    }
     backoffOnOk(state.backoff, DEFAULT_BACKOFF_BASE_MS);
   } catch (err) {
     const cls = classifyHermesError(err);
@@ -507,7 +634,11 @@ export async function tickOnce(
     const view = views[idx];
     // Stage 3: skip triggers whose parent market is Switchboard-sourced (see the
     // marketFeed build above). Counted so the skipped volume stays visible.
-    if (sbMarkets.has(view.market)) { report.skippedSbMarket++; continue; }
+    // Flag OFF → SB markets are still counted-and-skipped (prior behaviour).
+    // Flag ON → they fall through and are routed by tape below.
+    if (sbMarkets.has(view.market) && !TRIGGER_SB_ENABLED) {
+      report.skippedSbMarket++; continue;
+    }
     try {
       const feedHex = marketFeed.get(view.market);
       const spot = feedHex ? prices.get(feedHex) : undefined;
@@ -537,7 +668,10 @@ export async function tickOnce(
       if (view.kind === "sell") extra = { intrinsic: "enforced on-chain (OptionNotInTheMoney if OTM)" };
 
       if (decision.eligible) {
-        await fireTrigger(ctx, program, view, feedHex!, cfg, extra, deps);
+        await fireTrigger(
+          ctx, program, view, feedHex!, cfg, extra, deps,
+          sbMarkets.has(view.market), sbQueueFor(feedHex!),
+        );
         report.fired++;
       } else {
         switch (decision.reason) {
@@ -603,6 +737,13 @@ function realDeps(
     fetchMarkets: () => fetchAllDecoded(program, FETCHABLE.optionsMarket),
     fetchVaults: () => fetchAllDecoded(program, FETCHABLE.sharedVault),
     readPrices: (feeds) => readPricesBatched(feeds, ctx.hermesBase),
+    readSbPrices: TRIGGER_SB_ENABLED
+      ? async (feeds) => {
+          const { CrossbarClient } = await import("@switchboard-xyz/common");
+          const crossbar = new CrossbarClient(DEFAULT_CROSSBAR_URL);
+          return readSbPricesBatched(feeds, crossbar as any, Math.floor(Date.now() / 1000));
+        }
+      : undefined,
     quotePegTotalUsdc: async (mrec, vi, quantity) => {
       const q = await fetchOptionPriceQuote(program as any, mrec as any, {
         strike: Number(vi.strikeUsdc) / 1_000_000,
@@ -614,13 +755,71 @@ function realDeps(
       const perContract6 = BigInt(Math.round(q.premiumPerContract * 1_000_000));
       return applySpreadFloor(perContract6, vi.spreadBps) * quantity;
     },
-    send: async (view, feedHex) => fireProduction(ctx, program, view, feedHex, cfg),
+    send: async (view, feedHex, isSb) => (isSb
+      ? fireProductionSb(ctx, program, view, feedHex, cfg)
+      : fireProduction(ctx, program, view, feedHex, cfg)),
     nowSec: () => Math.floor(Date.now() / 1000),
   };
 }
 
 /** PRODUCTION send (P3): atomic post_update_atomic(fresh VAA) + CU + execute_trigger.
  *  Gated behind !dryRun — NOT exercised this pass. */
+/**
+ * SB fire path — the twin of the Pyth builder above. Tx shape is exactly the
+ * sbOracleCrank push shape: [CU, ed25519(idx 1), execute_trigger(SB accounts,
+ * price_update:null)]. `instructionIdx: 1` is load-bearing — execute_trigger
+ * locates the signature via find_ed25519_ix_index over the Instructions sysvar.
+ */
+async function fireProductionSb(
+  ctx: TriggerCrankContext, program: anchor.Program<any>, view: TriggerView,
+  feedHex: string, cfg: TickConfig,
+): Promise<string> {
+  // Lazy imports keep the SB SDK off the dry-run/test path.
+  const [{ buildManagedQuoteUpdateIxs }, reg, sbSdk, web3] = await Promise.all([
+    import("./switchboardQuotePost"),
+    import("./sbFeedRegistry"),
+    import("@switchboard-xyz/on-demand"),
+    import("@solana/web3.js"),
+  ]);
+  const { CrossbarClient } = await import("@switchboard-xyz/common");
+
+  const entry = reg.lookupSbFeed(feedHex);
+  if (!entry) throw new Error(`feed ${normHex(feedHex).slice(0, 10)} not in SB registry`);
+
+  const sbProgram = await (sbSdk as any).AnchorUtils.loadProgramFromConnection(
+    ctx.connection, ctx.wallet as any, (sbSdk as any).ON_DEMAND_DEVNET_PID,
+  );
+  const qObj = new (sbSdk as any).Queue(sbProgram, (sbSdk as any).ON_DEMAND_DEVNET_QUEUE);
+  const crossbar = new CrossbarClient(DEFAULT_CROSSBAR_URL);
+
+  const { ixs } = await buildManagedQuoteUpdateIxs(
+    qObj, crossbar as any, reg.buildOracleFeed(entry), ctx.wallet.publicKey,
+    { numSignatures: 2, instructionIdx: 1 },
+  );
+  const edPid = (web3 as any).Ed25519Program.programId.toBase58();
+  const edIx = ixs.find((i: TransactionInstruction) => i.programId.toBase58() === edPid);
+  if (!edIx) throw new Error("no ed25519 ix in managed-update output");
+
+  const accounts = assembleExecuteAccounts(
+    view, Buffer.from(normHex(feedHex), "hex"), cfg.usdcMint,
+    ctx.wallet.publicKey, PublicKey.default, cfg.programId,
+    { queue: entry.queue },
+  );
+  const ix = await buildExecuteTriggerIx(program, accounts);
+  // ed25519 MUST sit at index 1 (after the CU ix) — find_ed25519_ix_index.
+  const instructions = [
+    ComputeBudgetProgram.setComputeUnitLimit({ units: EXECUTE_CU_LIMIT }),
+    edIx,
+    ix,
+  ];
+  const { blockhash } = await ctx.connection.getLatestBlockhash("confirmed");
+  const msg = new (web3 as any).TransactionMessage({
+    payerKey: ctx.wallet.publicKey, recentBlockhash: blockhash, instructions,
+  }).compileToV0Message();
+  const tx = new (web3 as any).VersionedTransaction(msg);
+  return submitWithFallback(ctx.connection, ctx.wallet, [{ tx, signers: [] }] as any);
+}
+
 async function fireProduction(
   ctx: TriggerCrankContext, program: anchor.Program<any>, view: TriggerView,
   feedHex: string, cfg: TickConfig,

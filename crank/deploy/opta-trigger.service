@@ -1,0 +1,51 @@
+# opta-trigger.service — the TP/stop-entry trigger keeper, its OWN process.
+#
+# Deliberately NOT co-hosted in opta-crank. The crank carries the vol-oracle and
+# sb-oracle warming loops that the entire board's freshness depends on; a trigger
+# loop fault (crossbar outage, quote-fetch throw, RPC storm) must not be able to
+# take those down. Same repo, same wallet precedent, separate unit = process
+# isolation without a second codebase.
+#
+# Cadence is 15s (stops can't fire 5 min late) — far tighter than the crank's
+# loops, which is the second reason to separate: their pacing assumptions differ.
+#
+# NOT INSTALLED by this commit. Install is Part 2, after the acceptance read:
+#   cp crank/deploy/opta-trigger.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now opta-trigger
+#
+# The keeper is a SCHEDULER, never an authority: execute_trigger re-reads a
+# verified oracle in-tx and re-checks the stored comparator itself, so a
+# compromised or buggy keeper can cause a failed tx, never a wrong fill.
+
+[Unit]
+Description=Opta trigger keeper (TP / stop-entry, Pyth + Switchboard arms)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/opta-crank/crank
+EnvironmentFile=/opt/opta-trigger/.env
+
+# Start in the SAFE posture: SB arm on (that is the point of Phase A) but
+# DRY_RUN on, so the first unattended run only logs what it would send. Flip
+# OPTA_TRIGGER_DRY_RUN=0 in the EnvironmentFile after the canary fire.
+Environment=OPTA_TRIGGER_SB_ENABLED=1
+Environment=OPTA_TRIGGER_DRY_RUN=1
+
+ExecStart=/usr/bin/node --require ts-node/register --require tsconfig-paths/register /opt/opta-crank/crank/triggerCrank.ts
+
+Restart=always
+RestartSec=10
+# Gas-only keeper wallet (crank precedent) — secrets live in the EnvironmentFile,
+# never in this unit.
+User=root
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=opta-trigger
+
+# Bounded like the writer (RSS ~57M/350M there); the keeper holds far less state.
+MemoryMax=350M
+
+[Install]
+WantedBy=multi-user.target

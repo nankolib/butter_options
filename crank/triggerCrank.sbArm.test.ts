@@ -15,7 +15,8 @@ import { PublicKey } from "@solana/web3.js";
 import { SPL_SYSVAR_SLOT_HASHES_ID, SPL_SYSVAR_INSTRUCTIONS_ID } from "@switchboard-xyz/on-demand";
 import {
   assembleExecuteAccounts, buildTriggerMarketMaps, splitFeedsByTape,
-  readSbPricesBatched, type TriggerView,
+  readSbPricesBatched, classifyFireError, DEFAULT_FIRE_MAX_ATTEMPTS,
+  type TriggerView,
 } from "./triggerCrank";
 
 const PROGRAM = new PublicKey("CtzJ4MJYX6BFvF4g67i5C24tQuwRn6ddKkaE5L84z9Cq");
@@ -140,4 +141,40 @@ test("readSbPricesBatched: empty input short-circuits; junk results are dropped"
 
   const junk = { simulateFeeds: async () => [{ feedId: FEED, results: ["0", "-1", "abc"] }] };
   assert.equal((await readSbPricesBatched([FEED], junk, 0)).size, 0, "no positive finite value ⇒ no entry");
+});
+
+// ---- Within-tick fire retry: classification + bound (Phase A T1-FIX) --------
+// The SB gateway is ~3/15 clean (sbOracleCrank.ts); single-shot-per-tick catches
+// that window far too slowly for a stop. fireProductionSb now retries with a
+// FRESH quote — but must distinguish "never landed" (retry) from "chain rejected
+// the revalidation" (terminal: re-sending a tx the program already refused is
+// wrong and wastes the gateway window).
+
+test("classifyFireError: gateway / quote-fetch / network failures are RETRYABLE", () => {
+  assert.equal(classifyFireError(new Error("Failed to fetch gateway from crossbar: No gateways available for network: devnet")), "retryable");
+  assert.equal(classifyFireError(new Error("no ed25519 ix in managed-update output")), "retryable");
+  assert.equal(classifyFireError(new Error("fetch failed")), "retryable");
+  assert.equal(classifyFireError("blockhash not found"), "retryable");
+  assert.equal(classifyFireError(undefined), "retryable");
+});
+
+test("classifyFireError: an on-chain Custom program error is TERMINAL", () => {
+  // 6059 TriggerConditionNotMet is 0x17ab; the value is what simulate returns.
+  assert.equal(classifyFireError({ InstructionError: [2, { Custom: 6059 }] }), "terminal", "comparator revalidation failed");
+  assert.equal(classifyFireError({ InstructionError: [2, { Custom: 6048 }] }), "terminal", "vol-oracle freshness");
+  assert.equal(classifyFireError({ InstructionError: [1, { Custom: 1 }] }), "terminal", "insufficient funds etc.");
+  assert.equal(classifyFireError({ Custom: 6059 }), "terminal", "bare Custom shape");
+  // wrapped under `.err` (the shape a caught SendTransactionError can carry)
+  assert.equal(classifyFireError({ err: { InstructionError: [2, { Custom: 6059 }] } }), "terminal");
+});
+
+test("classifyFireError: a NON-Custom InstructionError is retryable (not a program verdict)", () => {
+  // e.g. ProgramFailedToComplete / compute exhaustion — worth a fresh attempt.
+  assert.equal(classifyFireError({ InstructionError: [2, "ProgramFailedToComplete"] }), "retryable");
+  assert.equal(classifyFireError({ InstructionError: [0, "InvalidAccountData"] }), "retryable");
+});
+
+test("fire retry bound is small and > 1 (bounded, but actually retries)", () => {
+  assert.ok(DEFAULT_FIRE_MAX_ATTEMPTS >= 2 && DEFAULT_FIRE_MAX_ATTEMPTS <= 5,
+    `expected a small bound, got ${DEFAULT_FIRE_MAX_ATTEMPTS}`);
 });

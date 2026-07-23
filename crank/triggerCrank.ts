@@ -83,6 +83,38 @@ export const TRIGGER_SB_ENABLED =
 export const DEFAULT_CROSSBAR_URL =
   process.env.OPTA_CROSSBAR_URL ?? "https://crossbar.switchboard.xyz";
 
+/** Within-tick fire retries against the flaky SB gateway (~3/15 clean, see
+ *  sbOracleCrank.ts). Single-shot-per-tick catches the clean window far too
+ *  slowly for a stop; the crank's proven answer is bounded retry-with-fresh-
+ *  quote. Matches SB_PUSH_MAX_ATTEMPTS's intent at a fire-appropriate bound. */
+export const DEFAULT_FIRE_MAX_ATTEMPTS = 3;
+
+/**
+ * Classify a fire-attempt failure. Load-bearing distinction the crank's push
+ * loop doesn't need but a fire does: a stop that keeps re-firing a tx the CHAIN
+ * already rejected (wrong comparator, stale oracle, insufficient funds) is
+ * wrong — that verdict won't change within a tick, and re-sending wastes the
+ * gateway window. So:
+ *   - "retryable": the quote never reached the chain — gateway/crossbar/quote-
+ *     fetch failures ("No gateways available", network, no-ed25519), or a
+ *     transient sim error (blockhash). Re-fetch a FRESH quote and try again.
+ *   - "terminal": the chain SIMULATED and REJECTED it — any InstructionError
+ *     carrying a Custom program error (6059 TriggerConditionNotMet, freshness,
+ *     funds). Stop this tick; the next tick re-reads state and re-decides.
+ */
+export function classifyFireError(err: unknown): "retryable" | "terminal" {
+  // On-chain program rejection: a simulate result shaped {InstructionError:[i,{Custom:n}]}
+  // (or {Custom:n}) is a deliberate revalidation failure → terminal.
+  const asObj = (v: unknown): any => (v && typeof v === "object" ? (v as any) : undefined);
+  const o = asObj(err);
+  const ie = o?.InstructionError ?? o?.err?.InstructionError;
+  if (Array.isArray(ie) && asObj(ie[1])?.Custom !== undefined) return "terminal";
+  if (o?.Custom !== undefined) return "terminal";
+  // Everything else — gateway/quote-fetch throws, network, blockhash — is a
+  // "never landed" condition → retry with a fresh quote.
+  return "retryable";
+}
+
 /** Resolve a feedHash → its SB On-Demand queue via the registry. Undefined for a
  *  Pyth feed or an unregistered hash (the fire path then throws explicitly). */
 export function sbQueueFor(feedHex: string): PublicKey | undefined {
@@ -791,33 +823,84 @@ async function fireProductionSb(
   );
   const qObj = new (sbSdk as any).Queue(sbProgram, (sbSdk as any).ON_DEMAND_DEVNET_QUEUE);
   const crossbar = new CrossbarClient(DEFAULT_CROSSBAR_URL);
-
-  const { ixs } = await buildManagedQuoteUpdateIxs(
-    qObj, crossbar as any, reg.buildOracleFeed(entry), ctx.wallet.publicKey,
-    { numSignatures: 2, instructionIdx: 1 },
-  );
   const edPid = (web3 as any).Ed25519Program.programId.toBase58();
-  const edIx = ixs.find((i: TransactionInstruction) => i.programId.toBase58() === edPid);
-  if (!edIx) throw new Error("no ed25519 ix in managed-update output");
+  const oracleFeed = reg.buildOracleFeed(entry);
 
+  // The execute_trigger ix is fixed; only the ed25519(quote) ix is re-fetched.
   const accounts = assembleExecuteAccounts(
     view, Buffer.from(normHex(feedHex), "hex"), cfg.usdcMint,
     ctx.wallet.publicKey, PublicKey.default, cfg.programId,
     { queue: entry.queue },
   );
-  const ix = await buildExecuteTriggerIx(program, accounts);
-  // ed25519 MUST sit at index 1 (after the CU ix) — find_ed25519_ix_index.
-  const instructions = [
-    ComputeBudgetProgram.setComputeUnitLimit({ units: EXECUTE_CU_LIMIT }),
-    edIx,
-    ix,
-  ];
-  const { blockhash } = await ctx.connection.getLatestBlockhash("confirmed");
-  const msg = new (web3 as any).TransactionMessage({
-    payerKey: ctx.wallet.publicKey, recentBlockhash: blockhash, instructions,
-  }).compileToV0Message();
-  const tx = new (web3 as any).VersionedTransaction(msg);
-  return submitWithFallback(ctx.connection, ctx.wallet, [{ tx, signers: [] }] as any);
+  const executeIx = await buildExecuteTriggerIx(program, accounts);
+  const feedShort = normHex(feedHex).slice(0, 10);
+
+  // Bounded retry-with-FRESH-quote (mirrors sbOracleCrank's warming push).
+  // gateway/quote-fetch/transient-sim = retryable → re-fetch; a Custom program
+  // error = the chain rejected the revalidation → terminal, stop this tick.
+  let lastErr: unknown = new Error("no fire attempt ran");
+  for (let attempt = 1; attempt <= DEFAULT_FIRE_MAX_ATTEMPTS; attempt++) {
+    if (ctx.shouldShutdown()) throw new Error("shutdown during fire");
+
+    // (a) FRESH signed quote → ed25519 ix. Never reuse a prior attempt's quote.
+    let edIx: TransactionInstruction;
+    try {
+      const { ixs } = await buildManagedQuoteUpdateIxs(
+        qObj, crossbar as any, oracleFeed, ctx.wallet.publicKey,
+        { numSignatures: 2, instructionIdx: 1 },
+      );
+      const found = ixs.find((i: TransactionInstruction) => i.programId.toBase58() === edPid);
+      if (!found) throw new Error("no ed25519 ix in managed-update output");
+      edIx = found;
+    } catch (err) {
+      lastErr = err; // quote never reached the chain → always retryable
+      ctx.log("info", "sb fire quote fetch failed (re-fetch fresh)", {
+        trigger: view.pubkey, feed: feedShort, attempt, err: String(err).slice(0, 140),
+      });
+      continue;
+    }
+
+    // (b) [CU, ed25519(idx 1), execute_trigger(SB ctx, price_update:null)].
+    const instructions = [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: EXECUTE_CU_LIMIT }),
+      edIx,
+      executeIx,
+    ];
+    const { blockhash } = await ctx.connection.getLatestBlockhash("confirmed");
+    const msg = new (web3 as any).TransactionMessage({
+      payerKey: ctx.wallet.publicKey, recentBlockhash: blockhash, instructions,
+    }).compileToV0Message();
+    const tx = new (web3 as any).VersionedTransaction(msg);
+
+    // (c) simulate-gate → classify. Terminal = the chain rejected it; do NOT
+    //     retry (re-reading next tick is the correct path).
+    const sim = await ctx.connection.simulateTransaction(tx, { commitment: "confirmed" });
+    if (sim.value.err) {
+      if (classifyFireError(sim.value.err) === "terminal") {
+        ctx.log("info", "sb fire rejected on-chain (terminal, no retry)", {
+          trigger: view.pubkey, feed: feedShort, attempt, err: JSON.stringify(sim.value.err),
+        });
+        throw new Error(`execute_trigger rejected: ${JSON.stringify(sim.value.err)}`);
+      }
+      lastErr = sim.value.err;
+      ctx.log("info", "sb fire sim transient (re-fetch fresh)", {
+        trigger: view.pubkey, feed: feedShort, attempt, err: JSON.stringify(sim.value.err),
+      });
+      continue;
+    }
+
+    // (d) sim clean → send. A send failure re-fetches a fresh quote next attempt.
+    try {
+      return await submitWithFallback(ctx.connection, ctx.wallet, [{ tx, signers: [] }] as any);
+    } catch (err) {
+      lastErr = err;
+      ctx.log("info", "sb fire send failed (re-fetch fresh)", {
+        trigger: view.pubkey, feed: feedShort, attempt, err: String(err).slice(0, 140),
+      });
+      continue;
+    }
+  }
+  throw new Error(`sb fire exhausted ${DEFAULT_FIRE_MAX_ATTEMPTS} attempts: ${String(lastErr).slice(0, 160)}`);
 }
 
 async function fireProduction(

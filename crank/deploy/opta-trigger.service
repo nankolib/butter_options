@@ -33,7 +33,7 @@ EnvironmentFile=/opt/opta-trigger/.env
 Environment=OPTA_TRIGGER_SB_ENABLED=1
 Environment=OPTA_TRIGGER_DRY_RUN=1
 
-ExecStart=/usr/bin/node --require ts-node/register --require tsconfig-paths/register /opt/opta-crank/crank/triggerCrank.ts
+ExecStart=/usr/bin/node --require ts-node/register --require tsconfig-paths/register /opt/opta-crank/crank/triggerCrankMain.ts
 
 Restart=always
 RestartSec=10

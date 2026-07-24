@@ -47,6 +47,42 @@ export function repriceDecision(
   return "hold";
 }
 
+/**
+ * A cancel that fails because the order is ALREADY GONE is a benign no-op, not a
+ * strand. Diagnosed 2026-07-24: the tick enumerates myOrders fresh at its start,
+ * then reprices/cancels across a long tick; an order that expires and is swept
+ * mid-tick is cancelled from a now-stale work-list and fails with 3012
+ * AccountNotInitialized (0xbc4). Confirmed a WITHIN-TICK RACE, not a persistent
+ * queue: across two 30-min windows 78 vs 73 stranded orders with ZERO overlap —
+ * each is a one-shot already-closed PDA, never retried. Its escrow was already
+ * returned at close, so nothing is stranded; the writer-strand alert was a false
+ * alarm running ~90/hr. Anchor emits 3012 as custom error 0xbc4 = 3012.
+ */
+export function isTerminalCancelError(err: unknown): boolean {
+  const s = String((err as any)?.message ?? err ?? "");
+  return (
+    /\b3012\b/.test(s) ||
+    /0xbc4\b/i.test(s) ||
+    /AccountNotInitialized/i.test(s)
+  );
+}
+
+export type PullOutcome = "noop-gone" | "sent" | "strand";
+
+/**
+ * Pure pull decision. `orderExists` is the pre-cancel existence check;
+ * `sendError` is null on a landed cancel, else the thrown error.
+ *   - order gone before the cancel        → noop-gone (skip, no tx, no alert)
+ *   - cancel landed                        → sent
+ *   - cancel threw a terminal "gone" (3012)→ noop-gone (race, benign)
+ *   - cancel threw anything else           → strand (real: collateral live)
+ */
+export function classifyPullOutcome(orderExists: boolean, sendError: unknown | null): PullOutcome {
+  if (!orderExists) return "noop-gone";
+  if (sendError == null) return "sent";
+  return isTerminalCancelError(sendError) ? "noop-gone" : "strand";
+}
+
 /** HARD denylist decision (pure). Evaluated BEFORE the allow-list so an exclusion
  *  survives dropping OPTA_WRITER_ASSETS (assets=null / full board) — a permanent
  *  exclusion must never live in the allow-list alone, or it silently returns the
@@ -393,17 +429,42 @@ export class WriterEngine {
   /** Cancel an ask, returning escrow to the bot. Returns true on success. */
   private async pull(seriesMint: PublicKey, order: MyOrder, reason: string): Promise<boolean> {
     if (!this.writable()) { log.info("dry-run-pull", { order: order.pubkey.toBase58(), reason }); return false; }
-    try {
-      const ix = await cancelOrderIx(this.buildCtx, seriesMint, order.pubkey);
-      const sig = await sendTx(this.chain, [CU(400_000), ix]);
-      this.hb.onCancel();
-      log.info("pull-ok", { order: order.pubkey.toBase58(), reason, sig });
-      return true;
-    } catch (e: any) {
-      // A cancel that keeps failing = collateral stranded in the escrow → alert.
-      this.hb.onStrand();
-      log.error("writer-strand", { order: order.pubkey.toBase58(), reason, err: String(e?.message ?? e).slice(0, 200) });
-      return false;
+    // Existence pre-check RIGHT BEFORE the cancel. The work-list is enumerated at
+    // tick start but consumed across a long tick; an order swept mid-tick is gone
+    // by now. Checking here (not at tick start) is what catches the within-tick
+    // race — a batched tick-start check would itself be stale. A getAccountInfo is
+    // far cheaper than a doomed cancel tx, and skipping is a benign no-op: a gone
+    // order already returned its escrow at close, so there is nothing to pull.
+    const exists = await accountExists(this.chain, order.pubkey);
+    let sendError: unknown | null = null;
+    let sig: string | undefined;
+    if (exists) {
+      try {
+        const ix = await cancelOrderIx(this.buildCtx, seriesMint, order.pubkey);
+        sig = await sendTx(this.chain, [CU(400_000), ix]);
+      } catch (e) {
+        sendError = e;
+      }
+    }
+    switch (classifyPullOutcome(exists, sendError)) {
+      case "sent":
+        this.hb.onCancel();
+        log.info("pull-ok", { order: order.pubkey.toBase58(), reason, sig });
+        return true;
+      case "noop-gone":
+        // Order already closed (pre-check miss, or a 3012 race one slot tighter).
+        // Its escrow returned at close → nothing stranded; skip, never alert.
+        log.info("pull-noop-gone", {
+          order: order.pubkey.toBase58(), reason, at: exists ? "3012-on-send" : "pre-check",
+        });
+        return false;
+      case "strand":
+        // A genuine cancel failure on a LIVE order = collateral really stranded → alert.
+        this.hb.onStrand();
+        log.error("writer-strand", {
+          order: order.pubkey.toBase58(), reason, err: String((sendError as any)?.message ?? sendError).slice(0, 200),
+        });
+        return false;
     }
   }
 }

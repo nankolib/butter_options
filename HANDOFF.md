@@ -1,3 +1,98 @@
+# SESSION CLOSE — 2026-07-24 11:10Z (grid cross-day PROVEN · trigger keeper live · 3012 strand fixed · crossbar blocker)
+
+> Written for a reader with ZERO session memory. **This block SUPERSEDES every
+> block below it** where they disagree; older blocks remain as history. Anything
+> not re-stated here (RULE 1/2/3, monitor inventory, rent-reclaim backlog) is
+> still live.
+
+## 1. Grid cross-day reuse — PROVEN under stress (combined acceptance PASS)
+The absolute equity strike grid (`ladder.ts`, commit `f7067a1`) faced its first
+real cross-day open on a **−13% down day** (TSLA −13.4%, GOOGL −8.5%, every
+ticker red). All 13 posted 20/20, **zero unattributed mints**: 4 tickers FULL
+REUSE (0 new strikes), the rest edge-slides matching verified ≥1-gridStep moves,
+and **MSTR tier-migrated $100→$92.5 grid** (crossed below $100, step $5→$2.5) —
+the pre-authorized exception, not a failure. 18 new strikes → shells +42 (30
+reused), vs ~260 under the old spot-relative regime = **~84% mint reduction on
+the worst-case day**. ClickUp `86eyd3z9g`.
+
+**Meme board stable overnight:** JUP/JTO/WIF repriced all night (hysteresis
+damping, 0 oracle-stale skips), sc climbed 67→86, all fresh. **BONK still
+parked** — its ~$3.1e-6 dust price collapses all 5 ladder rungs to the same
+micro-USDC strike (`toUsdcBN`≈3) and rounds premiums to zero → posts rejected,
+no post-ok/no error. Needs a scaled-strike fix (parked).
+
+## 2. Trigger keeper arc — LIVE as its own service
+`opta-trigger.service` (own systemd unit, gas wallet `5sHZETYz`, 15s) is now the
+**sole keeper**. Arc: SB arm (`b94a824`) + standalone entry `triggerCrankMain.ts`
+(`9c2fbdf` — the committed unit pointed at a library with no main guard) +
+**within-tick fire retry** (`61d23e0`, bounded fresh-quote loop + `classifyFire-
+Error`: gateway=retry, Custom program error=terminal). Deployed SB=1, then live.
+Recon: 7 Pyth (all off-board FX/commodity) vs **24 SB** (the whole board), 0
+pre-existing TriggerOrders.
+
+**Canary armed, standing acceptance test:** `3o7nTTM8…` StopEntryBuy XRP ≥1.05,
+$100 in vault `2gjf5cyH…` + $2 escrow (**both recoverable**; founder DnExEYnZ
+−$102, minted 0). Detects/evaluates/passes-margin/attempts-fire cleanly; **fires
+the instant crossbar serves a gateway** (see §6). ClickUp `86eyddbfk`.
+
+## 3. THE LESSON (record verbatim)
+**The keeper was dark for three stacked reasons — the SB skip, vault-counterparty
+liquidity, and no fire retry — and each fix exposed the next. Dark systems hide
+failures in layers.** A system that "exists and is deployed" but has never
+actually run its full path end-to-end is not proven; it is a stack of untested
+assumptions that reveal themselves one at a time only when you force it live.
+
+## 4. Phase B scoped — book-path fire for ALL trigger kinds
+The live board is **WriterAsk/book-based** (collateral escrowed per-ask), but
+Phase-4 triggers fire through the **vault counterparty** (`fill_vault_peg` /
+`exercise_american`) — and **no vault on the board has payout collateral** (1,866
+live vaults, 2 funded, both drained). So **both** existing trigger kinds are
+structurally unfireable on real liquidity, not just the deferred StopLossSell.
+Phase B = route every trigger kind through the book (`fill_order` Bid fill is the
+stop-loss exit; `OrderKind::Bid` is live), with the authority-fork + delegate-at-
+arm pattern Phase 4 already proved. Proposal is the next deliverable.
+
+## 5. 3012 strand storm — FIXED (noise, not capital)
+The ~90/hr `writer-strand` (0xbc4 = 3012 AccountNotInitialized on reprice-cancel)
+was a **false alarm**. Work-list is **re-derived per tick** (fresh
+`enumerateMyOrders`), NOT a persistent queue → it's a **within-tick race** (proven:
+two 30-min windows, 78 vs 73 stranded, **ZERO overlap**): an order swept mid-tick
+is cancelled from a now-stale list. Closed orders already returned their escrow →
+nothing stranded. Fix (`b0258eb`): existence pre-check before the cancel +
+3012-on-send classified terminal-benign (`pull-noop-gone`, no alert/retry); a
+genuine failure on a LIVE order still strands. Post-deploy: **~90/hr → 0**
+(pull-noop-gone 5, pull-ok 5, real cancels unaffected). Gates 48/0 + strand 6/6.
+ClickUp `86eyddwnk`.
+
+## 6. OPEN BLOCKER — Switchboard devnet crossbar gateway outage (escalated to Jack)
+The self-hosted crossbar (`localhost:8080`) devnet gateway list is **empty ~95%
+of the time** (curled empty 5/5 over 20s). It is now failing **ALL** oracle
+pushes (`feedsSupported:23` but `feedsPushed:0 / feedsErrored:23`), and it blocked
+the canary fire 78/78 with "No gateways available for network: devnet". NOT a
+keeper bug (code byte-identical to the crank; retry correct) and NOT a total
+outage (the crank catches rare brief windows by flooding — 8 attempts × 23 feeds/
+tick; ~1 XRP push/10min). **Board stales fail-closed toward the 6h freshness gate;
+self-heals on recovery.** Both the canary AND board oracle freshness are gated on
+this single external dependency. Escalated to Jack.
+
+## 7. Close numbers
+shells **1819**, SOL **31.025**, free USDC **$1,455,136** (a +$1.29M external
+funding event landed overnight Jul-23), board **90** non-equity (equities repost
+13:30Z). Three services active (opta-writer, opta-crank, opta-trigger); the crank
+trigger side-loop was retired this session (`OPTA_TRIGGER_CRANK_DISABLED=1`),
+leaving opta-trigger the sole keeper. shells/h ≈ 0, burn/h ≈ 0, strand 0.
+
+## 8. Next queue (priority order)
+1. **Phase B proposal** — book-path fire for all trigger kinds (§4).
+2. **Wave-3 commodities** — XAG + oil, behind Phase B.
+3. **BONK dust-fix** — scaled-strike for sub-cent assets (parked).
+4. **Aug-7 sweep** — now also reclaims **grid-transition orphans** (old roundSig-
+   strike vaults abandoned when equities moved to the grid) + the daily orphans.
+5. Gated on §6 recovery: canary auto-fire verification + confirm oracle pushes
+   resume board-wide.
+
+---
+
 # SESSION CLOSE — 2026-07-21 20:30Z (DAY CLOSE — churn v2 + funding + equity board)
 
 > Written for a reader with ZERO session memory. **This block SUPERSEDES the

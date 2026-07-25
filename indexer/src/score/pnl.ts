@@ -40,7 +40,7 @@
 // allowlist still does not see; the number is the finding.
 // =============================================================================
 
-import type { EventRow } from "../db";
+import type { TapeSource } from "../db";
 import { ORDER_KIND } from "../tape/allowlist";
 
 export interface WalletFlows {
@@ -88,7 +88,7 @@ const blank = (wallet: string): WalletFlows => ({
   netDeposits: 0n,
 });
 
-export function computePnl(tape: readonly EventRow[]): PnlResult {
+export function computePnl(tape: TapeSource): PnlResult {
   const byWallet = new Map<string, WalletFlows>();
   const get = (w: string) => {
     let r = byWallet.get(w);
@@ -117,7 +117,7 @@ export function computePnl(tape: readonly EventRow[]): PnlResult {
   const openEscrow = new Map<string, bigint>();
   const escrowOwner = new Map<string, string>();
 
-  for (const e of tape) {
+  for (const e of tape()) {
     const amt = big(e.amount_usdc);
     let fields: Record<string, string> = {};
     try {

@@ -27,10 +27,10 @@ const evt = (over: Partial<EventRow>): EventRow => ({
 function run(tape: EventRow[], faucetClaims: { wallet: string; block_time: number | null }[] = [], underlying = new Map()) {
   const asOf = D0 + 30 * DAY;
   return evaluate({
-    tape,
+    tape: () => tape,
     faucetClaims,
     underlyingOf: underlying,
-    multipliers: computeMultipliers(tape, asOf),
+    multipliers: computeMultipliers(() => tape, asOf),
     cfg: DEFAULT_QUESTS,
     asOf,
   });

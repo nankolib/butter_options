@@ -56,6 +56,42 @@ function migrateV1toV2(db: DB): void {
  * Bring the DB up to SCHEMA_VERSION. Called after the CREATE TABLE IF NOT EXISTS
  * pass, so v2 tables already exist by the time we get here.
  */
+/**
+ * v2 -> v3. ADDITIVE ONLY — the tape is untouched.
+ *
+ * The v2 `referrals` table could not hold a code with no referee yet, which the
+ * `POST /referral/code` endpoint requires, so it is replaced by
+ * `referral_codes` + a reshaped `referrals`. Both were EMPTY in v2 (the write
+ * path did not exist), so nothing is lost; the drop is safe by inspection, and
+ * the code asserts that rather than assuming it.
+ */
+function migrateV2toV3(db: DB): void {
+  const legacy = db.prepare("SELECT COUNT(*) AS n FROM referrals").get() as { n: number };
+  if (legacy.n > 0) {
+    throw new Error(
+      `v2->v3 expected an empty legacy referrals table but found ${legacy.n} rows. ` +
+        `Refusing to drop user data — migrate by hand.`,
+    );
+  }
+  db.transaction(() => {
+    // v2 put a UNIQUE index on social_posts.x_handle. That is wrong: the table
+    // is one row per TWEET and a handle posts many tweets, so a wallet's SECOND
+    // submission would have failed with a constraint error. The 1:1
+    // handle<->wallet binding belongs in `wallet_handles`, which v3 adds.
+    // Caught by the daily-cap test, which needed three posts from one handle.
+    db.exec("DROP INDEX IF EXISTS idx_social_handle");
+    db.exec("DROP TABLE IF EXISTS referrals");
+    db.exec(`CREATE TABLE referrals (
+      referee_wallet  TEXT PRIMARY KEY,
+      code            TEXT NOT NULL,
+      referrer_wallet TEXT NOT NULL,
+      bound_at        INTEGER NOT NULL)`);
+    db.exec("CREATE INDEX IF NOT EXISTS idx_ref_referrer ON referrals(referrer_wallet)");
+    db.prepare("UPDATE meta SET value = '3' WHERE key = 'schema_version'").run();
+  })();
+  log.info("migration v2->v3 complete — referral tables reshaped, tape untouched");
+}
+
 export function migrate(db: DB): void {
   let v = currentVersion(db);
   if (v === 0) {
@@ -68,6 +104,10 @@ export function migrate(db: DB): void {
   if (v === 1) {
     migrateV1toV2(db);
     v = 2;
+  }
+  if (v === 2) {
+    migrateV2toV3(db);
+    v = 3;
   }
   if (v !== SCHEMA_VERSION) {
     throw new Error(

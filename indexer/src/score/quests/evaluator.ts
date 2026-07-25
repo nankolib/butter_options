@@ -18,7 +18,7 @@
 // settle_expiry calls — asserted in the tests.
 // =============================================================================
 
-import type { EventRow } from "../../db";
+import type { EventRow, TapeSource } from "../../db";
 import { ORDER_KIND } from "../../tape/allowlist";
 import { spanBucket } from "../../tape/marketsRefresh";
 import { multiplierFor, utcDay, type MultiplierResult } from "../multiplier";
@@ -61,7 +61,7 @@ export interface FaucetClaimRow {
 }
 
 export interface EvaluatorInputs {
-  tape: readonly EventRow[];
+  tape: TapeSource;
   faucetClaims: readonly FaucetClaimRow[];
   /** mint -> asset_name + class bucket, from the markets reference table. */
   underlyingOf: ReadonlyMap<string, { assetName: string; bucket: string }>;
@@ -96,15 +96,30 @@ export function isoWeek(ts: number): string {
 
 const round4 = (n: number) => Math.round(n * 1e4) / 1e4;
 
+/**
+ * ITEM 0 (Phase 2b) — SELECTIVE RETENTION.
+ *
+ * This used to hold whole `EventRow` objects per wallet, which meant the render
+ * kept a large slice of the tape alive. It now retains only the few scalars the
+ * quest rules actually read, and only for the ~8 chain-relevant event types.
+ * On the live tape that is ~140 retained records versus 42,444 OrderPosted /
+ * OrderCancelled rows that no quest rule ever looks at.
+ */
+interface Ev {
+  ts: number;
+  mint: string | null;
+  amount: number;
+}
+
 interface WalletActivity {
-  fillsTaker: EventRow[];
-  fillsMakerReal: EventRow[]; // kind != 3
-  mints: EventRow[];
-  exercises: EventRow[];
-  triggersPlaced: EventRow[];
-  triggersExecuted: EventRow[];
-  keeperActions: EventRow[]; // IxSettleExpiry | IxCreateMarket
-  settleExpiries: EventRow[];
+  fillsTaker: Ev[];
+  fillsMakerReal: Ev[]; // kind != 3
+  mints: Ev[];
+  exercises: Ev[];
+  triggersPlaced: Ev[];
+  triggersExecuted: Ev[];
+  keeperActions: Ev[]; // IxSettleExpiry | IxCreateMarket
+  settleExpiries: Ev[];
 }
 
 function blankActivity(): WalletActivity {
@@ -120,6 +135,12 @@ function blankActivity(): WalletActivity {
   };
 }
 
+const toEv = (e: EventRow): Ev => ({
+  ts: e.block_time ?? 0,
+  mint: e.option_mint,
+  amount: e.amount_usdc ?? 0,
+});
+
 export function evaluate(input: EvaluatorInputs): EvaluatorResult {
   const { tape, faucetClaims, underlyingOf, multipliers, cfg, asOf } = input;
 
@@ -131,32 +152,32 @@ export function evaluate(input: EvaluatorInputs): EvaluatorResult {
     return a;
   };
 
-  for (const e of tape) {
+  for (const e of tape()) {
     switch (e.name) {
       case "OrderFilled":
-        if (e.wallet) get(e.wallet).fillsTaker.push(e);
-        if (e.counterparty && e.kind !== ORDER_KIND.VaultPeg) get(e.counterparty).fillsMakerReal.push(e);
+        if (e.wallet) get(e.wallet).fillsTaker.push(toEv(e));
+        if (e.counterparty && e.kind !== ORDER_KIND.VaultPeg) get(e.counterparty).fillsMakerReal.push(toEv(e));
         break;
       case "VaultMinted":
-        if (e.wallet) get(e.wallet).mints.push(e);
+        if (e.wallet) get(e.wallet).mints.push(toEv(e));
         break;
       case "VaultExercised":
-        if (e.wallet) get(e.wallet).exercises.push(e);
+        if (e.wallet) get(e.wallet).exercises.push(toEv(e));
         break;
       case "TriggerPlaced":
-        if (e.wallet) get(e.wallet).triggersPlaced.push(e);
+        if (e.wallet) get(e.wallet).triggersPlaced.push(toEv(e));
         break;
       case "TriggerExecuted":
-        if (e.wallet) get(e.wallet).triggersExecuted.push(e);
+        if (e.wallet) get(e.wallet).triggersExecuted.push(toEv(e));
         break;
       case "IxSettleExpiry":
         if (e.wallet) {
-          get(e.wallet).keeperActions.push(e);
-          get(e.wallet).settleExpiries.push(e);
+          get(e.wallet).keeperActions.push(toEv(e));
+          get(e.wallet).settleExpiries.push(toEv(e));
         }
         break;
       case "IxCreateMarket":
-        if (e.wallet) get(e.wallet).keeperActions.push(e);
+        if (e.wallet) get(e.wallet).keeperActions.push(toEv(e));
         break;
       default:
         break;
@@ -164,11 +185,12 @@ export function evaluate(input: EvaluatorInputs): EvaluatorResult {
   }
 
   const positions = computePositions(tape);
-  const heldByWallet = new Map<string, { ts: number }[]>();
+  const heldByWallet = new Map<string, Ev[]>();
   for (const a of positions.awards) {
+    const ev: Ev = { ts: a.ts, mint: null, amount: 0 };
     const list = heldByWallet.get(a.wallet);
-    if (list) list.push({ ts: a.ts });
-    else heldByWallet.set(a.wallet, [{ ts: a.ts }]);
+    if (list) list.push(ev);
+    else heldByWallet.set(a.wallet, [ev]);
   }
 
   const faucetByWallet = new Map<string, number[]>();
@@ -195,11 +217,10 @@ export function evaluate(input: EvaluatorInputs): EvaluatorResult {
     };
 
     // ---- Onboarding chain — STRICTLY SEQUENTIAL (D12) ---------------------
-    const firstAtOrAfter = (rows: readonly EventRow[], after: number): number | null => {
+    const firstAtOrAfter = (rows: readonly Ev[], after: number): number | null => {
       let best: number | null = null;
       for (const r of rows) {
-        const t = r.block_time ?? 0;
-        if (t >= after && (best === null || t < best)) best = t;
+        if (r.ts >= after && (best === null || r.ts < best)) best = r.ts;
       }
       return best;
     };
@@ -226,14 +247,11 @@ export function evaluate(input: EvaluatorInputs): EvaluatorResult {
         case "O5":
           at = firstAtOrAfter(a.triggersPlaced, unlockAt);
           if (at != null) {
-            o5OrderMints = new Set(
-              a.triggersPlaced.filter((r) => (r.block_time ?? 0) === at).map((r) => r.option_mint ?? ""),
-            );
+            o5OrderMints = new Set(a.triggersPlaced.filter((r) => r.ts === at).map((r) => r.mint ?? ""));
           }
           break;
         case "O6": {
-          const held = heldByWallet.get(wallet) ?? [];
-          at = firstAtOrAfter(held.map((h) => ({ block_time: h.ts }) as EventRow), unlockAt);
+          at = firstAtOrAfter(heldByWallet.get(wallet) ?? [], unlockAt);
           break;
         }
         case "O7":
@@ -250,9 +268,9 @@ export function evaluate(input: EvaluatorInputs): EvaluatorResult {
       // O5 bonus: the SAME trigger order later fired.
       if (q.id === "O5" && q.bonus) {
         const fired = a.triggersExecuted.find(
-          (r) => (r.block_time ?? 0) >= at! && (!o5OrderMints?.size || o5OrderMints.has(r.option_mint ?? "")),
+          (r) => r.ts >= at! && (!o5OrderMints?.size || o5OrderMints.has(r.mint ?? "")),
         );
-        if (fired) award(q.bonus.id, "", fired.block_time ?? at, q.bonus.points);
+        if (fired) award(q.bonus.id, "", fired.ts, q.bonus.points);
       }
     }
     funnel.set(wallet, step);
@@ -263,13 +281,10 @@ export function evaluate(input: EvaluatorInputs): EvaluatorResult {
     // ---- Dailies (UTC), multiplier-eligible ------------------------------
     const takerByDay = new Map<string, number>();
     for (const f of a.fillsTaker) {
-      if (f.block_time == null) continue;
-      const d = utcDay(f.block_time);
-      takerByDay.set(d, (takerByDay.get(d) ?? 0) + (f.amount_usdc ?? 0));
+      const d = utcDay(f.ts);
+      takerByDay.set(d, (takerByDay.get(d) ?? 0) + f.amount);
     }
-    const makerDays = new Set(
-      a.fillsMakerReal.filter((f) => f.block_time != null).map((f) => utcDay(f.block_time!)),
-    );
+    const makerDays = new Set(a.fillsMakerReal.map((f) => utcDay(f.ts)));
     const faucetDays = new Set((faucetByWallet.get(wallet) ?? []).map((t) => utcDay(t)));
 
     for (const q of cfg.dailies) {
@@ -296,8 +311,7 @@ export function evaluate(input: EvaluatorInputs): EvaluatorResult {
       } else if (q.id === "W2") {
         const byWeek = new Map<string, number>();
         for (const s of a.settleExpiries) {
-          if (s.block_time == null) continue;
-          const w = isoWeek(s.block_time);
+          const w = isoWeek(s.ts);
           byWeek.set(w, (byWeek.get(w) ?? 0) + 1);
         }
         for (const w of [...byWeek.keys()].sort()) {
@@ -308,10 +322,10 @@ export function evaluate(input: EvaluatorInputs): EvaluatorResult {
         const byWeek = new Map<string, { names: Set<string>; buckets: Set<string> }>();
         const allFills = [...a.fillsTaker, ...a.fillsMakerReal];
         for (const f of allFills) {
-          if (f.block_time == null || !f.option_mint) continue;
-          const u = underlyingOf.get(f.option_mint);
+          if (!f.mint) continue;
+          const u = underlyingOf.get(f.mint);
           if (!u) continue;
-          const w = isoWeek(f.block_time);
+          const w = isoWeek(f.ts);
           let acc = byWeek.get(w);
           if (!acc) byWeek.set(w, (acc = { names: new Set(), buckets: new Set() }));
           acc.names.add(u.assetName);

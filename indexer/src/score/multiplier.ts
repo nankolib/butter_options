@@ -22,7 +22,7 @@
 // truth, so a rules change is just a recompute.
 // =============================================================================
 
-import type { EventRow } from "../db";
+import type { EventRow, TapeSource } from "../db";
 import { ORDER_KIND } from "../tape/allowlist";
 
 export const MULTIPLIER_STEP = 0.1;
@@ -75,7 +75,7 @@ export function isActivityEvent(e: EventRow, wallet: string): boolean {
 }
 
 /** Collect the set of active UTC days per wallet. */
-export function activeDays(tape: readonly EventRow[]): Map<string, Set<string>> {
+export function activeDays(tape: TapeSource): Map<string, Set<string>> {
   const out = new Map<string, Set<string>>();
   const add = (w: string | null, ts: number | null) => {
     if (!w || ts == null) return;
@@ -84,7 +84,7 @@ export function activeDays(tape: readonly EventRow[]): Map<string, Set<string>> 
     s.add(utcDay(ts));
   };
 
-  for (const e of tape) {
+  for (const e of tape()) {
     switch (e.name) {
       case "OrderFilled":
         add(e.wallet, e.block_time);
@@ -107,7 +107,7 @@ export function activeDays(tape: readonly EventRow[]): Map<string, Set<string>> 
  * Replay streaks day by day from each wallet's first active day through `asOf`.
  * PURE — `asOf` is injected, never read from the clock.
  */
-export function computeMultipliers(tape: readonly EventRow[], asOf: number): MultiplierResult {
+export function computeMultipliers(tape: TapeSource, asOf: number): MultiplierResult {
   const active = activeDays(tape);
   const byWalletDay = new Map<string, Map<string, number>>();
   const state = new Map<string, StreakState>();

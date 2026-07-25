@@ -5,10 +5,10 @@
 // is never touched.
 // =============================================================================
 
-import { loadTape, type DB, type EventRow } from "../db";
+import { streamTape, type DB, type TapeSource } from "../db";
 import { INTERNAL_WALLETS, isInternal, labelFor } from "../registry";
 import { spanBucket } from "../tape/marketsRefresh";
-import { computeMultipliers, utcDay, type MultiplierResult } from "./multiplier";
+import { computeMultipliers, multiplierFor, utcDay, type MultiplierResult } from "./multiplier";
 import { computePnl, type PnlResult } from "./pnl";
 import { computeProvenance, type FlowRow, type ProvenanceRow } from "./provenance";
 import { computeReferrals, type ReferralResult, type ReferralRow } from "./referrals";
@@ -92,8 +92,11 @@ export interface RecomputeResult extends ScoreResult {
 
 const round4 = (n: number) => Math.round(n * 1e4) / 1e4;
 
+/** Mirrors OPTA_SOCIAL_MAX_PER_DAY; the evaluator re-applies it independently. */
+const SOCIAL_MAX_PER_DAY = Number(process.env.OPTA_SOCIAL_MAX_PER_DAY ?? 3);
+
 /** mint -> underlying, joining tape (mint->vault->market) to the markets table. */
-function buildUnderlyingMap(db: DB, tape: readonly EventRow[]) {
+function buildUnderlyingMap(db: DB, tape: TapeSource) {
   const marketRows = db.prepare("SELECT pubkey, asset_name, asset_class FROM markets").all() as {
     pubkey: string;
     asset_name: string;
@@ -104,7 +107,7 @@ function buildUnderlyingMap(db: DB, tape: readonly EventRow[]) {
   // vault -> market, from VaultCreated (added to the allowlist in Phase 2a
   // precisely so this edge exists) and SeriesCreated.
   const vaultToMarket = new Map<string, string>();
-  for (const e of tape) {
+  for (const e of tape()) {
     if (e.name !== "VaultCreated" && e.name !== "SeriesCreated") continue;
     try {
       const f = JSON.parse(e.fields_json) as { market?: string };
@@ -115,7 +118,7 @@ function buildUnderlyingMap(db: DB, tape: readonly EventRow[]) {
   }
 
   const out = new Map<string, { assetName: string; bucket: string }>();
-  for (const e of tape) {
+  for (const e of tape()) {
     if (!e.option_mint || out.has(e.option_mint)) continue;
     const vault = e.vault;
     if (!vault) continue;
@@ -132,7 +135,7 @@ function buildUnderlyingMap(db: DB, tape: readonly EventRow[]) {
 export function recompute(db: DB, asOf: number, cfg: RulesConfig = DEFAULT_RULES): RecomputeResult {
   rebuildWallets(db);
 
-  const tape = loadTape(db);
+  const tape = streamTape(db);
   const result = score(tape, cfg, asOf);
 
   const ins = db.prepare(
@@ -188,35 +191,79 @@ export function recompute(db: DB, asOf: number, cfg: RulesConfig = DEFAULT_RULES
   // ---- Base points x multiplier (D11: after the cap, at the day's rate) ---
   // rules_v1 already applied the daily cap; the multiplier is applied here to
   // each day's capped contribution, using that day's rate.
+  // D15 (Phase 2b): EXACT per-day attribution. rules_v1 now returns post-cap
+  // points bucketed by the UTC day they were earned, so each day is multiplied
+  // at THAT day's rate — the D11 semantics as specified. Phase 2a used a
+  // whole-wallet average multiplier because this breakdown did not exist, which
+  // over-credited quiet days and under-credited streak days.
   const baseMultiplied = new Map<string, number>();
   for (const s of result.scores) {
-    const perDay = multipliers.byWalletDay.get(s.wallet);
-    if (!perDay || perDay.size === 0) {
-      baseMultiplied.set(s.wallet, s.pointsCapped);
-      continue;
+    let total = 0;
+    for (const [day, pts] of Object.entries(s.perDay)) {
+      total += pts * multiplierFor(multipliers, s.wallet, day);
     }
-    // rules_v1 returns per-wallet totals, not per-day. Use the wallet's
-    // time-weighted average multiplier over its ACTIVE days so the result stays
-    // a pure function of the same inputs. Exact per-day attribution lands with
-    // the per-day breakdown in 2b.
-    let sum = 0;
-    let n = 0;
-    for (const m of perDay.values()) {
-      sum += m;
-      n += 1;
-    }
-    baseMultiplied.set(s.wallet, round4(s.pointsCapped * (n > 0 ? sum / n : 1)));
+    baseMultiplied.set(s.wallet, round4(total));
   }
 
   // ---- Self-earned (base + quests), then referral income against it ------
-  const selfEarned = new Map<string, number>();
-  for (const w of new Set([...baseMultiplied.keys(), ...quests.totals.keys()])) {
-    selfEarned.set(w, round4((baseMultiplied.get(w) ?? 0) + (quests.totals.get(w) ?? 0)));
+  // Social + approved bounty points are self-earned too. Social is capped
+  // per UTC day in the EVALUATOR as well as at submit time — defence in depth,
+  // so a bug or a race in the API cannot mint uncapped points.
+  const socialByWallet = new Map<string, number>();
+  {
+    const rows = db
+      .prepare("SELECT wallet, verified_at, points FROM social_posts WHERE verified_at IS NOT NULL ORDER BY verified_at ASC, tweet_id ASC")
+      .all() as { wallet: string; verified_at: number; points: number }[];
+    const perDay = new Map<string, number>();
+    for (const r of rows) {
+      const k = `${r.wallet}|${utcDay(r.verified_at)}`;
+      const n = (perDay.get(k) ?? 0) + 1;
+      perDay.set(k, n);
+      if (n > SOCIAL_MAX_PER_DAY) continue; // evaluator-side cap
+      socialByWallet.set(r.wallet, (socialByWallet.get(r.wallet) ?? 0) + (r.points ?? 0));
+    }
+  }
+  const bountyByWallet = new Map<string, number>();
+  for (const r of db
+    .prepare("SELECT wallet, COALESCE(SUM(points), 0) AS p FROM bounty_submissions WHERE status = 'approved' GROUP BY wallet")
+    .all() as { wallet: string; p: number }[]) {
+    bountyByWallet.set(r.wallet, r.p);
   }
 
-  const referralRows = db
-    .prepare("SELECT code, referrer_wallet, referee_wallet, bound_at, activated_at FROM referrals")
-    .all() as ReferralRow[];
+  const selfEarned = new Map<string, number>();
+  for (const w of new Set([
+    ...baseMultiplied.keys(),
+    ...quests.totals.keys(),
+    ...socialByWallet.keys(),
+    ...bountyByWallet.keys(),
+  ])) {
+    selfEarned.set(
+      w,
+      round4(
+        (baseMultiplied.get(w) ?? 0) +
+          (quests.totals.get(w) ?? 0) +
+          (socialByWallet.get(w) ?? 0) +
+          (bountyByWallet.get(w) ?? 0),
+      ),
+    );
+  }
+
+  // D14: activation is DERIVED, not stored. A referee is "activated" when they
+  // complete O3 (Make a Market); the tape already knows when that happened, so
+  // a stored column would be a second source of truth a recompute could
+  // contradict.
+  const o3At = new Map<string, number>();
+  for (const c of quests.completions) {
+    if (c.questId === "O3") o3At.set(c.wallet, c.completedAt);
+  }
+  const referralRows: ReferralRow[] = (
+    db.prepare("SELECT code, referrer_wallet, referee_wallet, bound_at FROM referrals").all() as {
+      code: string;
+      referrer_wallet: string;
+      referee_wallet: string;
+      bound_at: number;
+    }[]
+  ).map((r) => ({ ...r, activated_at: o3At.get(r.referee_wallet) ?? null }));
   const earnedAfter = (wallet: string, sinceTs: number): number => {
     // Points the referee earned at/after activation. Quests carry timestamps;
     // base points are prorated by the share of active days after `sinceTs`.

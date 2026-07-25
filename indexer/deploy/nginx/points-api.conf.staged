@@ -1,0 +1,72 @@
+# =============================================================================
+# points-api.conf.staged — STAGED, NOT APPLIED
+# =============================================================================
+#
+# This file is NOT installed anywhere. It is the exact diff to fold into the
+# LIVE /etc/nginx/sites-available/opta.fyi.conf when the campaign goes public.
+# Until then the points API is loopback-only (127.0.0.1:8791) and unreachable
+# from the internet.
+#
+# See indexer/GO-LIVE.md step 1 for the ordered apply + verify + rollback.
+#
+# opta.fyi is the LIVE production site (nginx reverse-proxy -> Vercel). Every
+# edit here risks the whole domain, which is why it ships staged.
+# =============================================================================
+
+# --- 1. http level: add ABOVE the `server {}` blocks in opta.fyi.conf --------
+limit_req_zone $binary_remote_addr zone=pts_read:10m  rate=20r/s;
+limit_req_zone $binary_remote_addr zone=pts_write:10m rate=1r/s;
+
+# --- 2. inside the `listen 443 ssl` server block, ABOVE `location / {` -------
+#     Placement note: nginx picks REGEX locations over PREFIX locations, so the
+#     write block below wins for those three paths even though the read block is
+#     a longer literal prefix. Both outrank the Vercel `location /` catch-all.
+
+    # Writes: signed, strict rate limit.
+    location ~ ^/api/points/(referral|social|bounty)/ {
+        limit_req zone=pts_write burst=5 nodelay;
+        proxy_pass http://127.0.0.1:8791;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 15s;
+        client_max_body_size 4k;
+
+        add_header Access-Control-Allow-Origin  "https://opta.fyi" always;
+        add_header Access-Control-Allow-Headers "content-type"      always;
+        add_header Access-Control-Allow-Methods "POST, OPTIONS"     always;
+        if ($request_method = OPTIONS) { return 204; }
+    }
+
+    # Reads: public, loose rate limit.
+    location /api/points/ {
+        limit_req zone=pts_read burst=40 nodelay;
+        proxy_pass http://127.0.0.1:8791;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 15s;
+        client_max_body_size 4k;
+
+        add_header Access-Control-Allow-Origin  "https://opta.fyi" always;
+        add_header Access-Control-Allow-Headers "content-type"      always;
+        add_header Access-Control-Allow-Methods "GET, OPTIONS"      always;
+        if ($request_method = OPTIONS) { return 204; }
+    }
+
+# --- 3. apply / verify / rollback --------------------------------------------
+#   cp /etc/nginx/sites-available/opta.fyi.conf \
+#      /etc/nginx/sites-available/opta.fyi.conf.bak-pre-points
+#   # ...fold blocks 1 and 2 in...
+#   nginx -t                                   # MUST pass before reload
+#   systemctl reload nginx
+#   curl -sS -o /dev/null -w '%{http_code}\n' https://opta.fyi/          # expect 200
+#   curl -sS https://opta.fyi/api/points/stats | head -c 200             # expect JSON
+#
+#   ROLLBACK:
+#   cp /etc/nginx/sites-available/opta.fyi.conf.bak-pre-points \
+#      /etc/nginx/sites-available/opta.fyi.conf && nginx -t && systemctl reload nginx

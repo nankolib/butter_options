@@ -17,7 +17,7 @@
 // only happen via an inflow we could not see.
 // =============================================================================
 
-import type { EventRow } from "../db";
+import type { EventRow, TapeSource } from "../db";
 import { ORDER_KIND } from "../tape/allowlist";
 
 export interface HeldToSettleAward {
@@ -40,15 +40,15 @@ export interface PositionResult {
   mintToVault: Map<string, string>;
 }
 
-export function buildMintToVault(tape: readonly EventRow[]): Map<string, string> {
+export function buildMintToVault(tape: TapeSource): Map<string, string> {
   const m = new Map<string, string>();
-  for (const e of tape) {
+  for (const e of tape()) {
     if (e.option_mint && e.vault && !m.has(e.option_mint)) m.set(e.option_mint, e.vault);
   }
   return m;
 }
 
-export function computePositions(tape: readonly EventRow[]): PositionResult {
+export function computePositions(tape: TapeSource): PositionResult {
   const mintToVault = buildMintToVault(tape);
   const vaultOf = (e: EventRow): string | null =>
     e.vault ?? (e.option_mint ? mintToVault.get(e.option_mint) ?? null : null);
@@ -63,7 +63,7 @@ export function computePositions(tape: readonly EventRow[]): PositionResult {
   };
 
   const holdersFinalizedByVault = new Map<string, number>();
-  for (const e of tape) {
+  for (const e of tape()) {
     if (e.name === "HoldersFinalized" && e.vault) {
       try {
         const f = JSON.parse(e.fields_json) as { holders_processed?: number | string };
@@ -85,7 +85,7 @@ export function computePositions(tape: readonly EventRow[]): PositionResult {
     }
   };
 
-  for (const e of tape) {
+  for (const e of tape()) {
     const vault = vaultOf(e);
     switch (e.name) {
       case "OrderFilled": {

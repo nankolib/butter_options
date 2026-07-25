@@ -1,14 +1,15 @@
 # opta-indexer
 
-Tape + points engine for the Opta program on devnet. **Phase 1 = SHADOW MODE:**
-no API, no frontend, no on-chain writes, nothing user-visible. The only output is
-an hourly append to `shadow.md`.
+Tape + points engine for the Opta program on devnet. **Still SHADOW MODE:** no
+frontend, no on-chain writes, nothing user-visible. The points API exists but is
+**loopback-only** and not exposed (see `GO-LIVE.md`). The visible output is an
+hourly append to `shadow.md`.
 
 ## The two layers
 
 | Layer | Tables | Rule |
 |---|---|---|
-| **TAPE** | `txs`, `events` | Immutable indexed facts. Append-only, **never rewritten**. Deterministic row ids (`<sig>:<ordinal>`) + `INSERT OR IGNORE` make re-indexing a no-op. |
+| **TAPE** | `txs`, `events`, `faucet_claims`, `capital_flows` | Immutable indexed facts. Append-only, **never rewritten**. Row ids come from CHAIN position (`<sig>:<logIndex>`, `<sig>:ix<n>`) so growing the allowlist cannot renumber them, keeping re-indexing idempotent. |
 | **PROJECTION** | `wallets` | Rebuildable classification (internal vs external). Safe to `UPDATE`. |
 | **SCORE** | `scores` | A **pure** function of the tape (`src/score/rules_v1.ts`), versioned. Rules change → full recompute → identical result on an identical tape. |
 
@@ -79,7 +80,7 @@ Rollback: `git -C /opt/opta-crank checkout HEAD -- indexer/` + rebuild + restart
 First stdout line must be:
 
 ```json
-{"service":"opta-indexer","commit":"<sha>","schemaVersion":1,"rulesVersion":"v1","cursor":"<sig|null>","backfillDone":<bool>}
+{"service":"opta-indexer","commit":"<sha>","schemaVersion":3,"rulesVersion":"v1","questsVersion":"v1","cursor":"<sig|null>","backfillDone":<bool>,"usdcMintOk":true}
 ```
 
 ```bash
@@ -88,11 +89,44 @@ journalctl -u opta-indexer -n 200 --no-pager | grep opta-indexer | head -1
 
 Never `journalctl -f` on this box.
 
+## Points API (Phase 2b)
+
+**Loopback only** — `127.0.0.1:8791`, in-process. The nginx conf that would make
+it public ships **staged, not applied**: `deploy/nginx/points-api.conf.staged`.
+See `GO-LIVE.md` before exposing anything.
+
+Reads (all carry `computed_at`):
+
+    GET /api/points/leaderboard?board=profit|volume|writer|referrals|social&limit=50
+    GET /api/points/wallet/:pubkey
+    GET /api/points/quests
+    GET /api/points/stats
+
+Writes — every one requires an ed25519 signature over the canonical message
+
+    opta-epoch0|{action}|{wallet}|{paramsHash}|{nonce}|{expiry_unix}
+
+`paramsHash` = `base58(sha256(canonicalJson(params)))`, so a captured signature
+cannot be replayed for a different action *or* different arguments. Nonces are
+single-use; `expiry` must be within 5 minutes.
+
+    POST /api/points/referral/code     {}                        -> idempotent 6-char code
+    POST /api/points/referral/bind     {code}
+    POST /api/points/social/submit     {tweet_url}
+    POST /api/points/bounty/submit     {kind, proof_url}
+
+Bounty review is a CLI, not an endpoint:
+
+    node dist/scripts/bounty-review.js list [pending]
+    node dist/scripts/bounty-review.js approve <id> <points>
+    node dist/scripts/bounty-review.js reject  <id>
+
 ## Ops
 
 | Task | Command |
 |---|---|
 | Recompute after a rules change | `node dist/scripts/recompute.js` |
+| Review bounties | `node dist/scripts/bounty-review.js list` |
 | Determinism check | `node dist/scripts/recompute.js --json --as-of 0 > a.json` twice, then `diff` |
 | Tape size | `sqlite3` is not installed — use `node -e` with `better-sqlite3` |
 
@@ -103,8 +137,14 @@ Never `journalctl -f` on this box.
 | `OPTA_RPC_URL` | — | **required**, private Helius endpoint, never logged |
 | `OPTA_PROGRAM_ID` | `CtzJ4MJY…z9Cq` | |
 | `OPTA_INDEXER_STATE_DIR` | `/opt/opta-indexer` | |
-| `OPTA_INDEXER_BACKFILL_FLOOR` | `1782950400` | 2026-07-01T00:00:00Z |
+| `OPTA_INDEXER_BACKFILL_FLOOR` | `1782864000` | 2026-07-01T00:00:00Z |
 | `OPTA_INDEXER_TICK_MS` | `60000` | live-tail interval |
 | `OPTA_INDEXER_BATCH_SIZE` | `10` | getTransaction per JSON-RPC batch |
 | `OPTA_INDEXER_RPS` | `5` | batches/sec, not txs/sec |
 | `OPTA_INDEXER_SHADOW_MS` | `3600000` | shadow render interval |
+| `OPTA_INDEXER_API_PORT` | `8791` | loopback API port |
+| `OPTA_INDEXER_API_HOST` | `127.0.0.1` | **do not** change without reading GO-LIVE.md |
+| `OPTA_INDEXER_API_ENABLED` | `1` | set `0` to disable the listener |
+| `OPTA_INDEXER_WRITE_COOLDOWN_SECS` | `10` | per-wallet, per-action |
+| `OPTA_SOCIAL_POINTS` / `OPTA_SOCIAL_MAX_PER_DAY` | `20` / `3` | cap enforced at submit AND in the evaluator |
+| `X_BEARER_TOKEN` | — | from `/etc/opta/x-read.env`, never logged |

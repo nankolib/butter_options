@@ -23,7 +23,7 @@ function evt(over: Partial<EventRow>): EventRow {
 }
 
 test("buyer pays total, seller receives total - fee, fee is the rake", () => {
-  const r = computePnl([
+  const r = computePnl(() => [
     evt({
       name: "OrderFilled", wallet: A, counterparty: B, kind: 2, vault: VAULT,
       amount_usdc: 100 * USDC, quantity: 1, fields_json: JSON.stringify({ fee: String(2 * USDC) }),
@@ -38,7 +38,7 @@ test("buyer pays total, seller receives total - fee, fee is the rake", () => {
 });
 
 test("deposited collateral is DEPLOYED, not a loss", () => {
-  const r = computePnl([evt({ name: "VaultDeposited", wallet: A, vault: VAULT, amount_usdc: 100 * USDC })]);
+  const r = computePnl(() => [evt({ name: "VaultDeposited", wallet: A, vault: VAULT, amount_usdc: 100 * USDC })]);
   const f = r.byWallet.get(A)!;
   assert.equal(f.usdcOut, BigInt(100 * USDC));
   assert.equal(f.deployed, BigInt(100 * USDC));
@@ -46,7 +46,7 @@ test("deposited collateral is DEPLOYED, not a loss", () => {
 });
 
 test("deposit -> settle payout realizes the gain and clears deployed", () => {
-  const r = computePnl([
+  const r = computePnl(() => [
     evt({ name: "VaultDeposited", wallet: A, vault: VAULT, amount_usdc: 100 * USDC }),
     evt({ name: "VaultPostSettlementWithdraw", wallet: A, vault: VAULT, amount_usdc: 105 * USDC }),
   ]);
@@ -56,18 +56,18 @@ test("deposit -> settle payout realizes the gain and clears deployed", () => {
 });
 
 test("VaultPostSettlementWithdraw is indexed — its absence broke Phase 1 PnL", () => {
-  const r = computePnl([evt({ name: "VaultPostSettlementWithdraw", wallet: A, vault: VAULT, amount_usdc: 7 * USDC })]);
+  const r = computePnl(() => [evt({ name: "VaultPostSettlementWithdraw", wallet: A, vault: VAULT, amount_usdc: 7 * USDC })]);
   assert.equal(r.byWallet.get(A)!.usdcIn, BigInt(7 * USDC));
 });
 
 test("bid escrow: posted -> deployed; cancelled -> returned", () => {
-  const posted = computePnl([
+  const posted = computePnl(() => [
     evt({ name: "OrderPosted", wallet: A, kind: 0, amount_usdc: 50 * USDC, fields_json: JSON.stringify({ order: "ORD1" }) }),
   ]);
   assert.equal(posted.byWallet.get(A)!.deployed, BigInt(50 * USDC));
   assert.equal(posted.byWallet.get(A)!.realizedPnl, 0n);
 
-  const cancelled = computePnl([
+  const cancelled = computePnl(() => [
     evt({ name: "OrderPosted", wallet: A, kind: 0, amount_usdc: 50 * USDC, fields_json: JSON.stringify({ order: "ORD1" }) }),
     evt({ name: "OrderCancelled", wallet: A, kind: 0, amount_usdc: 50 * USDC, fields_json: JSON.stringify({ order: "ORD1" }) }),
   ]);
@@ -76,12 +76,12 @@ test("bid escrow: posted -> deployed; cancelled -> returned", () => {
 });
 
 test("ask-side OrderPosted escrows contracts, not USDC", () => {
-  const r = computePnl([evt({ name: "OrderPosted", wallet: A, kind: 2, amount_usdc: 50 * USDC })]);
+  const r = computePnl(() => [evt({ name: "OrderPosted", wallet: A, kind: 2, amount_usdc: 50 * USDC })]);
   assert.equal(r.byWallet.get(A)?.usdcOut ?? 0n, 0n);
 });
 
 test("VaultPeg maker (kind==3) is a PDA and is credited nothing", () => {
-  const r = computePnl([
+  const r = computePnl(() => [
     evt({
       name: "OrderFilled", wallet: A, counterparty: VAULT, kind: 3, vault: VAULT,
       amount_usdc: 40 * USDC, quantity: 1, fields_json: JSON.stringify({ fee: "0" }),
@@ -93,7 +93,7 @@ test("VaultPeg maker (kind==3) is a PDA and is credited nothing", () => {
 
 test("full vault round trip: books close exactly, and PnL is zero-sum minus fees", () => {
   const fee = 3 * USDC;
-  const r = computePnl([
+  const r = computePnl(() => [
     // Writer funds the vault.
     evt({ name: "VaultDeposited", wallet: B, vault: VAULT, amount_usdc: 200 * USDC }),
     // Buyer pays 100 premium; the writer nets 97, treasury takes 3.
@@ -119,7 +119,7 @@ test("full vault round trip: books close exactly, and PnL is zero-sum minus fees
 
 test("aggregate finalize payouts are booked as a NAMED unattributed term", () => {
   // HoldersFinalized carries only a total — the tape cannot say who was paid.
-  const r = computePnl([
+  const r = computePnl(() => [
     evt({ name: "VaultDeposited", wallet: B, vault: VAULT, amount_usdc: 100 * USDC }),
     evt({
       name: "HoldersFinalized", wallet: null, vault: VAULT, amount_usdc: 100 * USDC,
@@ -132,7 +132,7 @@ test("aggregate finalize payouts are booked as a NAMED unattributed term", () =>
 });
 
 test("an unmodelled outflow shows up as a NON-ZERO residual — the point of the check", () => {
-  const r = computePnl([
+  const r = computePnl(() => [
     evt({ name: "VaultDeposited", wallet: B, vault: VAULT, amount_usdc: 100 * USDC }),
     // Pretend the withdrawal event type were missing from the allowlist: the
     // vault would still look funded and the books would not close.
@@ -143,7 +143,7 @@ test("an unmodelled outflow shows up as a NON-ZERO residual — the point of the
 });
 
 test("writer premium is tracked separately from PnL", () => {
-  const r = computePnl([
+  const r = computePnl(() => [
     evt({ name: "OrderFilled", wallet: A, counterparty: B, kind: 2, vault: VAULT, amount_usdc: 10 * USDC, quantity: 1, fields_json: JSON.stringify({ fee: "0" }) }),
     evt({ name: "PremiumClaimed", wallet: B, vault: VAULT, amount_usdc: 5 * USDC }),
   ]);

@@ -46,6 +46,8 @@ import { RULES_VERSION } from "./score/rules_v1";
 import { QUESTS_VERSION } from "./score/quests/evaluator";
 import { appendShadow, collectTapeStats, renderShadow } from "./score/shadow";
 import { SCHEMA_VERSION } from "./schema";
+import { startApiServer } from "./api/server";
+import { sweepNonces } from "./api/auth";
 
 function readCommit(): string {
   // OPTA_INDEXER_COMMIT WINS over the enclosing repo's HEAD. The VPS deploy is a
@@ -110,10 +112,16 @@ async function main(): Promise<void> {
     usdcMintOk: true,
   });
 
+  // Loopback API. Started BEFORE the backfill so reads are available while a
+  // long rebuild runs (they serve the previous recompute, with computed_at
+  // telling the caller exactly how stale that is).
+  const api = startApiServer(db, cfg);
+
   let stopping = false;
   const stop = () => {
     if (stopping) return;
     stopping = true;
+    api?.close();
     log.info("shutdown requested");
   };
   process.on("SIGTERM", stop);
@@ -213,6 +221,7 @@ async function main(): Promise<void> {
 
     if (Date.now() - lastShadow >= cfg.shadowMs) {
       renderOnce();
+      sweepNonces(db, Math.floor(Date.now() / 1000));
       lastShadow = Date.now();
     }
 

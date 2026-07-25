@@ -25,7 +25,7 @@
 //   diagnostics.holderCountDelta) and reported in shadow.md rather than hidden.
 // =============================================================================
 
-import type { EventRow } from "../db";
+import type { TapeSource } from "../db";
 import { ORDER_KIND } from "../tape/allowlist";
 import { computePositions } from "./positions";
 
@@ -62,6 +62,14 @@ export interface WalletScore {
   points: number;
   pointsCapped: number;
   breakdown: Record<string, number>;
+  /**
+   * D15 (Phase 2b): post-cap points attributed to the UTC day they were earned.
+   * Phase 2a multiplied a wallet's total by its AVERAGE multiplier because this
+   * breakdown did not exist — an approximation that over-credited quiet days and
+   * under-credited streak days. The caller now multiplies each day at THAT day's
+   * rate, which is what D11 actually specifies.
+   */
+  perDay: Record<string, number>;
 }
 
 export interface Diagnostics {
@@ -94,7 +102,7 @@ const USDC = 1_000_000;
 const round4 = (n: number) => Math.round(n * 1e4) / 1e4;
 const dayKey = (ts: number) => Math.floor(ts / 86400);
 
-export function score(tape: readonly EventRow[], cfg: RulesConfig, asOf: number): ScoreResult {
+export function score(tape: TapeSource, cfg: RulesConfig, asOf: number): ScoreResult {
   const contributions: Contribution[] = [];
   const diagnostics: Diagnostics = {
     negativePositions: 0,
@@ -123,7 +131,7 @@ export function score(tape: readonly EventRow[], cfg: RulesConfig, asOf: number)
   // ---- Pass 2: contributions ----------------------------------------------
   const marketsByCreator = new Map<string, number>();
 
-  for (const e of tape) {
+  for (const e of tape()) {
     switch (e.name) {
       case "OrderFilled": {
         const usdc = (e.amount_usdc ?? 0) / USDC;
@@ -192,6 +200,7 @@ export function score(tape: readonly EventRow[], cfg: RulesConfig, asOf: number)
     const list = byWallet.get(wallet)!;
     const dayRaw = new Map<number, number>();
     const breakdown: Record<string, number> = {};
+    const perDayAcc = new Map<string, number>();
     let raw = 0;
     let capped = 0;
 
@@ -207,9 +216,16 @@ export function score(tape: readonly EventRow[], cfg: RulesConfig, asOf: number)
       raw += c.points;
       capped += eff;
       breakdown[c.rule] = round4((breakdown[c.rule] ?? 0) + eff);
+      // D15: retain the post-cap amount against its UTC day so the caller can
+      // apply that day's multiplier instead of a whole-wallet average.
+      const dayStr = new Date(c.ts * 1000).toISOString().slice(0, 10);
+      perDayAcc.set(dayStr, (perDayAcc.get(dayStr) ?? 0) + eff);
     }
 
-    scores.push({ wallet, points: round4(raw), pointsCapped: round4(capped), breakdown });
+    const perDay: Record<string, number> = {};
+    for (const k of [...perDayAcc.keys()].sort()) perDay[k] = round4(perDayAcc.get(k)!);
+
+    scores.push({ wallet, points: round4(raw), pointsCapped: round4(capped), breakdown, perDay });
   }
 
   // Total order: capped DESC, then wallet ASC. No ties, so output is byte-stable.

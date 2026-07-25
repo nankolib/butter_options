@@ -48,8 +48,8 @@ function tmpDb(): string {
 
 test("pure score() is stable across repeated calls on a frozen tape", () => {
   const { events } = fixture();
-  const a = JSON.stringify(score(events, DEFAULT_RULES, 1_783_000_000));
-  const b = JSON.stringify(score(events, DEFAULT_RULES, 1_783_000_000));
+  const a = JSON.stringify(score(() => events, DEFAULT_RULES, 1_783_000_000));
+  const b = JSON.stringify(score(() => events, DEFAULT_RULES, 1_783_000_000));
   assert.equal(a, b);
 });
 
@@ -57,7 +57,7 @@ test("input order does not matter — loadTape re-sorts to (block_time, id)", ()
   const { events } = fixture();
   const sorted = [...events].sort((x, y) => (x.block_time ?? 0) - (y.block_time ?? 0) || (x.id < y.id ? -1 : 1));
   const shuffled = [...events].reverse().sort((x, y) => (x.block_time ?? 0) - (y.block_time ?? 0) || (x.id < y.id ? -1 : 1));
-  assert.equal(JSON.stringify(score(sorted, DEFAULT_RULES, 0)), JSON.stringify(score(shuffled, DEFAULT_RULES, 0)));
+  assert.equal(JSON.stringify(score(() => sorted, DEFAULT_RULES, 0)), JSON.stringify(score(() => shuffled, DEFAULT_RULES, 0)));
 });
 
 test("full recompute over sqlite is byte-identical twice, and re-index is idempotent", () => {

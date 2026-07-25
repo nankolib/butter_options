@@ -42,6 +42,20 @@ export interface Config {
   /** External-flow / markets refresh interval (ms). */
   capitalTickMs: number;
   marketsRefreshMs: number;
+
+  // ---- Phase 2b: API -----------------------------------------------------
+  apiEnabled: boolean;
+  /** LOOPBACK by default. Public exposure is nginx's job and ships STAGED. */
+  apiHost: string;
+  apiPort: number;
+  /** Per-wallet, per-action write cooldown, on top of nginx limit_req. */
+  writeCooldownSecs: number;
+  socialPointsPerPost: number;
+  socialMaxPerDay: number;
+  /** Read-only X bearer, from /etc/opta/x-read.env. NEVER logged. */
+  xBearer: string | null;
+  xMention: string;
+  xMaxAgeSecs: number;
 }
 
 function req(name: string): string {
@@ -87,5 +101,15 @@ export function loadConfig(): Config {
     ataMax: num("OPTA_INDEXER_ATA_MAX", 500),
     capitalTickMs: num("OPTA_INDEXER_CAPITAL_TICK_MS", 600_000),
     marketsRefreshMs: num("OPTA_INDEXER_MARKETS_MS", 1_800_000),
+
+    apiEnabled: (process.env.OPTA_INDEXER_API_ENABLED ?? "1") !== "0",
+    apiHost: process.env.OPTA_INDEXER_API_HOST?.trim() || "127.0.0.1",
+    apiPort: num("OPTA_INDEXER_API_PORT", 8791),
+    writeCooldownSecs: num("OPTA_INDEXER_WRITE_COOLDOWN_SECS", 10),
+    socialPointsPerPost: num("OPTA_SOCIAL_POINTS", 20),
+    socialMaxPerDay: num("OPTA_SOCIAL_MAX_PER_DAY", 3),
+    xBearer: process.env.X_BEARER_TOKEN?.trim() || null,
+    xMention: process.env.OPTA_X_MENTION?.trim() || "@optafinance",
+    xMaxAgeSecs: num("OPTA_X_MAX_AGE_SECS", 172_800), // 48h
   };
 }

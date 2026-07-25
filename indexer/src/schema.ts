@@ -12,7 +12,7 @@
 //                               keyed by rules_version so old runs survive.
 // =============================================================================
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const SCHEMA_SQL = `
 -- ============ META ============
@@ -125,15 +125,55 @@ CREATE TABLE IF NOT EXISTS markets (
   refreshed_at INTEGER
 );
 
--- ============ v2 WRITE-PATH TABLES (Phase 2b fills these; empty now) ========
-CREATE TABLE IF NOT EXISTS referrals (
-  code            TEXT PRIMARY KEY,
-  referrer_wallet TEXT NOT NULL,
-  referee_wallet  TEXT NOT NULL UNIQUE,
-  bound_at        INTEGER,
-  activated_at    INTEGER
+-- ============ v3 WRITE-PATH TABLES (Phase 2b) ===============================
+-- A code must be able to exist BEFORE anyone binds to it, which the v2 shape
+-- (referee_wallet NOT NULL UNIQUE) could not express. Split in two.
+CREATE TABLE IF NOT EXISTS referral_codes (
+  code       TEXT PRIMARY KEY,
+  wallet     TEXT NOT NULL UNIQUE,
+  created_at INTEGER NOT NULL
 );
 
+-- One row per REFEREE (a wallet can be referred exactly once).
+-- NOTE: there is deliberately no activated_at column. Activation is "the
+-- referee completed O3", which the tape already knows; storing it would create
+-- a second source of truth that a recompute could contradict.
+CREATE TABLE IF NOT EXISTS referrals (
+  referee_wallet  TEXT PRIMARY KEY,
+  code            TEXT NOT NULL,
+  referrer_wallet TEXT NOT NULL,
+  bound_at        INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ref_referrer ON referrals(referrer_wallet);
+
+-- X handle <-> wallet, 1:1 in BOTH directions (PK on one, UNIQUE on the other).
+CREATE TABLE IF NOT EXISTS wallet_handles (
+  wallet   TEXT PRIMARY KEY,
+  x_handle TEXT NOT NULL UNIQUE,
+  bound_at INTEGER NOT NULL
+);
+
+-- Signed-request replay protection.
+CREATE TABLE IF NOT EXISTS nonces (
+  nonce      TEXT PRIMARY KEY,
+  wallet     TEXT NOT NULL,
+  action     TEXT NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_nonce_exp ON nonces(expires_at);
+
+-- Per-wallet, per-action write cooldown (on top of nginx limit_req).
+CREATE TABLE IF NOT EXISTS write_cooldowns (
+  wallet  TEXT NOT NULL,
+  action  TEXT NOT NULL,
+  last_at INTEGER NOT NULL,
+  PRIMARY KEY (wallet, action)
+);
+
+-- One row PER TWEET. x_handle is deliberately NOT unique here: a handle posts
+-- many tweets. The 1:1 handle<->wallet binding lives in wallet_handles.
+-- v2 had a UNIQUE index here, which made a wallet second post fail; the
+-- v2->v3 migration drops it.
 CREATE TABLE IF NOT EXISTS social_posts (
   tweet_id    TEXT PRIMARY KEY,
   wallet      TEXT NOT NULL,
@@ -141,7 +181,7 @@ CREATE TABLE IF NOT EXISTS social_posts (
   verified_at INTEGER,
   points      REAL
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_social_handle ON social_posts(x_handle);
+CREATE INDEX IF NOT EXISTS idx_social_wallet ON social_posts(wallet, verified_at);
 
 CREATE TABLE IF NOT EXISTS bounty_submissions (
   id        TEXT PRIMARY KEY,

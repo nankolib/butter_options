@@ -107,6 +107,35 @@ export function eventCount(db: DB): number {
   return (db.prepare("SELECT COUNT(*) AS n FROM events").get() as { n: number }).n;
 }
 
+/**
+ * A re-iterable source of tape rows in canonical order.
+ *
+ * ITEM 0 (Phase 2b). The score layer used to take `EventRow[]`, which meant the
+ * whole tape lived in memory during every render — the hourly render peaked at
+ * 159-193 MB against a 200 MB cgroup cap, and that number grew with the tape.
+ * Passing a FACTORY instead lets each module make as many passes as it needs
+ * while holding only bounded state, so memory scales with wallets + vaults
+ * rather than with events.
+ *
+ * Purity is unaffected: the same source yields the same rows in the same order,
+ * so every scoring function remains a pure function of its inputs. Tests pass
+ * `() => fixtureArray`.
+ */
+export type TapeSource = () => Iterable<EventRow>;
+
+const TAPE_ORDER_SQL =
+  "SELECT * FROM events ORDER BY block_time ASC, sig ASC, ordinal ASC, id ASC";
+
+/**
+ * Streaming tape source. A fresh statement per pass: better-sqlite3 refuses to
+ * run two concurrent iterations of the SAME statement ("this statement is
+ * busy"), and nested passes are legitimate here.
+ */
+export function streamTape(db: DB): TapeSource {
+  return () => db.prepare(TAPE_ORDER_SQL).iterate() as Iterable<EventRow>;
+}
+
+/** Materialising loader. Kept for tests and small fixtures ONLY — not for renders. */
 export function loadTape(db: DB): EventRow[] {
   // TRUE CHAIN ORDER, and a total order so the SCORE layer is reproducible.
   // NOT `ORDER BY id`: ids are strings, so `<sig>:10` sorts before `<sig>:2`.

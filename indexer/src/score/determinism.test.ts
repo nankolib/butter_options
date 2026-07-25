@@ -81,6 +81,47 @@ test("full recompute over sqlite is byte-identical twice, and re-index is idempo
   fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
 });
 
+test("vault PDAs are excluded from the wallets projection, not counted as users", () => {
+  const dbPath = tmpDb();
+  const db = openDb(dbPath);
+  const write = makeWriter(db);
+
+  // A VaultPeg fill: taker is a real wallet, maker is the SharedVault PDA.
+  write(
+    { sig: "SIGPEG", slot: 1, block_time: 1_783_000_000, ok: 1, truncated: 0 },
+    [
+      {
+        id: "SIGPEG:0",
+        sig: "SIGPEG",
+        ordinal: 0,
+        ix_index: null,
+        source: "log",
+        name: "OrderFilled",
+        wallet: A,
+        counterparty: VAULT, // the PDA
+        vault: VAULT,
+        option_mint: null,
+        kind: 3,
+        amount_usdc: 1_000_000,
+        quantity: 1,
+        fields_json: "{}",
+        block_time: 1_783_000_000,
+      },
+    ],
+  );
+
+  const r = recompute(db, 0);
+  const rows = db.prepare("SELECT pubkey FROM wallets WHERE is_internal = 0").all() as { pubkey: string }[];
+  const keys = rows.map((x) => x.pubkey);
+  assert.ok(keys.includes(A), "the real taker must be counted");
+  assert.equal(keys.includes(VAULT), false, "the SharedVault PDA must NOT be counted as a wallet");
+  assert.equal(r.externalCount, 1);
+  assert.equal(r.diagnostics.pegMakerCreditsSkipped, 1);
+
+  db.close();
+  fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
+});
+
 test("schema version mismatch refuses to open rather than reshaping the tape", () => {
   const dbPath = tmpDb();
   const db = openDb(dbPath);

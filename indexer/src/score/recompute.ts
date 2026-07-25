@@ -12,17 +12,39 @@ import { DEFAULT_RULES, RULES_VERSION, score, type RulesConfig, type ScoreResult
 /**
  * Rebuild `wallets` from the tape + registry.ts (D2: classification lives here,
  * never on the immutable tape, so changing the registry needs no re-index).
+ *
+ * PDA EXCLUSION. `counterparty` is harvested alongside `wallet`, and on a
+ * VaultPeg fill (kind == 3) the maker is the SharedVault PDA, not a person
+ * (events.rs:296-304). The D3 rule already denies those points, but without
+ * this filter they would still be COUNTED as unique external wallets and
+ * inflate the campaign's headline metric. Any pubkey that appears in
+ * `events.vault` is a program account by construction and is excluded here —
+ * a broader and more durable test than special-casing kind == 3.
  */
 export function rebuildWallets(db: DB): void {
-  const rows = db
-    .prepare(
-      `SELECT pubkey, MIN(bt) AS first_seen, MAX(bt) AS last_seen FROM (
+  const vaultSet = new Set(
+    (db.prepare("SELECT DISTINCT vault AS v FROM events WHERE vault IS NOT NULL").all() as { v: string }[]).map(
+      (r) => r.v,
+    ),
+  );
+
+  const rows = (
+    db
+      .prepare(
+        `SELECT pubkey, MIN(bt) AS first_seen, MAX(bt) AS last_seen FROM (
          SELECT wallet       AS pubkey, block_time AS bt FROM events WHERE wallet       IS NOT NULL
          UNION ALL
          SELECT counterparty AS pubkey, block_time AS bt FROM events WHERE counterparty IS NOT NULL
        ) GROUP BY pubkey`,
-    )
-    .all() as { pubkey: string; first_seen: number | null; last_seen: number | null }[];
+      )
+      .all() as { pubkey: string; first_seen: number | null; last_seen: number | null }[]
+  ).filter((r) => !vaultSet.has(r.pubkey));
+
+  // The projection is rebuildable: drop any PDA a previous (pre-filter) run left.
+  const dropPda = db.prepare("DELETE FROM wallets WHERE pubkey = ?");
+  db.transaction(() => {
+    for (const v of vaultSet) dropPda.run(v);
+  })();
 
   const upsert = db.prepare(
     `INSERT INTO wallets (pubkey, is_internal, label, first_seen, last_seen)

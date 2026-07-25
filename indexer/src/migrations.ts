@@ -126,6 +126,15 @@ function migrateV3toV4(db: DB): void {
   });
 }
 
+/**
+ * v4 -> v5. ADDITIVE. Adds `account_kinds`; the next capital tick populates it
+ * and the following recompute drops any non-wallet from wallet_metrics.
+ */
+function migrateV4toV5(db: DB): void {
+  db.prepare("UPDATE meta SET value = '5' WHERE key = 'schema_version'").run();
+  log.info("migration v4->v5 complete — account_kinds added (owner classification)");
+}
+
 export function migrate(db: DB): void {
   let v = currentVersion(db);
   if (v === 0) {
@@ -146,6 +155,10 @@ export function migrate(db: DB): void {
   if (v === 3) {
     migrateV3toV4(db);
     v = 4;
+  }
+  if (v === 4) {
+    migrateV4toV5(db);
+    v = 5;
   }
   if (v !== SCHEMA_VERSION) {
     throw new Error(

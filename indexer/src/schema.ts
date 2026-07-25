@@ -12,7 +12,7 @@
 //                               keyed by rules_version so old runs survive.
 // =============================================================================
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export const SCHEMA_SQL = `
 -- ============ META ============
@@ -107,6 +107,21 @@ CREATE TABLE IF NOT EXISTS token_accounts (
   mint     TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_ta_owner ON token_accounts(owner, mint);
+
+-- Is this pubkey a real WALLET, or a program/mint/PDA that merely happens to
+-- own a token account? A user wallet is owned by the System Program (or does
+-- not exist on chain yet). Anything else -- a mint, a PDA, a token account --
+-- is not a person and must never reach a leaderboard.
+--
+-- This exists because a REAL USDC token account was found whose on-chain owner
+-- field is the wrapped-SOL MINT address. Nothing was misparsed; someone simply
+-- created an account that way and the faucet paid it. No amount of length
+-- checking catches that -- only asking the chain what the owner actually is.
+CREATE TABLE IF NOT EXISTS account_kinds (
+  pubkey     TEXT PRIMARY KEY,
+  is_wallet  INTEGER NOT NULL,
+  checked_at INTEGER NOT NULL
+);
 
 -- Per-ATA cursor for the Part A external-flow loop (D9: eligible wallets only).
 CREATE TABLE IF NOT EXISTS ata_cursors (

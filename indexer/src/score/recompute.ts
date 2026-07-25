@@ -115,6 +115,10 @@ function programAccountSet(db: DB): Set<string> {
   add(db.prepare("SELECT DISTINCT option_mint AS v FROM events WHERE option_mint IS NOT NULL").all() as { v: string }[]);
   add(db.prepare("SELECT DISTINCT mint AS v FROM token_accounts").all() as { v: string }[]);
   add(db.prepare("SELECT DISTINCT ata AS v FROM token_accounts").all() as { v: string }[]);
+  // Chain-verified: anything not owned by the System Program is not a person.
+  // This is what catches a token account whose owner field is a MINT — a real
+  // on-chain state that no structural heuristic can detect.
+  add(db.prepare("SELECT pubkey AS v FROM account_kinds WHERE is_wallet = 0").all() as { v: string }[]);
   return out;
 }
 

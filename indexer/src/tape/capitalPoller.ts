@@ -135,6 +135,10 @@ export class CapitalPoller {
           for (const k of fullAccountKeys(raw)) candidateAtas.add(k);
         }
         await this.resolver.resolve([...candidateAtas]);
+        // Classify every owner we might attribute a claim to.
+        await this.resolver.classifyOwners(
+          [...candidateAtas].map((a) => this.resolver.get(a)?.owner).filter((o): o is string => !!o),
+        );
 
         for (const raw of raws) {
           try {
@@ -243,6 +247,9 @@ export class CapitalPoller {
           const cand = new Set<string>();
           for (const raw of raws) for (const k of fullAccountKeys(raw)) cand.add(k);
           await this.resolver.resolve([...cand]);
+          await this.resolver.classifyOwners(
+            [...cand].map((a) => this.resolver.get(a)?.owner).filter((o): o is string => !!o),
+          );
           for (const raw of raws) this.ingestFlowTx(raw, wallet, stats);
         }
         upsertCursor.run(ata, wallet, newest, Math.floor(Date.now() / 1000));

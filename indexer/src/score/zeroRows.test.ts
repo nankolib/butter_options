@@ -151,6 +151,39 @@ test("BUG B: mints, vaults and token accounts are excluded from wallet_metrics",
   cleanup(db, dir);
 });
 
+test("BUG B: a token account whose on-chain OWNER is a mint is excluded", () => {
+  // The real case: DQ6dfEBf… is a genuine USDC token account whose owner field
+  // is the wrapped-SOL MINT. Nothing is misparsed — the chain really says that.
+  // Only account_kinds (chain-verified System-Program ownership) catches it.
+  const { db, dir } = tmpDb();
+  db.prepare("INSERT INTO token_accounts (ata, owner, mint) VALUES (?,?,?)").run(
+    "DQ6dfEBfZTghMKHpC71NXyegMp67BLuZHLuSzsKj6xGZ", WSOL, "AytU5HUQRew9VdUdrzQuZvZ7s14pHLiYjAF5WqdK3oxL",
+  );
+  db.prepare(
+    "INSERT INTO capital_flows (id, wallet, direction, source, amount_usdc, counterparty, block_time) VALUES (?,?,?,?,?,?,?)",
+  ).run("F9", WSOL, "in", "faucet", 10_000_000_000, null, 1_784_000_000);
+  db.prepare("INSERT INTO account_kinds (pubkey, is_wallet, checked_at) VALUES (?,0,?)").run(WSOL, 1_784_000_000);
+
+  recompute(db, 1_784_000_000);
+  const names = (db.prepare("SELECT wallet FROM wallet_metrics").all() as { wallet: string }[]).map((m) => m.wallet);
+  assert.equal(names.includes(WSOL), false, "chain says not-a-wallet, so it is not ranked");
+  const rows = (getLeaderboard(db, "profit", 50).body as { rows: { wallet: string }[] }).rows;
+  assert.equal(rows.some((r) => r.wallet === WSOL), false);
+  cleanup(db, dir);
+});
+
+test("BUG B: a System-Program-owned account IS treated as a wallet", () => {
+  const { db, dir } = tmpDb();
+  db.prepare("INSERT INTO account_kinds (pubkey, is_wallet, checked_at) VALUES (?,1,?)").run(A, 1_784_000_000);
+  db.prepare(
+    "INSERT INTO capital_flows (id, wallet, direction, source, amount_usdc, counterparty, block_time) VALUES (?,?,?,?,?,?,?)",
+  ).run("F10", A, "in", "faucet", 10_000_000_000, null, 1_784_000_000);
+  recompute(db, 1_784_000_000);
+  const names = (db.prepare("SELECT wallet FROM wallet_metrics").all() as { wallet: string }[]).map((m) => m.wallet);
+  assert.ok(names.includes(A), "a real wallet must survive the filter");
+  cleanup(db, dir);
+});
+
 // ---------------------------------------------------------------------------
 // DEGENERATE ROWS
 // ---------------------------------------------------------------------------

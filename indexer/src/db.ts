@@ -9,6 +9,7 @@ import Database from "better-sqlite3";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+import { migrate } from "./migrations";
 import { SCHEMA_SQL, SCHEMA_VERSION } from "./schema";
 
 export type DB = Database.Database;
@@ -46,14 +47,13 @@ export function openDb(dbPath: string): DB {
   db.pragma("synchronous = NORMAL");
   db.exec(SCHEMA_SQL);
 
-  const existing = getMeta(db, "schema_version");
-  if (existing == null) {
-    setMeta(db, "schema_version", String(SCHEMA_VERSION));
-  } else if (Number(existing) !== SCHEMA_VERSION) {
-    throw new Error(
-      `Schema version mismatch: db=${existing} code=${SCHEMA_VERSION}. ` +
-        `Migrate explicitly — the tape must never be silently reshaped.`,
-    );
+  // Explicit, versioned migration. Never a silent reshape: an unknown version
+  // throws rather than guessing.
+  migrate(db);
+
+  const after = getMeta(db, "schema_version");
+  if (Number(after) !== SCHEMA_VERSION) {
+    throw new Error(`Schema version mismatch after migrate: db=${after} code=${SCHEMA_VERSION}.`);
   }
   return db;
 }
@@ -108,8 +108,12 @@ export function eventCount(db: DB): number {
 }
 
 export function loadTape(db: DB): EventRow[] {
-  // Deterministic order — the SCORE layer depends on it for reproducibility.
+  // TRUE CHAIN ORDER, and a total order so the SCORE layer is reproducible.
+  // NOT `ORDER BY id`: ids are strings, so `<sig>:10` sorts before `<sig>:2`.
+  // Ordering by the integer `ordinal` restores real intra-tx sequence, which the
+  // position ledger depends on when a buy and an exercise share a transaction.
+  // `id` is the final tie-break (a log row and an ix row can share an ordinal).
   return db
-    .prepare("SELECT * FROM events ORDER BY block_time ASC, id ASC")
+    .prepare("SELECT * FROM events ORDER BY block_time ASC, sig ASC, ordinal ASC, id ASC")
     .all() as EventRow[];
 }

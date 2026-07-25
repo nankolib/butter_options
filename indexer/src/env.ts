@@ -26,6 +26,22 @@ export interface Config {
   rps: number;
   /** Hourly shadow render interval (ms). */
   shadowMs: number;
+
+  // ---- Phase 2a ----------------------------------------------------------
+  /**
+   * Devnet USDC mint. Read from CONFIG, never from prose — the canonical value
+   * is in app/src/utils/constants.ts and app/api/faucet.ts. main.ts asserts it
+   * on chain at boot, because a one-character-wrong mint yields an empty,
+   * entirely plausible-looking provenance tape.
+   */
+  usdcMint: string;
+  /** Server-side faucet wallet (payer + authority for every claim). */
+  faucetWallet: string;
+  /** D9 hard cap on per-ATA polling. Overflow is logged, never silent. */
+  ataMax: number;
+  /** External-flow / markets refresh interval (ms). */
+  capitalTickMs: number;
+  marketsRefreshMs: number;
 }
 
 function req(name: string): string {
@@ -64,5 +80,12 @@ export function loadConfig(): Config {
     batchSize: num("OPTA_INDEXER_BATCH_SIZE", 10),
     rps: num("OPTA_INDEXER_RPS", 5),
     shadowMs: num("OPTA_INDEXER_SHADOW_MS", 3_600_000),
+
+    // Phase 2a. Defaults are the verified canonical values; env can override.
+    usdcMint: process.env.OPTA_USDC_MINT?.trim() || "AytU5HUQRew9VdUdrzQuZvZ7s14pHLiYjAF5WqdK3oxL",
+    faucetWallet: process.env.OPTA_FAUCET_WALLET?.trim() || "J8Kct5tS5SvbmNj8fiuND94D4ZL5Cvip1MXsJLFRpEPz",
+    ataMax: num("OPTA_INDEXER_ATA_MAX", 500),
+    capitalTickMs: num("OPTA_INDEXER_CAPITAL_TICK_MS", 600_000),
+    marketsRefreshMs: num("OPTA_INDEXER_MARKETS_MS", 1_800_000),
   };
 }

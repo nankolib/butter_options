@@ -27,6 +27,7 @@
 
 import type { EventRow } from "../db";
 import { ORDER_KIND } from "../tape/allowlist";
+import { computePositions } from "./positions";
 
 export const RULES_VERSION = "v1";
 
@@ -109,51 +110,20 @@ export function score(tape: readonly EventRow[], cfg: RulesConfig, asOf: number)
     contributions.push({ wallet, ts: ts ?? 0, rule, points, seq: seq++ });
   };
 
-  // ---- Pass 1: mint -> vault map (VaultListingFilled carries no vault) ------
-  const mintToVault = new Map<string, string>();
-  for (const e of tape) {
-    if (e.option_mint && e.vault && !mintToVault.has(e.option_mint)) {
-      mintToVault.set(e.option_mint, e.vault);
-    }
-  }
-  const vaultOf = (e: EventRow): string | null =>
-    e.vault ?? (e.option_mint ? mintToVault.get(e.option_mint) ?? null : null);
+  // ---- Pass 1: the shared position ledger --------------------------------
+  // Held-to-settle derivation lives in positions.ts so rules_v1 and the quest
+  // evaluator cannot drift apart on subtle position accounting.
+  const posResult = computePositions(tape);
+  diagnostics.negativePositions = posResult.diagnostics.negativePositions;
+  diagnostics.holderCountDelta = posResult.diagnostics.holderCountDelta;
+  diagnostics.holderCountComparisons = posResult.diagnostics.holderCountComparisons;
 
-  // ---- Pass 2: contributions + holder-position ledger ----------------------
-  // Ledger is per (wallet, vault): VaultSettled is vault-scoped and VaultExercised
-  // carries no mint, so vault granularity is both sufficient and the finest level
-  // the tape actually supports.
-  const positions = new Map<string, number>();
-  const negativeSeen = new Set<string>();
-  const posKey = (w: string, v: string) => `${w}|${v}`;
+  const heldAwards = posResult.awards;
 
-  const move = (wallet: string | null, vault: string | null, delta: number) => {
-    if (!wallet || !vault || delta === 0) return;
-    const k = posKey(wallet, vault);
-    const next = (positions.get(k) ?? 0) + delta;
-    positions.set(k, next);
-    if (next < 0 && !negativeSeen.has(k)) {
-      negativeSeen.add(k);
-      diagnostics.negativePositions += 1;
-    }
-  };
-
+  // ---- Pass 2: contributions ----------------------------------------------
   const marketsByCreator = new Map<string, number>();
-  const holdersFinalizedByVault = new Map<string, number>();
-  for (const e of tape) {
-    if (e.name === "HoldersFinalized" && e.vault) {
-      try {
-        const f = JSON.parse(e.fields_json) as { holders_processed?: number | string };
-        holdersFinalizedByVault.set(e.vault, Number(f.holders_processed ?? 0));
-      } catch {
-        /* fields_json is always ours, but never let a parse kill scoring */
-      }
-    }
-  }
 
   for (const e of tape) {
-    const vault = vaultOf(e);
-
     switch (e.name) {
       case "OrderFilled": {
         const usdc = (e.amount_usdc ?? 0) / USDC;
@@ -174,33 +144,12 @@ export function score(tape: readonly EventRow[], cfg: RulesConfig, asOf: number)
         } else {
           add(maker, e.block_time, "fill_maker", usdc * cfg.makerPtsPerUsdc);
         }
-
-        // Position deltas. Filling a Bid means the TAKER is selling.
-        if (e.kind === ORDER_KIND.Bid) {
-          move(taker, vault, -qty);
-          move(maker, vault, +qty);
-        } else if (e.kind === ORDER_KIND.ResaleAsk) {
-          move(taker, vault, +qty);
-          move(maker, vault, -qty);
-        } else {
-          // WriterAsk / VaultPeg — contracts are minted fresh, maker holds nothing.
-          move(taker, vault, +qty);
-        }
+        void qty; // position deltas are owned by positions.ts
         break;
       }
 
-      case "VaultPurchased":
-        move(e.wallet, vault, +(e.quantity ?? 0));
-        break;
-
-      case "VaultListingFilled":
-        move(e.wallet, vault, +(e.quantity ?? 0)); // buyer
-        move(e.counterparty, vault, -(e.quantity ?? 0)); // seller
-        break;
-
       case "VaultExercised":
         add(e.wallet, e.block_time, "exercise", cfg.exercisePts);
-        move(e.wallet, vault, -(e.quantity ?? 0));
         break;
 
       case "TriggerExecuted":
@@ -220,35 +169,13 @@ export function score(tape: readonly EventRow[], cfg: RulesConfig, asOf: number)
         break;
       }
 
-      case "VaultSettled": {
-        if (!vault) break;
-        // Award every wallet still net-long this vault at settlement.
-        const holders: string[] = [];
-        for (const [k, qty] of positions) {
-          const [w, v] = k.split("|");
-          if (v === vault && qty > 0) holders.push(w);
-        }
-        holders.sort(); // determinism: Map order is insertion order, sort anyway
-        for (const w of holders) add(w, e.block_time, "held_to_settle", cfg.heldToSettlePts);
-
-        // D4 diagnostic: compare against the on-chain aggregate where available.
-        const onChain = holdersFinalizedByVault.get(vault);
-        if (onChain != null) {
-          diagnostics.holderCountComparisons += 1;
-          diagnostics.holderCountDelta += Math.abs(holders.length - onChain);
-        }
-
-        // Positions in a settled vault are resolved — clear them.
-        for (const k of [...positions.keys()]) {
-          if (k.endsWith(`|${vault}`)) positions.delete(k);
-        }
-        break;
-      }
-
       default:
         break;
     }
   }
+
+  // Held-to-settle awards come from the shared ledger, already in vault order.
+  for (const a of heldAwards) add(a.wallet, a.ts, "held_to_settle", cfg.heldToSettlePts);
 
   // ---- Pass 3: per-wallet, per-UTC-day soft cap ----------------------------
   contributions.sort((a, b) => a.ts - b.ts || a.seq - b.seq);

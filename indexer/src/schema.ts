@@ -12,7 +12,7 @@
 //                               keyed by rules_version so old runs survive.
 // =============================================================================
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export const SCHEMA_SQL = `
 -- ============ META ============
@@ -74,5 +74,126 @@ CREATE TABLE IF NOT EXISTS scores (
   breakdown_json TEXT NOT NULL,
   computed_at    INTEGER NOT NULL,
   PRIMARY KEY (rules_version, wallet)
+);
+
+-- ============ v2 TAPE — capital provenance (Part A) ============
+-- Independently sourced (faucet wallet + per-ATA cursors), so these are tape,
+-- not projections: they record transfers that happened, and are append-only.
+CREATE TABLE IF NOT EXISTS faucet_claims (
+  sig        TEXT PRIMARY KEY,
+  wallet     TEXT NOT NULL,
+  kind       TEXT NOT NULL,          -- 'usdc' | 'sol'
+  amount     INTEGER NOT NULL,       -- micro-USDC, or lamports for kind='sol'
+  block_time INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_fc_wallet ON faucet_claims(wallet, block_time);
+
+CREATE TABLE IF NOT EXISTS capital_flows (
+  id           TEXT PRIMARY KEY,     -- <sig>:<ordinal>
+  wallet       TEXT NOT NULL,
+  direction    TEXT NOT NULL,        -- 'in' | 'out'
+  source       TEXT NOT NULL,        -- 'faucet' | 'external'
+  amount_usdc  INTEGER NOT NULL,
+  counterparty TEXT,
+  block_time   INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_cf_wallet ON capital_flows(wallet, block_time);
+
+-- token account -> owner cache. A transfer names ATAs, not wallets; resolving
+-- the owner needs a chain read, so it is cached (immutable once created).
+CREATE TABLE IF NOT EXISTS token_accounts (
+  ata      TEXT PRIMARY KEY,
+  owner    TEXT NOT NULL,
+  mint     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ta_owner ON token_accounts(owner, mint);
+
+-- Per-ATA cursor for the Part A external-flow loop (D9: eligible wallets only).
+CREATE TABLE IF NOT EXISTS ata_cursors (
+  ata        TEXT PRIMARY KEY,
+  wallet     TEXT NOT NULL,
+  cursor_sig TEXT,
+  updated_at INTEGER
+);
+
+-- ============ v2 REFERENCE (rebuildable from chain) ============
+-- market -> underlying, for quest W3. Refreshed by gPA, not by the tape.
+CREATE TABLE IF NOT EXISTS markets (
+  pubkey      TEXT PRIMARY KEY,
+  asset_name  TEXT NOT NULL,
+  asset_class INTEGER NOT NULL,      -- 0 Crypto 1 Commodity 2 Equity 3 FX 4 ETF
+  refreshed_at INTEGER
+);
+
+-- ============ v2 WRITE-PATH TABLES (Phase 2b fills these; empty now) ========
+CREATE TABLE IF NOT EXISTS referrals (
+  code            TEXT PRIMARY KEY,
+  referrer_wallet TEXT NOT NULL,
+  referee_wallet  TEXT NOT NULL UNIQUE,
+  bound_at        INTEGER,
+  activated_at    INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS social_posts (
+  tweet_id    TEXT PRIMARY KEY,
+  wallet      TEXT NOT NULL,
+  x_handle    TEXT NOT NULL,
+  verified_at INTEGER,
+  points      REAL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_social_handle ON social_posts(x_handle);
+
+CREATE TABLE IF NOT EXISTS bounty_submissions (
+  id        TEXT PRIMARY KEY,
+  wallet    TEXT NOT NULL,
+  kind      TEXT NOT NULL,
+  proof_url TEXT,
+  status    TEXT NOT NULL,           -- 'pending' | 'approved' | 'rejected'
+  points    REAL
+);
+
+-- ============ v2 SCORE PROJECTIONS (dropped + rebuilt every recompute) ======
+CREATE TABLE IF NOT EXISTS wallet_metrics (
+  wallet          TEXT PRIMARY KEY,
+  faucet_in       INTEGER NOT NULL,
+  external_in     INTEGER NOT NULL,
+  external_out    INTEGER NOT NULL,
+  pct_faucet      REAL,
+  usdc_in         INTEGER NOT NULL,
+  usdc_out        INTEGER NOT NULL,
+  deployed        INTEGER NOT NULL,
+  realized_pnl    INTEGER NOT NULL,
+  roi             REAL,
+  volume_usdc     INTEGER NOT NULL,
+  writer_premium  INTEGER NOT NULL,
+  profit_eligible INTEGER NOT NULL,
+  ineligible_reason TEXT
+);
+
+CREATE TABLE IF NOT EXISTS quest_completions (
+  quests_version TEXT NOT NULL,
+  wallet         TEXT NOT NULL,
+  quest_id       TEXT NOT NULL,
+  period_key     TEXT NOT NULL,      -- '' one-time | 'YYYY-MM-DD' | 'YYYY-Www'
+  completed_at   INTEGER NOT NULL,
+  points         REAL NOT NULL,
+  PRIMARY KEY (quests_version, wallet, quest_id, period_key)
+);
+
+CREATE TABLE IF NOT EXISTS streak_state (
+  wallet            TEXT PRIMARY KEY,
+  current_streak    INTEGER NOT NULL,
+  longest_streak    INTEGER NOT NULL,
+  shields_banked    INTEGER NOT NULL,
+  shields_consumed  INTEGER NOT NULL,
+  multiplier        REAL NOT NULL,
+  last_active_day   TEXT
+);
+
+CREATE TABLE IF NOT EXISTS shield_events (
+  wallet   TEXT NOT NULL,
+  day      TEXT NOT NULL,
+  action   TEXT NOT NULL,            -- 'earned' | 'consumed'
+  PRIMARY KEY (wallet, day, action)
 );
 `;

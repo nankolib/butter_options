@@ -5,8 +5,14 @@
 // is never touched.
 // =============================================================================
 
-import { loadTape, type DB } from "../db";
+import { loadTape, type DB, type EventRow } from "../db";
 import { INTERNAL_WALLETS, isInternal, labelFor } from "../registry";
+import { spanBucket } from "../tape/marketsRefresh";
+import { computeMultipliers, utcDay, type MultiplierResult } from "./multiplier";
+import { computePnl, type PnlResult } from "./pnl";
+import { computeProvenance, type FlowRow, type ProvenanceRow } from "./provenance";
+import { computeReferrals, type ReferralResult, type ReferralRow } from "./referrals";
+import { DEFAULT_QUESTS, QUESTS_VERSION, evaluate, type EvaluatorResult } from "./quests/evaluator";
 import { DEFAULT_RULES, RULES_VERSION, score, type RulesConfig, type ScoreResult } from "./rules_v1";
 
 /**
@@ -71,9 +77,58 @@ export function rebuildWallets(db: DB): void {
 export interface RecomputeResult extends ScoreResult {
   externalCount: number;
   internalCount: number;
+  // ---- Phase 2a ---------------------------------------------------------
+  pnl: PnlResult;
+  provenance: Map<string, ProvenanceRow>;
+  multipliers: MultiplierResult;
+  quests: EvaluatorResult;
+  referrals: ReferralResult;
+  /** wallet -> final points: (base x multiplier) + quests + referral income. */
+  finalPoints: Map<string, number>;
+  faucetClaimCount: number;
+  faucetClaimWallets: number;
+  marketsKnown: number;
 }
 
-/** Full recompute. `asOf` is injected — rules_v1 never reads the clock. */
+const round4 = (n: number) => Math.round(n * 1e4) / 1e4;
+
+/** mint -> underlying, joining tape (mint->vault->market) to the markets table. */
+function buildUnderlyingMap(db: DB, tape: readonly EventRow[]) {
+  const marketRows = db.prepare("SELECT pubkey, asset_name, asset_class FROM markets").all() as {
+    pubkey: string;
+    asset_name: string;
+    asset_class: number;
+  }[];
+  const marketInfo = new Map(marketRows.map((m) => [m.pubkey, m]));
+
+  // vault -> market, from VaultCreated (added to the allowlist in Phase 2a
+  // precisely so this edge exists) and SeriesCreated.
+  const vaultToMarket = new Map<string, string>();
+  for (const e of tape) {
+    if (e.name !== "VaultCreated" && e.name !== "SeriesCreated") continue;
+    try {
+      const f = JSON.parse(e.fields_json) as { market?: string };
+      if (e.vault && f.market && !vaultToMarket.has(e.vault)) vaultToMarket.set(e.vault, f.market);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const out = new Map<string, { assetName: string; bucket: string }>();
+  for (const e of tape) {
+    if (!e.option_mint || out.has(e.option_mint)) continue;
+    const vault = e.vault;
+    if (!vault) continue;
+    const market = vaultToMarket.get(vault);
+    if (!market) continue;
+    const info = marketInfo.get(market);
+    if (!info) continue;
+    out.set(e.option_mint, { assetName: info.asset_name, bucket: spanBucket(info.asset_class) });
+  }
+  return { underlyingOf: out, marketsKnown: marketRows.length };
+}
+
+/** Full recompute. `asOf` is injected — no scoring module reads the clock. */
 export function recompute(db: DB, asOf: number, cfg: RulesConfig = DEFAULT_RULES): RecomputeResult {
   rebuildWallets(db);
 
@@ -104,5 +159,186 @@ export function recompute(db: DB, asOf: number, cfg: RulesConfig = DEFAULT_RULES
     else externalCount += 1;
   }
 
-  return { ...result, externalCount, internalCount };
+  // ==== Phase 2a layers, all pure functions over the tape =================
+  const walletRows = (db.prepare("SELECT pubkey FROM wallets").all() as { pubkey: string }[]).map((r) => r.pubkey);
+  const flows = db.prepare("SELECT wallet, direction, source, amount_usdc FROM capital_flows").all() as FlowRow[];
+  const provenance = computeProvenance(flows, walletRows);
+
+  const pnl = computePnl(tape);
+  const multipliers = computeMultipliers(tape, asOf);
+
+  const faucetClaims = db
+    .prepare("SELECT wallet, block_time FROM faucet_claims WHERE kind = 'usdc' ORDER BY block_time ASC")
+    .all() as { wallet: string; block_time: number | null }[];
+  const allClaims = db.prepare("SELECT COUNT(*) n, COUNT(DISTINCT wallet) w FROM faucet_claims").get() as {
+    n: number;
+    w: number;
+  };
+
+  const { underlyingOf, marketsKnown } = buildUnderlyingMap(db, tape);
+  const quests = evaluate({
+    tape,
+    faucetClaims,
+    underlyingOf,
+    multipliers,
+    cfg: DEFAULT_QUESTS,
+    asOf,
+  });
+
+  // ---- Base points x multiplier (D11: after the cap, at the day's rate) ---
+  // rules_v1 already applied the daily cap; the multiplier is applied here to
+  // each day's capped contribution, using that day's rate.
+  const baseMultiplied = new Map<string, number>();
+  for (const s of result.scores) {
+    const perDay = multipliers.byWalletDay.get(s.wallet);
+    if (!perDay || perDay.size === 0) {
+      baseMultiplied.set(s.wallet, s.pointsCapped);
+      continue;
+    }
+    // rules_v1 returns per-wallet totals, not per-day. Use the wallet's
+    // time-weighted average multiplier over its ACTIVE days so the result stays
+    // a pure function of the same inputs. Exact per-day attribution lands with
+    // the per-day breakdown in 2b.
+    let sum = 0;
+    let n = 0;
+    for (const m of perDay.values()) {
+      sum += m;
+      n += 1;
+    }
+    baseMultiplied.set(s.wallet, round4(s.pointsCapped * (n > 0 ? sum / n : 1)));
+  }
+
+  // ---- Self-earned (base + quests), then referral income against it ------
+  const selfEarned = new Map<string, number>();
+  for (const w of new Set([...baseMultiplied.keys(), ...quests.totals.keys()])) {
+    selfEarned.set(w, round4((baseMultiplied.get(w) ?? 0) + (quests.totals.get(w) ?? 0)));
+  }
+
+  const referralRows = db
+    .prepare("SELECT code, referrer_wallet, referee_wallet, bound_at, activated_at FROM referrals")
+    .all() as ReferralRow[];
+  const earnedAfter = (wallet: string, sinceTs: number): number => {
+    // Points the referee earned at/after activation. Quests carry timestamps;
+    // base points are prorated by the share of active days after `sinceTs`.
+    let questAfter = 0;
+    for (const c of quests.completions) {
+      if (c.wallet === wallet && c.completedAt >= sinceTs) questAfter += c.points;
+    }
+    const perDay = multipliers.byWalletDay.get(wallet);
+    let frac = 1;
+    if (perDay && perDay.size > 0) {
+      const cutoff = utcDay(sinceTs);
+      let after = 0;
+      for (const d of perDay.keys()) if (d >= cutoff) after += 1;
+      frac = after / perDay.size;
+    }
+    return round4(questAfter + (baseMultiplied.get(wallet) ?? 0) * frac);
+  };
+  const referrals = computeReferrals(referralRows, selfEarned, earnedAfter, DEFAULT_QUESTS.referral);
+
+  const finalPoints = new Map<string, number>();
+  for (const w of new Set([...selfEarned.keys(), ...referrals.bondPoints.keys(), ...referrals.commission.keys()])) {
+    finalPoints.set(
+      w,
+      round4(
+        (selfEarned.get(w) ?? 0) + (referrals.bondPoints.get(w) ?? 0) + (referrals.commission.get(w) ?? 0),
+      ),
+    );
+  }
+
+  persistProjections(db, asOf, { pnl, provenance, multipliers, quests, finalPoints });
+
+  return {
+    ...result,
+    externalCount,
+    internalCount,
+    pnl,
+    provenance,
+    multipliers,
+    quests,
+    referrals,
+    finalPoints,
+    faucetClaimCount: allClaims.n,
+    faucetClaimWallets: allClaims.w,
+    marketsKnown,
+  };
+}
+
+/** Write the recomputable projections. Dropped and rebuilt wholesale. */
+function persistProjections(
+  db: DB,
+  asOf: number,
+  d: {
+    pnl: PnlResult;
+    provenance: Map<string, ProvenanceRow>;
+    multipliers: MultiplierResult;
+    quests: EvaluatorResult;
+    finalPoints: Map<string, number>;
+  },
+): void {
+  const insMetrics = db.prepare(
+    `INSERT INTO wallet_metrics
+       (wallet, faucet_in, external_in, external_out, pct_faucet, usdc_in, usdc_out,
+        deployed, realized_pnl, roi, volume_usdc, writer_premium, profit_eligible, ineligible_reason)
+     VALUES (@wallet,@faucet_in,@external_in,@external_out,@pct_faucet,@usdc_in,@usdc_out,
+             @deployed,@realized_pnl,@roi,@volume_usdc,@writer_premium,@profit_eligible,@ineligible_reason)`,
+  );
+  const insQuest = db.prepare(
+    `INSERT INTO quest_completions (quests_version, wallet, quest_id, period_key, completed_at, points)
+     VALUES (?,?,?,?,?,?)`,
+  );
+  const insStreak = db.prepare(
+    `INSERT INTO streak_state
+       (wallet, current_streak, longest_streak, shields_banked, shields_consumed, multiplier, last_active_day)
+     VALUES (?,?,?,?,?,?,?)`,
+  );
+  const insShield = db.prepare("INSERT OR IGNORE INTO shield_events (wallet, day, action) VALUES (?,?,?)");
+
+  db.transaction(() => {
+    db.exec("DELETE FROM wallet_metrics");
+    db.prepare("DELETE FROM quest_completions WHERE quests_version = ?").run(QUESTS_VERSION);
+    db.exec("DELETE FROM streak_state");
+    db.exec("DELETE FROM shield_events");
+
+    const wallets = new Set([...d.pnl.byWallet.keys(), ...d.provenance.keys()]);
+    for (const w of [...wallets].sort()) {
+      const f = d.pnl.byWallet.get(w);
+      const p = d.provenance.get(w);
+      const faucetIn = p?.faucetIn ?? 0;
+      const realized = Number(f?.realizedPnl ?? 0n);
+      insMetrics.run({
+        wallet: w,
+        faucet_in: faucetIn,
+        external_in: p?.externalIn ?? 0,
+        external_out: p?.externalOut ?? 0,
+        pct_faucet: p?.pctFaucet ?? null,
+        usdc_in: Number(f?.usdcIn ?? 0n),
+        usdc_out: Number(f?.usdcOut ?? 0n),
+        deployed: Number(f?.deployed ?? 0n),
+        realized_pnl: realized,
+        roi: faucetIn > 0 ? realized / faucetIn : null,
+        volume_usdc: Number(f?.volumeUsdc ?? 0n),
+        writer_premium: Number(f?.writerPremium ?? 0n),
+        profit_eligible: p?.eligible ? 1 : 0,
+        ineligible_reason: p?.ineligibleReason ?? null,
+      });
+    }
+    for (const c of d.quests.completions) {
+      insQuest.run(QUESTS_VERSION, c.wallet, c.questId, c.periodKey, c.completedAt, c.points);
+    }
+    for (const s of [...d.multipliers.state.keys()].sort()) {
+      const st = d.multipliers.state.get(s)!;
+      insStreak.run(
+        st.wallet,
+        st.currentStreak,
+        st.longestStreak,
+        st.shieldsBanked,
+        st.shieldsConsumed,
+        st.multiplier,
+        st.lastActiveDay,
+      );
+    }
+    for (const e of d.multipliers.shieldEvents) insShield.run(e.wallet, e.day, e.action);
+  })();
+  void asOf;
 }

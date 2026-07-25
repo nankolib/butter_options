@@ -137,23 +137,21 @@ export function normalize(raw: RawTx, decoder: EventDecoder, programId: string):
   if (!ok) return { tx, events: [] };
 
   const events: EventRow[] = [];
-  let ordinal = 0;
 
-  const push = (row: Omit<EventRow, "id" | "sig" | "ordinal" | "block_time">) => {
-    events.push({
-      id: `${sig}:${ordinal}`,
-      sig,
-      ordinal,
-      block_time: raw.blockTime ?? null,
-      ...row,
-    });
-    ordinal += 1;
+  // ID STABILITY (Phase 2a / B2). Ordinals are derived from CHAIN position, never
+  // from our allowlist:
+  //   log-derived -> the event's index among all `Program data:` lines
+  //   ix-derived  -> the top-level instruction index, namespaced `ix<n>`
+  // Adding an allowlist entry therefore cannot renumber existing rows, so
+  // re-indexing stays idempotent (INSERT OR IGNORE on a deterministic PK).
+  const push = (ordinal: number, id: string, row: Omit<EventRow, "id" | "sig" | "ordinal" | "block_time">) => {
+    events.push({ id, sig, ordinal, block_time: raw.blockTime ?? null, ...row });
   };
 
   // ---- 1. Log-derived events, in log order --------------------------------
   for (const ev of decoder.decodeLogs(logs)) {
     const map = ALLOWLIST[ev.name];
-    push({
+    push(ev.logIndex, `${sig}:${ev.logIndex}`, {
       ix_index: null,
       source: "log",
       name: ev.name,
@@ -177,7 +175,7 @@ export function normalize(raw: RawTx, decoder: EventDecoder, programId: string):
     const ixAccounts = ix.accounts.map((idx) => keys[idx]).filter((k): k is string => k != null);
     const hit = matchIx(data, ixAccounts);
     if (!hit) continue;
-    push({
+    push(i, `${sig}:ix${i}`, {
       ix_index: i,
       source: "ix",
       name: hit.target.eventName,

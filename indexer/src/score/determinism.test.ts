@@ -127,6 +127,6 @@ test("schema version mismatch refuses to open rather than reshaping the tape", (
   const db = openDb(dbPath);
   db.prepare("UPDATE meta SET value = '999' WHERE key = 'schema_version'").run();
   db.close();
-  assert.throws(() => openDb(dbPath), /Schema version mismatch/);
+  assert.throws(() => openDb(dbPath), /No migration path from schema v999/);
   fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
 });

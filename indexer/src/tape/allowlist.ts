@@ -109,6 +109,10 @@ export const ALLOWLIST: Record<string, FieldMap> = {
   },
   PremiumClaimed: { wallet: "writer", vault: "vault", amountUsdc: "amount" },
   VaultReclaimed: { wallet: "writer", vault: "vault", amountUsdc: "amount" },
+  /// Phase 2a: the MAIN writer settlement payout path. PnL cannot reconcile
+  /// without it — its absence in Phase 1 was the reason for the v2 tape rebuild.
+  VaultPostSettlementWithdraw: { wallet: "writer", vault: "vault", amountUsdc: "amount" },
+  VaultBurnUnsold: { wallet: "writer", vault: "vault", optionMint: "mint", quantity: "burned" },
   WriterAskResidualWithdrawn: {
     wallet: "backer",
     vault: "vault",
@@ -129,6 +133,19 @@ export const ALLOWLIST: Record<string, FieldMap> = {
   },
   WritersFinalized: { wallet: null, vault: "vault", amountUsdc: "total_paid_out" },
   SeriesCreated: { wallet: null, vault: "vault", optionMint: "option_mint" },
+  /// Phase 2a: vault -> market edge. Needed to resolve a fill's UNDERLYING for
+  /// quest W3 (SeriesCreated only covers American canonical series).
+  /// `creator` is a real wallet (the vault opener), so it is scored as the actor.
+  VaultCreated: { wallet: "creator", vault: "vault", amountUsdc: "strike_price" },
+  /// Phase 2a: treasury dust — a term in the conservation residual.
+  SettledWriterAskVaultClosed: { wallet: null, vault: "vault", amountUsdc: "dust_swept" },
+  /// Phase 2a: escrowed contracts returned to sellers on auto-cancel.
+  VaultListingsAutoCancelled: {
+    wallet: null,
+    vault: "vault",
+    optionMint: "mint",
+    quantity: "tokens_returned",
+  },
 
   // ---- V2 secondary listings ----------------------------------------------
   VaultListingCreated: {

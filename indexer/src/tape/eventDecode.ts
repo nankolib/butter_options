@@ -25,6 +25,16 @@ const PROGRAM_DATA_PREFIX = "Program data: ";
 export interface DecodedEvent {
   name: string;
   data: Record<string, unknown>;
+  /**
+   * Index of this event's `Program data:` line among ALL such lines in the tx,
+   * whether or not they decoded or were allowlisted.
+   *
+   * THIS IS THE ID-STABILITY GUARANTEE (Phase 2a / B2). Numbering only the
+   * allowlisted events made ordinals shift whenever the allowlist grew, so a
+   * re-index wrote duplicates instead of being idempotent. Numbering every
+   * emitted line makes an ordinal a property of the CHAIN, not of our config.
+   */
+  logIndex: number;
 }
 
 export class EventDecoder {
@@ -41,8 +51,11 @@ export class EventDecoder {
    */
   decodeLogs(logs: readonly string[]): DecodedEvent[] {
     const out: DecodedEvent[] = [];
+    let logIndex = -1;
     for (const line of logs) {
       if (!line.startsWith(PROGRAM_DATA_PREFIX)) continue;
+      // Counted BEFORE any decode/allowlist filtering — see DecodedEvent.logIndex.
+      logIndex += 1;
       const b64 = line.slice(PROGRAM_DATA_PREFIX.length);
       let decoded: { name: string; data: unknown } | null = null;
       try {
@@ -52,7 +65,7 @@ export class EventDecoder {
       }
       if (!decoded) continue;
       if (!(decoded.name in ALLOWLIST)) continue; // ← the allowlist gate
-      out.push({ name: decoded.name, data: decoded.data as Record<string, unknown> });
+      out.push({ name: decoded.name, data: decoded.data as Record<string, unknown>, logIndex });
     }
     return out;
   }

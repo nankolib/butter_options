@@ -127,6 +127,8 @@ export function renderShadow(stats: TapeStats, result: RecomputeResult, rssBytes
   }
   L.push("");
 
+  L.push(...renderPhase2a(result));
+
   L.push("### Diagnostics");
   L.push("");
   L.push("| metric | value | meaning |");
@@ -146,6 +148,173 @@ export function renderShadow(stats: TapeStats, result: RecomputeResult, rssBytes
   L.push("");
 
   return L.join("\n");
+}
+
+const usd = (micro: number | bigint) => `$${(Number(micro) / 1e6).toFixed(2)}`;
+const short = (w: string) => `${w.slice(0, 6)}…${w.slice(-4)}`;
+
+/** Phase 2a sections: 5 boards, chain funnel, multipliers, provenance, PnL. */
+function renderPhase2a(r: RecomputeResult): string[] {
+  const L: string[] = [];
+  const ext = (w: string) => !isInternal(w);
+  const metrics = [...r.pnl.byWallet.values()].filter((m) => ext(m.wallet));
+
+  // ---- 1. RECONCILIATION — the number, whatever it is --------------------
+  const rec = r.pnl.reconciliation;
+  L.push("### PnL reconciliation");
+  L.push("");
+  L.push("`[W] wallets + [V] vaults + [F] treasury + [U] unattributed == 0`");
+  L.push("");
+  L.push(
+    "Every tape event is a transfer between wallets, vault PDAs, and the treasury, " +
+      "so the books must close exactly. [U] is a NAMED term: HoldersFinalized / " +
+      "WritersFinalized carry only aggregate totals, so those dollars land in wallets " +
+      "the tape cannot identify.",
+  );
+  L.push("");
+  L.push("| term | value |");
+  L.push("|---|---:|");
+  L.push(`| [W] wallets net | ${usd(rec.walletNet)} |`);
+  L.push(`| [V] vault balances | ${usd(rec.vaultBalance)} |`);
+  L.push(`| [F] fees + dust to treasury | ${usd(rec.fees)} |`);
+  L.push(`| [U] unattributed batch payouts | ${usd(rec.unattributedPayouts)} |`);
+  L.push(`| **residual (W+V+F+U)** | **${usd(rec.residual)}** |`);
+  L.push(`| Σ\\|flows\\| | ${usd(rec.grossFlows)} |`);
+  L.push(`| **residual / Σ\\|flows\\|** | **${(rec.residualRatio * 100).toFixed(4)}%** |`);
+  L.push(`| Σ realized_pnl | ${usd(rec.totalRealizedPnl)} |`);
+  L.push(`| vault balance not attributable to a depositor | ${usd(rec.unattributedVaultBalance)} |`);
+  L.push("");
+  L.push(
+    rec.residual === 0n
+      ? "Identity balances exactly."
+      : "_Non-zero residual is reported as-is. It is a measurement, not a tolerance to tune._",
+  );
+  L.push("");
+
+  // ---- 2. PROFIT board ---------------------------------------------------
+  L.push("### Board 1 — Profit (ROI, faucet-funded only)");
+  L.push("");
+  const eligible = metrics
+    .filter((m) => r.provenance.get(m.wallet)?.eligible)
+    .map((m) => ({ m, p: r.provenance.get(m.wallet)! }))
+    .sort((a, b) => {
+      const ra = Number(a.m.realizedPnl) / Math.max(1, a.p.faucetIn);
+      const rb = Number(b.m.realizedPnl) / Math.max(1, b.p.faucetIn);
+      return rb - ra || (a.m.wallet < b.m.wallet ? -1 : 1);
+    });
+  if (eligible.length === 0) {
+    L.push("_no eligible wallets_");
+  } else {
+    L.push("| # | wallet | realized PnL | deployed | faucet in | ROI |");
+    L.push("|---:|---|---:|---:|---:|---:|");
+    eligible.slice(0, 20).forEach((e, i) => {
+      const roi = e.p.faucetIn > 0 ? Number(e.m.realizedPnl) / e.p.faucetIn : 0;
+      L.push(
+        `| ${i + 1} | \`${short(e.m.wallet)}\` | ${usd(e.m.realizedPnl)} | ${usd(e.m.deployed)} | ${usd(e.p.faucetIn)} | ${(roi * 100).toFixed(2)}% |`,
+      );
+    });
+  }
+  L.push("");
+  const excluded = metrics.filter((m) => !r.provenance.get(m.wallet)?.eligible);
+  L.push(`**Excluded from the profit board (${excluded.length})** — reason recorded, never silent:`);
+  L.push("");
+  L.push("| wallet | reason |");
+  L.push("|---|---|");
+  for (const m of excluded.slice(0, 25)) {
+    L.push(`| \`${short(m.wallet)}\` | ${r.provenance.get(m.wallet)?.ineligibleReason ?? "unknown"} |`);
+  }
+  L.push("");
+
+  // ---- 3. VOLUME + 4. WRITER --------------------------------------------
+  L.push("### Board 2 — Volume");
+  L.push("");
+  L.push("| # | wallet | premium traded |");
+  L.push("|---:|---|---:|");
+  [...metrics]
+    .sort((a, b) => Number(b.volumeUsdc - a.volumeUsdc) || (a.wallet < b.wallet ? -1 : 1))
+    .slice(0, 10)
+    .forEach((m, i) => L.push(`| ${i + 1} | \`${short(m.wallet)}\` | ${usd(m.volumeUsdc)} |`));
+  L.push("");
+
+  L.push("### Board 3 — Writer (premium earned)");
+  L.push("");
+  L.push("| # | wallet | premium earned |");
+  L.push("|---:|---|---:|");
+  const writers = [...metrics]
+    .filter((m) => m.writerPremium > 0n)
+    .sort((a, b) => Number(b.writerPremium - a.writerPremium) || (a.wallet < b.wallet ? -1 : 1));
+  if (writers.length === 0) L.push("| — | _none_ | — |");
+  writers.slice(0, 10).forEach((m, i) => L.push(`| ${i + 1} | \`${short(m.wallet)}\` | ${usd(m.writerPremium)} |`));
+  L.push("");
+
+  // ---- 5. REFERRALS + 6. SOCIAL (empty until Phase 2b) ------------------
+  L.push("### Board 4 — Referrals");
+  L.push("");
+  L.push(
+    `_write path is Phase 2b; table currently holds ${r.referrals.bound} bindings, ${r.referrals.activated} activated_`,
+  );
+  L.push("");
+  L.push("### Board 5 — Social");
+  L.push("");
+  L.push("_write path is Phase 2b; table empty_");
+  L.push("");
+
+  // ---- Chain funnel ------------------------------------------------------
+  L.push("### Onboarding chain funnel (external wallets)");
+  L.push("");
+  const steps = ["O1 First Fill", "O2 First Write", "O3 Make a Market", "O4 First Exercise", "O5 Arm a Trigger", "O6 Diamond Hands", "O7 Keeper"];
+  const reached = new Array(8).fill(0);
+  for (const [w, step] of r.quests.funnel) {
+    if (!ext(w)) continue;
+    for (let i = 1; i <= step; i++) reached[i] += 1;
+  }
+  L.push("| step | wallets |");
+  L.push("|---|---:|");
+  steps.forEach((s, i) => L.push(`| ${s} | ${reached[i + 1]} |`));
+  const complete = [...r.quests.funnel.entries()].filter(([w, s]) => ext(w) && s === 7).length;
+  L.push(`| **chain complete** | **${complete}** |`);
+  L.push("");
+
+  // ---- Multiplier distribution ------------------------------------------
+  L.push("### Multiplier distribution (external)");
+  L.push("");
+  const dist = new Map<string, number>();
+  for (const [w, st] of r.multipliers.state) {
+    if (!ext(w)) continue;
+    const k = st.multiplier.toFixed(1);
+    dist.set(k, (dist.get(k) ?? 0) + 1);
+  }
+  L.push("| multiplier | wallets |");
+  L.push("|---:|---:|");
+  for (const k of [...dist.keys()].sort()) L.push(`| ${k}× | ${dist.get(k)} |`);
+  if (dist.size === 0) L.push("| — | 0 |");
+  const shieldsEarned = r.multipliers.shieldEvents.filter((e) => e.action === "earned" && ext(e.wallet)).length;
+  const shieldsUsed = r.multipliers.shieldEvents.filter((e) => e.action === "consumed" && ext(e.wallet)).length;
+  L.push("");
+  L.push(`Shields — earned ${shieldsEarned}, consumed ${shieldsUsed}.`);
+  L.push("");
+
+  // ---- Provenance --------------------------------------------------------
+  L.push("### Capital provenance");
+  L.push("");
+  L.push(
+    `Faucet claims on record: **${r.faucetClaimCount}** across **${r.faucetClaimWallets}** wallets. Markets known: ${r.marketsKnown}.`,
+  );
+  L.push("");
+  L.push("| wallet | faucet in | external in | external out | % faucet |");
+  L.push("|---|---:|---:|---:|---:|");
+  const prov = [...r.provenance.values()]
+    .filter((p) => ext(p.wallet) && (p.faucetIn > 0 || p.externalIn > 0 || p.externalOut > 0))
+    .sort((a, b) => b.faucetIn - a.faucetIn || (a.wallet < b.wallet ? -1 : 1));
+  if (prov.length === 0) L.push("| _no capital flows indexed_ | — | — | — | — |");
+  for (const p of prov.slice(0, 25)) {
+    L.push(
+      `| \`${short(p.wallet)}\` | ${usd(p.faucetIn)} | ${usd(p.externalIn)} | ${usd(p.externalOut)} | ${p.pctFaucet == null ? "—" : (p.pctFaucet * 100).toFixed(1) + "%"} |`,
+    );
+  }
+  L.push("");
+
+  return L;
 }
 
 export function appendShadow(shadowPath: string, block: string): void {

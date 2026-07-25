@@ -38,8 +38,12 @@ import { readCursor } from "./tape/cursor";
 import { EventDecoder } from "./tape/eventDecode";
 import { Poller } from "./tape/poller";
 import { RpcClient } from "./tape/rpc";
+import { CapitalPoller, emptyCapitalStats } from "./tape/capitalPoller";
+import { refreshMarkets } from "./tape/marketsRefresh";
+import { TokenAccountResolver } from "./tape/tokenAccounts";
 import { recompute } from "./score/recompute";
 import { RULES_VERSION } from "./score/rules_v1";
+import { QUESTS_VERSION } from "./score/quests/evaluator";
 import { appendShadow, collectTapeStats, renderShadow } from "./score/shadow";
 import { SCHEMA_VERSION } from "./schema";
 
@@ -74,14 +78,36 @@ async function main(): Promise<void> {
   const rpc = new RpcClient(cfg.rpcUrl, Math.max(1, Math.floor(1000 / Math.max(1, cfg.rps))));
   const poller = new Poller(db, rpc, decoder, cfg);
 
+  const resolver = new TokenAccountResolver(db, rpc);
+  const capital = new CapitalPoller(db, rpc, cfg, resolver);
+
+  // MINT ASSERT (B1). A one-character-wrong mint produces an empty, entirely
+  // plausible-looking provenance tape, so verify it is a real SPL mint before
+  // any provenance is indexed. Fail loudly at boot, never silently later.
+  const mintInfo = await rpc
+    .call<{ value: { owner?: string } | null }>("getAccountInfo", [
+      cfg.usdcMint,
+      { encoding: "base64", commitment: "confirmed" },
+    ])
+    .catch(() => null);
+  const mintOwner = mintInfo?.value?.owner ?? null;
+  if (mintOwner !== "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA") {
+    throw new Error(
+      `Configured OPTA_USDC_MINT ${cfg.usdcMint} is not an SPL Token mint (owner=${mintOwner ?? "missing"}). ` +
+        `Refusing to start — provenance would silently index nothing.`,
+    );
+  }
+
   const boot = readCursor(db);
   // RULE 1 boot marker — first line on stdout, asserted at deploy time.
   log.boot({
     commit: readCommit(),
     schemaVersion: SCHEMA_VERSION,
     rulesVersion: RULES_VERSION,
+    questsVersion: QUESTS_VERSION,
     cursor: boot.cursorSig,
     backfillDone: boot.backfillDone,
+    usdcMintOk: true,
   });
 
   let stopping = false;
@@ -131,8 +157,34 @@ async function main(): Promise<void> {
     }
   };
 
-  renderOnce(); // first render immediately after backfill
+  // ---- Part A: capital provenance + markets reference, before first render -
+  const capitalTick = async () => {
+    const stats = emptyCapitalStats();
+    capital.resetCaches();
+    try {
+      await capital.faucetTick(stats);
+    } catch (e) {
+      log.error("faucet tick failed", { err: (e as Error).message });
+    }
+    try {
+      await capital.ataTick(stats);
+    } catch (e) {
+      log.error("ata tick failed", { err: (e as Error).message });
+    }
+    log.info("capital tick", { ...stats });
+  };
+
+  await capitalTick();
+  try {
+    await refreshMarkets(db, rpc, cfg.programId);
+  } catch (e) {
+    log.error("markets refresh failed", { err: (e as Error).message });
+  }
+
+  renderOnce(); // first render after backfill + provenance + reference data
   let lastShadow = Date.now();
+  let lastCapital = Date.now();
+  let lastMarkets = Date.now();
 
   // ---- Live tail -----------------------------------------------------------
   log.info("entering live tail", { tickMs: cfg.tickMs });
@@ -144,6 +196,19 @@ async function main(): Promise<void> {
       }
     } catch (e) {
       log.error("tick failed", { err: (e as Error).message });
+    }
+
+    if (Date.now() - lastCapital >= cfg.capitalTickMs) {
+      await capitalTick();
+      lastCapital = Date.now();
+    }
+    if (Date.now() - lastMarkets >= cfg.marketsRefreshMs) {
+      try {
+        await refreshMarkets(db, rpc, cfg.programId);
+      } catch (e) {
+        log.error("markets refresh failed", { err: (e as Error).message });
+      }
+      lastMarkets = Date.now();
     }
 
     if (Date.now() - lastShadow >= cfg.shadowMs) {

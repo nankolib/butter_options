@@ -44,6 +44,13 @@ import { appendShadow, collectTapeStats, renderShadow } from "./score/shadow";
 import { SCHEMA_VERSION } from "./schema";
 
 function readCommit(): string {
+  // OPTA_INDEXER_COMMIT WINS over the enclosing repo's HEAD. The VPS deploy is a
+  // surgical path-overlay (`git checkout <ref> -- indexer/`) into the opta-crank
+  // checkout, so that checkout's HEAD is NOT the version of this code that is
+  // running. Reporting it would make the boot marker confidently wrong.
+  const pinned = process.env.OPTA_INDEXER_COMMIT?.trim();
+  if (pinned) return pinned;
+
   for (const rel of ["../../.git", "../../../.git"]) {
     try {
       const gitDir = path.resolve(__dirname, rel);
@@ -56,7 +63,7 @@ function readCommit(): string {
       /* try next */
     }
   }
-  return process.env.OPTA_INDEXER_COMMIT?.trim() || "unknown";
+  return "unknown";
 }
 
 async function main(): Promise<void> {

@@ -63,7 +63,12 @@ Same split as `opta-writer`.
 ssh root@144.202.58.6
 git -C /opt/opta-crank fetch origin
 git -C /opt/opta-crank checkout <ref> -- indexer/
-cd /opt/opta-crank/indexer && npm ci --omit=dev && npm run build
+chown -R opta:opta /opt/opta-crank/indexer
+cd /opt/opta-crank/indexer && npm ci && npm run build   # devDeps needed: tsc
+# Pin the boot marker to the DEPLOYED ref — the enclosing checkout's HEAD is a
+# different commit, because this is a path-overlay not a full pull.
+sed -i "s/^OPTA_INDEXER_COMMIT=.*/OPTA_INDEXER_COMMIT=<ref>/" /opt/opta-indexer/.env \
+  || echo "OPTA_INDEXER_COMMIT=<ref>" >> /opt/opta-indexer/.env
 systemctl restart --no-block opta-indexer
 ```
 

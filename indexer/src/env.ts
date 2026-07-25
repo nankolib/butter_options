@@ -59,7 +59,7 @@ export function loadConfig(): Config {
     shadowPath: process.env.OPTA_INDEXER_SHADOW?.trim() || path.join(stateDir, "shadow.md"),
     idlPath: process.env.OPTA_INDEXER_IDL?.trim() || defaultIdlPath(),
     // 2026-07-01T00:00:00Z
-    backfillFloor: num("OPTA_INDEXER_BACKFILL_FLOOR", 1782950400),
+    backfillFloor: num("OPTA_INDEXER_BACKFILL_FLOOR", 1782864000),
     tickMs: num("OPTA_INDEXER_TICK_MS", 60_000),
     batchSize: num("OPTA_INDEXER_BATCH_SIZE", 10),
     rps: num("OPTA_INDEXER_RPS", 5),

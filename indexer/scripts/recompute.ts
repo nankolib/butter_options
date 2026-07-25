@@ -26,7 +26,11 @@ function arg(name: string): string | null {
 function main(): void {
   const cfg = loadConfig();
   const db = openDb(cfg.dbPath);
-  const asOf = Number(arg("--as-of") ?? 0);
+  // Default to NOW. Defaulting to 0 wrote computed_at=0 into `scores`, which the
+  // API then reported as the freshness stamp — running the ops recompute command
+  // made every response look like it was computed at the epoch.
+  const asOfArg = arg("--as-of");
+  const asOf = asOfArg != null ? Number(asOfArg) : Math.floor(Date.now() / 1000);
   const result = recompute(db, asOf);
 
   if (process.argv.includes("--json")) {

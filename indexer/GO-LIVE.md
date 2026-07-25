@@ -101,7 +101,24 @@ single account observes every USDC movement.
 - [ ] Decide whether existing internal wallets stay excluded (they should)
 - [ ] Publish the rules page before the API is public
 
-## 7. Operational
+## 7. Purge Phase 2b test rows
+
+Acceptance testing wrote real rows into the live DB via the API. They must go
+before any public board is served.
+
+```sql
+-- test referrer / referee (deterministic keys from Buffer.alloc(32,'A'|'B'))
+DELETE FROM referrals      WHERE referrer_wallet = 'FnDw11RnMuVPfRYeo2h9aGj8siN4iWJTz5UwdLtKcfA4';
+DELETE FROM referral_codes WHERE wallet         = 'FnDw11RnMuVPfRYeo2h9aGj8siN4iWJTz5UwdLtKcfA4';
+DELETE FROM social_posts   WHERE tweet_id       = '2080003991203725576';
+DELETE FROM wallet_handles WHERE x_handle       = '_thekhay';
+DELETE FROM bounty_submissions WHERE kind = 'bug' AND proof_url LIKE '%/issues/1';
+```
+
+- [ ] Run the above, then `node dist/scripts/recompute.js`
+- [ ] Confirm the referrals and social boards are empty again
+
+## 8. Operational
 
 - [ ] Raise `MemoryMax` above 200M **or** confirm the streaming render keeps peak
       under it (Phase 2b Item 0 brought the peak down — re-measure after a month

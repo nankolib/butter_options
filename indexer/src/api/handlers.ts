@@ -80,19 +80,26 @@ export function getLeaderboard(db: DB, board: string, limit: number): ApiRespons
       )
       .all(n);
   } else if (board === "referrals") {
+    // NOT-internal, rather than "present in `wallets` and flagged external".
+    // Referring people is itself campaign activity, so a referrer who has not
+    // traded yet has no `wallets` row — an IN(...external) filter would hide
+    // exactly the people this board exists to rank.
     rows = db
       .prepare(
         `SELECT r.referrer_wallet AS wallet, COUNT(*) AS referees
          FROM referrals r
-         WHERE r.referrer_wallet IN (SELECT pubkey FROM wallets WHERE is_internal = 0)
+         WHERE r.referrer_wallet NOT IN (SELECT pubkey FROM wallets WHERE is_internal = 1)
          GROUP BY r.referrer_wallet ORDER BY referees DESC, wallet ASC LIMIT ?`,
       )
       .all(n);
   } else {
+    // Same reasoning, plus: this board previously had NO internal filter at all.
     rows = db
       .prepare(
         `SELECT wallet, COUNT(*) AS posts, COALESCE(SUM(points), 0) AS points
-         FROM social_posts WHERE verified_at IS NOT NULL
+         FROM social_posts
+         WHERE verified_at IS NOT NULL
+           AND wallet NOT IN (SELECT pubkey FROM wallets WHERE is_internal = 1)
          GROUP BY wallet ORDER BY points DESC, wallet ASC LIMIT ?`,
       )
       .all(n);
@@ -110,7 +117,15 @@ export function getWallet(db: DB, pubkey: string): ApiResponse {
   const w = db.prepare("SELECT pubkey, is_internal, label, first_seen, last_seen FROM wallets WHERE pubkey = ?").get(pubkey) as
     | { pubkey: string; is_internal: number; label: string | null; first_seen: number | null; last_seen: number | null }
     | undefined;
-  if (!w) return err(404, "unknown_wallet");
+  // A wallet can exist to the campaign without ever touching the tape — it may
+  // have bound a referral or verified a post but not yet traded. 404 only when
+  // it is genuinely unknown EVERYWHERE.
+  const knownOffTape =
+    db.prepare("SELECT 1 FROM referrals WHERE referee_wallet = ? OR referrer_wallet = ? LIMIT 1").get(pubkey, pubkey) ??
+    db.prepare("SELECT 1 FROM social_posts WHERE wallet = ? LIMIT 1").get(pubkey) ??
+    db.prepare("SELECT 1 FROM referral_codes WHERE wallet = ? LIMIT 1").get(pubkey) ??
+    db.prepare("SELECT 1 FROM bounty_submissions WHERE wallet = ? LIMIT 1").get(pubkey);
+  if (!w && !knownOffTape) return err(404, "unknown_wallet");
 
   const m = db.prepare("SELECT * FROM wallet_metrics WHERE wallet = ?").get(pubkey) as Record<string, unknown> | undefined;
   const s = db.prepare("SELECT points, points_capped, breakdown_json FROM scores WHERE wallet = ?").get(pubkey) as
@@ -140,10 +155,11 @@ export function getWallet(db: DB, pubkey: string): ApiResponse {
   return ok({
     computed_at: computedAt(db),
     wallet: pubkey,
-    is_internal: w.is_internal === 1,
-    label: w.label,
-    first_seen: w.first_seen,
-    last_seen: w.last_seen,
+    is_internal: w?.is_internal === 1,
+    label: w?.label ?? null,
+    first_seen: w?.first_seen ?? null,
+    last_seen: w?.last_seen ?? null,
+    on_tape: !!w,
     points: {
       base: s?.points_capped ?? 0,
       base_raw: s?.points ?? 0,

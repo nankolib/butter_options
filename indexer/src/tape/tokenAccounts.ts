@@ -9,6 +9,13 @@
 // Classic SPL Token account layout: mint(0..32) owner(32..64) amount(64..72).
 // =============================================================================
 
+/**
+ * Exact size of an SPL Token account. Token-2022 accounts are this plus
+ * extension bytes, so `>=` is the correct test. An SPL Mint is 82 bytes and is
+ * therefore rejected — which is the whole point (see the guard below).
+ */
+export const TOKEN_ACCOUNT_LEN = 165;
+
 import bs58 from "bs58";
 
 import type { DB } from "../db";
@@ -68,9 +75,19 @@ export class TokenAccountResolver {
         const info = infos[j];
         if (!info?.data?.[0]) continue;
         const buf = Buffer.from(info.data[0], "base64");
-        if (buf.length < 72) continue; // not a token account
+        // MUST be >= TOKEN_ACCOUNT_LEN, not 72.
+        //
+        // An SPL *Mint* is 82 bytes, so a `< 72` guard let mints through and
+        // parsed them as accounts: mint = bytes[0..32], owner = bytes[32..64],
+        // both garbage. That is how the wrapped-SOL mint ended up in
+        // wallet_metrics and on the profit board with a $10,000 faucet balance.
+        // A token account is EXACTLY 165 bytes (Token-2022 adds extensions on
+        // top), which no mint can satisfy.
+        if (buf.length < TOKEN_ACCOUNT_LEN) continue;
         const mint = bs58.encode(buf.subarray(0, 32));
         const owner = bs58.encode(buf.subarray(32, 64));
+        // A token account never owns itself and never has itself as its mint.
+        if (owner === chunk[j] || mint === chunk[j]) continue;
         this.cache.set(chunk[j], { owner, mint });
         rows.push([chunk[j], owner, mint]);
       }

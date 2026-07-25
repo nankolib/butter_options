@@ -92,6 +92,40 @@ function migrateV2toV3(db: DB): void {
   log.info("migration v2->v3 complete — referral tables reshaped, tape untouched");
 }
 
+/**
+ * v3 -> v4. Purges POISONED provenance and re-walks it.
+ *
+ * The v2/v3 token-account resolver guarded on `buf.length < 72`, but an SPL Mint
+ * is 82 bytes, so mints were parsed as token accounts with garbage owner/mint
+ * fields. The wrapped-SOL mint consequently appeared in wallet_metrics — on the
+ * PROFIT BOARD — holding a $10,000 faucet balance.
+ *
+ * token_accounts is a pure cache and faucet_claims / capital_flows are derived
+ * from a mere 45 faucet signatures plus ~15 ATA cursors, so the honest fix is to
+ * drop all of it and let the corrected parser rebuild it on the next capital
+ * tick. Cheap, bounded, and provably free of the bad rows — as opposed to trying
+ * to identify which cached entries were misparsed.
+ *
+ * The main TAPE (txs/events) is untouched: it never used this resolver.
+ */
+function migrateV3toV4(db: DB): void {
+  const before = db.prepare("SELECT COUNT(*) AS n FROM token_accounts").get() as { n: number };
+  const claims = db.prepare("SELECT COUNT(*) AS n FROM faucet_claims").get() as { n: number };
+  db.transaction(() => {
+    db.exec("DELETE FROM token_accounts");
+    db.exec("DELETE FROM faucet_claims");
+    db.exec("DELETE FROM capital_flows");
+    db.exec("DELETE FROM ata_cursors");
+    db.exec("DELETE FROM wallet_metrics");
+    db.prepare("DELETE FROM meta WHERE key = 'faucet_cursor_sig'").run();
+    db.prepare("UPDATE meta SET value = '4' WHERE key = 'schema_version'").run();
+  })();
+  log.info("migration v3->v4 complete — provenance purged, will re-walk with the fixed parser", {
+    tokenAccountsDropped: before.n,
+    faucetClaimsDropped: claims.n,
+  });
+}
+
 export function migrate(db: DB): void {
   let v = currentVersion(db);
   if (v === 0) {
@@ -108,6 +142,10 @@ export function migrate(db: DB): void {
   if (v === 2) {
     migrateV2toV3(db);
     v = 3;
+  }
+  if (v === 3) {
+    migrateV3toV4(db);
+    v = 4;
   }
   if (v !== SCHEMA_VERSION) {
     throw new Error(

@@ -52,7 +52,10 @@ export type Board = "profit" | "volume" | "writer" | "referrals" | "social";
 export function getLeaderboard(db: DB, board: string, limit: number): ApiResponse {
   const boards: Board[] = ["profit", "volume", "writer", "referrals", "social"];
   if (!boards.includes(board as Board)) return err(400, "unknown_board", { valid: boards });
-  const n = Math.min(Math.max(1, limit || 50), 200);
+  // `limit || 50` treats -5 as truthy and clamps it to 1, silently returning a
+  // single row for a nonsense input. Anything non-positive falls back to the
+  // default instead.
+  const n = Number.isFinite(limit) && limit > 0 ? Math.min(Math.trunc(limit), 200) : 50;
 
   let rows: unknown[] = [];
   if (board === "profit") {

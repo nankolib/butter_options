@@ -92,6 +92,32 @@ export interface RecomputeResult extends ScoreResult {
 
 const round4 = (n: number) => Math.round(n * 1e4) / 1e4;
 
+/**
+ * Pubkeys that are PROGRAM OR TOKEN ACCOUNTS, never people.
+ *
+ * Bug B (Phase 2c pre-work): wallet_metrics is built from the union of PnL
+ * wallets and provenance wallets, so anything that leaked into either — a vault
+ * PDA, an option mint, a token account, the USDC mint itself — became a "wallet"
+ * with metrics, and profit_eligible could be set on it. The board query happened
+ * to filter most of them out via `wallets`, but the underlying table was wrong
+ * and the UI reads that table.
+ *
+ * This is the same shape as the Phase 1 vault-PDA fix, generalised: derive the
+ * exclusion from what the data ITSELF says is not a wallet, rather than
+ * enumerating special cases.
+ */
+function programAccountSet(db: DB): Set<string> {
+  const out = new Set<string>();
+  const add = (rows: { v: string | null }[]) => {
+    for (const r of rows) if (r.v) out.add(r.v);
+  };
+  add(db.prepare("SELECT DISTINCT vault AS v FROM events WHERE vault IS NOT NULL").all() as { v: string }[]);
+  add(db.prepare("SELECT DISTINCT option_mint AS v FROM events WHERE option_mint IS NOT NULL").all() as { v: string }[]);
+  add(db.prepare("SELECT DISTINCT mint AS v FROM token_accounts").all() as { v: string }[]);
+  add(db.prepare("SELECT DISTINCT ata AS v FROM token_accounts").all() as { v: string }[]);
+  return out;
+}
+
 /** Mirrors OPTA_SOCIAL_MAX_PER_DAY; the evaluator re-applies it independently. */
 const SOCIAL_MAX_PER_DAY = Number(process.env.OPTA_SOCIAL_MAX_PER_DAY ?? 3);
 
@@ -163,8 +189,12 @@ export function recompute(db: DB, asOf: number, cfg: RulesConfig = DEFAULT_RULES
   }
 
   // ==== Phase 2a layers, all pure functions over the tape =================
-  const walletRows = (db.prepare("SELECT pubkey FROM wallets").all() as { pubkey: string }[]).map((r) => r.pubkey);
-  const flows = db.prepare("SELECT wallet, direction, source, amount_usdc FROM capital_flows").all() as FlowRow[];
+  const notAWallet = programAccountSet(db);
+  const walletRows = (db.prepare("SELECT pubkey FROM wallets").all() as { pubkey: string }[])
+    .map((r) => r.pubkey)
+    .filter((w) => !notAWallet.has(w));
+  const flows = (db.prepare("SELECT wallet, direction, source, amount_usdc FROM capital_flows").all() as FlowRow[])
+    .filter((f) => !notAWallet.has(f.wallet));
   const provenance = computeProvenance(flows, walletRows);
 
   const pnl = computePnl(tape);
@@ -347,7 +377,11 @@ function persistProjections(
     db.exec("DELETE FROM streak_state");
     db.exec("DELETE FROM shield_events");
 
-    const wallets = new Set([...d.pnl.byWallet.keys(), ...d.provenance.keys()]);
+    // Bug B: never persist metrics for a program/token account.
+    const notAWallet = programAccountSet(db);
+    const wallets = new Set(
+      [...d.pnl.byWallet.keys(), ...d.provenance.keys()].filter((w) => !notAWallet.has(w)),
+    );
     for (const w of [...wallets].sort()) {
       const f = d.pnl.byWallet.get(w);
       const p = d.provenance.get(w);

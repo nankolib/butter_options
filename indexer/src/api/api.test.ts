@@ -316,7 +316,7 @@ test("reads: every endpoint answers against a fixture DB", () => {
 
   const s = getStats(db);
   assert.equal(s.status, 200);
-  assert.equal((s.body as { schema_version: number }).schema_version, 3);
+  assert.equal((s.body as { schema_version: number }).schema_version, 4);
 
   db.close();
   fs.rmSync(dir, { recursive: true, force: true });

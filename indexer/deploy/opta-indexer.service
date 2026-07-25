@@ -1,0 +1,38 @@
+# Installed to /etc/systemd/system/opta-indexer.service on the VPS.
+# Code lives in the opta-crank checkout (/opt/opta-crank/indexer), state and
+# secrets live in /opt/opta-indexer — the same split opta-writer uses.
+#
+# MemoryMax=200M (D5): the backfill holds larger transient batches than steady
+# state, so a hard 150M cap risks an OOM kill mid-walk. The ACCEPTANCE target is
+# steady-state RSS < 150M, measured post-backfill.
+[Unit]
+Description=Opta indexer — tape + points engine (SHADOW MODE, nothing user-visible)
+Documentation=https://github.com/nankolib/opta
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=opta
+Group=opta
+WorkingDirectory=/opt/opta-crank/indexer
+EnvironmentFile=/opt/opta-indexer/.env
+ExecStart=/usr/bin/node dist/src/main.js
+
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=120
+MemoryMax=200M
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=opta-indexer
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/opta-indexer
+
+[Install]
+WantedBy=multi-user.target

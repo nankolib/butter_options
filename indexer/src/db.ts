@@ -1,0 +1,115 @@
+// =============================================================================
+// db.ts — better-sqlite3 open + migrations + prepared statements
+// =============================================================================
+// In-process SQLite, WAL mode (the opta-tweet house pattern — its data.db-wal
+// is live on the box). Single process, single writer, no server.
+// =============================================================================
+
+import Database from "better-sqlite3";
+import * as fs from "node:fs";
+import * as path from "node:path";
+
+import { SCHEMA_SQL, SCHEMA_VERSION } from "./schema";
+
+export type DB = Database.Database;
+
+export interface EventRow {
+  id: string;
+  sig: string;
+  ordinal: number;
+  ix_index: number | null;
+  source: "log" | "ix";
+  name: string;
+  wallet: string | null;
+  counterparty: string | null;
+  vault: string | null;
+  option_mint: string | null;
+  kind: number | null;
+  amount_usdc: number | null;
+  quantity: number | null;
+  fields_json: string;
+  block_time: number | null;
+}
+
+export interface TxRow {
+  sig: string;
+  slot: number;
+  block_time: number | null;
+  ok: number;
+  truncated: number;
+}
+
+export function openDb(dbPath: string): DB {
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+  const db = new Database(dbPath);
+  db.pragma("journal_mode = WAL");
+  db.pragma("synchronous = NORMAL");
+  db.exec(SCHEMA_SQL);
+
+  const existing = getMeta(db, "schema_version");
+  if (existing == null) {
+    setMeta(db, "schema_version", String(SCHEMA_VERSION));
+  } else if (Number(existing) !== SCHEMA_VERSION) {
+    throw new Error(
+      `Schema version mismatch: db=${existing} code=${SCHEMA_VERSION}. ` +
+        `Migrate explicitly — the tape must never be silently reshaped.`,
+    );
+  }
+  return db;
+}
+
+export function getMeta(db: DB, key: string): string | null {
+  const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(key) as { value: string } | undefined;
+  return row?.value ?? null;
+}
+
+export function setMeta(db: DB, key: string, value: string): void {
+  db.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(
+    key,
+    value,
+  );
+}
+
+/**
+ * Persist one transaction and its extracted events atomically.
+ *
+ * INSERT OR IGNORE on both tables: `txs.sig` and `events.id` are deterministic,
+ * so re-indexing the same signature is a no-op. This is what makes a mid-backfill
+ * kill safe (acceptance criterion: restart resumes, zero dupes).
+ */
+export function makeWriter(db: DB) {
+  const insTx = db.prepare(
+    `INSERT OR IGNORE INTO txs (sig, slot, block_time, ok, truncated, indexed_at)
+     VALUES (@sig, @slot, @block_time, @ok, @truncated, @indexed_at)`,
+  );
+  const insEvt = db.prepare(
+    `INSERT OR IGNORE INTO events
+       (id, sig, ordinal, ix_index, source, name, wallet, counterparty, vault,
+        option_mint, kind, amount_usdc, quantity, fields_json, block_time)
+     VALUES
+       (@id, @sig, @ordinal, @ix_index, @source, @name, @wallet, @counterparty, @vault,
+        @option_mint, @kind, @amount_usdc, @quantity, @fields_json, @block_time)`,
+  );
+
+  const run = db.transaction((tx: TxRow, events: EventRow[]) => {
+    insTx.run({ ...tx, indexed_at: Math.floor(Date.now() / 1000) });
+    for (const e of events) insEvt.run(e);
+  });
+
+  return (tx: TxRow, events: EventRow[]) => run(tx, events);
+}
+
+export function txCount(db: DB): number {
+  return (db.prepare("SELECT COUNT(*) AS n FROM txs").get() as { n: number }).n;
+}
+
+export function eventCount(db: DB): number {
+  return (db.prepare("SELECT COUNT(*) AS n FROM events").get() as { n: number }).n;
+}
+
+export function loadTape(db: DB): EventRow[] {
+  // Deterministic order — the SCORE layer depends on it for reproducibility.
+  return db
+    .prepare("SELECT * FROM events ORDER BY block_time ASC, id ASC")
+    .all() as EventRow[];
+}

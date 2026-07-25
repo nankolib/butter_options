@@ -1,0 +1,10 @@
+node_modules/
+dist/
+idl/
+*.log
+*.db
+*.db-wal
+*.db-shm
+shadow.md
+.env
+_probe_*.js

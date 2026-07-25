@@ -112,14 +112,34 @@ export async function refreshMarkets(db: DB, rpc: RpcClient, programId: string):
   );
   const now = Math.floor(Date.now() / 1000);
   let n = 0;
+  const rejectedBySize: Record<number, number> = {};
   db.transaction(() => {
     for (const a of accounts) {
-      const parsed = parseMarket(Buffer.from(a.account.data[0], "base64"));
-      if (!parsed) continue;
+      const buf = Buffer.from(a.account.data[0], "base64");
+      const parsed = parseMarket(buf);
+      if (!parsed) {
+        rejectedBySize[buf.length] = (rejectedBySize[buf.length] ?? 0) + 1;
+        continue;
+      }
       ins.run(a.pubkey, parsed.assetName, parsed.assetClass, now);
       n += 1;
     }
   })();
-  log.info("markets refreshed", { markets: n });
+
+  const rejected = accounts.length - n;
+  // NEVER SILENT. Most OptionsMarket accounts on devnet are LEGACY layouts from
+  // before strike_price/expiry moved to SharedVault: they share the account
+  // discriminator but have a different field order, so the current-layout parser
+  // correctly refuses them (old layouts decode as garbage — see the repo's
+  // account size-drift history). Rejecting is right; hiding it is not. Every
+  // rejected market is one whose mints cannot resolve an underlying, which
+  // narrows quest W3 coverage.
+  log.info("markets refreshed", {
+    fetched: accounts.length,
+    parsed: n,
+    rejectedLegacyLayout: rejected,
+    rejectedBySize,
+    note: rejected > 0 ? "W3 underlying resolution covers parsed markets only" : undefined,
+  });
   return n;
 }

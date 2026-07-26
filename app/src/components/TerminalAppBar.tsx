@@ -3,6 +3,7 @@ import { NavLink } from "react-router-dom";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { FaucetIconButton } from "./FaucetIconButton";
+import { PointsChip } from "./PointsChip";
 
 /**
  * TerminalAppBar — the shared dark-default terminal chrome for the trading app.
@@ -51,6 +52,10 @@ export const TerminalAppBar: FC<{
       <div className="ml-auto flex items-center gap-[10px] md:ml-0">
         <FaucetIconButton kind="sol" />
         <FaucetIconButton kind="usdc" />
+        {/* EPOCH 0 chip. Self-returns null when the flag is off, no wallet is
+            connected, the API is down, or points are zero — so the bar's flex
+            layout is untouched in every off state. */}
+        <PointsChip />
         <span className="hidden items-center rounded-[4px] border border-l-faint px-[7px] py-[3px] font-mono-plex text-[10px] tracking-[0.14em] text-l-muted sm:inline-flex">
           DEVNET
         </span>

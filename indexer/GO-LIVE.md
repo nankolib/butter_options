@@ -70,11 +70,14 @@ the VPS).
 
 ## 4. Provenance completeness — gates the profit board
 
-- [ ] Confirm `atasPolled` has stopped climbing (it was 5 → 10 → 15 while the
-      token-account cache filled). A wallet whose external inflows were never
-      polled looks 100% faucet-funded and would **wrongly qualify** for the
-      profit board.
-- [ ] Confirm `atasSkippedOverCap = 0` in the `capital tick` log.
+- [x] **DONE 2026-07-26.** `atasPolled` plateaued at **15 for 12 consecutive
+      ticks** (~2h). Coverage is understood, not merely flat: eligible 28,
+      polled 15, unpolled 13 — and **all 13 unpolled have no known USDC ATA
+      because they never claimed from the faucet**, so `faucet_in = 0` and they
+      are already profit-ineligible ("no faucet claim on record"). Zero unpolled
+      wallets are classified not-a-wallet; zero unpolled for any other reason.
+      The gap therefore cannot wrongly qualify anyone.
+- [x] **DONE 2026-07-26.** `atasSkippedOverCap = 0` in every `capital tick`.
 - [ ] Accept or fix: faucet history starts **2026-07-04**, three days after the
       trade tape, so wallets funded before then show `faucet_in = 0` and are
       correctly excluded. Fine for a fresh campaign; state it publicly if any

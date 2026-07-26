@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { Suspense, lazy, useEffect, useRef } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { useWallet } from "@solana/wallet-adapter-react";
 import posthog from "posthog-js";
@@ -14,6 +14,15 @@ import { DocsLayout, DocsIndex, DocsSection } from "./pages/docs";
 import { Privacy } from "./pages/Privacy";
 import { Support } from "./pages/Support";
 import { Terms } from "./pages/Terms";
+import { EPOCH0_UI } from "./utils/epoch0";
+
+/**
+ * EPOCH 0 campaign surface — flag-gated (VITE_EPOCH0_UI, default OFF).
+ * `lazy` keeps it out of the entry chunk, and the <Route> below is never
+ * created when the flag is off, so /leaderboard falls through exactly as it
+ * does today. A production deploy with the flag unset is unchanged.
+ */
+const LeaderboardPage = lazy(() => import("./pages/leaderboard"));
 
 /**
  * Routes that hide the persistent global Header.
@@ -85,6 +94,16 @@ function AppShell() {
         <Route path="/marketplace" element={<Navigate replace to="/trade" />} />
         <Route path="/write" element={<Write />} />
         <Route path="/portfolio" element={<PortfolioPage />} />
+        {EPOCH0_UI && (
+          <Route
+            path="/leaderboard"
+            element={
+              <Suspense fallback={null}>
+                <LeaderboardPage />
+              </Suspense>
+            }
+          />
+        )}
         <Route path="/privacy" element={<Privacy />} />
         <Route path="/support" element={<Support />} />
         <Route path="/terms" element={<Terms />} />

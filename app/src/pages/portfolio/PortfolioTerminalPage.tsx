@@ -25,6 +25,9 @@ import { useActivity } from "./terminal/portfolioActivity";
 import { useSectionCollapse } from "./terminal/useSectionCollapse";
 import { buildAssetRollup } from "./terminal/assetRollup";
 import { SummaryStrip } from "./terminal/SummaryStrip";
+// EPOCH 0 campaign panel. Self-returns null when VITE_EPOCH0_UI is off, so this
+// import is inert in production until the flag flips.
+import { QuestPanel } from "./QuestPanel";
 import { ByAssetSection } from "./terminal/ByAssetSection";
 import { HoldingsLedger } from "./terminal/HoldingsLedger";
 import { WrittenLedger } from "./terminal/WrittenLedger";
@@ -148,6 +151,9 @@ export const PortfolioTerminalPage: FC = () => {
                 progress={claim.progress}
                 onClaimAll={claim.claimAll}
               />
+
+              {/* Approved placement: below the summary band, above positions. */}
+              <QuestPanel />
 
               <ByAssetSection
                 rows={assetRows}

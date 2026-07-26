@@ -28,36 +28,44 @@
 
 use anchor_lang::prelude::*;
 
-/// What the trigger does when it fires. v1 routes BOTH through the vault as the
-/// always-on counterparty (never the book, which has no guaranteed liquidity):
+/// What the trigger does when it fires.
 ///
 /// **Variant order is load-bearing** — the Borsh discriminator is a single byte
-/// encoding the variant index (StopEntryBuy = 0, TakeProfitSell = 1). Append
-/// new variants only; never reorder.
+/// encoding the variant index (StopEntryBuy = 0, TakeProfitSell = 1,
+/// StopLossSell = 2). Append new variants only; never reorder.
 ///
-/// NOTE: exactly two variants. There is NO StopLossSell — a true stop-loss must
-/// sell an OTM long, which the vault cannot buy back (it only pays capped
-/// intrinsic, and exercise reverts OTM). Real stop-loss needs the book path and
-/// is deferred to a later phase.
+/// Phase B routes fires through the BOOK (per-ask WriterAsk escrows + Bids),
+/// where the live liquidity now sits — the pooled-vault peg/exercise paths are
+/// structurally dead (≈zero pooled collateral board-wide). StopLossSell is the
+/// variant added here (B0): a true stop-loss sells an OTM long, which the vault
+/// cannot buy back (exercise reverts OTM), so it can ONLY route to the book bid
+/// side. It is appended now (migration-free: 0 live TriggerOrders) and stays
+/// DARK until B2 wires the sell path to `bid_fill_core`.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace, Debug)]
 pub enum TriggerKind {
-    /// Stop-entry buy: when the underlying crosses the threshold, fill the vault
-    /// peg (vault mints contracts to the owner). USDC is escrowed at placement.
+    /// Stop-entry buy: when the underlying crosses the threshold, take-buy the
+    /// book ask side (B1) — v1 filled the vault peg. USDC is escrowed at placement.
     StopEntryBuy,
-    /// Take-profit sell: when the underlying crosses the threshold, exercise the
-    /// owner's long (vault pays capped intrinsic, delegate-burn at fire). The
-    /// long stays liquid until the trigger hits — nothing is escrowed.
+    /// Take-profit sell: when the underlying crosses the threshold, sell the
+    /// owner's ITM long. v1 exercised against the vault (capped intrinsic,
+    /// delegate-burn); B2 routes it to the book bid side. Nothing is escrowed.
     TakeProfitSell,
+    /// Stop-loss sell: when the underlying crosses the threshold, sell the
+    /// owner's long into the book bid side (B2) — no vault path exists (an OTM
+    /// long can't be exercised). Delegate-transfers at fire; nothing is escrowed.
+    /// DARK until B2.
+    StopLossSell,
 }
 
 impl TriggerKind {
-    /// Stable u8 encoding for events (StopEntryBuy = 0, TakeProfitSell = 1),
-    /// matching the Borsh discriminator and the house convention of emitting
-    /// enum fields as u8 (see events.rs / OrderKind::as_u8).
+    /// Stable u8 encoding for events (StopEntryBuy = 0, TakeProfitSell = 1,
+    /// StopLossSell = 2), matching the Borsh discriminator and the house
+    /// convention of emitting enum fields as u8 (see events.rs / OrderKind::as_u8).
     pub fn as_u8(self) -> u8 {
         match self {
             TriggerKind::StopEntryBuy => 0,
             TriggerKind::TakeProfitSell => 1,
+            TriggerKind::StopLossSell => 2,
         }
     }
 }
@@ -137,6 +145,18 @@ pub struct TriggerOrder {
 
     /// PDA bump seed.
     pub bump: u8,
+
+    /// OCO (one-cancels-other) link → the paired trigger's PDA, or None for a
+    /// standalone trigger. Appended in B0 while the layout is migration-free
+    /// (0 live TriggerOrders); wired in B3. `Option<Pubkey>` adds 1 + 32 = 33
+    /// bytes to INIT_SPACE (204 → 237).
+    ///
+    /// B3 SEMANTICS (noted now, implemented in B3): when a trigger fires,
+    /// execute_trigger MUST also decrement the linked leg's `quantity` by the
+    /// fired amount in the SAME tx and close it at 0 — so a single atomic fire
+    /// can never gap through both legs. A partial fire decrements both; only a
+    /// fill that zeros a leg closes it (and its paired leg).
+    pub oco_link: Option<Pubkey>,
 }
 
 /// Seed prefix for TriggerOrder PDAs: ["trigger_order", owner, option_mint, nonce_le].
@@ -155,7 +175,12 @@ mod tests {
     // discriminators. A reorder would silently retag every placed trigger.
     #[test]
     fn trigger_kind_discriminators_are_stable() {
-        for (kind, idx) in [(TriggerKind::StopEntryBuy, 0u8), (TriggerKind::TakeProfitSell, 1u8)] {
+        // Existing kinds' stored bytes are UNCHANGED by the StopLossSell append.
+        for (kind, idx) in [
+            (TriggerKind::StopEntryBuy, 0u8),
+            (TriggerKind::TakeProfitSell, 1u8),
+            (TriggerKind::StopLossSell, 2u8),
+        ] {
             assert_eq!(kind.as_u8(), idx, "{:?} as_u8 must be {}", kind, idx);
             let mut buf = vec![];
             kind.serialize(&mut buf).unwrap();
@@ -174,9 +199,10 @@ mod tests {
     }
 
     // Pins the InitSpace-computed size so an accidental field add/reorder is a
-    // loud test failure (the spec quotes 204 = 8-disc-excluded body).
+    // loud test failure. B0 added `oco_link: Option<Pubkey>` = 1 + 32 = 33 bytes:
+    // 204 → 237 (8-disc-excluded body; full account = 8 + 237 = 245).
     #[test]
-    fn trigger_order_init_space_is_204() {
-        assert_eq!(TriggerOrder::INIT_SPACE, 204);
+    fn trigger_order_init_space_is_237() {
+        assert_eq!(TriggerOrder::INIT_SPACE, 237);
     }
 }

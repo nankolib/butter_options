@@ -457,4 +457,10 @@ pub enum OptaError {
     // American premiums for the ~7-day warmup. Error code 6078.
     #[msg("seed_vol out of bounds — must be 0 (no seed) or within [MIN_SEED_VOL, MAX_SEED_VOL]")]
     SeedVolOutOfBounds,
+
+    // B0: StopLossSell is appended to TriggerKind but its book fire path is DARK
+    // until B2. execute_trigger rejects it defensively (no vault path exists for
+    // an OTM sell). Append-only — error code 6079.
+    #[msg("StopLossSell trigger is not yet enabled (dark until the book sell path lands in B2)")]
+    StopLossSellDark,
 }

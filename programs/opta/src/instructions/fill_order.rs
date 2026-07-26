@@ -38,6 +38,104 @@ use crate::events::OrderFilled;
 use crate::state::*;
 use super::initialize_protocol::TREASURY_SEED;
 
+/// Extracted book **bid-fill** economics (the `OrderKind::Bid` arm below). Shared
+/// by two callers via the Phase-4 authority fork:
+///
+///   - DIRECT taker sell (`fill_order`): the taker owns the option tokens and
+///     signs the delivery → `option_delegate_bump = None` (`invoke_transfer_checked`
+///     with empty seeds, taker is a real tx signer).
+///   - SELL-TRIGGER fire (`execute_trigger`, DARK until B2): the keeper — not the
+///     owner — fires, so the option is pulled from the owner's ATA by the protocol
+///     `PermanentDelegate` → `option_delegate_bump = Some(protocol_bump)`
+///     (`invoke_signed` [PROTOCOL_SEED, bump]). Same delegate wiring as
+///     `american_exercise_core`'s burn.
+///
+/// The USDC legs (bid escrow → recipient, fee → treasury) are protocol-PDA-signed
+/// in BOTH paths. The `usdc_recipient` differs (taker vs trigger owner). On the
+/// `None` path this is byte-identical to the pre-extraction inline arm — the
+/// direct-fill suites are the regression gate.
+#[allow(clippy::too_many_arguments)]
+pub fn bid_fill_core<'info>(
+    option_src: &AccountInfo<'info>,
+    option_mint: &AccountInfo<'info>,
+    maker_option_account: &AccountInfo<'info>,
+    option_authority: &AccountInfo<'info>,
+    option_delegate_bump: Option<u8>,
+    hook_extra_metas: &AccountInfo<'info>,
+    hook_program: &AccountInfo<'info>,
+    hook_state: &AccountInfo<'info>,
+    escrow: &AccountInfo<'info>,
+    usdc_recipient: &AccountInfo<'info>,
+    treasury: &AccountInfo<'info>,
+    protocol_state: &AccountInfo<'info>,
+    protocol_bump: u8,
+    token_program: &AccountInfo<'info>,
+    token_2022_program: &AccountInfo<'info>,
+    fill_quantity: u64,
+    counterparty_share: u64,
+    fee: u64,
+) -> Result<()> {
+    let token_2022_key = token_2022_program.key();
+    let protocol_seeds: &[&[u8]] = &[PROTOCOL_SEED, &[protocol_bump]];
+    let protocol_signer: &[&[&[u8]]] = &[protocol_seeds];
+
+    // Option delivery: src → maker (bidder). Authority fork (None=taker signs;
+    // Some=protocol PermanentDelegate invoke_signed). The delegate seeds are the
+    // protocol PDA seeds — identical to `protocol_signer` since the delegate IS
+    // protocol_state.
+    let option_signer: &[&[&[u8]]] = if option_delegate_bump.is_some() {
+        protocol_signer
+    } else {
+        &[]
+    };
+    spl_token_2022::onchain::invoke_transfer_checked(
+        &token_2022_key,
+        option_src.clone(),
+        option_mint.clone(),
+        maker_option_account.clone(),
+        option_authority.clone(),
+        &[
+            hook_extra_metas.clone(),
+            hook_program.clone(),
+            hook_state.clone(),
+        ],
+        fill_quantity,
+        0,
+        option_signer,
+    )?;
+
+    // Escrow USDC → recipient (minus fee), fee → treasury. Protocol signs.
+    if counterparty_share > 0 {
+        token::transfer(
+            CpiContext::new_with_signer(
+                token_program.clone(),
+                Transfer {
+                    from: escrow.clone(),
+                    to: usdc_recipient.clone(),
+                    authority: protocol_state.clone(),
+                },
+                protocol_signer,
+            ),
+            counterparty_share,
+        )?;
+    }
+    if fee > 0 {
+        token::transfer(
+            CpiContext::new_with_signer(
+                token_program.clone(),
+                Transfer {
+                    from: escrow.clone(),
+                    to: treasury.clone(),
+                    authority: protocol_state.clone(),
+                },
+                protocol_signer,
+            ),
+            fee,
+        )?;
+    }
+    Ok(())
+}
+
 pub fn handle_fill_order(ctx: Context<FillOrder>, fill_quantity: u64) -> Result<()> {
     let clock = Clock::get()?;
 
@@ -168,51 +266,30 @@ pub fn handle_fill_order(ctx: Context<FillOrder>, fill_quantity: u64) -> Result<
                     OptaError::MakerOptionAccountInvalid
                 );
             }
-            // Taker delivers option tokens → maker (bidder). Taker signs.
-            spl_token_2022::onchain::invoke_transfer_checked(
-                &token_2022_key,
-                ctx.accounts.taker_option_account.to_account_info(),
-                ctx.accounts.option_mint.to_account_info(),
-                ctx.accounts.maker_option_account.to_account_info(),
-                ctx.accounts.taker.to_account_info(),
-                &[
-                    ctx.accounts.extra_account_meta_list.to_account_info(),
-                    ctx.accounts.transfer_hook_program.to_account_info(),
-                    ctx.accounts.hook_state.to_account_info(),
-                ],
+            // Direct taker sell → the extracted core. The taker signs the option
+            // delivery (option_delegate_bump = None); USDC legs protocol-signed.
+            // Byte-identical to the prior inline arm (the None path).
+            let option_mint_ai = ctx.accounts.option_mint.to_account_info();
+            bid_fill_core(
+                &ctx.accounts.taker_option_account.to_account_info(),
+                &option_mint_ai,
+                &ctx.accounts.maker_option_account.to_account_info(),
+                &ctx.accounts.taker.to_account_info(),
+                None, // direct: the taker is a real tx signer
+                &ctx.accounts.extra_account_meta_list.to_account_info(),
+                &ctx.accounts.transfer_hook_program.to_account_info(),
+                &ctx.accounts.hook_state.to_account_info(),
+                &ctx.accounts.escrow.to_account_info(),
+                &ctx.accounts.taker_usdc_account.to_account_info(),
+                &ctx.accounts.treasury.to_account_info(),
+                &ctx.accounts.protocol_state.to_account_info(),
+                ctx.accounts.protocol_state.bump,
+                &ctx.accounts.token_program.to_account_info(),
+                &ctx.accounts.token_2022_program.to_account_info(),
                 fill_quantity,
-                0,
-                &[],
+                counterparty_share,
+                fee,
             )?;
-            // Escrow USDC → taker (minus fee), fee → treasury. Protocol signs.
-            if counterparty_share > 0 {
-                token::transfer(
-                    CpiContext::new_with_signer(
-                        ctx.accounts.token_program.to_account_info(),
-                        Transfer {
-                            from: ctx.accounts.escrow.to_account_info(),
-                            to: ctx.accounts.taker_usdc_account.to_account_info(),
-                            authority: ctx.accounts.protocol_state.to_account_info(),
-                        },
-                        protocol_signer,
-                    ),
-                    counterparty_share,
-                )?;
-            }
-            if fee > 0 {
-                token::transfer(
-                    CpiContext::new_with_signer(
-                        ctx.accounts.token_program.to_account_info(),
-                        Transfer {
-                            from: ctx.accounts.escrow.to_account_info(),
-                            to: ctx.accounts.treasury.to_account_info(),
-                            authority: ctx.accounts.protocol_state.to_account_info(),
-                        },
-                        protocol_signer,
-                    ),
-                    fee,
-                )?;
-            }
         }
         OrderKind::WriterAsk => return err!(OptaError::WriterAsksDisabled),
         // VaultPeg is never a resting order (post_order rejects it) — no stored

@@ -140,7 +140,11 @@ pub fn handle_place_trigger(
             (true, max_premium)
         }
         // -------------------------------------------------------------------
-        TriggerKind::TakeProfitSell => {
+        // StopLossSell shares placement semantics with TakeProfitSell (both are
+        // sells: no escrow, sanity-check the source ATA). StopLossSell's FIRE path
+        // is dark until B2 — execute_trigger rejects it — but staging is harmless
+        // and forward-compatible (B2 only wires the fire leg).
+        TriggerKind::TakeProfitSell | TriggerKind::StopLossSell => {
             // Keep the field honest: a sell escrows nothing, so reject a nonzero
             // ceiling and store 0.
             require!(max_premium == 0, OptaError::InvalidPremium);
@@ -194,6 +198,8 @@ pub fn handle_place_trigger(
     order.created_at = clock.unix_timestamp;
     order.nonce = nonce;
     order.bump = ctx.bumps.trigger_order;
+    // OCO is wired in B3; placements are standalone until then.
+    order.oco_link = None;
 
     emit!(TriggerPlaced {
         trigger_order: order.key(),

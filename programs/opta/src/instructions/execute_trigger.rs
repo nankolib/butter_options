@@ -349,6 +349,11 @@ pub fn handle_execute_trigger(ctx: Context<ExecuteTrigger>) -> Result<()> {
                 ts: clock.unix_timestamp,
             });
         }
+        // ---------------------------------------------------------------------
+        // B0: StopLossSell is appended to TriggerKind but its book bid-side fire
+        // path is DARK until B2 (there is no vault path — an OTM long can't be
+        // exercised). Reject defensively; B2 routes it to bid_fill_core.
+        TriggerKind::StopLossSell => return err!(OptaError::StopLossSellDark),
     }
 
     Ok(())

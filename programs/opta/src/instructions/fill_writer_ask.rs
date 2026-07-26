@@ -34,6 +34,182 @@ use crate::feature_flags::{AMERICAN_ENABLED, WRITER_ASKS_ENABLED};
 use crate::state::*;
 use super::initialize_protocol::TREASURY_SEED;
 
+/// Result of a writer-ask fill (premium/fee split + collateral moved).
+pub struct WriterAskFillResult {
+    pub total: u64,
+    pub fee: u64,
+    pub counterparty_share: u64,
+    pub collateral_moved: u64,
+}
+
+/// Extracted book **writer-ask (primary) fill** economics — the premium/fee
+/// split, the mint-on-fill, the per-order-escrow → pot debit, and the pot +
+/// position bookkeeping. Shared by two callers via the Phase-4 authority fork on
+/// the USDC PREMIUM legs:
+///
+///   - DIRECT taker buy (`fill_writer_ask`): premium USDC comes from the taker's
+///     account, taker signs → `usdc_payer_bump = None` (`CpiContext::new`). Mint
+///     destination = the taker's option ATA.
+///   - BUY-TRIGGER fire (`execute_trigger`, DARK until B1): the keeper fires, so
+///     premium USDC comes from the trigger's per-order USDC escrow (owner =
+///     protocol_state) → `usdc_payer_bump = Some(protocol_bump)`
+///     (`CpiContext::new_with_signer` [PROTOCOL_SEED, bump]). Mint destination =
+///     the trigger owner's pre-created option ATA.
+///
+/// The mint (protocol mint authority), the escrow → pot debit, and the pot +
+/// position bookkeeping are protocol-side and identical in BOTH paths. On the
+/// `None` path this is byte-identical to the pre-extraction inline handler — the
+/// direct fill_writer_ask suite is the regression gate.
+#[allow(clippy::too_many_arguments)]
+pub fn writer_ask_fill_core<'info>(
+    price: u64,
+    cpt: u64,
+    fill_quantity: u64,
+    fee_bps: u16,
+    protocol_bump: u8,
+    // USDC premium legs (payer fork)
+    usdc_source: &AccountInfo<'info>,
+    usdc_authority: &AccountInfo<'info>,
+    usdc_payer_bump: Option<u8>,
+    maker_usdc: &AccountInfo<'info>,
+    treasury: &AccountInfo<'info>,
+    // mint
+    option_mint: &AccountInfo<'info>,
+    option_dest: &AccountInfo<'info>,
+    protocol_state: &AccountInfo<'info>,
+    // collateral escrow → pot
+    escrow: &AccountInfo<'info>,
+    pot_usdc: &AccountInfo<'info>,
+    // bookkeeping
+    pot: &mut Account<'info, WriterAskPot>,
+    position: &mut Account<'info, WriterAskPosition>,
+    order_mint: Pubkey,
+    order_vault: Pubkey,
+    order_owner: Pubkey,
+    pot_usdc_key: Pubkey,
+    pot_bump: u8,
+    position_bump: u8,
+    now_ts: i64,
+    // programs
+    token_program: &AccountInfo<'info>,
+    token_2022_program: &AccountInfo<'info>,
+) -> Result<WriterAskFillResult> {
+    // ---- premium + fee split (maker-set price) ----
+    let total: u64 = (fill_quantity as u128)
+        .checked_mul(price as u128)
+        .ok_or(OptaError::MathOverflow)?
+        .try_into()
+        .map_err(|_| OptaError::MathOverflow)?;
+    let fee: u64 = ((total as u128)
+        .checked_mul(fee_bps as u128)
+        .ok_or(OptaError::MathOverflow)?
+        .checked_div(10_000)
+        .ok_or(OptaError::MathOverflow)?)
+    .try_into()
+    .map_err(|_| OptaError::MathOverflow)?;
+    let counterparty_share = total.checked_sub(fee).ok_or(OptaError::MathOverflow)?;
+    let collateral_moved: u64 = (cpt as u128)
+        .checked_mul(fill_quantity as u128)
+        .ok_or(OptaError::MathOverflow)?
+        .try_into()
+        .map_err(|_| OptaError::MathOverflow)?;
+
+    let token_2022_key = token_2022_program.key();
+    let protocol_seeds: &[&[u8]] = &[PROTOCOL_SEED, &[protocol_bump]];
+    let protocol_signer: &[&[&[u8]]] = &[protocol_seeds];
+
+    // ---- USDC: payer → treasury (fee) + payer → maker (premium − fee). FORK. ----
+    if fee > 0 {
+        if usdc_payer_bump.is_some() {
+            token::transfer(
+                CpiContext::new_with_signer(
+                    token_program.clone(),
+                    Transfer { from: usdc_source.clone(), to: treasury.clone(), authority: usdc_authority.clone() },
+                    protocol_signer,
+                ),
+                fee,
+            )?;
+        } else {
+            token::transfer(
+                CpiContext::new(
+                    token_program.clone(),
+                    Transfer { from: usdc_source.clone(), to: treasury.clone(), authority: usdc_authority.clone() },
+                ),
+                fee,
+            )?;
+        }
+    }
+    if counterparty_share > 0 {
+        if usdc_payer_bump.is_some() {
+            token::transfer(
+                CpiContext::new_with_signer(
+                    token_program.clone(),
+                    Transfer { from: usdc_source.clone(), to: maker_usdc.clone(), authority: usdc_authority.clone() },
+                    protocol_signer,
+                ),
+                counterparty_share,
+            )?;
+        } else {
+            token::transfer(
+                CpiContext::new(
+                    token_program.clone(),
+                    Transfer { from: usdc_source.clone(), to: maker_usdc.clone(), authority: usdc_authority.clone() },
+                ),
+                counterparty_share,
+            )?;
+        }
+    }
+
+    // ---- Mint fill_quantity → dest (protocol_state signs; no hook) ----
+    invoke_signed(
+        &spl_token_2022::instruction::mint_to(
+            &token_2022_key,
+            option_mint.key,
+            option_dest.key,
+            &protocol_state.key(),
+            &[],
+            fill_quantity,
+        )?,
+        &[option_mint.clone(), option_dest.clone(), protocol_state.clone()],
+        protocol_signer,
+    )?;
+
+    // ---- Escrow → pot debit (cpt × fill_quantity; protocol signs) ----
+    if collateral_moved > 0 {
+        token::transfer(
+            CpiContext::new_with_signer(
+                token_program.clone(),
+                Transfer { from: escrow.clone(), to: pot_usdc.clone(), authority: protocol_state.clone() },
+                protocol_signer,
+            ),
+            collateral_moved,
+        )?;
+    }
+
+    // ---- Pot bookkeeping (identity on fresh; counters always) ----
+    if pot.option_mint == Pubkey::default() {
+        pot.option_mint = order_mint;
+        pot.vault = order_vault;
+        pot.usdc_account = pot_usdc_key;
+        pot.bump = pot_bump;
+    }
+    pot.total_collateral = pot.total_collateral.checked_add(collateral_moved).ok_or(OptaError::MathOverflow)?;
+    pot.total_contracts = pot.total_contracts.checked_add(fill_quantity).ok_or(OptaError::MathOverflow)?;
+
+    // ---- Position bookkeeping (backer = order.owner) ----
+    if position.created_at == 0 {
+        position.backer = order_owner;
+        position.option_mint = order_mint;
+        position.vault = order_vault;
+        position.created_at = now_ts;
+        position.bump = position_bump;
+    }
+    position.collateral_committed = position.collateral_committed.checked_add(collateral_moved).ok_or(OptaError::MathOverflow)?;
+    position.contracts_written = position.contracts_written.checked_add(fill_quantity).ok_or(OptaError::MathOverflow)?;
+
+    Ok(WriterAskFillResult { total, fee, counterparty_share, collateral_moved })
+}
+
 pub fn handle_fill_writer_ask(ctx: Context<FillWriterAsk>, fill_quantity: u64) -> Result<()> {
     // ---- 1. Gates (first lines) -------------------------------------------
     require!(WRITER_ASKS_ENABLED, OptaError::WriterAsksDisabled);
@@ -74,131 +250,60 @@ pub fn handle_fill_writer_ask(ctx: Context<FillWriterAsk>, fill_quantity: u64) -
     require!(fill_quantity > 0, OptaError::InvalidContractSize);
     require!(fill_quantity <= remaining, OptaError::ListingExhausted);
 
-    // ---- 3. Premium + fee split (maker-set price) -------------------------
-    let total: u64 = (fill_quantity as u128)
-        .checked_mul(price as u128)
-        .ok_or(OptaError::MathOverflow)?
-        .try_into()
-        .map_err(|_| OptaError::MathOverflow)?;
-    let fee_bps = ctx.accounts.protocol_state.fee_bps as u128;
-    let fee: u64 = ((total as u128)
-        .checked_mul(fee_bps)
-        .ok_or(OptaError::MathOverflow)?
-        .checked_div(10_000)
-        .ok_or(OptaError::MathOverflow)?)
-    .try_into()
-    .map_err(|_| OptaError::MathOverflow)?;
-    let counterparty_share = total.checked_sub(fee).ok_or(OptaError::MathOverflow)?;
-    let collateral_moved: u64 = (cpt as u128)
-        .checked_mul(fill_quantity as u128)
-        .ok_or(OptaError::MathOverflow)?
-        .try_into()
-        .map_err(|_| OptaError::MathOverflow)?;
+    // ---- 3-8. Fill economics via the extracted core (direct taker path) -----
+    // usdc_payer_bump = None → the taker signs the premium legs; mint dest = the
+    // taker's option ATA. Byte-identical to the prior inline steps 3-8; the
+    // fill_writer_ask suite is the regression gate.
+    let option_mint_ai = ctx.accounts.option_mint.to_account_info();
+    let taker_usdc_ai = ctx.accounts.taker_usdc_account.to_account_info();
+    let taker_ai = ctx.accounts.taker.to_account_info();
+    let maker_usdc_ai = ctx.accounts.maker_usdc_account.to_account_info();
+    let treasury_ai = ctx.accounts.treasury.to_account_info();
+    let taker_opt_ai = ctx.accounts.taker_option_account.to_account_info();
+    let protocol_ai = ctx.accounts.protocol_state.to_account_info();
+    let escrow_ai = ctx.accounts.escrow.to_account_info();
+    let pot_usdc_ai = ctx.accounts.writer_ask_pot_usdc.to_account_info();
+    let pot_usdc_key = ctx.accounts.writer_ask_pot_usdc.key();
+    let tok_ai = ctx.accounts.token_program.to_account_info();
+    let tok22_ai = ctx.accounts.token_2022_program.to_account_info();
+    let fee_bps_u16 = ctx.accounts.protocol_state.fee_bps;
+    let protocol_bump = ctx.accounts.protocol_state.bump;
+    let pot_bump = ctx.bumps.writer_ask_pot;
+    let position_bump = ctx.bumps.writer_ask_position;
+    let now_ts = clock.unix_timestamp;
 
-    let token_2022_key = ctx.accounts.token_2022_program.key();
+    let fill = writer_ask_fill_core(
+        price,
+        cpt,
+        fill_quantity,
+        fee_bps_u16,
+        protocol_bump,
+        &taker_usdc_ai,
+        &taker_ai,
+        None, // direct: the taker is a real tx signer
+        &maker_usdc_ai,
+        &treasury_ai,
+        &option_mint_ai,
+        &taker_opt_ai, // mint dest = taker
+        &protocol_ai,
+        &escrow_ai,
+        &pot_usdc_ai,
+        &mut ctx.accounts.writer_ask_pot,
+        &mut ctx.accounts.writer_ask_position,
+        order_mint,
+        order_vault,
+        order_owner,
+        pot_usdc_key,
+        pot_bump,
+        position_bump,
+        now_ts,
+        &tok_ai,
+        &tok22_ai,
+    )?;
+    let fee = fill.fee;
+
     let protocol_seeds: &[&[u8]] = &[PROTOCOL_SEED, &[ctx.accounts.protocol_state.bump]];
     let protocol_signer: &[&[&[u8]]] = &[protocol_seeds];
-
-    // ---- 4. USDC: taker → maker (premium − fee) + taker → treasury (fee) ---
-    if fee > 0 {
-        token::transfer(
-            CpiContext::new(
-                ctx.accounts.token_program.to_account_info(),
-                Transfer {
-                    from: ctx.accounts.taker_usdc_account.to_account_info(),
-                    to: ctx.accounts.treasury.to_account_info(),
-                    authority: ctx.accounts.taker.to_account_info(),
-                },
-            ),
-            fee,
-        )?;
-    }
-    if counterparty_share > 0 {
-        token::transfer(
-            CpiContext::new(
-                ctx.accounts.token_program.to_account_info(),
-                Transfer {
-                    from: ctx.accounts.taker_usdc_account.to_account_info(),
-                    to: ctx.accounts.maker_usdc_account.to_account_info(),
-                    authority: ctx.accounts.taker.to_account_info(),
-                },
-            ),
-            counterparty_share,
-        )?;
-    }
-
-    // ---- 5. Mint fill_quantity → taker (protocol_state signs; no hook) -----
-    invoke_signed(
-        &spl_token_2022::instruction::mint_to(
-            &token_2022_key,
-            ctx.accounts.option_mint.key,
-            ctx.accounts.taker_option_account.key,
-            &ctx.accounts.protocol_state.key(),
-            &[],
-            fill_quantity,
-        )?,
-        &[
-            ctx.accounts.option_mint.to_account_info(),
-            ctx.accounts.taker_option_account.to_account_info(),
-            ctx.accounts.protocol_state.to_account_info(),
-        ],
-        protocol_signer,
-    )?;
-
-    // ---- 6. Escrow → pot debit (cpt × fill_quantity; protocol signs) -------
-    if collateral_moved > 0 {
-        token::transfer(
-            CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
-                Transfer {
-                    from: ctx.accounts.escrow.to_account_info(),
-                    to: ctx.accounts.writer_ask_pot_usdc.to_account_info(),
-                    authority: ctx.accounts.protocol_state.to_account_info(),
-                },
-                protocol_signer,
-            ),
-            collateral_moved,
-        )?;
-    }
-
-    // ---- 7. Pot bookkeeping (identity on fresh; counters always) ----------
-    {
-        let pot = &mut ctx.accounts.writer_ask_pot;
-        if pot.option_mint == Pubkey::default() {
-            pot.option_mint = order_mint;
-            pot.vault = order_vault;
-            pot.usdc_account = ctx.accounts.writer_ask_pot_usdc.key();
-            pot.bump = ctx.bumps.writer_ask_pot;
-        }
-        pot.total_collateral = pot
-            .total_collateral
-            .checked_add(collateral_moved)
-            .ok_or(OptaError::MathOverflow)?;
-        pot.total_contracts = pot
-            .total_contracts
-            .checked_add(fill_quantity)
-            .ok_or(OptaError::MathOverflow)?;
-    }
-
-    // ---- 8. Position bookkeeping (backer = order.owner) -------------------
-    {
-        let pos = &mut ctx.accounts.writer_ask_position;
-        if pos.created_at == 0 {
-            pos.backer = order_owner;
-            pos.option_mint = order_mint;
-            pos.vault = order_vault;
-            pos.created_at = clock.unix_timestamp;
-            pos.bump = ctx.bumps.writer_ask_position;
-        }
-        pos.collateral_committed = pos
-            .collateral_committed
-            .checked_add(collateral_moved)
-            .ok_or(OptaError::MathOverflow)?;
-        pos.contracts_written = pos
-            .contracts_written
-            .checked_add(fill_quantity)
-            .ok_or(OptaError::MathOverflow)?;
-    }
 
     // ---- 9. Decrement + conditional close ---------------------------------
     let new_remaining = {

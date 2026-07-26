@@ -191,11 +191,23 @@ pub fn handle_auto_finalize_writers<'info>(
         let unclaimed_premium = earned_since_deposit
             .saturating_sub(premium_claimed as u128) as u64;
 
-        let writer_remaining = (shares as u128)
-            .checked_mul(collateral_remaining as u128)
-            .ok_or(OptaError::MathOverflow)?
-            .checked_div(total_shares as u128)
-            .ok_or(OptaError::MathOverflow)? as u64;
+        // Guard the pro-rata division. A fully-drained vault has total_shares == 0,
+        // and a residual position (already zeroed by an earlier path but not yet
+        // closed) has shares == 0. In either case there is no collateral to
+        // pro-rate, so writer_remaining is 0. Without this guard, checked_div(0)
+        // returns None → MathOverflow, reverting the whole tx *before* the step-8
+        // close below — which is why such orphan positions persist and the crank
+        // re-detects and retries them every tick forever. Skipping the division
+        // lets the existing close path dispose the orphan (rent → writer wallet).
+        let writer_remaining = if total_shares == 0 || shares == 0 {
+            0u64
+        } else {
+            (shares as u128)
+                .checked_mul(collateral_remaining as u128)
+                .ok_or(OptaError::MathOverflow)?
+                .checked_div(total_shares as u128)
+                .ok_or(OptaError::MathOverflow)? as u64
+        };
 
         // ---- 6. Transfer USDC (premium + collateral share) ---------------
         let strike_bytes = strike_price.to_le_bytes();

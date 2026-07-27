@@ -503,6 +503,22 @@ export function assembleExecuteAccounts(
     sbQueue: isSb ? sb!.queue : null,
     sbSlothashes: isSb ? SPL_SYSVAR_SLOT_HASHES_ID : null,
     sbInstructions: isSb ? SPL_SYSVAR_INSTRUCTIONS_ID : null,
+    // Phase B1: the ten book-fire optionals [21]-[30] — ALWAYS null on this
+    // peg-path assembler (book fires are dark until the Jul-31 flip). accountsStrict
+    // requires every IDL account to be specified, so these must be present-as-null;
+    // Anchor substitutes the program-id sentinel → the on-chain arm reads them as
+    // None → the byte-identical vault-peg path. When the flip wires book fires,
+    // assembleBookAccounts (above) supplies real keys here instead of the nulls.
+    bookOrder: null,
+    bookMaker: null,
+    bookEscrow: null,
+    bookMakerUsdc: null,
+    writerAskPot: null,
+    writerAskPotUsdc: null,
+    writerAskPosition: null,
+    resaleHookMetas: null,
+    resaleHookProgram: null,
+    resaleHookState: null,
   };
 }
 

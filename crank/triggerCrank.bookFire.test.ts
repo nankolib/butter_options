@@ -15,11 +15,16 @@ import assert from "node:assert/strict";
 import { PublicKey, Keypair } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID, getAssociatedTokenAddressSync } from "@solana/spl-token";
 
+import { Connection } from "@solana/web3.js";
 import {
   selectBestAsk,
   assembleBookAccounts,
+  assembleExecuteAccounts,
+  buildExecuteTriggerIx,
+  loadTriggerProgram,
   BOOK_ACCOUNT_ROLES,
   type BookAskView,
+  type TriggerView,
 } from "./triggerCrank";
 
 // ---- Tiny runner (identical shape to triggerCrank.test.ts) -----------------
@@ -155,6 +160,45 @@ test("BOOK_ACCOUNT_ROLES: exactly the ten [21]-[30] roles in struct order", () =
     "writer_ask_pot", "writer_ask_pot_usdc", "writer_ask_position",
     "resale_hook_metas", "resale_hook_program", "resale_hook_state",
   ]);
+});
+
+// ---- Peg-path ix builds against the NEW IDL (the live-keeper crash guard) ---
+// After the program upgrade the crank IDL declares the ten book optionals, and
+// accountsStrict requires EVERY declared account. assembleExecuteAccounts (peg
+// path) must therefore pass them as null → Anchor emits the program-id sentinel
+// → the on-chain arm reads book_order == None → vault peg. If a future edit drops
+// those nulls, this test fails BEFORE the change reaches the VPS (where it would
+// otherwise crash the keeper on every fire).
+test("assembleExecuteAccounts (peg): executeTrigger ix builds with all 31 accounts vs new IDL", async () => {
+  const dummyWallet = {
+    publicKey: PROGRAM_ID,
+    signTransaction: async (t: any) => t,
+    signAllTransactions: async (t: any) => t,
+  };
+  const program = loadTriggerProgram(new Connection("http://127.0.0.1:8899"), dummyWallet as any);
+  const view: TriggerView = {
+    pubkey: Keypair.generate().publicKey.toBase58(),
+    owner: Keypair.generate().publicKey.toBase58(),
+    market: Keypair.generate().publicKey.toBase58(),
+    vault: VAULT.toBase58(),
+    optionMint: MINT.toBase58(),
+    holderOptionAta: Keypair.generate().publicKey.toBase58(),
+    kind: "buy", comparator: "ge", thresholdUsdc: usd(100),
+    quantity: 3n, maxPremiumPerContract: usd(5),
+  };
+  const accounts = assembleExecuteAccounts(
+    view, MINT.toBuffer(), USDC, PROGRAM_ID, PublicKey.default, program.programId, null);
+  // 21 base/SB roles + 10 book roles must all be present as null (or real).
+  for (const role of BOOK_ACCOUNT_ROLES) {
+    const camel = role.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+    assert.ok(camel in accounts, `peg assembler must include ${camel} (null)`);
+    assert.equal((accounts as any)[camel], null, `${camel} must be null on the peg path`);
+  }
+  const ix = await buildExecuteTriggerIx(program, accounts);
+  // 31 = 18 base + 3 SB + 10 book; the ten book keys are the program-id sentinel.
+  assert.equal(ix.keys.length, 31, "executeTrigger ix has all 31 accounts");
+  const tail = ix.keys.slice(21).filter((k) => k.pubkey.equals(program.programId));
+  assert.equal(tail.length, 10, "the ten book optionals are the program-id sentinel (None)");
 });
 
 // ---- Runner ----------------------------------------------------------------

@@ -2717,6 +2717,65 @@ export type Opta = {
             "runtime in the SB arm, then scanned for the ed25519 ix index."
           ],
           "optional": true
+        },
+        {
+          "name": "bookOrder",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "bookMaker",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "bookEscrow",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "bookMakerUsdc",
+          "docs": [
+            "Writer's USDC (premium recipient); owner==book_order.owner + mint checked in-handler."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "writerAskPot",
+          "docs": [
+            "Per-series WriterAskPot (must pre-exist); PDA [writer_ask_pot, option_mint] checked in-handler."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "writerAskPotUsdc",
+          "docs": [
+            "Per-series pot USDC (must pre-exist); PDA [writer_ask_pot_usdc, option_mint] checked in-handler."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "writerAskPosition",
+          "docs": [
+            "Per-(series, writer) WriterAskPosition (must pre-exist); PDA checked in-handler."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "resaleHookMetas",
+          "optional": true
+        },
+        {
+          "name": "resaleHookProgram",
+          "optional": true
+        },
+        {
+          "name": "resaleHookState",
+          "optional": true
         }
       ],
       "args": []
@@ -7042,69 +7101,6 @@ export type Opta = {
       "args": []
     },
     {
-      "name": "synthWarmVolOracle",
-      "docs": [
-        "Plant warmed VolOracle state (sample_count=720, fresh last_sample_ts,",
-        "V2-reference accumulators, caller-supplied spot) so American pricing",
-        "reads Ok past warmup/stale/math gates without 168 rate-limited pushes.",
-        "Gated by `test-synth-vol`. NEVER deploy a test-synth-vol build — it",
-        "lets anyone overwrite an oracle's vol state. Test-only."
-      ],
-      "discriminator": [
-        191,
-        90,
-        138,
-        28,
-        3,
-        150,
-        141,
-        216
-      ],
-      "accounts": [
-        {
-          "name": "signer",
-          "signer": true
-        },
-        {
-          "name": "volOracle",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  118,
-                  111,
-                  108,
-                  95,
-                  111,
-                  114,
-                  97,
-                  99,
-                  108,
-                  101
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "volOracle"
-              }
-            ]
-          }
-        }
-      ],
-      "args": [
-        {
-          "name": "spotPriceScaled",
-          "type": "i64"
-        },
-        {
-          "name": "lastSampleTs",
-          "type": "i64"
-        }
-      ]
-    },
-    {
       "name": "withdrawFromVault",
       "docs": [
         "Withdraw uncommitted collateral from a shared vault."
@@ -8539,6 +8535,16 @@ export type Opta = {
       "code": 6078,
       "name": "seedVolOutOfBounds",
       "msg": "seed_vol out of bounds — must be 0 (no seed) or within [MIN_SEED_VOL, MAX_SEED_VOL]"
+    },
+    {
+      "code": 6079,
+      "name": "stopLossSellDark",
+      "msg": "StopLossSell trigger is not yet enabled (dark until the book sell path lands in B2)"
+    },
+    {
+      "code": 6080,
+      "name": "askPriceExceedsMax",
+      "msg": "Ask price exceeds the trigger's per-contract max_premium ceiling"
     }
   ],
   "types": [
@@ -9985,17 +9991,19 @@ export type Opta = {
     {
       "name": "triggerKind",
       "docs": [
-        "What the trigger does when it fires. v1 routes BOTH through the vault as the",
-        "always-on counterparty (never the book, which has no guaranteed liquidity):",
+        "What the trigger does when it fires.",
         "",
         "**Variant order is load-bearing** — the Borsh discriminator is a single byte",
-        "encoding the variant index (StopEntryBuy = 0, TakeProfitSell = 1). Append",
-        "new variants only; never reorder.",
+        "encoding the variant index (StopEntryBuy = 0, TakeProfitSell = 1,",
+        "StopLossSell = 2). Append new variants only; never reorder.",
         "",
-        "NOTE: exactly two variants. There is NO StopLossSell — a true stop-loss must",
-        "sell an OTM long, which the vault cannot buy back (it only pays capped",
-        "intrinsic, and exercise reverts OTM). Real stop-loss needs the book path and",
-        "is deferred to a later phase."
+        "Phase B routes fires through the BOOK (per-ask WriterAsk escrows + Bids),",
+        "where the live liquidity now sits — the pooled-vault peg/exercise paths are",
+        "structurally dead (≈zero pooled collateral board-wide). StopLossSell is the",
+        "variant added here (B0): a true stop-loss sells an OTM long, which the vault",
+        "cannot buy back (exercise reverts OTM), so it can ONLY route to the book bid",
+        "side. It is appended now (migration-free: 0 live TriggerOrders) and stays",
+        "DARK until B2 wires the sell path to `bid_fill_core`."
       ],
       "type": {
         "kind": "enum",
@@ -10005,6 +10013,9 @@ export type Opta = {
           },
           {
             "name": "takeProfitSell"
+          },
+          {
+            "name": "stopLossSell"
           }
         ]
       }
@@ -10127,6 +10138,24 @@ export type Opta = {
               "PDA bump seed."
             ],
             "type": "u8"
+          },
+          {
+            "name": "ocoLink",
+            "docs": [
+              "OCO (one-cancels-other) link → the paired trigger's PDA, or None for a",
+              "standalone trigger. Appended in B0 while the layout is migration-free",
+              "(0 live TriggerOrders); wired in B3. `Option<Pubkey>` adds 1 + 32 = 33",
+              "bytes to INIT_SPACE (204 → 237).",
+              "",
+              "B3 SEMANTICS (noted now, implemented in B3): when a trigger fires,",
+              "execute_trigger MUST also decrement the linked leg's `quantity` by the",
+              "fired amount in the SAME tx and close it at 0 — so a single atomic fire",
+              "can never gap through both legs. A partial fire decrements both; only a",
+              "fill that zeros a leg closes it (and its paired leg)."
+            ],
+            "type": {
+              "option": "pubkey"
+            }
           }
         ]
       }

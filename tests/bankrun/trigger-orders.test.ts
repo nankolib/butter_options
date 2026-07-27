@@ -346,6 +346,10 @@ describe("trigger orders — Pass 0 (place + cancel)", function () {
       systemProgram: SystemProgram.programId,
       // Stage 3 1a-ii: trailing Switchboard read-arm optionals — null on Pyth path.
       sbQueue: null, sbSlothashes: null, sbInstructions: null,
+      // Phase B1: book-fire optionals [21]-[30] — null → vault-peg path (unchanged).
+      bookOrder: null, bookMaker: null, bookEscrow: null, bookMakerUsdc: null,
+      writerAskPot: null, writerAskPotUsdc: null, writerAskPosition: null,
+      resaleHookMetas: null, resaleHookProgram: null, resaleHookState: null,
     }).preInstructions([CU(400_000)]).rpc();
   }
 
@@ -563,6 +567,10 @@ describe("trigger orders — Pass 0 (place + cancel)", function () {
       vaultUsdcAccount: vaultUsdc, tokenProgram: TOKEN_PROGRAM_ID, token2022Program: TOKEN_2022_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
       sbQueue: sb?.queue ?? null, sbSlothashes: sb?.slothashes ?? null, sbInstructions: sb?.instructions ?? null,
+      // Phase B1: book-fire optionals [21]-[30] — null → vault-peg path (unchanged).
+      bookOrder: null, bookMaker: null, bookEscrow: null, bookMakerUsdc: null,
+      writerAskPot: null, writerAskPotUsdc: null, writerAskPosition: null,
+      resaleHookMetas: null, resaleHookProgram: null, resaleHookState: null,
     };
   }
 

@@ -463,4 +463,10 @@ pub enum OptaError {
     // an OTM sell). Append-only — error code 6079.
     #[msg("StopLossSell trigger is not yet enabled (dark until the book sell path lands in B2)")]
     StopLossSellDark,
+
+    // B1: a book StopEntryBuy fire was handed an ask whose per-contract price
+    // exceeds the trigger's max_premium ceiling. The keeper must only lift asks
+    // within the bound; this is the on-chain backstop. Append-only — code 6080.
+    #[msg("Ask price exceeds the trigger's per-contract max_premium ceiling")]
+    AskPriceExceedsMax,
 }

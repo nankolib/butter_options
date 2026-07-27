@@ -61,6 +61,18 @@ import { SPL_SYSVAR_SLOT_HASHES_ID, SPL_SYSVAR_INSTRUCTIONS_ID } from "@switchbo
 const TRIGGER_ORDER_SEED = "trigger_order";
 const TRIGGER_ESCROW_SEED = "trigger_escrow";
 
+// ---- Phase B1: book-fire seeds (MUST match programs/opta/src/state + the
+//      execute_trigger.rs runtime PDA checks). The keeper assembles the [21]-[30]
+//      trailing optionals ONLY when book fires are enabled at the flip (dormant
+//      until then — the on-chain BOOK_TRIGGERS_ENABLED gate is dark in prod). --
+const RESTING_ORDER_ESCROW_SEED = "resting_order_escrow";
+const WRITER_ASK_POT_SEED = "writer_ask_pot";
+const WRITER_ASK_POT_USDC_SEED = "writer_ask_pot_usdc";
+const WRITER_ASK_POSITION_SEED = "writer_ask_position";
+// opta-transfer-hook PDA seeds (programs/opta-transfer-hook/src/lib.rs:32-35).
+const EXTRA_ACCOUNT_METAS_SEED = "extra-account-metas";
+const HOOK_STATE_SEED = "hook-state";
+
 // ---- Tunables --------------------------------------------------------------
 export const DEFAULT_TRIGGER_TICK_MS = 15_000; // 15s — stops can't fire 5 min late
 export const DEFAULT_FIRE_MARGIN_BPS = 50; // 0.50% — headroom over measured SOL spot↔EMA gap (calm p90 ~16bps, move-peak ~33bps; P3.4 characterization)
@@ -137,6 +149,17 @@ const EXECUTE_ACCOUNT_ROLES = [
   // Phase A: the SB arm's three optional accounts (null on the Pyth path).
   "sb_queue", "sb_slothashes", "sb_instructions",
 ];
+
+// Phase B1: the ten trailing book-fire optionals [21]-[30], in the EXACT order
+// execute_trigger.rs declares them (see its KEEPER POSITIONAL LAYOUT comment).
+// A WriterAsk fire populates [21]-[27] and nulls [28]-[30]; a ResaleAsk fire is
+// the reverse. This array is the single source of truth the assembler + its unit
+// test both pin to, so a struct-order change on either side breaks the test.
+export const BOOK_ACCOUNT_ROLES = [
+  "book_order", "book_maker", "book_escrow", "book_maker_usdc",
+  "writer_ask_pot", "writer_ask_pot_usdc", "writer_ask_position",
+  "resale_hook_metas", "resale_hook_program", "resale_hook_state",
+] as const;
 
 // ---- Types -----------------------------------------------------------------
 
@@ -480,6 +503,94 @@ export function assembleExecuteAccounts(
     sbQueue: isSb ? sb!.queue : null,
     sbSlothashes: isSb ? SPL_SYSVAR_SLOT_HASHES_ID : null,
     sbInstructions: isSb ? SPL_SYSVAR_INSTRUCTIONS_ID : null,
+  };
+}
+
+// ============================================================================
+// Phase B1: book-fire selection + positional account assembly (PURE)
+// ============================================================================
+//
+// DORMANT until the Jul-31 canary flip: the on-chain BOOK_TRIGGERS_ENABLED gate
+// is dark in the feature-free prod build, so a StopEntryBuy that passes book
+// accounts STILL routes to the vault peg. These helpers are unit-tested now so
+// the flip session only has to wire discovery (fetch resting orders per
+// option_mint) into the tick — the selection rule and the exact [21]-[30] layout
+// are already proven against the on-chain struct.
+
+export type BookAskKind = "writerAsk" | "resaleAsk";
+
+/** Plain view of a resting ask eligible for a StopEntryBuy book fire. */
+export interface BookAskView {
+  pubkey: string;
+  owner: string;
+  optionMint: string;
+  vault: string;
+  kind: BookAskKind;
+  pricePerContract: bigint; // 6-dec
+  quantityRemaining: bigint;
+}
+
+/**
+ * Choose the ask a StopEntryBuy should lift THIS fire — the cheapest resting ask
+ * whose price ≤ the trigger's per-contract max_premium and that still has depth.
+ * The on-chain arm re-validates price ≤ max_premium (AskPriceExceedsMax / 6080),
+ * so this only governs WHICH ask the keeper hands over.
+ *
+ * Tie-break: a WriterAsk wins an exact price tie (primary board liquidity, and it
+ * avoids the heavier Token-2022 hook transfer). A ResaleAsk is therefore only
+ * selected when it is STRICTLY better-priced — "resale secondary: only if
+ * better-priced within max_premium" from the branch spec.
+ */
+export function selectBestAsk(
+  asks: BookAskView[], maxPremiumPerContract: bigint,
+): BookAskView | undefined {
+  let best: BookAskView | undefined;
+  for (const a of asks) {
+    if (a.quantityRemaining <= 0n) continue;
+    if (a.pricePerContract > maxPremiumPerContract) continue;
+    if (a.kind !== "writerAsk" && a.kind !== "resaleAsk") continue;
+    if (!best) { best = a; continue; }
+    if (a.pricePerContract < best.pricePerContract) { best = a; continue; }
+    // Exact price tie → prefer WriterAsk (primary).
+    if (a.pricePerContract === best.pricePerContract
+        && a.kind === "writerAsk" && best.kind === "resaleAsk") {
+      best = a;
+    }
+  }
+  return best;
+}
+
+/**
+ * Assemble the ten trailing book optionals in BOOK_ACCOUNT_ROLES order for the
+ * chosen ask. WriterAsk → pot/position set, hook accounts null; ResaleAsk → hook
+ * accounts set, pot/position null. Every PDA is derived from the same seeds the
+ * on-chain runtime re-checks (execute_trigger.rs), so the keeper never sends a tx
+ * the program would reject on a PDA mismatch. Key ORDER is pinned to
+ * BOOK_ACCOUNT_ROLES (the assembler's unit test asserts both).
+ */
+export function assembleBookAccounts(
+  ask: BookAskView, usdcMint: PublicKey, programId: PublicKey, hookProgramId: PublicKey,
+): Record<string, PublicKey | null> {
+  const order = new PublicKey(ask.pubkey);
+  const maker = new PublicKey(ask.owner);
+  const optionMint = new PublicKey(ask.optionMint);
+  const seed = (s: string, extra: Buffer[] = [], pid = programId) =>
+    PublicKey.findProgramAddressSync([Buffer.from(s), ...extra], pid)[0];
+  const isWriter = ask.kind === "writerAsk";
+
+  // Insertion order MUST equal BOOK_ACCOUNT_ROLES → the on-chain struct order.
+  return {
+    book_order: order,
+    book_maker: maker,
+    book_escrow: seed(RESTING_ORDER_ESCROW_SEED, [order.toBuffer()]),
+    book_maker_usdc: getAssociatedTokenAddressSync(usdcMint, maker, false, TOKEN_PROGRAM_ID),
+    writer_ask_pot: isWriter ? seed(WRITER_ASK_POT_SEED, [optionMint.toBuffer()]) : null,
+    writer_ask_pot_usdc: isWriter ? seed(WRITER_ASK_POT_USDC_SEED, [optionMint.toBuffer()]) : null,
+    writer_ask_position: isWriter
+      ? seed(WRITER_ASK_POSITION_SEED, [optionMint.toBuffer(), maker.toBuffer()]) : null,
+    resale_hook_metas: isWriter ? null : seed(EXTRA_ACCOUNT_METAS_SEED, [optionMint.toBuffer()], hookProgramId),
+    resale_hook_program: isWriter ? null : hookProgramId,
+    resale_hook_state: isWriter ? null : seed(HOOK_STATE_SEED, [optionMint.toBuffer()], hookProgramId),
   };
 }
 

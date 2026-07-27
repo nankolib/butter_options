@@ -54,6 +54,35 @@ pub const WRITER_ASKS_ENABLED: bool = true;
 #[cfg(not(feature = "testing"))]
 pub const WRITER_ASKS_ENABLED: bool = true;
 
+// =============================================================================
+// BOOK_TRIGGERS_ENABLED — Phase B1 book-path StopEntryBuy fires (DARK)
+// =============================================================================
+//
+// When TRUE, execute_trigger's StopEntryBuy routes to the book — lifting the
+// writer's live ask board via writer_ask_fill_core (primary) / resale_ask_fill_
+// core (secondary), escrow-pays arm — instead of the structurally-dead vault peg
+// (98% of vaults hold zero pooled collateral board-wide).
+//
+// SHAPE = the WRITER_ASKS_ENABLED dark pattern (NOT a plain flip-in-place const):
+// a pure const is false in every build and could never be exercised by the
+// bankrun gates. The `testing` branch is TRUE so the test build exercises the
+// book path; the feature-free (prod) branch is FALSE (dark). This is the only
+// way to satisfy B1's gate matrix (which must test the live book path).
+//
+// Routing is `BOOK_TRIGGERS_ENABLED && book_order.is_some()` — so a flag-true
+// test build STILL runs the byte-identical vault peg when no book accounts are
+// passed (the existing peg tests), while book-account calls take the new path.
+//
+// FLIP (Jul-31 canary session): change the `not(feature = "testing")` branch
+// below from `false` to `true` and redeploy feature-free. The canary is the live
+// acceptance test on the book path. Until then, prod is dark and the vault-peg
+// fallback is intact.
+#[cfg(feature = "testing")]
+pub const BOOK_TRIGGERS_ENABLED: bool = true;
+
+#[cfg(not(feature = "testing"))]
+pub const BOOK_TRIGGERS_ENABLED: bool = false;
+
 #[cfg(test)]
 mod tests {
     // Run-8 M-1 / M-03 reconciliation: American options and writer asks are both

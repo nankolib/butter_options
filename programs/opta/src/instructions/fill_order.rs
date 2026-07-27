@@ -136,6 +136,73 @@ pub fn bid_fill_core<'info>(
     Ok(())
 }
 
+/// Extracted book **resale-ask fill** economics (the `OrderKind::ResaleAsk` arm
+/// below): taker pays USDC (fee → treasury, remainder → maker), escrow option
+/// tokens → destination (protocol-PDA-signed hook transfer). Authority fork on
+/// the USDC PAYER (Phase-4 pattern):
+///   - DIRECT taker buy (`fill_order`): `usdc_payer_bump = None`, taker signs,
+///     option destination = the taker's option account.
+///   - BUY-TRIGGER fire (`execute_trigger`, secondary path, DARK): USDC from the
+///     trigger escrow, `usdc_payer_bump = Some(protocol_bump)`; option
+///     destination = the trigger owner's option ATA.
+/// The option leg is protocol-PDA-signed in both. Byte-identical to the prior
+/// inline arm on the `None` path — the ResaleAsk suite is the regression gate.
+#[allow(clippy::too_many_arguments)]
+pub fn resale_ask_fill_core<'info>(
+    usdc_source: &AccountInfo<'info>,
+    usdc_authority: &AccountInfo<'info>,
+    usdc_payer_bump: Option<u8>,
+    maker_usdc: &AccountInfo<'info>,
+    treasury: &AccountInfo<'info>,
+    option_escrow: &AccountInfo<'info>,
+    option_mint: &AccountInfo<'info>,
+    option_dest: &AccountInfo<'info>,
+    hook_extra_metas: &AccountInfo<'info>,
+    hook_program: &AccountInfo<'info>,
+    hook_state: &AccountInfo<'info>,
+    protocol_state: &AccountInfo<'info>,
+    protocol_bump: u8,
+    token_program: &AccountInfo<'info>,
+    token_2022_program: &AccountInfo<'info>,
+    fill_quantity: u64,
+    counterparty_share: u64,
+    fee: u64,
+) -> Result<()> {
+    let token_2022_key = token_2022_program.key();
+    let protocol_seeds: &[&[u8]] = &[PROTOCOL_SEED, &[protocol_bump]];
+    let protocol_signer: &[&[&[u8]]] = &[protocol_seeds];
+
+    // USDC: payer → treasury (fee) + payer → maker (premium − fee). FORK.
+    if fee > 0 {
+        if usdc_payer_bump.is_some() {
+            token::transfer(CpiContext::new_with_signer(token_program.clone(), Transfer { from: usdc_source.clone(), to: treasury.clone(), authority: usdc_authority.clone() }, protocol_signer), fee)?;
+        } else {
+            token::transfer(CpiContext::new(token_program.clone(), Transfer { from: usdc_source.clone(), to: treasury.clone(), authority: usdc_authority.clone() }), fee)?;
+        }
+    }
+    if counterparty_share > 0 {
+        if usdc_payer_bump.is_some() {
+            token::transfer(CpiContext::new_with_signer(token_program.clone(), Transfer { from: usdc_source.clone(), to: maker_usdc.clone(), authority: usdc_authority.clone() }, protocol_signer), counterparty_share)?;
+        } else {
+            token::transfer(CpiContext::new(token_program.clone(), Transfer { from: usdc_source.clone(), to: maker_usdc.clone(), authority: usdc_authority.clone() }), counterparty_share)?;
+        }
+    }
+
+    // Escrow option tokens → dest (protocol PDA signs).
+    spl_token_2022::onchain::invoke_transfer_checked(
+        &token_2022_key,
+        option_escrow.clone(),
+        option_mint.clone(),
+        option_dest.clone(),
+        protocol_state.clone(),
+        &[hook_extra_metas.clone(), hook_program.clone(), hook_state.clone()],
+        fill_quantity,
+        0,
+        protocol_signer,
+    )?;
+    Ok(())
+}
+
 pub fn handle_fill_order(ctx: Context<FillOrder>, fill_quantity: u64) -> Result<()> {
     let clock = Clock::get()?;
 
@@ -194,48 +261,29 @@ pub fn handle_fill_order(ctx: Context<FillOrder>, fill_quantity: u64) -> Result<
     // ---- 3. Branch on order kind ------------------------------------------
     match kind {
         OrderKind::ResaleAsk => {
-            // Taker pays USDC: fee → treasury, remainder → maker. Taker signs.
-            if fee > 0 {
-                token::transfer(
-                    CpiContext::new(
-                        ctx.accounts.token_program.to_account_info(),
-                        Transfer {
-                            from: ctx.accounts.taker_usdc_account.to_account_info(),
-                            to: ctx.accounts.treasury.to_account_info(),
-                            authority: ctx.accounts.taker.to_account_info(),
-                        },
-                    ),
-                    fee,
-                )?;
-            }
-            if counterparty_share > 0 {
-                token::transfer(
-                    CpiContext::new(
-                        ctx.accounts.token_program.to_account_info(),
-                        Transfer {
-                            from: ctx.accounts.taker_usdc_account.to_account_info(),
-                            to: ctx.accounts.maker_usdc_account.to_account_info(),
-                            authority: ctx.accounts.taker.to_account_info(),
-                        },
-                    ),
-                    counterparty_share,
-                )?;
-            }
-            // Escrow option tokens → taker (protocol PDA signs).
-            spl_token_2022::onchain::invoke_transfer_checked(
-                &token_2022_key,
-                ctx.accounts.escrow.to_account_info(),
-                ctx.accounts.option_mint.to_account_info(),
-                ctx.accounts.taker_option_account.to_account_info(),
-                ctx.accounts.protocol_state.to_account_info(),
-                &[
-                    ctx.accounts.extra_account_meta_list.to_account_info(),
-                    ctx.accounts.transfer_hook_program.to_account_info(),
-                    ctx.accounts.hook_state.to_account_info(),
-                ],
+            // Direct taker buy → the extracted core. Taker signs USDC
+            // (usdc_payer_bump = None); option escrow → taker, protocol-signed.
+            // Byte-identical to the prior inline arm (the None path).
+            let option_mint_ai = ctx.accounts.option_mint.to_account_info();
+            resale_ask_fill_core(
+                &ctx.accounts.taker_usdc_account.to_account_info(),
+                &ctx.accounts.taker.to_account_info(),
+                None, // direct: taker is a real tx signer
+                &ctx.accounts.maker_usdc_account.to_account_info(),
+                &ctx.accounts.treasury.to_account_info(),
+                &ctx.accounts.escrow.to_account_info(),
+                &option_mint_ai,
+                &ctx.accounts.taker_option_account.to_account_info(), // dest = taker
+                &ctx.accounts.extra_account_meta_list.to_account_info(),
+                &ctx.accounts.transfer_hook_program.to_account_info(),
+                &ctx.accounts.hook_state.to_account_info(),
+                &ctx.accounts.protocol_state.to_account_info(),
+                ctx.accounts.protocol_state.bump,
+                &ctx.accounts.token_program.to_account_info(),
+                &ctx.accounts.token_2022_program.to_account_info(),
                 fill_quantity,
-                0,
-                protocol_signer,
+                counterparty_share,
+                fee,
             )?;
         }
         OrderKind::Bid => {

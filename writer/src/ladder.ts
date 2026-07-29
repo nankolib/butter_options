@@ -258,7 +258,12 @@ export function buildLadder(inp: LadderInput): TargetCell[] {
       const atmDistance = spot > 0 ? Math.abs(strikeDollars - spot) / spot : 0;
       const rungIndex = Math.round(Math.abs(i - centre));
       for (const t of tenors) {
-        if (t.ts <= nowSec) return; // defensive
+        // MUST be `continue`, not `return`. This loop sits inside a forEach
+        // callback, so `return` would exit the callback and drop EVERY REMAINING
+        // TENOR for this strike — not just the expired one. The non-equity branch
+        // below uses `continue`; the two must stay in lockstep. Pinned by
+        // ladder.rollover.test.ts.
+        if (t.ts <= nowSec) continue; // defensive
         emit(strikeDollars, atmDistance, t, rungIndex);
       }
     });

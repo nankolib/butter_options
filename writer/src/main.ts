@@ -55,6 +55,25 @@ async function main(): Promise<void> {
       ([["BTC", 66658], ["ETH", 1926], ["SOL", 77.87], ["XRP", 1.1489], ["FARTCOIN", 0.13897], ["XAU", 4064]] as const)
         .map(([a, s]) => [a, +hystBand(s).toPrecision(4)]),
     ),
+    // BID CONFIG — RULE-1 assertable from the boot line alone.
+    //
+    // Added because its absence hid a live no-op: on 2026-07-29
+    // OPTA_WRITER_BID_ENABLED=1 was set and the writer ran an hour posting
+    // nothing, because the DEPLOYED build predated the bid feature entirely. The
+    // env var reached the process; the code that reads it did not exist. With the
+    // flag echoed here, `bidEnabled` missing from the boot line means "this build
+    // has no bid support", and `false` means "supported and off" — two states that
+    // were previously indistinguishable from the log.
+    bids: {
+      enabled: cfg.bidEnabled,
+      atmRungs: cfg.bidAtmRungs,
+      maxCells: cfg.bidMaxCells || "uncapped",
+      maxNotionalPerAsset: cfg.bidMaxNotionalPerAsset,
+      maxNotionalGlobal: cfg.bidMaxNotionalGlobal,
+      reserveUsdc: cfg.bidReserveUsdc,
+      maxLongPerSeries: cfg.bidMaxLongPerSeries,
+      depthFrac: cfg.bidDepthFrac,
+    },
   });
 
   const chain = await initChain(cfg);

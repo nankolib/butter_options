@@ -93,7 +93,27 @@ single account observes every USDC movement.
       Helius webhook or a mint-wide stream. The cap logs loudly when hit, but a
       truncated provenance set silently mis-qualifies wallets.
 
-## 6. Shadow → live cutover
+## 6. Quest panel visual pass — REQUIRED before the flag goes on
+
+The 2c automated screenshot set (56 shots, both modes x desktop/mobile) covers
+every campaign surface EXCEPT one: the quest panel sits inside
+PortfolioTerminalPage's connect-wallet gate, and headless chromium has no
+wallet, so all 12 portfolio shots show the connect prompt rather than the panel.
+Its logic is unit-tested; its APPEARANCE has never been reviewed.
+
+- [ ] Connect a real wallet and review the quest panel in **dark** and **light**
+- [ ] Check every block renders: totals, 7-step chain, referral (code + copy +
+      bind), social submit, bounty submit
+- [ ] Exercise the signed-action states — idle -> confirm in wallet -> pending ->
+      success/fail — at least once end-to-end
+- [ ] Verify on a **mobile viewport** too
+
+```bash
+ssh -N -L 8791:127.0.0.1:8791 root@144.202.58.6 &
+cd app && VITE_EPOCH0_UI=1 VITE_POINTS_API_BASE=/api/points npx vite
+```
+
+## 7. Shadow → live cutover
 
 - [ ] Freeze `quests_v1.json` and `rules_v1` weights; a rules change after launch
       re-scores retroactively (the whole point of the TAPE/SCORE split, but
@@ -104,7 +124,7 @@ single account observes every USDC movement.
 - [ ] Decide whether existing internal wallets stay excluded (they should)
 - [ ] Publish the rules page before the API is public
 
-## 7. Purge Phase 2b test rows
+## 8. Purge Phase 2b test rows
 
 Acceptance testing wrote real rows into the live DB via the API. They must go
 before any public board is served.
@@ -118,10 +138,10 @@ DELETE FROM wallet_handles WHERE x_handle       = '_thekhay';
 DELETE FROM bounty_submissions WHERE kind = 'bug' AND proof_url LIKE '%/issues/1';
 ```
 
-- [ ] Run the above, then `node dist/scripts/recompute.js`
-- [ ] Confirm the referrals and social boards are empty again
+- [x] **DONE 2026-07-26.** All five write-path tables purged to zero; both
+      boards return `rows: []` after recompute.
 
-## 8. Operational
+## 9. Operational
 
 - [ ] Raise `MemoryMax` above 200M **or** confirm the streaming render keeps peak
       under it (Phase 2b Item 0 brought the peak down — re-measure after a month

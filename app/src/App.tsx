@@ -38,6 +38,7 @@ const LeaderboardPage = lazy(() => import("./pages/leaderboard"));
  *   /markets     — Paper-surface trader page; supplies AppNav
  *   /write       — Paper-surface trader page; supplies AppNav
  *   /trade       — Paper-surface trader page; supplies AppNav
+ *   /leaderboard — EPOCH 0 campaign board; supplies TerminalAppBar.
  *   /marketplace — Soft-redirect to /trade (Slice 6 of the merge arc).
  *                  Kept in HEADER_HIDDEN_PATHS for one release cycle to
  *                  suppress the global Header during the brief redirect
@@ -48,7 +49,15 @@ const LeaderboardPage = lazy(() => import("./pages/leaderboard"));
  * have migrated to AppNav. The global Header is now only shown on
  * routes not listed above (currently none).
  */
-const HEADER_HIDDEN_PATHS = ["/", "/docs", "/portfolio", "/markets", "/write", "/trade", "/marketplace", "/privacy", "/support", "/terms"];
+const HEADER_HIDDEN_PATHS = [
+  "/", "/docs", "/portfolio", "/markets", "/write", "/trade", "/marketplace",
+  "/privacy", "/support", "/terms",
+  // Gated on the flag, not added unconditionally: with EPOCH0_UI off no Route
+  // matches /leaderboard, so hiding the header there would render a completely
+  // blank page instead of today's header-only fallthrough. Flag off must stay
+  // byte-identical to production.
+  ...(EPOCH0_UI ? ["/leaderboard"] : []),
+];
 
 /**
  * True iff `path` exactly matches one of `patterns` or is a descendant

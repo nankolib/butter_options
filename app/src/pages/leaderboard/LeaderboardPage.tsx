@@ -10,7 +10,7 @@
 // in utils/epoch0Format.ts, which is unit-tested. See app/scripts/run-epoch0-tests.mjs.
 // =============================================================================
 
-import { useCallback, useEffect, useMemo, useState, type FC } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FC } from "react";
 import { Link } from "react-router-dom";
 import { useWallet } from "@solana/wallet-adapter-react";
 
@@ -48,9 +48,24 @@ export const LeaderboardPage: FC = () => {
   const [board, setBoard] = useState<Board>("profit");
   const [state, setState] = useState<Loaded>(EMPTY);
 
+  /**
+   * Request sequence guard.
+   *
+   * Without it, a SLOWER earlier fetch can resolve after a faster later one and
+   * overwrite it — so switching tabs quickly rendered the previous board's rows
+   * under the new board's header (writer wallets shown as Referrals, metric
+   * column reading an absent field and falling back to an em dash). Caught in
+   * the screenshot gate. Only the newest request may write state.
+   */
+  const seq = useRef(0);
+
   const load = useCallback(async (b: Board) => {
-    setState((p) => ({ ...p, loading: true }));
+    const mine = ++seq.current;
+    // Clear rows on switch: a board's header must never sit above another
+    // board's data, not even for one frame.
+    setState({ rows: [], computedAt: null, failed: false, loading: true });
     const res = await fetchLeaderboard(b, 50);
+    if (mine !== seq.current) return; // superseded
     setState(
       res.ok
         ? { rows: res.data.rows, computedAt: res.data.computed_at, failed: false, loading: false }

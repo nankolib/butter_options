@@ -160,4 +160,27 @@ export default defineConfig({
       util: "util",
     },
   },
+  /**
+   * DEV-ONLY proxy for the EPOCH 0 points API.
+   *
+   * The indexer's listener is LOOPBACK-ONLY and serves no CORS headers — nginx
+   * adds those in production. A dev page on :5173 fetching :8791 is therefore a
+   * cross-origin request the browser blocks, even though curl succeeds. Proxying
+   * makes the dev fetch same-origin, matching how it will behave in production
+   * behind nginx.
+   *
+   * Set OPTA_POINTS_PROXY to the tunnelled listener and
+   * VITE_POINTS_API_BASE=/api/points:
+   *   ssh -N -L 8791:127.0.0.1:8791 root@144.202.58.6
+   *
+   * `server` applies to `vite dev` only; the production build is unaffected.
+   */
+  server: {
+    proxy: {
+      "/api/points": {
+        target: process.env.OPTA_POINTS_PROXY || "http://127.0.0.1:8791",
+        changeOrigin: true,
+      },
+    },
+  },
 });

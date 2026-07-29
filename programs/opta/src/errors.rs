@@ -469,4 +469,29 @@ pub enum OptaError {
     // within the bound; this is the on-chain backstop. Append-only — code 6080.
     #[msg("Ask price exceeds the trigger's per-contract max_premium ceiling")]
     AskPriceExceedsMax,
+
+    // B2: a sell-leg book fire was handed a resting order that is not a Bid. The
+    // sell path can ONLY lift the bid side (a sell into an ask is not a fill), so
+    // this is fail-closed rather than a silent skip — a non-Bid in the book slot
+    // is a keeper bug, not a market condition. Append-only — error code 6081.
+    #[msg("Sell-leg book fire requires a Bid resting order")]
+    NotABid,
+
+    // B2: a sell trigger reached the book path carrying max_premium == 0 — i.e.
+    // no stored per-contract minimum-proceeds floor. execute_trigger is
+    // PERMISSIONLESS, so without a floor any caller could post a dust bid and
+    // fire the owner's stop-loss into it. Floor 0 therefore means "book
+    // ineligible": the trigger keeps its vault fallback (TakeProfitSell) or stays
+    // unfireable (StopLossSell) rather than becoming free money for a keeper.
+    // Every pre-B2 sell trigger stored 0, so this is also the migration guard.
+    // Append-only — error code 6082.
+    #[msg("Sell trigger has no minimum-proceeds floor (max_premium == 0) — book fire refused")]
+    SellFloorRequired,
+
+    // B2: the bid handed to a sell-leg fire prices below the owner's stored
+    // per-contract floor. REVERT, not skip: the keeper CHOSE this bid, so a
+    // below-floor bid is keeper error or an attack, never a benign market state
+    // (mirrors AskPriceExceedsMax / 6080 on the buy side). Append-only — 6083.
+    #[msg("Bid price is below the sell trigger's per-contract minimum-proceeds floor")]
+    BidPriceBelowMin,
 }

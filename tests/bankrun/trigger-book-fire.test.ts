@@ -168,7 +168,7 @@ describe("B1: StopEntryBuy → book (writer_ask_fill_core, escrow-pays)", functi
       sbQueue: null, sbSlothashes: null, sbInstructions: null,
       bookOrder: askO.order, bookMaker: m.writer.publicKey, bookEscrow: askO.escrow, bookMakerUsdc: makerUsdc,
       writerAskPot: pot, writerAskPotUsdc: potUsdc, writerAskPosition: position,
-      resaleHookMetas: null, resaleHookProgram: null, resaleHookState: null,
+      bookHookMetas: null, bookHookProgram: null, bookHookState: null, bookMakerOption: null,
     }).preInstructions([CU(400_000)]);
     if (expectErr) { let msg = ""; try { await b.rpc(); } catch (x: any) { msg = String(x); } return msg; }
     await b.rpc();
@@ -344,7 +344,7 @@ describe("B1: StopEntryBuy → book (writer_ask_fill_core, escrow-pays)", functi
       sbQueue: null, sbSlothashes: null, sbInstructions: null,
       bookOrder: null, bookMaker: null, bookEscrow: null, bookMakerUsdc: null,
       writerAskPot: null, writerAskPotUsdc: null, writerAskPosition: null,
-      resaleHookMetas: null, resaleHookProgram: null, resaleHookState: null,
+      bookHookMetas: null, bookHookProgram: null, bookHookState: null, bookMakerOption: null,
     }).preInstructions([CU(400_000)]).rpc();
 
     const vaultShare = (await bal(e, m.vaultUsdc)) - vBefore;
@@ -395,7 +395,7 @@ describe("B1: StopEntryBuy → book (writer_ask_fill_core, escrow-pays)", functi
       sbQueue: null, sbSlothashes: null, sbInstructions: null,
       bookOrder: resale.order, bookMaker: reseller.publicKey, bookEscrow: resale.escrow, bookMakerUsdc: resellerUsdc,
       writerAskPot: null, writerAskPotUsdc: null, writerAskPosition: null,
-      resaleHookMetas: m.extraMetas, resaleHookProgram: HOOK_PROGRAM_ID, resaleHookState: m.hookState,
+      bookHookMetas: m.extraMetas, bookHookProgram: HOOK_PROGRAM_ID, bookHookState: m.hookState, bookMakerOption: null,
     }).preInstructions([CU(400_000)]).rpc();
 
     const total = RP.muln(Q);              // $10

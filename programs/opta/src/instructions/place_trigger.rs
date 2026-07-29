@@ -20,8 +20,10 @@
 //       so a P1 fire can never fail on a missing ATA. Store its key.
 //     - max_premium must be > 0.
 //
-//   TakeProfitSell:
-//     - no escrow; escrow_funded = false; reject a nonzero max_premium (store 0).
+//   TakeProfitSell / StopLossSell:
+//     - no escrow; escrow_funded = false. `max_premium` is stored VERBATIM and
+//       carries the sell-side meaning: the per-contract MINIMUM-PROCEEDS FLOOR a
+//       B2 book fire must beat (0 = book ineligible → vault fallback only).
 //     - SANITY ONLY: the caller passes the owner's existing Token-2022 ATA for
 //       option_mint; verify mint + owner + balance >= quantity from the raw ATA
 //       bytes (the exercise_american.rs:92-101 read). Balance is RE-checked at
@@ -141,13 +143,30 @@ pub fn handle_place_trigger(
         }
         // -------------------------------------------------------------------
         // StopLossSell shares placement semantics with TakeProfitSell (both are
-        // sells: no escrow, sanity-check the source ATA). StopLossSell's FIRE path
-        // is dark until B2 — execute_trigger rejects it — but staging is harmless
-        // and forward-compatible (B2 only wires the fire leg).
+        // sells: no escrow, sanity-check the source ATA).
         TriggerKind::TakeProfitSell | TriggerKind::StopLossSell => {
-            // Keep the field honest: a sell escrows nothing, so reject a nonzero
-            // ceiling and store 0.
-            require!(max_premium == 0, OptaError::InvalidPremium);
+            // B2: `max_premium` carries the SELL-SIDE meaning of the same field —
+            // the per-contract MINIMUM-PROCEEDS FLOOR the book fire must beat.
+            // (BUY: a per-contract ceiling on what the owner will PAY. SELL: a
+            // per-contract floor on what the owner will ACCEPT. Same field, same
+            // units, mirrored direction — no layout change.)
+            //
+            // Pre-B2 this arm required 0. It no longer does, because a sell with
+            // no floor is unsafe the moment sells can route to the book:
+            // execute_trigger is PERMISSIONLESS, so a floorless stop-loss could be
+            // fired into an attacker's own 1-unit bid and the contract taken for a
+            // rounding error. The floor is the owner's only defence and it must be
+            // stored at placement — the fire-time caller is untrusted by
+            // construction and cannot be allowed to supply it.
+            //
+            // 0 stays LEGAL and means "book ineligible" (execute_trigger's book
+            // arm refuses it with SellFloorRequired / 6082). That keeps every
+            // pre-B2 placement valid and keeps its behaviour exactly as it was:
+            // a TakeProfitSell still falls back to the vault exercise path, and a
+            // StopLossSell still cannot fire. Opting into the book is an explicit,
+            // priced decision the owner makes at placement.
+            //
+            // A sell still escrows NOTHING — `escrow_funded` stays false below.
 
             // SANITY: the declared source ATA must be the owner's, on this mint,
             // and currently hold >= quantity. Raw Token-2022 layout:
@@ -178,7 +197,7 @@ pub fn handle_place_trigger(
             let balance = u64::from_le_bytes(amount_bytes);
             require!(balance >= quantity, OptaError::InsufficientOptionTokens);
 
-            (false, 0u64)
+            (false, max_premium)
         }
     };
 

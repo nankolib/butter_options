@@ -55,13 +55,22 @@ pub const WRITER_ASKS_ENABLED: bool = true;
 pub const WRITER_ASKS_ENABLED: bool = true;
 
 // =============================================================================
-// BOOK_TRIGGERS_ENABLED — Phase B1 book-path StopEntryBuy fires (DARK)
+// BOOK_TRIGGERS_ENABLED — book-path trigger fires, both legs (DARK)
 // =============================================================================
 //
-// When TRUE, execute_trigger's StopEntryBuy routes to the book — lifting the
-// writer's live ask board via writer_ask_fill_core (primary) / resale_ask_fill_
-// core (secondary), escrow-pays arm — instead of the structurally-dead vault peg
-// (98% of vaults hold zero pooled collateral board-wide).
+// When TRUE, execute_trigger routes trigger fires to the BOOK instead of the
+// structurally-dead pooled vault (98% of vaults hold zero pooled collateral
+// board-wide):
+//   B1 BUY  — StopEntryBuy lifts the live ask board via writer_ask_fill_core
+//             (primary) / resale_ask_fill_core (secondary), escrow-pays arm.
+//   B2 SELL — TakeProfitSell and StopLossSell hit the live bid board via
+//             bid_fill_core, delegate-pull arm. StopLossSell has NO vault path
+//             (an OTM long cannot be exercised), so this flag is the whole of
+//             its fire path: false ⇒ 6079, true ⇒ book-or-skip.
+//
+// The sell leg additionally enforces the owner's stored per-contract minimum-
+// proceeds floor (6082/6083) — see execute_trigger.rs. That floor is meaningless
+// while this flag is false, since no sell can reach the book.
 //
 // SHAPE = the WRITER_ASKS_ENABLED dark pattern (NOT a plain flip-in-place const):
 // a pure const is false in every build and could never be exercised by the
@@ -75,8 +84,13 @@ pub const WRITER_ASKS_ENABLED: bool = true;
 //
 // FLIP (Jul-31 canary session): change the `not(feature = "testing")` branch
 // below from `false` to `true` and redeploy feature-free. The canary is the live
-// acceptance test on the book path. Until then, prod is dark and the vault-peg
-// fallback is intact.
+// acceptance test on the book path. Until then, prod is dark, the vault-peg
+// fallback is intact, and StopLossSell still reverts 6079.
+//
+// NOTE for the flip session: flipping this turns the SELL legs live too, and the
+// bid side is empty by design until writer bids ship. That is intentional and
+// safe — a sell with nothing to cross takes the skip-until-bid path (stays armed,
+// quiet TriggerSkipped), it does not revert and does not fall into the vault.
 #[cfg(feature = "testing")]
 pub const BOOK_TRIGGERS_ENABLED: bool = true;
 

@@ -126,7 +126,16 @@ pub struct TriggerOrder {
     /// BUY: PER-CONTRACT escrow ceiling (USDC 6-dec). The escrowed figure is
     /// `max_premium * quantity`. ⚠️ UNITS: this is PER-CONTRACT; fill_vault_peg's
     /// own `max_premium` arg (P1) is a fee-inclusive TOTAL — do not conflate.
-    /// SELL: stored as 0 (no escrow).
+    /// SELL (B2): the mirrored constraint — the PER-CONTRACT MINIMUM-PROCEEDS
+    /// FLOOR a book bid must beat before `execute_trigger` will sell into it.
+    /// Same field, same units, opposite direction (buy = ceiling on what the
+    /// owner pays; sell = floor on what the owner accepts). A sell still escrows
+    /// nothing. 0 is legal and means BOOK INELIGIBLE — the book arm refuses it
+    /// with `SellFloorRequired` (6082), so every pre-B2 sell (all stored 0) keeps
+    /// exactly its old behaviour: TakeProfitSell falls back to the vault exercise
+    /// path, StopLossSell stays unfireable. This field is the owner's ONLY
+    /// defence on the sell side, because `execute_trigger` is permissionless and
+    /// the fire-time caller therefore cannot be trusted to supply a price bound.
     pub max_premium: u64,
 
     /// SELL: the exact ATA to delegate-burn from at fire (P1).

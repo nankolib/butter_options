@@ -349,7 +349,7 @@ describe("trigger orders — Pass 0 (place + cancel)", function () {
       // Phase B1: book-fire optionals [21]-[30] — null → vault-peg path (unchanged).
       bookOrder: null, bookMaker: null, bookEscrow: null, bookMakerUsdc: null,
       writerAskPot: null, writerAskPotUsdc: null, writerAskPosition: null,
-      resaleHookMetas: null, resaleHookProgram: null, resaleHookState: null,
+      bookHookMetas: null, bookHookProgram: null, bookHookState: null, bookMakerOption: null,
     }).preInstructions([CU(400_000)]).rpc();
   }
 
@@ -570,7 +570,7 @@ describe("trigger orders — Pass 0 (place + cancel)", function () {
       // Phase B1: book-fire optionals [21]-[30] — null → vault-peg path (unchanged).
       bookOrder: null, bookMaker: null, bookEscrow: null, bookMakerUsdc: null,
       writerAskPot: null, writerAskPotUsdc: null, writerAskPosition: null,
-      resaleHookMetas: null, resaleHookProgram: null, resaleHookState: null,
+      bookHookMetas: null, bookHookProgram: null, bookHookState: null, bookMakerOption: null,
     };
   }
 

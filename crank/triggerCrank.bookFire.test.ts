@@ -5,7 +5,7 @@
 // book-fire building blocks the Jul-31 flip will wire into the tick:
 //   - selectBestAsk: cheapest ask ≤ max_premium, WriterAsk wins exact ties,
 //     ResaleAsk only when strictly better-priced, zero-depth/over-budget rejected.
-//   - assembleBookAccounts: the ten [21]-[30] optionals in BOOK_ACCOUNT_ROLES
+//   - assembleBookAccounts / assembleBidAccounts: the eleven [21]-[31] optionals
 //     order, kind-correct null pattern, PDAs matching the on-chain seeds.
 // The assembler's key order is asserted against BOOK_ACCOUNT_ROLES so a struct
 // reorder on EITHER side (keeper or execute_trigger.rs) breaks this test.
@@ -13,17 +13,21 @@
 
 import assert from "node:assert/strict";
 import { PublicKey, Keypair } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID, getAssociatedTokenAddressSync } from "@solana/spl-token";
+import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, getAssociatedTokenAddressSync } from "@solana/spl-token";
 
 import { Connection } from "@solana/web3.js";
 import {
   selectBestAsk,
+  selectBestBid,
+  classifySellRoute,
   assembleBookAccounts,
+  assembleBidAccounts,
   assembleExecuteAccounts,
   buildExecuteTriggerIx,
   loadTriggerProgram,
   BOOK_ACCOUNT_ROLES,
   type BookAskView,
+  type BookBidView,
   type TriggerView,
 } from "./triggerCrank";
 
@@ -127,9 +131,9 @@ test("assembleBookAccounts: WriterAsk → pot/position set, hook accounts null",
   assert.equal((acc.writer_ask_position as PublicKey).toBase58(), expPos.toBase58());
 
   // [28]-[30] null on a writer-ask fire.
-  assert.equal(acc.resale_hook_metas, null);
-  assert.equal(acc.resale_hook_program, null);
-  assert.equal(acc.resale_hook_state, null);
+  assert.equal(acc.book_hook_metas, null);
+  assert.equal(acc.book_hook_program, null);
+  assert.equal(acc.book_hook_state, null);
 });
 
 test("assembleBookAccounts: ResaleAsk → hook accounts set, pot/position null", () => {
@@ -146,30 +150,141 @@ test("assembleBookAccounts: ResaleAsk → hook accounts set, pot/position null",
     [Buffer.from("extra-account-metas"), MINT.toBuffer()], HOOK_ID)[0];
   const expState = PublicKey.findProgramAddressSync(
     [Buffer.from("hook-state"), MINT.toBuffer()], HOOK_ID)[0];
-  assert.equal((acc.resale_hook_metas as PublicKey).toBase58(), expMetas.toBase58());
-  assert.equal((acc.resale_hook_program as PublicKey).toBase58(), HOOK_ID.toBase58());
-  assert.equal((acc.resale_hook_state as PublicKey).toBase58(), expState.toBase58());
+  assert.equal((acc.book_hook_metas as PublicKey).toBase58(), expMetas.toBase58());
+  assert.equal((acc.book_hook_program as PublicKey).toBase58(), HOOK_ID.toBase58());
+  assert.equal((acc.book_hook_state as PublicKey).toBase58(), expState.toBase58());
 
   // The shared [21]-[24] slots are always populated (escrow seed is kind-agnostic).
   assert.ok(acc.book_order && acc.book_maker && acc.book_escrow && acc.book_maker_usdc);
 });
 
-test("BOOK_ACCOUNT_ROLES: exactly the ten [21]-[30] roles in struct order", () => {
+test("BOOK_ACCOUNT_ROLES: exactly the eleven [21]-[31] roles in struct order", () => {
   assert.deepEqual([...BOOK_ACCOUNT_ROLES], [
     "book_order", "book_maker", "book_escrow", "book_maker_usdc",
     "writer_ask_pot", "writer_ask_pot_usdc", "writer_ask_position",
-    "resale_hook_metas", "resale_hook_program", "resale_hook_state",
+    "book_hook_metas", "book_hook_program", "book_hook_state",
+    "book_maker_option",
   ]);
 });
 
+// ---- B2: selectBestBid / assembleBidAccounts / classifySellRoute -----------
+function mkBid(over: Partial<BookBidView> = {}): BookBidView {
+  return {
+    pubkey: Keypair.generate().publicKey.toBase58(),
+    owner: Keypair.generate().publicKey.toBase58(),
+    optionMint: MINT.toBase58(),
+    vault: VAULT.toBase58(),
+    pricePerContract: usd(5),
+    quantityRemaining: 10n,
+    ...over,
+  };
+}
+
+test("selectBestBid: picks the HIGHEST bid at or above the floor", () => {
+  const low = mkBid({ pricePerContract: usd(4) });
+  const high = mkBid({ pricePerContract: usd(9) });
+  const mid = mkBid({ pricePerContract: usd(6) });
+  assert.equal(selectBestBid([low, high, mid], usd(3))?.pubkey, high.pubkey);
+});
+
+test("selectBestBid: bids below the floor are never selected", () => {
+  const under = mkBid({ pricePerContract: usd(2) });
+  assert.equal(selectBestBid([under], usd(5)), undefined);
+  // …and the floor is inclusive.
+  const exact = mkBid({ pricePerContract: usd(5) });
+  assert.equal(selectBestBid([exact], usd(5))?.pubkey, exact.pubkey);
+});
+
+test("selectBestBid: zero-depth bids are skipped even when best-priced", () => {
+  const empty = mkBid({ pricePerContract: usd(9), quantityRemaining: 0n });
+  const real = mkBid({ pricePerContract: usd(6) });
+  assert.equal(selectBestBid([empty, real], usd(1))?.pubkey, real.pubkey);
+});
+
+test("selectBestBid: floor 0 is BOOK INELIGIBLE — never selects (6082 on-chain)", () => {
+  // Every pre-B2 sell trigger stored max_premium 0. The keeper must not hand any
+  // of them a bid, or the on-chain arm would reject with SellFloorRequired.
+  assert.equal(selectBestBid([mkBid({ pricePerContract: usd(9) })], 0n), undefined);
+});
+
+test("selectBestBid: empty book → undefined (the steady state, not an error)", () => {
+  assert.equal(selectBestBid([], usd(5)), undefined);
+});
+
+test("assembleBidAccounts: [21]-[23]+[28]-[31] set, [24]-[27] null, roles ordered", () => {
+  const bid = mkBid();
+  const acc = assembleBidAccounts(bid, PROGRAM_ID, HOOK_ID);
+  // Key ORDER must equal the on-chain struct order.
+  assert.deepEqual(Object.keys(acc), [...BOOK_ACCOUNT_ROLES]);
+  // [21]-[23]
+  assert.equal(acc.book_order!.toBase58(), bid.pubkey);
+  assert.equal(acc.book_maker!.toBase58(), bid.owner);
+  assert.equal(
+    acc.book_escrow!.toBase58(),
+    PublicKey.findProgramAddressSync(
+      [Buffer.from("resting_order_escrow"), new PublicKey(bid.pubkey).toBuffer()], PROGRAM_ID)[0].toBase58(),
+    "book_escrow is the per-order PDA the program re-derives");
+  // [24]-[27] are ask-only on a sell.
+  assert.equal(acc.book_maker_usdc, null, "a sell pays owner_usdc_account, not the maker");
+  assert.equal(acc.writer_ask_pot, null);
+  assert.equal(acc.writer_ask_pot_usdc, null);
+  assert.equal(acc.writer_ask_position, null);
+  // [28]-[30] shared hook triad — required, the option leg dispatches the hook.
+  assert.equal(acc.book_hook_program!.toBase58(), HOOK_ID.toBase58());
+  assert.ok(acc.book_hook_metas, "hook metas required on a sell");
+  assert.ok(acc.book_hook_state, "hook state required on a sell");
+  // [31] destination = the BIDDER's option ATA, exactly what the program pins to.
+  assert.equal(
+    acc.book_maker_option!.toBase58(),
+    getAssociatedTokenAddressSync(MINT, new PublicKey(bid.owner), false, TOKEN_2022_PROGRAM_ID).toBase58(),
+    "book_maker_option is the maker's Token-2022 ATA on (bid.owner, option_mint)");
+});
+
+test("assembleBidAccounts: buy assembler leaves [31] null (shapes stay disjoint)", () => {
+  const acc = assembleBookAccounts(mkAsk(), USDC, PROGRAM_ID, HOOK_ID);
+  assert.equal(acc.book_maker_option, null, "a buy never populates the sell delivery slot");
+});
+
+test("classifySellRoute: floor 0 → TP falls back to the vault, SL is book-ineligible", () => {
+  const bids = [mkBid({ pricePerContract: usd(9) })];
+  assert.deepEqual(classifySellRoute("takeProfitSell", 0n, bids), { route: "vault" });
+  assert.deepEqual(classifySellRoute("stopLossSell", 0n, bids), {
+    route: "skip", reason: "book_ineligible",
+  });
+});
+
+test("classifySellRoute: skip-until-bid — empty book is a QUIET skip, not an error", () => {
+  // The live bid side is empty by design, so this is what every StopLossSell
+  // returns on every tick until writer bids ship.
+  assert.deepEqual(classifySellRoute("stopLossSell", usd(5), []), {
+    route: "skip", reason: "no_crossing_bid",
+  });
+  // Same when bids exist but all price under the owner's floor.
+  assert.deepEqual(classifySellRoute("stopLossSell", usd(5), [mkBid({ pricePerContract: usd(2) })]), {
+    route: "skip", reason: "no_crossing_bid",
+  });
+  // A TakeProfitSell still has somewhere to go.
+  assert.deepEqual(classifySellRoute("takeProfitSell", usd(5), []), { route: "vault" });
+});
+
+test("classifySellRoute: a crossing bid routes to the book for BOTH sell kinds", () => {
+  const best = mkBid({ pricePerContract: usd(8) });
+  const bids = [mkBid({ pricePerContract: usd(6) }), best];
+  for (const k of ["takeProfitSell", "stopLossSell"] as const) {
+    const r = classifySellRoute(k, usd(5), bids);
+    assert.equal(r.route, "book", `${k} routes to the book`);
+    assert.equal((r as any).bid.pubkey, best.pubkey, `${k} takes the best bid`);
+  }
+});
+
 // ---- Peg-path ix builds against the NEW IDL (the live-keeper crash guard) ---
-// After the program upgrade the crank IDL declares the ten book optionals, and
+// After the program upgrade the crank IDL declares the eleven book optionals, and
 // accountsStrict requires EVERY declared account. assembleExecuteAccounts (peg
 // path) must therefore pass them as null → Anchor emits the program-id sentinel
 // → the on-chain arm reads book_order == None → vault peg. If a future edit drops
 // those nulls, this test fails BEFORE the change reaches the VPS (where it would
 // otherwise crash the keeper on every fire).
-test("assembleExecuteAccounts (peg): executeTrigger ix builds with all 31 accounts vs new IDL", async () => {
+test("assembleExecuteAccounts (peg): executeTrigger ix builds with all 32 accounts vs new IDL", async () => {
   const dummyWallet = {
     publicKey: PROGRAM_ID,
     signTransaction: async (t: any) => t,
@@ -188,17 +303,17 @@ test("assembleExecuteAccounts (peg): executeTrigger ix builds with all 31 accoun
   };
   const accounts = assembleExecuteAccounts(
     view, MINT.toBuffer(), USDC, PROGRAM_ID, PublicKey.default, program.programId, null);
-  // 21 base/SB roles + 10 book roles must all be present as null (or real).
+  // 21 base/SB roles + 11 book roles must all be present as null (or real).
   for (const role of BOOK_ACCOUNT_ROLES) {
     const camel = role.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
     assert.ok(camel in accounts, `peg assembler must include ${camel} (null)`);
     assert.equal((accounts as any)[camel], null, `${camel} must be null on the peg path`);
   }
   const ix = await buildExecuteTriggerIx(program, accounts);
-  // 31 = 18 base + 3 SB + 10 book; the ten book keys are the program-id sentinel.
-  assert.equal(ix.keys.length, 31, "executeTrigger ix has all 31 accounts");
+  // 32 = 18 base + 3 SB + 11 book; the eleven book keys are the program-id sentinel.
+  assert.equal(ix.keys.length, 32, "executeTrigger ix has all 32 accounts");
   const tail = ix.keys.slice(21).filter((k) => k.pubkey.equals(program.programId));
-  assert.equal(tail.length, 10, "the ten book optionals are the program-id sentinel (None)");
+  assert.equal(tail.length, 11, "the eleven book optionals are the program-id sentinel (None)");
 });
 
 // ---- Runner ----------------------------------------------------------------

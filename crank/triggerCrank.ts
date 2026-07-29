@@ -150,15 +150,21 @@ const EXECUTE_ACCOUNT_ROLES = [
   "sb_queue", "sb_slothashes", "sb_instructions",
 ];
 
-// Phase B1: the ten trailing book-fire optionals [21]-[30], in the EXACT order
-// execute_trigger.rs declares them (see its KEEPER POSITIONAL LAYOUT comment).
-// A WriterAsk fire populates [21]-[27] and nulls [28]-[30]; a ResaleAsk fire is
-// the reverse. This array is the single source of truth the assembler + its unit
-// test both pin to, so a struct-order change on either side breaks the test.
+// The ELEVEN trailing book-fire optionals [21]-[31], in the EXACT order
+// execute_trigger.rs declares them (see its positional-layout table). Three fire
+// shapes share these slots:
+//   WriterAsk buy (B1) → [21]-[27]           ([28]-[31] null)
+//   ResaleAsk buy (B1) → [21]-[24],[28]-[30] ([25]-[27],[31] null)
+//   Bid sell      (B2) → [21]-[23],[28]-[31] ([24]-[27] null)
+// [28]-[30] are the SHARED per-series transfer-hook triad — required by ANY leg
+// that moves option tokens, so they are book_hook_* and not resale-specific.
+// This array is the single source of truth both assemblers + their unit tests
+// pin to, so a struct reorder on either side breaks the test.
 export const BOOK_ACCOUNT_ROLES = [
   "book_order", "book_maker", "book_escrow", "book_maker_usdc",
   "writer_ask_pot", "writer_ask_pot_usdc", "writer_ask_position",
-  "resale_hook_metas", "resale_hook_program", "resale_hook_state",
+  "book_hook_metas", "book_hook_program", "book_hook_state",
+  "book_maker_option",
 ] as const;
 
 // ---- Types -----------------------------------------------------------------
@@ -516,9 +522,10 @@ export function assembleExecuteAccounts(
     writerAskPot: null,
     writerAskPotUsdc: null,
     writerAskPosition: null,
-    resaleHookMetas: null,
-    resaleHookProgram: null,
-    resaleHookState: null,
+    bookHookMetas: null,
+    bookHookProgram: null,
+    bookHookState: null,
+    bookMakerOption: null,
   };
 }
 
@@ -604,10 +611,137 @@ export function assembleBookAccounts(
     writer_ask_pot_usdc: isWriter ? seed(WRITER_ASK_POT_USDC_SEED, [optionMint.toBuffer()]) : null,
     writer_ask_position: isWriter
       ? seed(WRITER_ASK_POSITION_SEED, [optionMint.toBuffer(), maker.toBuffer()]) : null,
-    resale_hook_metas: isWriter ? null : seed(EXTRA_ACCOUNT_METAS_SEED, [optionMint.toBuffer()], hookProgramId),
-    resale_hook_program: isWriter ? null : hookProgramId,
-    resale_hook_state: isWriter ? null : seed(HOOK_STATE_SEED, [optionMint.toBuffer()], hookProgramId),
+    book_hook_metas: isWriter ? null : seed(EXTRA_ACCOUNT_METAS_SEED, [optionMint.toBuffer()], hookProgramId),
+    book_hook_program: isWriter ? null : hookProgramId,
+    book_hook_state: isWriter ? null : seed(HOOK_STATE_SEED, [optionMint.toBuffer()], hookProgramId),
+    // [31] is the SELL leg's delivery destination — never populated by a buy.
+    book_maker_option: null,
   };
+}
+
+// ============================================================================
+// Phase B2: sell-leg bid selection + positional account assembly (PURE)
+// ============================================================================
+//
+// DORMANT until the flip, exactly as the B1 buy-side helpers are. Additionally
+// dormant in PRACTICE: the live bid side is empty by design today, so
+// selectBestBid returns undefined on every real board and the tick emits the
+// quiet skip class below rather than a fire. These are unit-tested now so the
+// flip session only has to wire bid discovery into the tick.
+
+/** Plain view of a resting bid eligible for a sell-leg fire. */
+export interface BookBidView {
+  pubkey: string;
+  owner: string;
+  optionMint: string;
+  vault: string;
+  pricePerContract: bigint; // 6-dec
+  quantityRemaining: bigint;
+}
+
+/**
+ * Choose the bid a sell trigger should hit THIS fire — the HIGHEST-priced resting
+ * bid that still has depth and that meets the owner's stored per-contract
+ * minimum-proceeds floor. Mirror image of `selectBestAsk` (cheapest within a
+ * ceiling ↔ dearest above a floor).
+ *
+ * `floorPerContract` is the trigger's `max_premium` read with its sell-side
+ * meaning. A floor of 0n means the trigger is BOOK INELIGIBLE — it was placed
+ * before B2 (or deliberately without a floor), and the on-chain arm would revert
+ * it with SellFloorRequired (6082), so never select a bid for it at all.
+ *
+ * The on-chain arm re-validates price >= floor (BidPriceBelowMin / 6083); this
+ * only governs WHICH bid the keeper hands over. Returning `undefined` is the
+ * normal, expected outcome and must be treated as skip-until-bid, not an error.
+ */
+export function selectBestBid(
+  bids: BookBidView[], floorPerContract: bigint,
+): BookBidView | undefined {
+  if (floorPerContract <= 0n) return undefined; // book ineligible — 6082 on-chain
+  let best: BookBidView | undefined;
+  for (const b of bids) {
+    if (b.quantityRemaining <= 0n) continue;
+    if (b.pricePerContract < floorPerContract) continue;
+    if (!best || b.pricePerContract > best.pricePerContract) best = b;
+  }
+  return best;
+}
+
+/**
+ * Assemble the eleven [21]-[31] optionals in BOOK_ACCOUNT_ROLES order for a
+ * sell-leg fire against `bid`. Populates [21]-[23] + [28]-[31]; [24]-[27] are
+ * ask-only and stay null:
+ *   [24] book_maker_usdc — a sell pays the TRIGGER OWNER out of the bid escrow,
+ *        and owner_usdc_account (base slot 12) is that destination. The maker has
+ *        no USDC leg on this side at all.
+ *   [25]-[27] writer-ask pot/position — writer-ask bookkeeping, irrelevant to a
+ *        bid fill (nothing is minted; the contract merely changes hands).
+ *
+ * `book_maker_option` is the bidder's option ATA. The on-chain arm pins it to
+ * (bid.owner, option_mint) before the transfer, so deriving it here from exactly
+ * those two values is what keeps the keeper from ever sending a rejectable tx.
+ * It must EXIST at fire time — the caller prepends an idempotent ATA create.
+ */
+export function assembleBidAccounts(
+  bid: BookBidView, programId: PublicKey, hookProgramId: PublicKey,
+): Record<string, PublicKey | null> {
+  const order = new PublicKey(bid.pubkey);
+  const maker = new PublicKey(bid.owner);
+  const optionMint = new PublicKey(bid.optionMint);
+  const seed = (s: string, extra: Buffer[] = [], pid = programId) =>
+    PublicKey.findProgramAddressSync([Buffer.from(s), ...extra], pid)[0];
+
+  // Insertion order MUST equal BOOK_ACCOUNT_ROLES → the on-chain struct order.
+  return {
+    book_order: order,
+    book_maker: maker,
+    book_escrow: seed(RESTING_ORDER_ESCROW_SEED, [order.toBuffer()]),
+    book_maker_usdc: null,
+    writer_ask_pot: null,
+    writer_ask_pot_usdc: null,
+    writer_ask_position: null,
+    book_hook_metas: seed(EXTRA_ACCOUNT_METAS_SEED, [optionMint.toBuffer()], hookProgramId),
+    book_hook_program: hookProgramId,
+    book_hook_state: seed(HOOK_STATE_SEED, [optionMint.toBuffer()], hookProgramId),
+    book_maker_option: getAssociatedTokenAddressSync(optionMint, maker, false, TOKEN_2022_PROGRAM_ID),
+  };
+}
+
+/** Why a sell trigger produced no book fire this tick. Both are QUIET, expected
+ *  states — never errors, never `report.orderErrors`. */
+export type SellSkipReason = "no_crossing_bid" | "book_ineligible";
+
+export type SellRoute =
+  | { route: "book"; bid: BookBidView }
+  | { route: "vault" }
+  | { route: "skip"; reason: SellSkipReason };
+
+/**
+ * Decide how a sell trigger is routed THIS tick. Pure — mirrors the on-chain
+ * dispatch in execute_trigger's sell arm exactly, so the keeper never sends a tx
+ * the program would refuse:
+ *
+ *   floor 0, TakeProfitSell   → vault  (unchanged fallback; 6082 on the book arm)
+ *   floor 0, StopLossSell     → skip:book_ineligible  (no vault path exists)
+ *   floor > 0, bid found      → book   (assembleBidAccounts supplies [21]-[31])
+ *   floor > 0, no bid,  TP    → vault  (fall back rather than stall)
+ *   floor > 0, no bid,  SL    → skip:no_crossing_bid
+ *
+ * SKIP-UNTIL-BID IS THE STEADY STATE. The bid side is empty by design today, so
+ * `no_crossing_bid` is what every live StopLossSell returns on every tick until
+ * writer bids ship. It is logged at the quiet `skip` class alongside
+ * condition_not_met — a stop-loss with nothing to cross is a market fact, not a
+ * keeper failure, and must never page anyone.
+ */
+export function classifySellRoute(
+  kind: "takeProfitSell" | "stopLossSell",
+  floorPerContract: bigint,
+  bids: BookBidView[],
+): SellRoute {
+  const bid = selectBestBid(bids, floorPerContract);
+  if (bid) return { route: "book", bid };
+  if (kind === "takeProfitSell") return { route: "vault" };
+  return { route: "skip", reason: floorPerContract <= 0n ? "book_ineligible" : "no_crossing_bid" };
 }
 
 /** Build the execute_trigger instruction (offline — no RPC). */

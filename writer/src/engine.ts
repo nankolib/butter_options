@@ -17,14 +17,37 @@ import type { WriterConfig } from "./env";
 import type { Chain } from "./chain";
 import { getBalanceSol, getFreeUsdc, sendTx, accountExists } from "./chain";
 import { log, Heartbeat } from "./log";
-import { enumerateMarkets, readOracle, enumerateMyOrders, type MarketInfo, type MyOrder } from "./discovery";
+import {
+  enumerateMarkets, readOracle, enumerateMyOrders, enumerateMyBids, enumerateMyLongs,
+  type MarketInfo, type MyOrder, type MyBid,
+} from "./discovery";
 import { buildLadder, classifyTier, type TargetCell } from "./ladder";
 import { seriesMintPda, mintRecordPda, vaultAmericanPda } from "./ids";
 import { fetchQuote, applySpread, toUsdcBN, QuoteFailure } from "./pricing";
 import {
-  createSeriesIx, createSharedVaultIx, postWriterAskIx, cancelOrderIx, CU, type BuildCtx,
+  createSeriesIx, createSharedVaultIx, postWriterAskIx, postBidIx, cancelOrderIx, CU, type BuildCtx,
 } from "./builders";
 import { isMarketHours } from "./marketHours";
+import { decideBid, type AskOutcome, type BidPolicy } from "./bids";
+
+/**
+ * What the ask loop did to one cell this tick, plus the market context the bid
+ * pass needs. The bid is a DEPENDENT quote — it is derived from this record and
+ * from nothing else, which is what keeps the no-cross invariant true by
+ * construction rather than by periodic re-check.
+ */
+interface AskCellOutcome {
+  cell: TargetCell;
+  market: MarketInfo;
+  seriesMint: PublicKey;
+  outcome: AskOutcome;
+  /** The ask price actually RESTING on chain after the ask loop acted. */
+  restingAskPrice: number | null;
+  mark: number;
+  marketOpen: boolean;
+  quoteFails: number;
+  oracleReady: boolean;
+}
 
 const EQUITY_MIN_LEAD_SECS = 24 * 3600; // don't post an equity ask expiring within a day
 
@@ -219,6 +242,18 @@ export class WriterEngine {
     let postedThisRun = 0;
     const perAssetLive = new Map<string, number>();
     const targetSeries = new Set<string>();
+    // C1: what the ask loop did, per cell. Populated by `record` below and
+    // consumed by bidPass() STRICTLY AFTER this loop finishes — never during, so
+    // the ask budget is fully settled before a single bid is considered.
+    const askOutcomes: AskCellOutcome[] = [];
+    const record = (
+      o: Omit<AskCellOutcome, "marketOpen" | "quoteFails" | "oracleReady"> &
+        Partial<Pick<AskCellOutcome, "marketOpen" | "quoteFails" | "oracleReady">>,
+    ) => {
+      askOutcomes.push({
+        marketOpen: true, quoteFails: 0, oracleReady: true, ...o,
+      } as AskCellOutcome);
+    };
     // In dry-run the preview shows intended asks unconstrained by current USDC
     // (funding lands just before go-live); live runs enforce the real balance.
     let quoteBudget = this.cfg.dryRun ? Infinity : freeUsdc;
@@ -270,6 +305,10 @@ export class WriterEngine {
           const hrs = isMarketHours(nowSec, market.assetClass);
           if (!hrs.ok) {
             if (existing) await this.pull(seriesMint, existing, "market-closed");
+            record({
+              cell, market, seriesMint, outcome: "pulled", restingAskPrice: null,
+              mark: 0, marketOpen: false,
+            });
             continue;
           }
         }
@@ -287,9 +326,16 @@ export class WriterEngine {
           this.failCounts.set(s58, n);
           this.hb.onQuoteFail();
           if (existing && n >= this.cfg.quoteFailPullThreshold) await this.pull(seriesMint, existing, `quote-fail:${kind}`);
+          record({
+            cell, market, seriesMint, outcome: "pulled", restingAskPrice: null,
+            mark: 0, quoteFails: n,
+          });
           continue;
         }
-        if (askPremium <= 0) continue;
+        if (askPremium <= 0) {
+          record({ cell, market, seriesMint, outcome: "absent", restingAskPrice: null, mark: 0 });
+          continue;
+        }
         const askMicro = toUsdcBN(askPremium);
 
         if (existing) {
@@ -306,32 +352,55 @@ export class WriterEngine {
           // moves like 0.021416 → 0.021368 (0.05%) every cycle. Drift-triggered
           // reprices are NEVER skipped; only the age path is ε-gated.
           if (action === "reprice") {
-            await this.reprice(cell, market, seriesMint, existing, askMicro, nowSec);
-          } else if (action === "skip-epsilon") {
-            log.info("reprice-skip-epsilon", {
-              asset: cell.assetName, strike: cell.strikeDollars, side: cell.side,
-              driftPct: +(drift * 100).toFixed(4), epsilonPct: REPRICE_EPSILON * 100,
+            const ok = await this.reprice(cell, market, seriesMint, existing, askMicro, nowSec);
+            record({
+              cell, market, seriesMint,
+              outcome: ok ? "repriced" : "absent",
+              restingAskPrice: ok ? askPremium : null,
+              mark: askPremium / (1 + cell.spreadBps / 10_000),
+            });
+          } else {
+            if (action === "skip-epsilon") {
+              log.info("reprice-skip-epsilon", {
+                asset: cell.assetName, strike: cell.strikeDollars, side: cell.side,
+                driftPct: +(drift * 100).toFixed(4), epsilonPct: REPRICE_EPSILON * 100,
+              });
+            }
+            // Held (or ε-skipped): the OLD price is what is resting on chain.
+            record({
+              cell, market, seriesMint, outcome: "held", restingAskPrice: restPrice,
+              mark: askPremium / (1 + cell.spreadBps / 10_000),
             });
           }
           continue;
         }
 
-        // New post — respect caps + USDC budget.
-        if (liveGlobal >= this.cfg.globalVaultCap) { log.info("cap-global", { cap: this.cfg.globalVaultCap }); continue; }
-        if (assetLive >= this.cfg.maxCellsPerAsset) continue;
+        // New post — respect caps + USDC budget. Every early-out here means NO
+        // resting ask on this series, so the bid pass must see "absent" and
+        // refuse to quote a bid with no anchor.
+        const noAnchor = () =>
+          record({ cell, market, seriesMint, outcome: "absent", restingAskPrice: null, mark: askPremium / (1 + cell.spreadBps / 10_000) });
+        if (liveGlobal >= this.cfg.globalVaultCap) { log.info("cap-global", { cap: this.cfg.globalVaultCap }); noAnchor(); continue; }
+        if (assetLive >= this.cfg.maxCellsPerAsset) { noAnchor(); continue; }
         // MAX_CELLS caps TOTAL live asks (existing on-chain + new), not per-tick
         // new posts — else the ladder grows every tick. liveGlobal starts at the
         // wallet's current order count and increments per post, so once the cap
         // is reached the bot only reprices, never adds.
-        if (this.cfg.maxCellsThisRun > 0 && liveGlobal >= this.cfg.maxCellsThisRun) continue;
+        if (this.cfg.maxCellsThisRun > 0 && liveGlobal >= this.cfg.maxCellsThisRun) { noAnchor(); continue; }
         const collateral = cell.strikeDollars * cell.qty;
-        if (collateral > quoteBudget) { log.warn("usdc-budget-skip", { asset: cell.assetName, need: collateral, free: quoteBudget }); continue; }
+        if (collateral > quoteBudget) { log.warn("usdc-budget-skip", { asset: cell.assetName, need: collateral, free: quoteBudget }); noAnchor(); continue; }
 
         const ok = await this.post(cell, market, seriesMint, askMicro, nowSec);
         if (ok) {
           postedThisRun++; liveGlobal++; assetLive++; quoteBudget -= collateral;
           perAssetLive.set(market.assetName, assetLive);
         }
+        record({
+          cell, market, seriesMint,
+          outcome: ok ? "posted" : "absent",
+          restingAskPrice: ok ? askPremium : null,
+          mark: askPremium / (1 + cell.spreadBps / 10_000),
+        });
       }
       perAssetLive.set(market.assetName, assetLive);
     }
@@ -345,7 +414,229 @@ export class WriterEngine {
       }
     }
 
+    // --- C1 DEPENDENT-QUOTE PASS -------------------------------------------
+    // Runs STRICTLY AFTER the ask loop (including the orphan sweep) so the ask
+    // side has already taken its budget: `quoteBudget` is now the true remainder
+    // and bids draw from that, never from money an ask might still need. Wrapped
+    // whole so a bid-side failure can never abort a completed ask reconcile.
+    try {
+      await this.bidPass(askOutcomes, quoteBudget, nowMs);
+    } catch (e: any) {
+      log.error("bid-pass-fail", { err: String(e?.message ?? e).slice(0, 200) });
+    }
+
     this.hb.maybeEmit(nowMs, { markets: markets.length, liveOrders: liveGlobal, freeUsdc, sol });
+  }
+
+  // ---- C1: bids ------------------------------------------------------------
+
+  private bidPolicy(): BidPolicy {
+    return {
+      enabled: this.cfg.bidEnabled,
+      atmRungs: this.cfg.bidAtmRungs,
+      maxNotionalPerAsset: this.cfg.bidMaxNotionalPerAsset,
+      maxNotionalGlobal: this.cfg.bidMaxNotionalGlobal,
+      reserveUsdc: this.cfg.bidReserveUsdc,
+      maxCells: this.cfg.bidMaxCells,
+      maxLongPerSeries: this.cfg.bidMaxLongPerSeries,
+      depthFrac: this.cfg.bidDepthFrac,
+      driftBps: this.cfg.repriceDriftBps,
+      maxAgeMs: this.cfg.repriceMaxAgeMs,
+    };
+  }
+
+  /**
+   * Derive every bid from what the ask loop just did. A bid is NEVER quoted for
+   * a series with no resting ask — that is the anchor the no-cross guard is
+   * measured against, and without it there is nothing to be safely below.
+   *
+   * `freeUsdcAfterAsks` is the ask loop's leftover budget (Infinity in dry-run,
+   * matching the ask preview's convention).
+   */
+  private async bidPass(outcomes: AskCellOutcome[], freeUsdcAfterAsks: number, nowMs: number): Promise<void> {
+    // The flag is INERT, not a kill switch: disabled means this pass does
+    // nothing at all — it does not even sweep resting bids, so flipping it off
+    // leaves them for a deliberate operator unwind rather than mass-cancelling.
+    if (!this.cfg.bidEnabled) return;
+
+    const policy = this.bidPolicy();
+    const myBids = await enumerateMyBids(this.chain.program, this.chain.wallet.publicKey);
+    const bidsBySeries = new Map<string, MyBid>();
+    for (const b of myBids) {
+      const k = b.optionMint.toBase58();
+      const prev = bidsBySeries.get(k);
+      if (!prev || b.nonce > prev.nonce) bidsBySeries.set(k, b);
+    }
+
+    // Long inventory per series — a filled bid makes the bot a holder and there
+    // is no on-chain net-off, so this is what bounds accumulation.
+    const longs = await enumerateMyLongs(
+      this.chain.program, this.chain.wallet.publicKey,
+      [...new Set(outcomes.map((o) => o.seriesMint.toBase58()))].map((s) => new PublicKey(s)),
+    );
+
+    // A resting bid whose series the ask loop never reached (market skipped for a
+    // stale oracle, or the series left the target set) has lost its anchor.
+    const seen = new Set(outcomes.map((o) => o.seriesMint.toBase58()));
+    for (const b of myBids) {
+      if (!seen.has(b.optionMint.toBase58())) {
+        await this.pullBid(b, "no-ask-anchor:orphan");
+      }
+    }
+
+    let globalBidNotional = 0;
+    let liveBidCells = myBids.length;
+    const perAsset = new Map<string, number>();
+
+    // Group by asset so one asset's failure cannot stop the others.
+    const byAsset = new Map<string, AskCellOutcome[]>();
+    for (const o of outcomes) {
+      const k = o.market.assetName;
+      if (!byAsset.has(k)) byAsset.set(k, []);
+      byAsset.get(k)!.push(o);
+    }
+
+    for (const [asset, cells] of byAsset) {
+      try {
+        for (const o of cells) {
+          const s58 = o.seriesMint.toBase58();
+          const existing = bidsBySeries.get(s58) ?? null;
+          const assetBidNotional = perAsset.get(asset) ?? 0;
+
+          const decision = decideBid({
+            policy,
+            askOutcome: o.outcome,
+            rungIndex: o.cell.rungIndex,
+            restingAskPrice: o.restingAskPrice,
+            mark: o.mark,
+            askSpreadBps: o.cell.spreadBps,
+            askQty: o.cell.qty,
+            existingBid: existing
+              ? {
+                  price: Number(existing.priceMicro) / 1e6,
+                  qty: Number(existing.quantityRemaining),
+                  createdAtMs: existing.createdAtMs,
+                }
+              : null,
+            heldLong: longs.get(s58) ?? 0,
+            assetBidNotional,
+            globalBidNotional,
+            freeUsdcAfterAsks,
+            liveBidCells,
+            marketOpen: o.marketOpen,
+            quoteFails: o.quoteFails,
+            oracleReady: o.oracleReady,
+            nowMs,
+          });
+
+          const plan = {
+            asset, side: o.cell.side, strike: o.cell.strikeDollars, tenor: o.cell.tenorLabel,
+            expiry: o.cell.expiryTs, askResting: o.restingAskPrice, mark: o.mark,
+          };
+
+          switch (decision.action) {
+            case "post": {
+              const ok = await this.postBid(o, decision.price, decision.qty, plan);
+              if (ok) {
+                perAsset.set(asset, assetBidNotional + decision.notional);
+                globalBidNotional += decision.notional;
+                liveBidCells += 1;
+              }
+              break;
+            }
+            case "reprice": {
+              if (!existing) break;
+              const restingNotional = (Number(existing.priceMicro) / 1e6) * Number(existing.quantityRemaining);
+              // Dry-run reports the reprice as ONE line, mirroring the ask side.
+              // Without this the preview would show the cancel and swallow the
+              // repost (pullBid is a no-op returning false when not writable),
+              // under-reporting the very plan the canary decision is made on.
+              if (!this.writable()) {
+                log.info("dry-run-bid-reprice", {
+                  ...plan, from: Number(existing.priceMicro) / 1e6, to: decision.price, qty: decision.qty,
+                });
+                break;
+              }
+              if (!(await this.pullBid(existing, "bid-reprice-cancel"))) break;
+              const ok = await this.postBid(o, decision.price, decision.qty, plan);
+              if (ok) {
+                const delta = Math.max(0, decision.notional - restingNotional);
+                perAsset.set(asset, assetBidNotional + delta);
+                globalBidNotional += delta;
+              }
+              break;
+            }
+            case "pull":
+              if (existing) await this.pullBid(existing, decision.reason);
+              break;
+            case "skip":
+              log.info("bid-skip", { ...plan, reason: decision.reason });
+              break;
+            case "hold":
+              break;
+          }
+        }
+      } catch (e: any) {
+        // Per-asset isolation: one bad asset must not stop the rest of the book.
+        log.error("bid-asset-fail", { asset, err: String(e?.message ?? e).slice(0, 200) });
+      }
+    }
+  }
+
+  private async postBid(
+    o: AskCellOutcome, price: number, qty: number, plan: Record<string, unknown>,
+  ): Promise<boolean> {
+    const full = { ...plan, bidPrice: price, qty, notional: +(price * qty).toFixed(6) };
+    if (!this.writable()) { log.info("dry-run-bid-post", full); return true; }
+    const vault = vaultAmericanPda(
+      o.market.publicKey, BigInt(o.cell.strikeMicro.toString()), o.cell.expiryTs, o.cell.optIdx,
+    );
+    let nonce = BigInt(Math.floor(Date.now() / 1000));
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const { ix, order } = await postBidIx(
+        this.buildCtx, o.market.publicKey, vault, o.seriesMint, toUsdcBN(price), qty, nonce,
+      );
+      try {
+        const sig = await sendTx(this.chain, [CU(200_000), ix]);
+        log.info("bid-post-ok", { ...full, sig, order: order.toBase58() });
+        return true;
+      } catch (e: any) {
+        if (await accountExists(this.chain, order)) { log.info("bid-post-ok-recheck", { ...full, order: order.toBase58() }); return true; }
+        if (attempt === 2) { log.error("bid-post-fail", { ...full, err: String(e?.message ?? e).slice(0, 200) }); return false; }
+        nonce += 1n;
+      }
+    }
+    return false;
+  }
+
+  /** Cancel a resting bid, returning its USDC escrow. Reuses the ask side's
+   *  already-proven gone-order race handling (classifyPullOutcome). */
+  private async pullBid(bid: MyBid, reason: string): Promise<boolean> {
+    if (!this.writable()) { log.info("dry-run-bid-pull", { order: bid.pubkey.toBase58(), reason }); return false; }
+    const exists = await accountExists(this.chain, bid.pubkey);
+    let sendError: unknown | null = null;
+    let sig: string | undefined;
+    if (exists) {
+      try {
+        const ix = await cancelOrderIx(this.buildCtx, bid.optionMint, bid.pubkey);
+        sig = await sendTx(this.chain, [CU(400_000), ix]);
+      } catch (e) {
+        sendError = e;
+      }
+    }
+    switch (classifyPullOutcome(exists, sendError)) {
+      case "sent":
+        log.info("bid-pull-ok", { order: bid.pubkey.toBase58(), reason, sig });
+        return true;
+      case "noop-gone":
+        log.info("bid-pull-noop-gone", { order: bid.pubkey.toBase58(), reason });
+        return false;
+      case "strand":
+        log.error("bid-strand", {
+          order: bid.pubkey.toBase58(), reason, err: String((sendError as any)?.message ?? sendError).slice(0, 200),
+        });
+        return false;
+    }
   }
 
   // ---- actions (no-op in dry-run / disabled) --------------------------------
@@ -410,19 +701,23 @@ export class WriterEngine {
     return false;
   }
 
-  private async reprice(cell: TargetCell, market: MarketInfo, seriesMint: PublicKey, existing: MyOrder, askMicro: BN, nowSec: number): Promise<void> {
+  /** Returns true when a NEW ask is resting at `askMicro` afterwards. (Dry-run
+   *  returns true: the plan is what the diff compares, and nothing was sent.) */
+  private async reprice(cell: TargetCell, market: MarketInfo, seriesMint: PublicKey, existing: MyOrder, askMicro: BN, nowSec: number): Promise<boolean> {
     const plan = { asset: cell.assetName, side: cell.side, strike: cell.strikeDollars, from: Number(existing.priceMicro) / 1e6, to: Number(askMicro) / 1e6 };
-    if (!this.writable()) { log.info("dry-run-reprice", plan); return; }
+    if (!this.writable()) { log.info("dry-run-reprice", plan); return true; }
     // Cancel the old ask (escrow → owner), then repost at the new price.
-    if (!(await this.pull(seriesMint, existing, "reprice-cancel"))) return;
+    if (!(await this.pull(seriesMint, existing, "reprice-cancel"))) return false;
     const vault = vaultAmericanPda(market.publicKey, BigInt(cell.strikeMicro.toString()), cell.expiryTs, cell.optIdx);
     const { ix: postIx, order } = await postWriterAskIx(this.buildCtx, market.publicKey, vault, seriesMint, askMicro, cell.qty, BigInt(nowSec));
     try {
       const sig = await sendTx(this.chain, [CU(200_000), postIx]);
       this.hb.onReprice();
       log.info("reprice-ok", { ...plan, sig, order: order.toBase58() });
+      return true;
     } catch (e: any) {
       log.error("reprice-repost-fail", { ...plan, err: String(e?.message ?? e).slice(0, 200) });
+      return false;
     }
   }
 

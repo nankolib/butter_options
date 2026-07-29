@@ -44,6 +44,22 @@ export interface WriterConfig {
   lowBalanceWarnSol: number; // OPTA_WRITER_LOW_BALANCE_WARN_SOL (default 1.0)
   minFreeUsdc: number;       // OPTA_WRITER_MIN_FREE_USDC (default 0) — warn below
 
+  // --- C1 two-sided quoting (bids). Dark by default. ---
+  // A bid is a DEPENDENT quote: it exists only alongside a resting ask on the
+  // same series, and is re-derived whenever that ask is posted/repriced/pulled.
+  // Asks always get budget priority — a failed ask post can strand permanent
+  // series+vault rent, a failed bid post costs nothing.
+  bidEnabled: boolean;            // OPTA_WRITER_BID_ENABLED (default FALSE)
+  // ATM band is a CODE bound enforced in bids.ts, not a throttle: caps decide
+  // how much is quoted inside the band, never where the band is.
+  bidAtmRungs: number;            // OPTA_WRITER_BID_ATM_RUNGS (default 0 = ATM only)
+  bidMaxNotionalPerAsset: number; // OPTA_WRITER_BID_MAX_NOTIONAL_PER_ASSET (USD)
+  bidMaxNotionalGlobal: number;   // OPTA_WRITER_BID_MAX_NOTIONAL_GLOBAL (USD)
+  bidReserveUsdc: number;         // OPTA_WRITER_BID_RESERVE_USDC — free-USDC floor bids never touch
+  bidMaxCells: number;            // OPTA_WRITER_BID_MAX_CELLS (0 = uncapped; canary throttle)
+  bidMaxLongPerSeries: number;    // OPTA_WRITER_MAX_LONG_PER_SERIES — inventory cap, contracts
+  bidDepthFrac: number;           // OPTA_WRITER_BID_DEPTH_FRAC (fraction of the ask qty)
+
   // Optional fee-payer for the read-only get_option_price simulation. sigVerify
   // is false, so any funded system-owned pubkey works and nothing is signed;
   // this lets observe-mode quote before the bot wallet is funded. Default: the
@@ -154,6 +170,16 @@ export function loadConfig(): WriterConfig {
     tickMs: Math.max(1000, num(process.env.OPTA_WRITER_TICK_MS, 5 * 60 * 1000)),
     lowBalanceWarnSol: num(process.env.OPTA_WRITER_LOW_BALANCE_WARN_SOL, 1.0),
     minFreeUsdc: num(process.env.OPTA_WRITER_MIN_FREE_USDC, 0),
+    // Bids: dark by default. The master switch defaults FALSE so a deploy that
+    // ships this code changes nothing until it is set deliberately.
+    bidEnabled: bool(process.env.OPTA_WRITER_BID_ENABLED, false),
+    bidAtmRungs: Math.max(0, num(process.env.OPTA_WRITER_BID_ATM_RUNGS, 0)),
+    bidMaxNotionalPerAsset: num(process.env.OPTA_WRITER_BID_MAX_NOTIONAL_PER_ASSET, 250),
+    bidMaxNotionalGlobal: num(process.env.OPTA_WRITER_BID_MAX_NOTIONAL_GLOBAL, 2500),
+    bidReserveUsdc: num(process.env.OPTA_WRITER_BID_RESERVE_USDC, 5000),
+    bidMaxCells: num(process.env.OPTA_WRITER_BID_MAX_CELLS, 0),
+    bidMaxLongPerSeries: num(process.env.OPTA_WRITER_MAX_LONG_PER_SERIES, 10),
+    bidDepthFrac: num(process.env.OPTA_WRITER_BID_DEPTH_FRAC, 0.25),
     simPayer: parseSimPayer(process.env.OPTA_WRITER_SIM_PAYER),
   };
 }

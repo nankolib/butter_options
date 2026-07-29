@@ -163,3 +163,48 @@ export async function cancelOrderIx(
     })
     .instruction();
 }
+
+/**
+ * post_order(Bid) — rest a USDC-escrowed limit bid on the canonical series. The
+ * account list is IDENTICAL to postWriterAskIx (post_order takes a uniform
+ * context and branches on `kind` internally); only the kind arg and the escrow
+ * semantics differ. A Bid escrows `priceMicro × quantity` USDC — the premium
+ * itself, not strike×qty collateral — which is why a bid locks roughly 1-6% of
+ * what the equivalent ask locks.
+ *
+ * Requires the series + vault to ALREADY exist. That always holds here: a bid is
+ * a dependent quote and is only ever derived for a series that already carries
+ * one of the bot's resting asks, so it mints nothing and adds no permanent rent.
+ */
+export async function postBidIx(
+  ctx: BuildCtx, market: PublicKey, vault: PublicKey, seriesMint: PublicKey,
+  priceMicro: BN, quantity: number, nonce: bigint,
+): Promise<{ ix: TransactionInstruction; order: PublicKey }> {
+  const order = restingOrderPda(seriesMint, ctx.owner, nonce);
+  const ownerOption = getAssociatedTokenAddressSync(seriesMint, ctx.owner, false, TOKEN_2022_PROGRAM_ID);
+  const ownerUsdc = getAssociatedTokenAddressSync(ctx.usdcMint, ctx.owner, false, TOKEN_PROGRAM_ID);
+  const ix = await ctx.program.methods
+    .postOrder({ bid: {} } as any, priceMicro, new BN(quantity), new BN(nonce.toString()))
+    .accountsStrict({
+      owner: ctx.owner,
+      sharedVault: vault,
+      market,
+      vaultMintRecord: mintRecordPda(seriesMint),
+      optionMint: seriesMint,
+      order,
+      escrow: restingEscrowPda(order),
+      protocolState: ctx.protocolState,
+      ownerOptionAccount: ownerOption,
+      ownerUsdcAccount: ownerUsdc,
+      usdcMint: ctx.usdcMint,
+      transferHookProgram: HOOK_ID,
+      extraAccountMetaList: extraAccountMetaListPda(seriesMint),
+      hookState: hookStatePda(seriesMint),
+      tokenProgram: TOKEN_PROGRAM_ID,
+      token2022Program: TOKEN_2022_PROGRAM_ID,
+      systemProgram: SystemProgram.programId,
+      rent: SYSVAR_RENT_PUBKEY,
+    })
+    .instruction();
+  return { ix, order };
+}

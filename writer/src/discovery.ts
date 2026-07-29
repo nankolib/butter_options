@@ -10,7 +10,8 @@
 // =============================================================================
 
 import type { Program } from "@coral-xyz/anchor";
-import { Connection, PublicKey } from "@solana/web3.js";
+import { Connection, PublicKey, type AccountInfo } from "@solana/web3.js";
+import { getAssociatedTokenAddressSync, TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
 import { PROGRAM_ID, volOraclePda } from "./ids";
 import type { AssetClass } from "./marketHours";
 import { log } from "./log";
@@ -43,6 +44,18 @@ export interface MyOrder {
   quantityRemaining: bigint;
   nonce: bigint;
   createdAtMs: number; // best-effort from on-chain created_at (secs -> ms)
+}
+
+/** A resting Bid owned by the bot. Same shape as MyOrder — kept as a distinct
+ *  type so no call site can accidentally feed a bid into an ask code path. */
+export interface MyBid {
+  pubkey: PublicKey;
+  optionMint: PublicKey;
+  vault: PublicKey;
+  priceMicro: bigint;
+  quantityRemaining: bigint;
+  nonce: bigint;
+  createdAtMs: number;
 }
 
 function memcmpFilter(program: Program<any>, accountName: string) {
@@ -145,6 +158,82 @@ export async function enumerateMyOrders(
       quantityRemaining: BigInt(String(r.quantityRemaining ?? r.quantity_remaining ?? 0)),
       nonce: BigInt(String(r.nonce ?? 0)),
       createdAtMs: createdAtSec > 0 ? createdAtSec * 1000 : 0,
+    });
+  }
+  return out;
+}
+
+/**
+ * Enumerate the bot's own resting BIDS. Deliberately a SEPARATE function from
+ * `enumerateMyOrders`, whose `writerAsk` filter is a NAMED INVARIANT: it is the
+ * reason the ask engine (ordersBySeries, the reprice loop, the orphan sweep)
+ * cannot see bids and therefore cannot mistake one for an ask or cancel it out
+ * from under this pass. Do not merge these two functions or generalise that
+ * filter — the duplication below is the safety property.
+ */
+export async function enumerateMyBids(
+  program: Program<any>, owner: PublicKey,
+): Promise<MyBid[]> {
+  const connection: Connection = program.provider.connection;
+  const disc = memcmpFilter(program, "restingOrder");
+  const raw = await connection.getProgramAccounts(PROGRAM_ID, {
+    commitment: "confirmed",
+    filters: [disc, { memcmp: { offset: 8, bytes: owner.toBase58() } }],
+  });
+  const out: MyBid[] = [];
+  for (const { pubkey, account } of raw) {
+    let r: any;
+    try {
+      r = program.coder.accounts.decode("restingOrder", account.data);
+    } catch {
+      continue;
+    }
+    // Mirror image of the ask filter: ONLY Bids belong to this flow.
+    if (!r.kind || !("bid" in r.kind)) continue;
+    const createdAtSec = bnNum(r.createdAt ?? r.created_at ?? 0);
+    out.push({
+      pubkey,
+      optionMint: new PublicKey(r.optionMint ?? r.option_mint),
+      vault: new PublicKey(r.vault),
+      priceMicro: BigInt(String(r.pricePerContract ?? r.price_per_contract ?? 0)),
+      quantityRemaining: BigInt(String(r.quantityRemaining ?? r.quantity_remaining ?? 0)),
+      nonce: BigInt(String(r.nonce ?? 0)),
+      createdAtMs: createdAtSec > 0 ? createdAtSec * 1000 : 0,
+    });
+  }
+  return out;
+}
+
+/**
+ * Batch-read the bot's LONG inventory across `mints` — the option-token balance
+ * of its own ATA per series. Feeds the inventory cap (a filled bid makes the bot
+ * a long holder and there is no on-chain net-off, so the cap is the only thing
+ * bounding accumulation). Token-2022 base layout: amount at bytes 64..72. A
+ * missing ATA reads as 0. Chunked to stay inside getMultipleAccounts' 100-key limit.
+ */
+export async function enumerateMyLongs(
+  program: Program<any>, owner: PublicKey, mints: PublicKey[],
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (mints.length === 0) return out;
+  const connection: Connection = program.provider.connection;
+  const atas = mints.map((m) => ({
+    mint58: m.toBase58(),
+    ata: getAssociatedTokenAddressSync(m, owner, false, TOKEN_2022_PROGRAM_ID),
+  }));
+  for (let i = 0; i < atas.length; i += 100) {
+    const chunk = atas.slice(i, i + 100);
+    let infos: (AccountInfo<Buffer> | null)[];
+    try {
+      infos = await connection.getMultipleAccountsInfo(chunk.map((c) => c.ata), "confirmed");
+    } catch (e: any) {
+      log.warn("enumerate-longs-fail", { err: String(e?.message ?? e).slice(0, 160) });
+      continue;
+    }
+    chunk.forEach((c, j) => {
+      const info = infos[j];
+      if (!info || info.data.length < 72) { out.set(c.mint58, 0); return; }
+      out.set(c.mint58, Number(Buffer.from(info.data).readBigUInt64LE(64)));
     });
   }
   return out;

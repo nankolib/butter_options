@@ -176,6 +176,13 @@ export interface TargetCell {
   qty: number;
   spreadBps: number;
   atmDistance: number; // |mult - 1|, for ordering
+  /** Integer rung distance from the ATM strike: 0 = ATM, 1 = first wing either
+   *  side, 2 = second. Distinct from `atmDistance` (a fraction used only for
+   *  ATM-first ORDERING) because the bid side needs an exact, scale-free band —
+   *  on equity the ATM grid point is rarely exactly at spot, so its atmDistance
+   *  is nonzero and cannot identify the centre rung. Consumed by the bid module's
+   *  ATM filter; the ask path ignores it. */
+  rungIndex: number;
 }
 
 export interface LadderInput {
@@ -212,7 +219,10 @@ export function buildLadder(inp: LadderInput): TargetCell[] {
   const nowSec = Math.floor(nowMs / 1000);
 
   // Shared cell emitter — identical fields on both paths; keeps them in lockstep.
-  const emit = (strikeDollars: number, atmDistance: number, t: { label: "weekly" | "monthly"; ts: number }) => {
+  const emit = (
+    strikeDollars: number, atmDistance: number, t: { label: "weekly" | "monthly"; ts: number },
+    rungIndex: number,
+  ) => {
     if (strikeDollars <= 0) return;
     const strikeMicro = toUsdcBN(strikeDollars);
     const qty = clampQty(strikeDollars, tier.targetNotional);
@@ -230,6 +240,7 @@ export function buildLadder(inp: LadderInput): TargetCell[] {
         qty,
         spreadBps: tier.spreadBps,
         atmDistance,
+        rungIndex,
       });
     }
   };
@@ -238,26 +249,35 @@ export function buildLadder(inp: LadderInput): TargetCell[] {
     // EQUITY: stateless absolute grid — N grid points nearest ATM, identical for
     // every expiry (no per-expiry hysteresis, so a cold post-cancel board still
     // re-derives the SAME strikes → cross-day PDA reuse). ATM-first by |strike−spot|.
-    for (const strikeDollars of equityGridStrikes(spot, EQUITY_LADDER_N)) {
+    // The grid is symmetric around the snapped ATM point, so the rung index is
+    // just the array offset from the centre — exact, and independent of how far
+    // the snapped ATM sits from raw spot.
+    const grid = equityGridStrikes(spot, EQUITY_LADDER_N);
+    const centre = (grid.length - 1) / 2;
+    grid.forEach((strikeDollars, i) => {
       const atmDistance = spot > 0 ? Math.abs(strikeDollars - spot) / spot : 0;
+      const rungIndex = Math.round(Math.abs(i - centre));
       for (const t of tenors) {
-        if (t.ts <= nowSec) continue; // defensive
-        emit(strikeDollars, atmDistance, t);
+        if (t.ts <= nowSec) return; // defensive
+        emit(strikeDollars, atmDistance, t, rungIndex);
       }
-    }
+    });
   } else {
     // NON-EQUITY (crypto/metals/fx/etf): spot-relative rungs + per-expiry strike
     // hysteresis. UNCHANGED — the just-proven 24/7 board must not move.
     const byExpiry = inp.existingStrikesByExpiry;
     for (const mult of STRIKE_MULTIPLIERS) {
       const rawTarget = spot * mult;
+      // Rungs are spaced RUNG_FRAC apart, so |mult-1| / RUNG_FRAC is the exact
+      // integer rung: 1.00 -> 0, 0.95/1.05 -> 1, 0.90/1.10 -> 2.
+      const rungIndex = Math.round(Math.abs(mult - 1) / RUNG_FRAC);
       for (const t of tenors) {
         if (t.ts <= nowSec) continue; // defensive
         // Hysteresis is resolved PER EXPIRY: only anchors on THIS tenor can
         // retain a strike, because the series PDA is keyed by expiry too.
         const anchors = byExpiry?.get(t.ts) ?? [];
         const strikeDollars = stickyStrike(rawTarget, anchors, spot);
-        emit(strikeDollars, Math.abs(mult - 1), t);
+        emit(strikeDollars, Math.abs(mult - 1), t, rungIndex);
       }
     }
   }

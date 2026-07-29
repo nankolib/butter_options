@@ -2730,13 +2730,17 @@ export type Opta = {
         },
         {
           "name": "bookEscrow",
+          "docs": [
+            "Holds the maker's USDC (WriterAsk collateral / Bid funds) or option tokens (ResaleAsk)."
+          ],
           "writable": true,
           "optional": true
         },
         {
           "name": "bookMakerUsdc",
           "docs": [
-            "Writer's USDC (premium recipient); owner==book_order.owner + mint checked in-handler."
+            "Maker's USDC (premium recipient on a BUY); owner==book_order.owner checked",
+            "in-handler. None on a sell — proceeds go to owner_usdc_account instead."
           ],
           "writable": true,
           "optional": true
@@ -2766,15 +2770,26 @@ export type Opta = {
           "optional": true
         },
         {
-          "name": "resaleHookMetas",
+          "name": "bookHookMetas",
           "optional": true
         },
         {
-          "name": "resaleHookProgram",
+          "name": "bookHookProgram",
           "optional": true
         },
         {
-          "name": "resaleHookState",
+          "name": "bookHookState",
+          "optional": true
+        },
+        {
+          "name": "bookMakerOption",
+          "docs": [
+            "Runtime-pinned to (book_order.owner, option_mint) from the raw Token-2022",
+            "layout BEFORE the transfer (the fill_order.rs C-1 guard, applied to the",
+            "trigger path). A typed constraint is not usable: these are Token-2022",
+            "accounts, which `Account<TokenAccount>` rejects."
+          ],
+          "writable": true,
           "optional": true
         }
       ],
@@ -8545,6 +8560,21 @@ export type Opta = {
       "code": 6080,
       "name": "askPriceExceedsMax",
       "msg": "Ask price exceeds the trigger's per-contract max_premium ceiling"
+    },
+    {
+      "code": 6081,
+      "name": "notABid",
+      "msg": "Sell-leg book fire requires a Bid resting order"
+    },
+    {
+      "code": 6082,
+      "name": "sellFloorRequired",
+      "msg": "Sell trigger has no minimum-proceeds floor (max_premium == 0) — book fire refused"
+    },
+    {
+      "code": 6083,
+      "name": "bidPriceBelowMin",
+      "msg": "Bid price is below the sell trigger's per-contract minimum-proceeds floor"
     }
   ],
   "types": [
@@ -10098,7 +10128,16 @@ export type Opta = {
               "BUY: PER-CONTRACT escrow ceiling (USDC 6-dec). The escrowed figure is",
               "`max_premium * quantity`. ⚠️ UNITS: this is PER-CONTRACT; fill_vault_peg's",
               "own `max_premium` arg (P1) is a fee-inclusive TOTAL — do not conflate.",
-              "SELL: stored as 0 (no escrow)."
+              "SELL (B2): the mirrored constraint — the PER-CONTRACT MINIMUM-PROCEEDS",
+              "FLOOR a book bid must beat before `execute_trigger` will sell into it.",
+              "Same field, same units, opposite direction (buy = ceiling on what the",
+              "owner pays; sell = floor on what the owner accepts). A sell still escrows",
+              "nothing. 0 is legal and means BOOK INELIGIBLE — the book arm refuses it",
+              "with `SellFloorRequired` (6082), so every pre-B2 sell (all stored 0) keeps",
+              "exactly its old behaviour: TakeProfitSell falls back to the vault exercise",
+              "path, StopLossSell stays unfireable. This field is the owner's ONLY",
+              "defence on the sell side, because `execute_trigger` is permissionless and",
+              "the fire-time caller therefore cannot be trusted to supply a price bound."
             ],
             "type": "u64"
           },

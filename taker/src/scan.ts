@@ -8,11 +8,19 @@
 // There are known corrupt vaults on devnet; a scanner that dies on them is a
 // scanner that silently stops bidding.
 //
-// SCOPE: ResaleAsk only. A ResaleAsk is a real user selling contracts they
-// already hold — the exit the treasury exists to provide. WriterAsk (mint-on-
-// fill) and Bid are deliberately out of scope: buying a WriterAsk funds a writer
-// rather than exiting a holder, and filling a Bid would mean SELLING, which this
-// bot has no inventory policy for.
+// SCOPE: the two ASK kinds a real user can post.
+//   ResaleAsk (kind 1)  a holder selling contracts they already own — the exit
+//                       the treasury exists to provide.
+//   WriterAsk (kind 2)  a user writing new contracts against escrowed collateral
+//                       (the trade ticket's Write side). Filling MINTS, so it
+//                       CREATES open interest — bounded separately by maxOiUsd.
+//
+// Both complete quest O3 ("Make a Market"), which keys on OrderFilled where the
+// wallet is the counterparty and kind != VaultPeg. Covering only ResaleAsk left
+// the trade ticket's Write side a dead end for O3.
+//
+// Bid (kind 0) stays out of scope: filling one means SELLING, and this bot has
+// no inventory policy. VaultPeg (kind 3) is the protocol's own peg, not a user.
 // =============================================================================
 
 import type { Program } from "@coral-xyz/anchor";
@@ -21,11 +29,14 @@ import { PROGRAM_ID } from "./ids";
 import { bnNum } from "./chain";
 import { log } from "./log";
 
-export interface ResaleAsk {
+export type AskKind = "resaleAsk" | "writerAsk";
+
+export interface UserAsk {
   pubkey: PublicKey;
   owner: PublicKey;
   optionMint: PublicKey;
   vault: PublicKey;
+  kind: AskKind;
   priceUsdc: number;        // human USDC per contract
   quantityRemaining: number;
   createdAtSec: number;
@@ -47,14 +58,40 @@ function memcmpFilter(program: Program<any>, accountName: string) {
   return { memcmp: { offset, bytes } };
 }
 
-/** Every resting ResaleAsk on the book, from any owner. */
-export async function enumerateResaleAsks(program: Program<any>): Promise<ResaleAsk[]> {
+/**
+ * Map a decoded Anchor OrderKind to the ask kinds the taker will fill, or null.
+ *
+ * PURE and exported ON PURPOSE. This was inline in the scan loop, which meant
+ * the single most consequential line in the scanner — the one deciding whether
+ * a Bid can reach the fill path — sat behind a getProgramAccounts call and no
+ * test could reach it. Mutation testing caught exactly that: breaking this
+ * selection left the whole suite green.
+ *
+ * The test is POSITIVE and exhaustive. "Not a bid" would let VaultPeg, and any
+ * future OrderKind variant, fall through into the buy path by default.
+ */
+export function kindOf(rawKind: unknown): AskKind | null {
+  if (rawKind == null || typeof rawKind !== "object") return null;
+  const k = rawKind as Record<string, unknown>;
+  if ("resaleAsk" in k) return "resaleAsk";
+  if ("writerAsk" in k) return "writerAsk";
+  return null; // bid, vaultPeg, or anything added later
+}
+
+/**
+ * Every resting user ask on the book — both kinds, from any owner.
+ *
+ * The kind test is POSITIVE and exhaustive (`resaleAsk` or `writerAsk`), never
+ * "not a bid". A future OrderKind variant must be opted in deliberately rather
+ * than fall through into the fill path because it happened not to be excluded.
+ */
+export async function enumerateUserAsks(program: Program<any>): Promise<UserAsk[]> {
   const connection: Connection = program.provider.connection;
   const raw = await connection.getProgramAccounts(PROGRAM_ID, {
     commitment: "confirmed",
     filters: [memcmpFilter(program, "restingOrder")],
   });
-  const out: ResaleAsk[] = [];
+  const out: UserAsk[] = [];
   for (const { pubkey, account } of raw) {
     let r: any;
     try {
@@ -62,7 +99,8 @@ export async function enumerateResaleAsks(program: Program<any>): Promise<Resale
     } catch {
       continue; // legacy / corrupt orphan
     }
-    if (!r.kind || !("resaleAsk" in r.kind)) continue;
+    const kind = kindOf(r.kind);
+    if (kind == null) continue;
     const qty = bnNum(r.quantityRemaining ?? r.quantity_remaining, 0);
     if (qty <= 0) continue;
     out.push({
@@ -70,6 +108,7 @@ export async function enumerateResaleAsks(program: Program<any>): Promise<Resale
       owner: new PublicKey(r.owner),
       optionMint: new PublicKey(r.optionMint ?? r.option_mint),
       vault: new PublicKey(r.vault),
+      kind,
       priceUsdc: bnNum(r.pricePerContract ?? r.price_per_contract, 0) / 1e6,
       quantityRemaining: qty,
       createdAtSec: bnNum(r.createdAt ?? r.created_at, 0),

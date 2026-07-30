@@ -30,7 +30,23 @@ export type RejectReason =
   | "global_budget"
   | "float_cap"
   | "delay_pending"
+  | "oi_cap"
   | "zero_quantity";
+
+/**
+ * Which side of the book the candidate is, and it changes the economics more
+ * than it looks:
+ *
+ *   resaleAsk  a holder selling contracts that ALREADY EXIST. Filling it
+ *              TRANSFERS open interest — someone else's position becomes ours.
+ *   writerAsk  a user writing NEW contracts against escrowed collateral.
+ *              Filling it MINTS, so it CREATES open interest that did not exist
+ *              before, and the taker's eventual exit problem grows rather than
+ *              moves.
+ *
+ * That asymmetry is why `maxOiUsd` exists and applies to writerAsk only.
+ */
+export type CandidateKind = "resaleAsk" | "writerAsk";
 
 export interface BandConfig {
   /** Minimum discount to fair we require. Never pay within this of fair. */
@@ -45,14 +61,28 @@ export interface TakerLimits extends BandConfig {
   maxPerWalletDayUsdc: number;
   maxGlobalDayUsdc: number;
   maxFloatUsdc: number;
+  /**
+   * Ceiling on open-interest notional the taker may CREATE via writerAsk fills,
+   * measured as strike x contracts minted to us.
+   *
+   * Deliberately NOT the same thing as maxFloatUsdc. Float bounds cash paid out
+   * — premium, which is small. This bounds the position we are left holding,
+   * which is strike-sized and therefore roughly two orders of magnitude larger.
+   * A $10k float cap would happily let the taker mint six figures of OI before
+   * binding, so without this the exit problem is effectively uncapped.
+   */
+  maxOiUsd: number;
 }
 
 export interface Candidate {
   orderPk: string;
   owner: string;
   optionMint: string;
+  kind: CandidateKind;
   /** micro-USDC per contract. */
   priceUsdc: number;
+  /** Strike in human USD. Only meaningful for OI sizing on writerAsk. */
+  strikeUsd: number;
   quantityRemaining: number;
   expiryTs: number;
   isEuropean: boolean;
@@ -62,10 +92,12 @@ export interface Spend {
   walletSpentTodayUsdc: number;
   globalSpentTodayUsdc: number;
   floatUsdc: number;
+  /** Open-interest notional the taker currently carries from writerAsk fills. */
+  oiUsd: number;
 }
 
 export type Decision =
-  | { fill: true; quantity: number; costUsdc: number; bandBps: number }
+  | { fill: true; quantity: number; costUsdc: number; bandBps: number; oiCreatedUsd: number }
   | { fill: false; reason: RejectReason; detail?: string };
 
 /**
@@ -98,16 +130,37 @@ export function withinBand(askUsdc: number, fairUsdc: number, cfg: BandConfig): 
   return "ok";
 }
 
-/** Largest quantity affordable under the per-fill cap and every budget. */
+/** OI notional a fill of `qty` would CREATE. Zero unless we are minting. */
+export function oiCreatedUsd(c: Candidate, qty: number): number {
+  return c.kind === "writerAsk" ? qty * Math.max(0, c.strikeUsd) : 0;
+}
+
+/**
+ * Largest quantity affordable under the per-fill cap and every budget.
+ *
+ * The cash budgets divide by PRICE (what we pay); the OI budget divides by
+ * STRIKE (what we end up holding). Using price for both would understate OI by
+ * the ratio of premium to strike — typically 50-200x — and the cap would never
+ * bind.
+ */
 export function affordableQuantity(c: Candidate, limits: TakerLimits, spend: Spend): number {
   if (!(c.priceUsdc > 0) || c.quantityRemaining <= 0) return 0;
-  const headroom = Math.min(
+  const cashHeadroom = Math.min(
     limits.maxFillUsdc,
     Math.max(0, limits.maxPerWalletDayUsdc - spend.walletSpentTodayUsdc),
     Math.max(0, limits.maxGlobalDayUsdc - spend.globalSpentTodayUsdc),
     Math.max(0, limits.maxFloatUsdc - spend.floatUsdc),
   );
-  return Math.min(c.quantityRemaining, Math.floor(headroom / c.priceUsdc));
+  let qty = Math.min(c.quantityRemaining, Math.floor(cashHeadroom / c.priceUsdc));
+
+  if (c.kind === "writerAsk") {
+    // A writerAsk with no readable strike cannot be OI-sized, so it cannot be
+    // filled. Fail closed rather than treat an unknown strike as free capacity.
+    if (!(c.strikeUsd > 0)) return 0;
+    const oiHeadroom = Math.max(0, limits.maxOiUsd - spend.oiUsd);
+    qty = Math.min(qty, Math.floor(oiHeadroom / c.strikeUsd));
+  }
+  return Math.max(0, qty);
 }
 
 export interface EvalInput {
@@ -210,6 +263,15 @@ export function evaluate(inp: EvalInput): Decision {
   const qty = affordableQuantity(c, limits, spend);
   if (qty <= 0) {
     // Name the binding constraint — "no budget" is useless when tuning.
+    // OI is checked FIRST for writerAsk: it is the cap most likely to bind on
+    // that side (strike-sized, not premium-sized), and reporting `float_cap`
+    // when OI is what stopped us would send an operator to the wrong knob.
+    if (c.kind === "writerAsk") {
+      if (!(c.strikeUsd > 0)) return { fill: false, reason: "oi_cap", detail: "strike unreadable" };
+      if (spend.oiUsd + c.strikeUsd > limits.maxOiUsd) {
+        return { fill: false, reason: "oi_cap", detail: `${Math.round(spend.oiUsd)}/${limits.maxOiUsd} OI` };
+      }
+    }
     if (spend.floatUsdc >= limits.maxFloatUsdc) return { fill: false, reason: "float_cap" };
     if (spend.globalSpentTodayUsdc >= limits.maxGlobalDayUsdc) return { fill: false, reason: "global_budget" };
     if (spend.walletSpentTodayUsdc >= limits.maxPerWalletDayUsdc) return { fill: false, reason: "wallet_budget" };
@@ -221,6 +283,7 @@ export function evaluate(inp: EvalInput): Decision {
     quantity: qty,
     costUsdc: qty * c.priceUsdc,
     bandBps: discountBps(c.priceUsdc, inp.fairUsdc),
+    oiCreatedUsd: oiCreatedUsd(c, qty),
   };
 }
 

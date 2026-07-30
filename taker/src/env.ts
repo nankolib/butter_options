@@ -36,6 +36,8 @@ export interface TakerConfig {
   maxGlobalDayUsdc: number;
   maxFloatUsdc: number;
   maxFillUsdc: number;
+  /** Ceiling on open interest the taker may CREATE via writerAsk fills. */
+  maxOiUsd: number;
 
   // --- timing ---
   minDelaySecs: number;
@@ -132,6 +134,7 @@ export function loadConfig(): TakerConfig {
     maxGlobalDayUsdc: num(process.env.OPTA_TAKER_MAX_GLOBAL_DAY_USDC, 2000),
     maxFloatUsdc: num(process.env.OPTA_TAKER_MAX_FLOAT_USDC, 10_000),
     maxFillUsdc: num(process.env.OPTA_TAKER_MAX_FILL_USDC, 100),
+    maxOiUsd: num(process.env.OPTA_TAKER_MAX_OI_USD, 2500),
 
     minDelaySecs: num(process.env.OPTA_TAKER_MIN_DELAY_SECS, 30),
     maxDelaySecs: num(process.env.OPTA_TAKER_MAX_DELAY_SECS, 180),

@@ -21,9 +21,15 @@ export { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID };
 export const SEED = {
   protocol: "protocol_v2",
   volOracle: "vol_oracle",
+  mintRecord: "vault_mint_record",
   restingOrderEscrow: "resting_order_escrow",
   extraAccountMetas: "extra-account-metas",
   hookState: "hook-state",
+  // Writer-ask PDAs — mirror programs/opta/src/state/writer_ask_{pot,position}.rs
+  // (verified literals) and app/src/pages/trade/orderFlows.ts.
+  writerAskPot: "writer_ask_pot",
+  writerAskPotUsdc: "writer_ask_pot_usdc",
+  writerAskPosition: "writer_ask_position",
 } as const;
 
 export const pda = (seeds: (Buffer | Uint8Array)[], programId: PublicKey = PROGRAM_ID): PublicKey =>
@@ -36,6 +42,18 @@ export const volOraclePda = (feedId: Uint8Array): PublicKey =>
 
 export const restingEscrowPda = (order: PublicKey): PublicKey =>
   pda([Buffer.from(SEED.restingOrderEscrow), order.toBuffer()]);
+
+export const mintRecordPda = (optionMint: PublicKey): PublicKey =>
+  pda([Buffer.from(SEED.mintRecord), optionMint.toBuffer()]);
+
+export const writerAskPotPda = (optionMint: PublicKey): PublicKey =>
+  pda([Buffer.from(SEED.writerAskPot), optionMint.toBuffer()]);
+
+export const writerAskPotUsdcPda = (optionMint: PublicKey): PublicKey =>
+  pda([Buffer.from(SEED.writerAskPotUsdc), optionMint.toBuffer()]);
+
+export const writerAskPositionPda = (optionMint: PublicKey, maker: PublicKey): PublicKey =>
+  pda([Buffer.from(SEED.writerAskPosition), optionMint.toBuffer(), maker.toBuffer()]);
 
 export const extraAccountMetaListPda = (mint: PublicKey): PublicKey =>
   pda([Buffer.from(SEED.extraAccountMetas), mint.toBuffer()], HOOK_ID);

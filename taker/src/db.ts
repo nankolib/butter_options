@@ -17,7 +17,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { utcDay } from "./budget";
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export type Db = Database.Database;
 
@@ -49,8 +49,9 @@ function migrate(db: Db): void {
       spent_usdc  REAL NOT NULL DEFAULT 0
     );
 
-    -- Single-row key/value for capital currently at risk. Not derived from
-    -- fills: positions settle and resell, and float must fall when they do.
+    -- Single-row key/value for capital currently at risk, and for open interest
+    -- created by minting fills. Neither is derived from the fills table:
+    -- positions settle and resell, and both counters must FALL when they do.
     CREATE TABLE IF NOT EXISTS float_state (k TEXT PRIMARY KEY, v REAL NOT NULL);
 
     CREATE TABLE IF NOT EXISTS fills (
@@ -58,10 +59,12 @@ function migrate(db: Db): void {
       order_pk   TEXT NOT NULL,
       owner      TEXT NOT NULL,
       mint       TEXT NOT NULL,
+      kind       TEXT NOT NULL DEFAULT 'resaleAsk',
       qty        INTEGER NOT NULL,
       price      REAL NOT NULL,
       fair       REAL NOT NULL,
       band_bps   INTEGER NOT NULL,
+      oi_usd     REAL NOT NULL DEFAULT 0,
       ts         INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_fills_owner_ts ON fills(owner, ts);
@@ -74,8 +77,16 @@ function migrate(db: Db): void {
       delay_until_ts INTEGER NOT NULL
     );
   `);
+  // v1 -> v2: writerAsk support. Existing databases predate `kind` and `oi_usd`
+  // on `fills`. ADD COLUMN is additive and the defaults are correct for the rows
+  // already there — every historical fill was a resaleAsk, which creates no OI.
+  const cols = new Set((db.prepare("PRAGMA table_info(fills)").all() as { name: string }[]).map((c) => c.name));
+  if (!cols.has("kind")) db.exec("ALTER TABLE fills ADD COLUMN kind TEXT NOT NULL DEFAULT 'resaleAsk'");
+  if (!cols.has("oi_usd")) db.exec("ALTER TABLE fills ADD COLUMN oi_usd REAL NOT NULL DEFAULT 0");
+
   db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)").run(String(SCHEMA_VERSION));
   db.prepare("INSERT OR IGNORE INTO float_state (k, v) VALUES ('float_usdc', 0)").run();
+  db.prepare("INSERT OR IGNORE INTO float_state (k, v) VALUES ('oi_usd', 0)").run();
 }
 
 // --- reads -------------------------------------------------------------------
@@ -94,6 +105,12 @@ export function globalSpentToday(db: Db, nowSecs: number): number {
 
 export function readFloat(db: Db): number {
   const r = db.prepare("SELECT v FROM float_state WHERE k = 'float_usdc'").get() as { v: number } | undefined;
+  return r?.v ?? 0;
+}
+
+/** Open-interest notional currently carried from writerAsk fills. */
+export function readOi(db: Db): number {
+  const r = db.prepare("SELECT v FROM float_state WHERE k = 'oi_usd'").get() as { v: number } | undefined;
   return r?.v ?? 0;
 }
 
@@ -120,14 +137,21 @@ export function seeOrder(db: Db, orderPk: string, nowSecs: number, delaySecs: nu
  */
 export function recordFill(
   db: Db,
-  f: { sig: string; orderPk: string; owner: string; mint: string; qty: number; price: number; fair: number; bandBps: number; ts: number },
+  f: {
+    sig: string; orderPk: string; owner: string; mint: string;
+    kind: "resaleAsk" | "writerAsk";
+    qty: number; price: number; fair: number; bandBps: number;
+    /** OI notional CREATED by this fill. Zero for resaleAsk (transfer, not mint). */
+    oiUsd: number;
+    ts: number;
+  },
 ): void {
   const day = utcDay(f.ts);
   const cost = f.qty * f.price;
   db.transaction(() => {
-    db.prepare(`INSERT OR IGNORE INTO fills (sig, order_pk, owner, mint, qty, price, fair, band_bps, ts)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(f.sig, f.orderPk, f.owner, f.mint, f.qty, f.price, f.fair, f.bandBps, f.ts);
+    db.prepare(`INSERT OR IGNORE INTO fills (sig, order_pk, owner, mint, kind, qty, price, fair, band_bps, oi_usd, ts)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(f.sig, f.orderPk, f.owner, f.mint, f.kind, f.qty, f.price, f.fair, f.bandBps, f.oiUsd, f.ts);
     db.prepare(`INSERT INTO budget_ledger (day, wallet, spent_usdc) VALUES (?, ?, ?)
                 ON CONFLICT(day, wallet) DO UPDATE SET spent_usdc = spent_usdc + excluded.spent_usdc`)
       .run(day, f.owner, cost);
@@ -135,12 +159,18 @@ export function recordFill(
                 ON CONFLICT(day) DO UPDATE SET spent_usdc = spent_usdc + excluded.spent_usdc`)
       .run(day, cost);
     db.prepare("UPDATE float_state SET v = MAX(0, v + ?) WHERE k = 'float_usdc'").run(cost);
+    if (f.oiUsd > 0) db.prepare("UPDATE float_state SET v = MAX(0, v + ?) WHERE k = 'oi_usd'").run(f.oiUsd);
   })();
 }
 
 /** Lower the float when capital comes back (settlement, exercise, resale). */
 export function releaseFloat(db: Db, recoveredUsdc: number): void {
   db.prepare("UPDATE float_state SET v = MAX(0, v - ?) WHERE k = 'float_usdc'").run(recoveredUsdc);
+}
+
+/** Lower open interest when a minted position leaves (exercise, settle, resale-out). */
+export function releaseOi(db: Db, releasedUsd: number): void {
+  db.prepare("UPDATE float_state SET v = MAX(0, v - ?) WHERE k = 'oi_usd'").run(releasedUsd);
 }
 
 /** Drop sighting rows for orders that no longer rest. Keeps the table bounded. */

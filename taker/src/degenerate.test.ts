@@ -23,7 +23,8 @@ import {
 } from "./eligibility";
 import { headroom, bindingConstraint, utcDay } from "./budget";
 import {
-  openDb, walletSpentToday, globalSpentToday, readFloat, seeOrder, recordFill, releaseFloat, pruneSeen, type Db,
+  openDb, walletSpentToday, globalSpentToday, readFloat, readOi,
+  seeOrder, recordFill, releaseFloat, releaseOi, pruneSeen, type Db,
 } from "./db";
 
 const NOW = 1_785_000_000;
@@ -33,16 +34,17 @@ const TAKER = "TAKERxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
 const LIMITS: TakerLimits = {
   minDiscountBps: 500, maxDiscountBps: 5000, minTteSecs: 24 * 3600,
   maxFillUsdc: 100, maxPerWalletDayUsdc: 250, maxGlobalDayUsdc: 2000, maxFloatUsdc: 10_000,
+  maxOiUsd: 2500,
 };
 
 const candidate = (over: Partial<Candidate> = {}): Candidate => ({
-  orderPk: "ORDER1", owner: USER, optionMint: "MINT1",
-  priceUsdc: 9, quantityRemaining: 5, expiryTs: NOW + 7 * 86_400, isEuropean: false, ...over,
+  orderPk: "ORDER1", owner: USER, optionMint: "MINT1", kind: "resaleAsk",
+  priceUsdc: 9, strikeUsd: 100, quantityRemaining: 5, expiryTs: NOW + 7 * 86_400, isEuropean: false, ...over,
 });
 
 const input = (over: Partial<EvalInput> = {}): EvalInput => ({
   candidate: candidate(), fairUsdc: 10, limits: LIMITS,
-  spend: { walletSpentTodayUsdc: 0, globalSpentTodayUsdc: 0, floatUsdc: 0 },
+  spend: { walletSpentTodayUsdc: 0, globalSpentTodayUsdc: 0, floatUsdc: 0, oiUsd: 0 },
   nowSecs: NOW, delayUntilSecs: 0,
   isInternal: () => false, isWallet: () => true, takerWallet: TAKER, ...over,
 });
@@ -67,13 +69,15 @@ test("ZERO ROWS: a fresh database reports zero spend, not undefined", () => {
     assert.equal(walletSpentToday(db, USER, NOW), 0);
     assert.equal(globalSpentToday(db, NOW), 0);
     assert.equal(readFloat(db), 0);
+    assert.equal(readOi(db), 0);
     const h = headroom(LIMITS, {
       walletSpentTodayUsdc: walletSpentToday(db, USER, NOW),
       globalSpentTodayUsdc: globalSpentToday(db, NOW),
       floatUsdc: readFloat(db),
+      oiUsd: readOi(db),
     });
-    assert.deepEqual(h, { wallet: 250, global: 2000, float: 10_000 });
-    assert.equal(bindingConstraint(LIMITS, { walletSpentTodayUsdc: 0, globalSpentTodayUsdc: 0, floatUsdc: 0 }), null);
+    assert.deepEqual(h, { wallet: 250, global: 2000, float: 10_000, oi: 2500 });
+    assert.equal(bindingConstraint(LIMITS, { walletSpentTodayUsdc: 0, globalSpentTodayUsdc: 0, floatUsdc: 0, oiUsd: 0 }), null);
   } finally { cleanup(); }
 });
 
@@ -98,10 +102,20 @@ test("ZERO ROWS: releasing float against a zero float clamps at zero", () => {
 
 test("ZERO LIMITS: every cap at zero refuses everything (a zero cap is OFF, not unlimited)", () => {
   // The dangerous reading of "0" is "no limit". Assert the safe one.
-  const zero: TakerLimits = { ...LIMITS, maxFillUsdc: 0, maxPerWalletDayUsdc: 0, maxGlobalDayUsdc: 0, maxFloatUsdc: 0 };
+  const zero: TakerLimits = {
+    ...LIMITS, maxFillUsdc: 0, maxPerWalletDayUsdc: 0, maxGlobalDayUsdc: 0, maxFloatUsdc: 0, maxOiUsd: 0,
+  };
   const d = evaluate(input({ limits: zero }));
   assert.equal(d.fill, false);
-  assert.equal(affordableQuantity(candidate(), zero, { walletSpentTodayUsdc: 0, globalSpentTodayUsdc: 0, floatUsdc: 0 }), 0);
+  const noSpend = { walletSpentTodayUsdc: 0, globalSpentTodayUsdc: 0, floatUsdc: 0, oiUsd: 0 };
+  assert.equal(affordableQuantity(candidate(), zero, noSpend), 0);
+  // …and a zero OI cap must shut the minting side specifically, not silently
+  // read as "unlimited OI".
+  assert.equal(affordableQuantity(candidate({ kind: "writerAsk" }), zero, noSpend), 0);
+  assert.equal(
+    affordableQuantity(candidate({ kind: "writerAsk" }), { ...LIMITS, maxOiUsd: 0 }, noSpend), 0,
+    "zero OI cap alone blocks writerAsk even with cash available",
+  );
 });
 
 test("DEGENERATE PRICE: sub-cent asks do not round a fill into existence", () => {
@@ -139,8 +153,8 @@ test("ROLLOVER: daily counters reset at midnight UTC while float does NOT", () =
     assert.notEqual(utcDay(beforeMidnight), utcDay(afterMidnight));
 
     recordFill(db, {
-      sig: "SIG1", orderPk: "O1", owner: USER, mint: "M1",
-      qty: 10, price: 9, fair: 10, bandBps: 1000, ts: beforeMidnight,
+      sig: "SIG1", orderPk: "O1", owner: USER, mint: "M1", kind: "resaleAsk",
+      qty: 10, price: 9, fair: 10, bandBps: 1000, oiUsd: 0, ts: beforeMidnight,
     });
     assert.equal(walletSpentToday(db, USER, beforeMidnight), 90);
     assert.equal(globalSpentToday(db, beforeMidnight), 90);
@@ -158,8 +172,8 @@ test("ROLLOVER: yesterday's spend is retained, not overwritten", () => {
   try {
     const d1 = Date.UTC(2026, 6, 30, 12, 0, 0) / 1000;
     const d2 = Date.UTC(2026, 6, 31, 12, 0, 0) / 1000;
-    recordFill(db, { sig: "S1", orderPk: "O1", owner: USER, mint: "M1", qty: 1, price: 50, fair: 60, bandBps: 1667, ts: d1 });
-    recordFill(db, { sig: "S2", orderPk: "O2", owner: USER, mint: "M1", qty: 1, price: 30, fair: 40, bandBps: 2500, ts: d2 });
+    recordFill(db, { sig: "S1", orderPk: "O1", owner: USER, mint: "M1", kind: "resaleAsk", qty: 1, price: 50, fair: 60, bandBps: 1667, oiUsd: 0, ts: d1 });
+    recordFill(db, { sig: "S2", orderPk: "O2", owner: USER, mint: "M1", kind: "resaleAsk", qty: 1, price: 30, fair: 40, bandBps: 2500, oiUsd: 0, ts: d2 });
     assert.equal(walletSpentToday(db, USER, d1), 50);
     assert.equal(walletSpentToday(db, USER, d2), 30);
     assert.equal(readFloat(db), 80); // float is cumulative across days
@@ -177,13 +191,16 @@ test("RESTART: spend counters survive a reopen", () => {
   const p = path.join(dir, "taker.db");
   try {
     const a = openDb(p);
-    recordFill(a, { sig: "S1", orderPk: "O1", owner: USER, mint: "M1", qty: 10, price: 9, fair: 10, bandBps: 1000, ts: NOW });
+    recordFill(a, { sig: "S1", orderPk: "O1", owner: USER, mint: "M1", kind: "writerAsk", qty: 10, price: 9, fair: 10, bandBps: 1000, oiUsd: 1000, ts: NOW });
     a.close();
 
     const b = openDb(p);
     assert.equal(walletSpentToday(b, USER, NOW), 90);
     assert.equal(globalSpentToday(b, NOW), 90);
     assert.equal(readFloat(b), 90);
+    // OI must survive a restart too. A bot that forgot its open interest would
+    // re-mint its way past the cap after every crash.
+    assert.equal(readOi(b), 1000);
     b.close();
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
@@ -210,7 +227,7 @@ test("RESTART: a replayed fill signature does not double-count spend", () => {
   // out. Re-recording the same signature must be idempotent on the FILL row…
   const { db, cleanup } = tmpDb();
   try {
-    const f = { sig: "SAME", orderPk: "O1", owner: USER, mint: "M1", qty: 10, price: 9, fair: 10, bandBps: 1000, ts: NOW };
+    const f = { sig: "SAME", orderPk: "O1", owner: USER, mint: "M1", kind: "resaleAsk" as const, qty: 10, price: 9, fair: 10, bandBps: 1000, oiUsd: 0, ts: NOW };
     recordFill(db, f);
     recordFill(db, f);
     const n = db.prepare("SELECT COUNT(*) AS c FROM fills").get() as { c: number };
@@ -277,4 +294,100 @@ test("delayForOrder is total over odd pubkeys", () => {
     const d = delayForOrder(pk, 30, 180);
     assert.ok(Number.isInteger(d) && d >= 30 && d <= 180, `${JSON.stringify(pk)} => ${d}`);
   }
+});
+
+// ---------------------------------------------------------------------------
+// OPEN INTEREST — the writerAsk counter, and the v1 database that predates it
+// ---------------------------------------------------------------------------
+
+test("ZERO ROWS: releasing OI against zero OI clamps at zero", () => {
+  const { db, cleanup } = tmpDb();
+  try {
+    releaseOi(db, 5000);
+    assert.equal(readOi(db), 0);
+  } finally { cleanup(); }
+});
+
+test("OI accumulates across writerAsk fills and is released independently of float", () => {
+  // The two counters must not be coupled: a position can be exited (float back)
+  // in a way that also closes the OI, but they move by DIFFERENT amounts —
+  // premium versus strike — and mixing them mis-caps the bot by ~100x.
+  const { db, cleanup } = tmpDb();
+  try {
+    recordFill(db, { sig: "W1", orderPk: "O1", owner: USER, mint: "M1", kind: "writerAsk", qty: 5, price: 9, fair: 10, bandBps: 1000, oiUsd: 500, ts: NOW });
+    recordFill(db, { sig: "W2", orderPk: "O2", owner: USER, mint: "M2", kind: "writerAsk", qty: 3, price: 9, fair: 10, bandBps: 1000, oiUsd: 300, ts: NOW });
+    assert.equal(readOi(db), 800);
+    assert.equal(readFloat(db), 72, "float tracks premium, not strike");
+
+    releaseOi(db, 500);          // one series settled
+    assert.equal(readOi(db), 300);
+    assert.equal(readFloat(db), 72, "releasing OI must not touch float");
+  } finally { cleanup(); }
+});
+
+test("a resaleAsk fill moves float but NEVER moves OI", () => {
+  const { db, cleanup } = tmpDb();
+  try {
+    recordFill(db, { sig: "R1", orderPk: "O1", owner: USER, mint: "M1", kind: "resaleAsk", qty: 10, price: 9, fair: 10, bandBps: 1000, oiUsd: 0, ts: NOW });
+    assert.equal(readFloat(db), 90);
+    assert.equal(readOi(db), 0);
+  } finally { cleanup(); }
+});
+
+test("SCHEMA v1 -> v2: an existing database migrates without losing spend", () => {
+  // The deployed taker already has a v1 taker.db. Migration must be additive and
+  // must not reset counters — a wiped budget on upgrade is an uncapped bot for
+  // the rest of the day.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "opta-taker-v1-"));
+  const p = path.join(dir, "taker.db");
+  try {
+    // Hand-build the v1 shape: no `kind`, no `oi_usd`, no oi_usd float_state row.
+    const Database = require("better-sqlite3");
+    const v1 = new Database(p);
+    v1.exec(`
+      CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE budget_ledger (day TEXT NOT NULL, wallet TEXT NOT NULL, spent_usdc REAL NOT NULL DEFAULT 0, PRIMARY KEY (day, wallet));
+      CREATE TABLE budget_global (day TEXT PRIMARY KEY, spent_usdc REAL NOT NULL DEFAULT 0);
+      CREATE TABLE float_state (k TEXT PRIMARY KEY, v REAL NOT NULL);
+      CREATE TABLE fills (sig TEXT PRIMARY KEY, order_pk TEXT NOT NULL, owner TEXT NOT NULL, mint TEXT NOT NULL,
+                          qty INTEGER NOT NULL, price REAL NOT NULL, fair REAL NOT NULL, band_bps INTEGER NOT NULL, ts INTEGER NOT NULL);
+      CREATE TABLE seen_orders (order_pk TEXT PRIMARY KEY, first_seen_ts INTEGER NOT NULL, delay_until_ts INTEGER NOT NULL);
+      INSERT INTO meta VALUES ('schema_version','1');
+      INSERT INTO float_state VALUES ('float_usdc', 123.45);
+      INSERT INTO budget_ledger VALUES ('${utcDay(NOW)}','${USER}', 77);
+      INSERT INTO fills VALUES ('OLD','O1','${USER}','M1',5,9,10,1000,${NOW});
+      INSERT INTO seen_orders VALUES ('ORDER1', ${NOW}, ${NOW + 120});
+    `);
+    v1.close();
+
+    const db = openDb(p); // runs the migration
+    try {
+      assert.equal(readFloat(db), 123.45, "float preserved");
+      assert.equal(walletSpentToday(db, USER, NOW), 77, "spend preserved");
+      assert.equal(readOi(db), 0, "OI starts at zero on a migrated database");
+      assert.equal(seeOrder(db, "ORDER1", NOW + 60, 30), NOW + 120, "delay clock preserved");
+
+      // The pre-existing fill must read back as a resaleAsk creating no OI —
+      // which is factually right: v1 could only ever fill resaleAsks.
+      const row = db.prepare("SELECT kind, oi_usd FROM fills WHERE sig='OLD'").get() as { kind: string; oi_usd: number };
+      assert.equal(row.kind, "resaleAsk");
+      assert.equal(row.oi_usd, 0);
+      assert.equal((db.prepare("SELECT value FROM meta WHERE key='schema_version'").get() as { value: string }).value, "2");
+
+      // And the migrated database must still ACCEPT a writerAsk fill.
+      recordFill(db, { sig: "NEW", orderPk: "O2", owner: USER, mint: "M2", kind: "writerAsk", qty: 2, price: 9, fair: 10, bandBps: 1000, oiUsd: 200, ts: NOW });
+      assert.equal(readOi(db), 200);
+    } finally { db.close(); }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("ROLLOVER: OI persists across midnight, like float and unlike the dailies", () => {
+  const { db, cleanup } = tmpDb();
+  try {
+    const before = Date.UTC(2026, 6, 30, 23, 59, 0) / 1000;
+    const after = Date.UTC(2026, 6, 31, 0, 1, 0) / 1000;
+    recordFill(db, { sig: "W1", orderPk: "O1", owner: USER, mint: "M1", kind: "writerAsk", qty: 5, price: 9, fair: 10, bandBps: 1000, oiUsd: 500, ts: before });
+    assert.equal(walletSpentToday(db, USER, after), 0, "daily resets");
+    assert.equal(readOi(db), 500, "OI does not — the position is still open");
+  } finally { cleanup(); }
 });

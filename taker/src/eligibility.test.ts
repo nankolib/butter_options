@@ -9,7 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  evaluate, preScreen, identityGate, withinBand, discountBps, affordableQuantity, delayForOrder,
+  evaluate, preScreen, identityGate, withinBand, discountBps, affordableQuantity, delayForOrder, oiCreatedUsd,
   type Candidate, type TakerLimits, type EvalInput, type Spend,
 } from "./eligibility";
 
@@ -26,16 +26,19 @@ const LIMITS: TakerLimits = {
   maxPerWalletDayUsdc: 250,
   maxGlobalDayUsdc: 2000,
   maxFloatUsdc: 10_000,
+  maxOiUsd: 2500,
 };
 
-const ZERO_SPEND: Spend = { walletSpentTodayUsdc: 0, globalSpentTodayUsdc: 0, floatUsdc: 0 };
+const ZERO_SPEND: Spend = { walletSpentTodayUsdc: 0, globalSpentTodayUsdc: 0, floatUsdc: 0, oiUsd: 0 };
 
 function candidate(over: Partial<Candidate> = {}): Candidate {
   return {
     orderPk: "ORDER1",
     owner: USER,
     optionMint: "MINT1",
+    kind: "resaleAsk",
     priceUsdc: 9,               // 10% under a fair value of 10 => inside the band
+    strikeUsd: 100,
     quantityRemaining: 5,
     expiryTs: NOW + 7 * 86_400,
     isEuropean: false,
@@ -215,8 +218,13 @@ test("float cap: total capital at risk binds regardless of daily spend", () => {
 test("the binding constraint is named, not just 'no budget'", () => {
   // All three exhausted at once: float is reported first because it is the most
   // serious (it does not reset at midnight).
-  const spend = { walletSpentTodayUsdc: 250, globalSpentTodayUsdc: 2000, floatUsdc: 10_000 };
+  const spend = { walletSpentTodayUsdc: 250, globalSpentTodayUsdc: 2000, floatUsdc: 10_000, oiUsd: 0 };
   assert.equal(reasonOf(evaluate(input({ spend }))), "float_cap");
+  // On the minting side OI is reported instead, because that is the knob to turn.
+  assert.equal(
+    reasonOf(evaluate(input({ candidate: candidate({ kind: "writerAsk" }), spend: { ...spend, oiUsd: 2500 } }))),
+    "oi_cap",
+  );
 });
 
 test("partial headroom fills PARTIALLY rather than refusing", () => {
@@ -247,16 +255,26 @@ test("a single contract priced above the per-fill cap is refused, not rounded up
 });
 
 test("affordableQuantity never exceeds ANY single limit", () => {
-  // Property check across a grid — the min() is easy to get subtly wrong.
+  // Property check across a grid — the min() is easy to get subtly wrong, and
+  // the OI term divides by a DIFFERENT denominator than the cash terms.
   for (const price of [0.01, 1, 7.5, 99]) {
     for (const walletSpent of [0, 100, 249]) {
       for (const floatNow of [0, 5000, 9950]) {
-        const spend = { walletSpentTodayUsdc: walletSpent, globalSpentTodayUsdc: 0, floatUsdc: floatNow };
-        const q = affordableQuantity(candidate({ priceUsdc: price, quantityRemaining: 1e6 }), LIMITS, spend);
+       for (const kind of ["resaleAsk", "writerAsk"] as const) {
+        for (const oiNow of [0, 1200, 2499]) {
+        const spend = { walletSpentTodayUsdc: walletSpent, globalSpentTodayUsdc: 0, floatUsdc: floatNow, oiUsd: oiNow };
+        const c = candidate({ kind, priceUsdc: price, strikeUsd: 100, quantityRemaining: 1e6 });
+        const q = affordableQuantity(c, LIMITS, spend);
         const cost = q * price;
         assert.ok(cost <= LIMITS.maxFillUsdc + 1e-9, `per-fill (${cost})`);
         assert.ok(cost <= LIMITS.maxPerWalletDayUsdc - walletSpent + 1e-9, `wallet (${cost})`);
         assert.ok(cost <= LIMITS.maxFloatUsdc - floatNow + 1e-9, `float (${cost})`);
+        // OI bounds the MINTING side only, and in strike units.
+        const oi = oiCreatedUsd(c, q);
+        assert.ok(oi <= LIMITS.maxOiUsd - oiNow + 1e-9, `oi (${oi}) for ${kind}`);
+        if (kind === "resaleAsk") assert.equal(oi, 0, "resale never creates OI");
+        }
+       }
       }
     }
   }
@@ -335,4 +353,142 @@ test("preScreen never needs a fair value to reach its verdict", () => {
   const { fairUsdc, spend, ...rest } = input();
   void fairUsdc; void spend;
   assert.equal(preScreen(rest), null);
+});
+
+// ---------------------------------------------------------------------------
+// WriterAsk — the MINTING side. Creates open interest instead of moving it.
+// ---------------------------------------------------------------------------
+
+const writerAsk = (over: Partial<Candidate> = {}): Candidate =>
+  candidate({ kind: "writerAsk", strikeUsd: 100, ...over });
+
+test("writerAsk: a genuine user write fills and reports the OI it creates", () => {
+  const d = evaluate(input({ candidate: writerAsk() }));
+  assert.equal(d.fill, true);
+  if (!d.fill) return;
+  assert.equal(d.quantity, 5);
+  assert.equal(d.costUsdc, 45);            // premium paid: 5 x $9
+  assert.equal(d.oiCreatedUsd, 500);       // OI created: 5 x $100 strike
+});
+
+test("resaleAsk creates NO open interest — it transfers, it does not mint", () => {
+  // The distinction the whole cap rests on. A resaleAsk fill moves an existing
+  // position to us; nothing new comes into being, so OI must not move.
+  const d = evaluate(input({ candidate: candidate({ strikeUsd: 100 }) }));
+  assert.equal(d.fill, true);
+  if (!d.fill) return;
+  assert.equal(d.oiCreatedUsd, 0);
+});
+
+test("OI cap refuses a writerAsk once exhausted, and names OI as the reason", () => {
+  const d = evaluate(input({ candidate: writerAsk(), spend: { ...ZERO_SPEND, oiUsd: 2500 } }));
+  assert.equal(d.fill, false);
+  if (d.fill) return;
+  assert.equal(d.reason, "oi_cap");
+});
+
+test("OI cap does NOT constrain resaleAsk, even when fully exhausted", () => {
+  // Exiting a holder is exactly what the treasury is for, and it adds no OI.
+  // A shared cap would shut the useful side off because of the risky one.
+  assert.equal(reasonOf(evaluate(input({ spend: { ...ZERO_SPEND, oiUsd: 2500 } }))), "FILL");
+});
+
+test("OI sizes on STRIKE, not premium — the cap binds long before float does", () => {
+  // 25 contracts available, $9 premium each ($225 total, trivially affordable),
+  // $100 strike. maxOiUsd=2500 allows 25 by OI... but maxFillUsdc=$100 allows
+  // only 11 by cash. The tighter of the two must win.
+  const d = evaluate(input({ candidate: writerAsk({ quantityRemaining: 25 }) }));
+  assert.equal(d.fill, true);
+  if (!d.fill) return;
+  assert.equal(d.quantity, 11, "cash cap binds here");
+  assert.equal(d.oiCreatedUsd, 1100);
+
+  // Raise the cash caps and OI becomes the binding constraint at 25.
+  const loose = { ...LIMITS, maxFillUsdc: 100_000, maxPerWalletDayUsdc: 100_000, maxGlobalDayUsdc: 100_000 };
+  const d2 = evaluate(input({ candidate: writerAsk({ quantityRemaining: 100 }), limits: loose }));
+  assert.equal(d2.fill, true);
+  if (!d2.fill) return;
+  assert.equal(d2.quantity, 25, "OI cap binds: 2500 / 100 strike");
+  assert.equal(d2.oiCreatedUsd, 2500);
+});
+
+test("OI headroom partially fills rather than refusing", () => {
+  const loose = { ...LIMITS, maxFillUsdc: 100_000, maxPerWalletDayUsdc: 100_000, maxGlobalDayUsdc: 100_000 };
+  const d = evaluate(input({
+    candidate: writerAsk({ quantityRemaining: 100 }),
+    limits: loose,
+    spend: { ...ZERO_SPEND, oiUsd: 2200 },   // $300 of OI headroom => 3 contracts
+  }));
+  assert.equal(d.fill, true);
+  if (!d.fill) return;
+  assert.equal(d.quantity, 3);
+  assert.equal(d.oiCreatedUsd, 300);
+});
+
+test("writerAsk with an unreadable strike FAILS CLOSED", () => {
+  // A zero/missing strike would make OI look free. Treating "unknown" as "zero"
+  // is exactly how a cap silently stops capping.
+  for (const strikeUsd of [0, -1, Number.NaN]) {
+    const d = evaluate(input({ candidate: writerAsk({ strikeUsd }) }));
+    assert.equal(d.fill, false, `strike ${strikeUsd} refused`);
+    if (d.fill) return;
+    assert.equal(d.reason, "oi_cap");
+  }
+  // …while a resaleAsk is unaffected: it never needs the strike.
+  assert.equal(reasonOf(evaluate(input({ candidate: candidate({ strikeUsd: 0 }) }))), "FILL");
+});
+
+test("oiCreatedUsd is zero for resaleAsk at every quantity", () => {
+  for (const q of [1, 7, 1000]) {
+    assert.equal(oiCreatedUsd(candidate({ strikeUsd: 250 }), q), 0);
+    assert.equal(oiCreatedUsd(writerAsk({ strikeUsd: 250 }), q), 250 * q);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// IDENTITY ON THE WRITERASK SIDE — the fixture that matters most in production
+// ---------------------------------------------------------------------------
+
+test("ALL-WRITERASK INTERNAL BOOK: zero candidates survive identity", () => {
+  // This IS the live board: 309 of 323 asks are the writer bot's writerAsks.
+  // Before this extension, identityGate protected against an edge case. Now it
+  // is the only thing between the treasury and buying its own market-maker's
+  // inventory, one mint-on-fill at a time, all day.
+  const book = Array.from({ length: 309 }, (_, i) =>
+    writerAsk({ orderPk: `WA${i}`, owner: BOT }));
+
+  let eligible = 0;
+  for (const c of book) {
+    const d = evaluate(input({ candidate: c }));
+    if (d.fill) eligible++;
+    else assert.equal(d.reason, "internal_owner", `${c.orderPk} refused for identity`);
+  }
+  assert.equal(eligible, 0, "not one internal writerAsk is fillable");
+});
+
+test("ALL-WRITERASK INTERNAL BOOK: identity holds when every other gate would pass", () => {
+  // The strongest form: perfectly priced, in band, delay elapsed, budgets empty,
+  // OI empty. Only identity stands between us and 309 wash fills.
+  const d = evaluate(input({
+    candidate: writerAsk({ owner: BOT, priceUsdc: 7 }),   // 30% under fair — squarely in band
+    spend: ZERO_SPEND,
+    delayUntilSecs: 0,
+  }));
+  assert.equal(d.fill, false);
+  if (d.fill) return;
+  assert.equal(d.reason, "internal_owner");
+});
+
+test("the ONE external writerAsk in an otherwise-internal book is found", () => {
+  // Mirrors the live book exactly: 309 internal + 1 external (2uqTc8xg…).
+  // A gate that refuses everything is not safe, it is broken — this is the test
+  // that tells the two apart.
+  const EXTERNAL = "2uqTc8xg83bb6LXSYoJmY3vxmEoc8QebhCbijrVVVRVv";
+  const book = [
+    ...Array.from({ length: 309 }, (_, i) => writerAsk({ orderPk: `WA${i}`, owner: BOT })),
+    writerAsk({ orderPk: "REAL", owner: EXTERNAL }),
+  ];
+  const fillable = book.filter((c) => evaluate(input({ candidate: c })).fill);
+  assert.equal(fillable.length, 1);
+  assert.equal(fillable[0].orderPk, "REAL");
 });

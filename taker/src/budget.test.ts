@@ -3,12 +3,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { utcDay, headroom, bindingConstraint, nextFloat, type BudgetLimits } from "./budget";
+import { utcDay, headroom, bindingConstraint, nextFloat, nextOi, type BudgetLimits } from "./budget";
 
 const LIMITS: BudgetLimits = {
   maxPerWalletDayUsdc: 250,
   maxGlobalDayUsdc: 2000,
   maxFloatUsdc: 10_000,
+  maxOiUsd: 2500,
 };
 
 test("utcDay is UTC, not local", () => {
@@ -30,31 +31,39 @@ test("headroom is never negative, even when a limit is already exceeded", () => 
   // Overspend is possible in principle (a limit lowered mid-day). It must clamp
   // to zero rather than produce a negative that would read as "budget available"
   // once something subtracts it.
-  const h = headroom(LIMITS, { walletSpentTodayUsdc: 400, globalSpentTodayUsdc: 3000, floatUsdc: 12_000 });
-  assert.deepEqual(h, { wallet: 0, global: 0, float: 0 });
+  const h = headroom(LIMITS, { walletSpentTodayUsdc: 400, globalSpentTodayUsdc: 3000, floatUsdc: 12_000, oiUsd: 9_999 });
+  assert.deepEqual(h, { wallet: 0, global: 0, float: 0, oi: 0 });
 });
 
 test("headroom subtracts each limit independently", () => {
-  const h = headroom(LIMITS, { walletSpentTodayUsdc: 100, globalSpentTodayUsdc: 500, floatUsdc: 2500 });
-  assert.deepEqual(h, { wallet: 150, global: 1500, float: 7500 });
+  const h = headroom(LIMITS, { walletSpentTodayUsdc: 100, globalSpentTodayUsdc: 500, floatUsdc: 2500, oiUsd: 500 });
+  assert.deepEqual(h, { wallet: 150, global: 1500, float: 7500, oi: 2000 });
 });
 
 test("bindingConstraint is null while everything has room", () => {
-  assert.equal(bindingConstraint(LIMITS, { walletSpentTodayUsdc: 1, globalSpentTodayUsdc: 1, floatUsdc: 1 }), null);
+  assert.equal(bindingConstraint(LIMITS, { walletSpentTodayUsdc: 1, globalSpentTodayUsdc: 1, floatUsdc: 1, oiUsd: 1 }), null);
 });
 
 test("bindingConstraint names each limit", () => {
-  assert.equal(bindingConstraint(LIMITS, { walletSpentTodayUsdc: 250, globalSpentTodayUsdc: 0, floatUsdc: 0 }), "wallet");
-  assert.equal(bindingConstraint(LIMITS, { walletSpentTodayUsdc: 0, globalSpentTodayUsdc: 2000, floatUsdc: 0 }), "global");
-  assert.equal(bindingConstraint(LIMITS, { walletSpentTodayUsdc: 0, globalSpentTodayUsdc: 0, floatUsdc: 10_000 }), "float");
+  const z = { walletSpentTodayUsdc: 0, globalSpentTodayUsdc: 0, floatUsdc: 0, oiUsd: 0 };
+  assert.equal(bindingConstraint(LIMITS, { ...z, walletSpentTodayUsdc: 250 }), "wallet");
+  assert.equal(bindingConstraint(LIMITS, { ...z, globalSpentTodayUsdc: 2000 }), "global");
+  assert.equal(bindingConstraint(LIMITS, { ...z, floatUsdc: 10_000 }), "float");
+  assert.equal(bindingConstraint(LIMITS, { ...z, oiUsd: 2500 }), "oi");
 });
 
 test("bindingConstraint reports FLOAT first when several bind together", () => {
   // Float is the one that does not reset at midnight, so it is the one an
   // operator needs to see.
   assert.equal(
-    bindingConstraint(LIMITS, { walletSpentTodayUsdc: 250, globalSpentTodayUsdc: 2000, floatUsdc: 10_000 }),
+    bindingConstraint(LIMITS, { walletSpentTodayUsdc: 250, globalSpentTodayUsdc: 2000, floatUsdc: 10_000, oiUsd: 0 }),
     "float",
+  );
+  // OI outranks float: on the writerAsk side it binds first, and sending an
+  // operator to the float knob when OI is what stopped them wastes the incident.
+  assert.equal(
+    bindingConstraint(LIMITS, { walletSpentTodayUsdc: 250, globalSpentTodayUsdc: 2000, floatUsdc: 10_000, oiUsd: 2500 }),
+    "oi",
   );
 });
 
@@ -70,4 +79,14 @@ test("float never goes negative", () => {
   // Recovering more than was spent is legitimate — a profitable exit — and must
   // not manufacture phantom headroom above the cap.
   assert.equal(nextFloat(100, 0, 500), 0);
+});
+
+test("open interest rises on minting fills and falls when the position leaves", () => {
+  // Same shape as float, deliberately a separate function: one counter is
+  // premium-denominated and the other strike-denominated, and feeding either
+  // the other's units would silently mis-cap the bot.
+  assert.equal(nextOi(0, 500, 0), 500);
+  assert.equal(nextOi(500, 0, 200), 300);
+  assert.equal(nextOi(500, 250, 100), 650);
+  assert.equal(nextOi(100, 0, 900), 0, "never negative");
 });

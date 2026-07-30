@@ -54,19 +54,46 @@ and remove the extra `EnvironmentFile` line.
 now update **three** consumers, not two: `/opt/opta-crank/.env`,
 `/etc/opta/x-read.env`, `/opt/opta-tweet/.env`.
 
-## 3. Faucet SOL top-up — BLOCKING for any real campaign
+## 3. Faucet SOL top-up — PARTIALLY DONE (covers early campaign, not scale)
 
-Measured 2026-07-25: faucet `J8Kct5tS…RpEPz` holds **4.58 SOL ≈ 91 drops** at
-0.05 SOL each, against **974 USDC drops**. SOL runs out ~10× sooner than USDC and
-**cannot be minted** — it must be transferred from the admin wallet, which is
-**LOCAL-only in WSL** (`/home/nanko/.config/solana/id.json`, deliberately not on
-the VPS).
+**Executed 2026-07-30.** Faucet went 4.58 -> **17.58 SOL = 351 claims** at 0.05
+each (5 SOL from admin + 8 SOL from the writer wallet). USDC side is not a
+constraint: faucet holds $9.73M and the admin can mint on demand.
 
-- [ ] Decide the target tester count, multiply by 0.05 SOL, add headroom
-- [ ] Top up via `scripts/_exec_fund_faucet.mjs` (run from WSL)
-- [ ] Re-verify both balances; confirm SOL drops ≥ USDC drops
-- [ ] Set a low-balance alert — running dry mid-campaign funds testers with USDC
-      they cannot spend
+- [x] Top-up executed; faucet at 351 SOL claims
+- [ ] **NOT sufficient for scale.** 351 claims covers the early campaign only.
+      SOL cannot be minted — it must be accumulated.
+- [ ] **Accumulate devnet SOL before pushing past ~300 testers:** daily
+      `faucet.solana.com` grabs, and/or request a devnet SOL grant from the
+      Solana Foundation or Helius. Start this early — it is rate-limited and
+      slow, so it cannot be done reactively.
+- [ ] Set a low-balance alert on the faucet wallet.
+
+### 3b. ⚠️ WRITER SOL BURN — more urgent than the faucet
+
+Measured over a 17-hour window (2026-07-29 17:20Z 25.774 SOL -> 2026-07-30
+10:20Z 21.940 SOL): **~3.83 SOL burned = ~5.4 SOL/day.**
+
+The writer runs ~200 reprices + ~200 cancels per hour, plus periodic repost
+waves that mint new series and vaults (the 08:54Z heartbeat shows `posted:180`)
+— and series/vault creation pays rent, which dominates the fee cost.
+
+After sending 8 SOL to the faucet the writer holds **13.94 SOL ≈ 2.6 days** at
+that rate. The funding plan assumed "~17.7 SOL ≈ 125 days", which implied
+~0.14 SOL/day — roughly **38x lower than measured**. Two things compounded: the
+writer had already burned 3.8 SOL overnight before the transfer, and the burn
+assumption itself was wrong.
+
+- [ ] **Decide within ~2 days:** top the writer back up, or accept it stopping.
+      A writer with no SOL stops market-making entirely — the board goes stale
+      and every quote surface with it.
+- [ ] Options: return ~5 SOL from the faucet (leaves 251 claims, still ample for
+      early testing), or from the admin reserve (only 5.2 SOL, earmarked for
+      program upgrades), or accumulate externally per 3 above.
+- [ ] Add a writer low-SOL alert. `OPTA_WRITER_LOW_BALANCE_WARN_SOL` defaults to
+      1.0, which at 5.4 SOL/day is under 5 hours of warning — raise it to ~10.
+- [ ] Longer term the burn itself is the problem: ~5 SOL/day is ~150 SOL/month
+      of devnet gas that no reshuffling fixes.
 
 ## 4. Provenance completeness — gates the profit board
 

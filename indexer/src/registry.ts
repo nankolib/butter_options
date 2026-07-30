@@ -27,6 +27,11 @@ export const INTERNAL_WALLETS: InternalWallet[] = [
   { pubkey: "HgafDv195BtNc8X4uvNoRuGcUra5PuUwDJgHeKHvgFiS", label: "writer-bot" },
   { pubkey: "5sHZETYzbbdBQnFLmDCG3gyCikew39pL8kAE5xroGfqa", label: "crank-gas" },
   { pubkey: "J8Kct5tS5SvbmNj8fiuND94D4ZL5Cvip1MXsJLFRpEPz", label: "faucet" },
+  // Treasury taker (service #8). Registered BEFORE it can spend: opta-taker
+  // refuses to boot armed unless this entry exists, because an unregistered
+  // taker would appear on the leaderboard as a top trader and its buys would
+  // score as organic volume. Adding it here arms nothing.
+  { pubkey: "FeQnyJpyhxAHGUcNTx7W22BRbnsbctyPvSoav5zq5N7p", label: "taker-bot" },
 ];
 
 const BY_PUBKEY = new Map(INTERNAL_WALLETS.map((w) => [w.pubkey, w]));

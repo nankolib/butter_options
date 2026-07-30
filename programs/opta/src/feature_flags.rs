@@ -55,7 +55,7 @@ pub const WRITER_ASKS_ENABLED: bool = true;
 pub const WRITER_ASKS_ENABLED: bool = true;
 
 // =============================================================================
-// BOOK_TRIGGERS_ENABLED — book-path trigger fires, both legs (DARK)
+// BOOK_TRIGGERS_ENABLED — book-path trigger fires, both legs (LIVE)
 // =============================================================================
 //
 // When TRUE, execute_trigger routes trigger fires to the BOOK instead of the
@@ -72,30 +72,31 @@ pub const WRITER_ASKS_ENABLED: bool = true;
 // proceeds floor (6082/6083) — see execute_trigger.rs. That floor is meaningless
 // while this flag is false, since no sell can reach the book.
 //
-// SHAPE = the WRITER_ASKS_ENABLED dark pattern (NOT a plain flip-in-place const):
-// a pure const is false in every build and could never be exercised by the
-// bankrun gates. The `testing` branch is TRUE so the test build exercises the
-// book path; the feature-free (prod) branch is FALSE (dark). This is the only
-// way to satisfy B1's gate matrix (which must test the live book path).
+// Routing is `BOOK_TRIGGERS_ENABLED && book_order.is_some()` — so a fire that
+// passes NO book accounts still runs the byte-identical vault peg (the existing
+// peg tests), while book-account calls take the book path. That second conjunct
+// is why the flag was inert on its own; see B1.5 below.
 //
-// Routing is `BOOK_TRIGGERS_ENABLED && book_order.is_some()` — so a flag-true
-// test build STILL runs the byte-identical vault peg when no book accounts are
-// passed (the existing peg tests), while book-account calls take the new path.
+// STATUS: FLIPPED AND LIVE. Both cfg branches are now `true`, so the flag is a
+// permanent production default (the AMERICAN_ENABLED / WRITER_ASKS_ENABLED
+// shape). The `testing` branch is retained only so the split still compiles.
 //
-// FLIP (Jul-31 canary session): change the `not(feature = "testing")` branch
-// below from `false` to `true` and redeploy feature-free. The canary is the live
-// acceptance test on the book path. Until then, prod is dark, the vault-peg
-// fallback is intact, and StopLossSell still reverts 6079.
+// The flip required B1.5 first: routing is `BOOK_TRIGGERS_ENABLED &&
+// book_order.is_some()`, and until the keeper actually assembled book accounts
+// this const was unreachable — a flag alone could never move a fire onto the
+// book. Do not re-flip without checking that the keeper still populates the
+// eleven optionals (crank/triggerCrank.ts, enumerateAsksForMint).
 //
-// NOTE for the flip session: flipping this turns the SELL legs live too, and the
-// bid side is empty by design until writer bids ship. That is intentional and
-// safe — a sell with nothing to cross takes the skip-until-bid path (stays armed,
-// quiet TriggerSkipped), it does not revert and does not fall into the vault.
+// SELL LEGS ARE LIVE TOO. StopLossSell no longer reverts 6079; with no crossable
+// bid it takes skip-until-bid (stays armed, quiet TriggerSkipped). It cannot be
+// dumped into a dust bid: `max_premium` is the stored per-contract MINIMUM-
+// PROCEEDS FLOOR on a sell, and 0 means BOOK INELIGIBLE (SellFloorRequired 6082),
+// so every legacy-style sell placement is refused the book by construction.
 #[cfg(feature = "testing")]
 pub const BOOK_TRIGGERS_ENABLED: bool = true;
 
 #[cfg(not(feature = "testing"))]
-pub const BOOK_TRIGGERS_ENABLED: bool = false;
+pub const BOOK_TRIGGERS_ENABLED: bool = true;
 
 #[cfg(test)]
 mod tests {

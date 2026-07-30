@@ -9,8 +9,13 @@
 // merely plausible fails at simulate on a good day and mis-routes funds on a bad
 // one.
 //
-// Measured cost: fill_order against a ResaleAsk is ~114K CU. The 400K limit is
-// the same headroom the frontend uses.
+// Measured cost (devnet, 2026-07-30, 5-sample simulate against live series):
+//   fill_order       ~114K CU
+//   fill_writer_ask  76.2K-85.2K CU, avg 80.3K
+// The MINTING path is the cheaper one. mint_to does not fire the transfer hook,
+// and that hook CPI costs more than the extra writer-ask pot / position /
+// mint-record accounts. The 400K limit is the same headroom the frontend uses,
+// leaving ~315K spare on the worst sample.
 // =============================================================================
 
 import type { Program } from "@coral-xyz/anchor";

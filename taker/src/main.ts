@@ -162,8 +162,12 @@ async function tick(cfg: TakerConfig, chain: Chain, db: Db, hb: Heartbeat): Prom
         order: orderPk, owner, kind: ask.kind, qty: decision.quantity,
         costUsdc: +decision.costUsdc.toFixed(2), discountBps: decision.bandBps,
         oiCreatedUsd: +decision.oiCreatedUsd.toFixed(2),
-        // The measured number for the 400K budget. writerAsk mints on fill, so
-        // it costs materially more than the ~114K a resaleAsk transfer takes.
+        // Measured against the 400K budget on devnet, 2026-07-30:
+        //   fill_writer_ask  76.2K-85.2K CU (avg 80.3K, max 21.3% of budget)
+        //   fill_order       ~114K CU
+        // The minting path is CHEAPER, which is counter-intuitive and worth
+        // recording: mint_to does not fire the transfer hook, and that hook CPI
+        // costs more than the extra pot/position/mint-record accounts do.
         cu: sim.unitsConsumed, dryRun: cfg.dryRun, armed: cfg.armed,
       });
       continue;

@@ -72,6 +72,9 @@ const WRITER_ASK_POSITION_SEED = "writer_ask_position";
 // opta-transfer-hook PDA seeds (programs/opta-transfer-hook/src/lib.rs:32-35).
 const EXTRA_ACCOUNT_METAS_SEED = "extra-account-metas";
 const HOOK_STATE_SEED = "hook-state";
+/** opta-transfer-hook program id. Same value as writer/src/ids.ts:22 and
+ *  tests/bankrun/bootstrap.ts:42; execute_trigger ID-pins [29] against it. */
+export const HOOK_PROGRAM_ID = new PublicKey("83EW6a9o9P5CmGUkQKvVZvsz6v6Dgztiw5M4tVjfZMAG");
 
 // ---- Tunables --------------------------------------------------------------
 export const DEFAULT_TRIGGER_TICK_MS = 15_000; // 15s — stops can't fire 5 min late
@@ -403,7 +406,13 @@ export interface TickDeps {
   ) => Promise<bigint>;
   /** Production sender. NEVER called when dryRun — kept injectable so tests can
    *  assert it stays untouched in dry-run. */
-  send: (view: TriggerView, feedHex: string, isSb?: boolean) => Promise<string>;
+  /** B1.5: resting asks on one series. Optional so existing callers/tests need
+   *  no change; absent ⇒ no book discovery ⇒ peg fallback (unchanged). */
+  fetchAsksForMint?: (optionMint: PublicKey) => Promise<BookAskView[]>;
+  send: (
+    view: TriggerView, feedHex: string, isSb?: boolean,
+    book?: Record<string, PublicKey | null> | null,
+  ) => Promise<string>;
   nowSec: () => number;
 }
 
@@ -475,6 +484,11 @@ export function assembleExecuteAccounts(
   view: TriggerView, feedIdBytes: Buffer, usdcMint: PublicKey,
   caller: PublicKey, priceUpdate: PublicKey, programId: PublicKey,
   sb?: { queue: PublicKey } | null,
+  /** B1.5: snake_case book accounts from assembleBookAccounts/assembleBidAccounts.
+   *  Absent ⇒ all eleven stay null ⇒ on-chain `book_order.is_some()` is false ⇒
+   *  the byte-identical vault-peg fallback. This is the ONLY way real book keys
+   *  reach the wire. */
+  book?: Record<string, PublicKey | null> | null,
 ): Record<string, PublicKey | null> {
   const triggerOrder = new PublicKey(view.pubkey);
   const optionMint = new PublicKey(view.optionMint);
@@ -515,17 +529,17 @@ export function assembleExecuteAccounts(
     // Anchor substitutes the program-id sentinel → the on-chain arm reads them as
     // None → the byte-identical vault-peg path. When the flip wires book fires,
     // assembleBookAccounts (above) supplies real keys here instead of the nulls.
-    bookOrder: null,
-    bookMaker: null,
-    bookEscrow: null,
-    bookMakerUsdc: null,
-    writerAskPot: null,
-    writerAskPotUsdc: null,
-    writerAskPosition: null,
-    bookHookMetas: null,
-    bookHookProgram: null,
-    bookHookState: null,
-    bookMakerOption: null,
+    bookOrder: book?.book_order ?? null,
+    bookMaker: book?.book_maker ?? null,
+    bookEscrow: book?.book_escrow ?? null,
+    bookMakerUsdc: book?.book_maker_usdc ?? null,
+    writerAskPot: book?.writer_ask_pot ?? null,
+    writerAskPotUsdc: book?.writer_ask_pot_usdc ?? null,
+    writerAskPosition: book?.writer_ask_position ?? null,
+    bookHookMetas: book?.book_hook_metas ?? null,
+    bookHookProgram: book?.book_hook_program ?? null,
+    bookHookState: book?.book_hook_state ?? null,
+    bookMakerOption: book?.book_maker_option ?? null,
   };
 }
 
@@ -744,6 +758,74 @@ export function classifySellRoute(
   return { route: "skip", reason: floorPerContract <= 0n ? "book_ineligible" : "no_crossing_bid" };
 }
 
+/**
+ * B1.5 — DISCOVERY. Enumerate every resting ask on ONE series, decoded to the
+ * plain view `selectBestAsk` consumes. gPA filtered by account discriminator +
+ * `option_mint` (offset 8 owner, 40 option_mint: disc8 + owner32), so the scan
+ * is one series, not the whole book.
+ *
+ * Decode is per-account in try/catch (safeFetchAll semantics) — Anchor's .all()
+ * dies on a single stale-discriminator orphan and would empty the whole scan.
+ * Zero-depth orders are dropped here so the selector never sees them; Bids are
+ * dropped because this is the BUY side (a StopEntryBuy lifts asks only).
+ */
+export async function enumerateAsksForMint(
+  program: anchor.Program<any>, optionMint: PublicKey,
+): Promise<BookAskView[]> {
+  const connection: Connection = program.provider.connection;
+  const { offset, bytes } = (program.coder.accounts as any).memcmp("restingOrder");
+  const raw = await connection.getProgramAccounts(program.programId, {
+    commitment: "confirmed",
+    filters: [
+      { memcmp: { offset, bytes } },
+      // RestingOrder layout: disc(8) owner(32) option_mint(32) ...
+      { memcmp: { offset: 8 + 32, bytes: optionMint.toBase58() } },
+    ],
+  });
+  const out: BookAskView[] = [];
+  for (const { pubkey, account } of raw) {
+    let r: any;
+    try {
+      r = program.coder.accounts.decode("restingOrder", account.data);
+    } catch {
+      continue;
+    }
+    const kind: BookAskKind | null = r.kind && "writerAsk" in r.kind
+      ? "writerAsk"
+      : r.kind && "resaleAsk" in r.kind
+        ? "resaleAsk"
+        : null;
+    if (!kind) continue; // Bid / VaultPeg are not liftable by a StopEntryBuy
+    const quantityRemaining = BigInt(String(r.quantityRemaining ?? r.quantity_remaining ?? 0));
+    if (quantityRemaining <= 0n) continue; // zero depth ⇒ never offer it
+    out.push({
+      pubkey: pubkey.toBase58(),
+      owner: new PublicKey(r.owner).toBase58(),
+      optionMint: new PublicKey(r.optionMint ?? r.option_mint).toBase58(),
+      vault: new PublicKey(r.vault).toBase58(),
+      kind,
+      pricePerContract: BigInt(String(r.pricePerContract ?? r.price_per_contract ?? 0)),
+      quantityRemaining,
+    });
+  }
+  return out;
+}
+
+/**
+ * B1.5 — the whole buy-side book decision for one trigger, pure given `asks`.
+ * Returns the eleven snake_case book accounts, or null to leave them null (the
+ * vault-peg fallback). Kept separate from the tick so the fallback path is
+ * unit-testable without RPC.
+ */
+export function bookAccountsForBuy(
+  asks: BookAskView[], maxPremiumPerContract: bigint,
+  usdcMint: PublicKey, programId: PublicKey, hookProgramId: PublicKey = HOOK_PROGRAM_ID,
+): Record<string, PublicKey | null> | null {
+  const best = selectBestAsk(asks, maxPremiumPerContract);
+  if (!best) return null;
+  return assembleBookAccounts(best, usdcMint, programId, hookProgramId);
+}
+
 /** Build the execute_trigger instruction (offline — no RPC). */
 export async function buildExecuteTriggerIx(
   program: anchor.Program<any>, accounts: Record<string, PublicKey | null>,
@@ -813,12 +895,13 @@ async function fireTrigger(
   ctx: TriggerCrankContext, program: anchor.Program<any>, view: TriggerView,
   feedHex: string, cfg: TickConfig, extra: Record<string, unknown>, deps: TickDeps,
   isSb: boolean = false, sbQueue?: PublicKey,
+  book?: Record<string, PublicKey | null> | null,
 ): Promise<void> {
   if (cfg.dryRun) {
     const feedIdBytes = Buffer.from(normHex(feedHex), "hex");
     const accounts = assembleExecuteAccounts(
       view, feedIdBytes, cfg.usdcMint, cfg.callerPubkey, PublicKey.default, cfg.programId,
-      isSb && sbQueue ? { queue: sbQueue } : null,
+      isSb && sbQueue ? { queue: sbQueue } : null, book,
     );
     const ix = await buildExecuteTriggerIx(program, accounts);
     ctx.log("info", "DRY-RUN would send execute_trigger", {
@@ -843,14 +926,16 @@ async function fireTrigger(
         i, role: EXECUTE_ACCOUNT_ROLES[i] ?? "?", pubkey: k.pubkey.toBase58(),
         signer: k.isSigner, writable: k.isWritable,
       })),
+      route: book ? "book" : "vault-peg",
       ...extra,
       note: "DRY RUN — NOT sent; price_update shown as placeholder (ephemeral, posted in-tx); on-chain execute_trigger re-checks EMA + condition",
     });
     return;
   }
-  const sig = await deps.send(view, feedHex, isSb);
+  const sig = await deps.send(view, feedHex, isSb, book);
   ctx.log("info", "execute_trigger sent", {
-    event: "fired", trigger: view.pubkey, kind: view.kind, tape: isSb ? "switchboard" : "pyth", sig,
+    event: "fired", trigger: view.pubkey, kind: view.kind,
+    tape: isSb ? "switchboard" : "pyth", route: book ? "book" : "vault-peg", sig,
   });
 }
 
@@ -961,9 +1046,34 @@ export async function tickOnce(
       if (view.kind === "sell") extra = { intrinsic: "enforced on-chain (OptionNotInTheMoney if OTM)" };
 
       if (decision.eligible) {
+        // B1.5 BOOK DISCOVERY. A StopEntryBuy lifts the live ask board when one
+        // is crossable within its per-contract ceiling; anything else (no asks,
+        // all over budget, discovery error) leaves the eleven optionals null and
+        // takes the byte-identical vault-peg fallback. Discovery failure must
+        // NEVER block a fire — the peg path is always still available.
+        let book: Record<string, PublicKey | null> | null = null;
+        if (view.kind === "buy" && deps.fetchAsksForMint) {
+          try {
+            const asks = await deps.fetchAsksForMint(new PublicKey(view.optionMint));
+            book = bookAccountsForBuy(
+              asks, view.maxPremiumPerContract, cfg.usdcMint, cfg.programId,
+            );
+            ctx.log("info", "book discovery", {
+              event: "book-discovery", trigger: view.pubkey, asksFound: asks.length,
+              maxPremium: view.maxPremiumPerContract.toString(),
+              route: book ? "book" : "vault-peg",
+              ask: book?.book_order?.toBase58() ?? null,
+            });
+          } catch (err) {
+            book = null;
+            ctx.log("warn", "book discovery failed (falling back to vault peg)", {
+              trigger: view.pubkey, err: String(err).slice(0, 160),
+            });
+          }
+        }
         await fireTrigger(
           ctx, program, view, feedHex!, cfg, extra, deps,
-          sbMarkets.has(view.market), sbQueueFor(feedHex!),
+          sbMarkets.has(view.market), sbQueueFor(feedHex!), book,
         );
         report.fired++;
       } else {
@@ -1048,9 +1158,10 @@ function realDeps(
       const perContract6 = BigInt(Math.round(q.premiumPerContract * 1_000_000));
       return applySpreadFloor(perContract6, vi.spreadBps) * quantity;
     },
-    send: async (view, feedHex, isSb) => (isSb
-      ? fireProductionSb(ctx, program, view, feedHex, cfg)
-      : fireProduction(ctx, program, view, feedHex, cfg)),
+    send: async (view, feedHex, isSb, book) => (isSb
+      ? fireProductionSb(ctx, program, view, feedHex, cfg, book)
+      : fireProduction(ctx, program, view, feedHex, cfg, book)),
+    fetchAsksForMint: async (optionMint) => enumerateAsksForMint(program, optionMint),
     nowSec: () => Math.floor(Date.now() / 1000),
   };
 }
@@ -1066,6 +1177,8 @@ function realDeps(
 async function fireProductionSb(
   ctx: TriggerCrankContext, program: anchor.Program<any>, view: TriggerView,
   feedHex: string, cfg: TickConfig,
+  /** B1.5 book optionals, or null/absent for the vault-peg fallback. */
+  book?: Record<string, PublicKey | null> | null,
 ): Promise<string> {
   // Lazy imports keep the SB SDK off the dry-run/test path.
   const [{ buildManagedQuoteUpdateIxs }, reg, sbSdk, web3] = await Promise.all([
@@ -1091,7 +1204,7 @@ async function fireProductionSb(
   const accounts = assembleExecuteAccounts(
     view, Buffer.from(normHex(feedHex), "hex"), cfg.usdcMint,
     ctx.wallet.publicKey, PublicKey.default, cfg.programId,
-    { queue: entry.queue },
+    { queue: entry.queue }, book,
   );
   const executeIx = await buildExecuteTriggerIx(program, accounts);
   const feedShort = normHex(feedHex).slice(0, 10);
@@ -1167,6 +1280,8 @@ async function fireProductionSb(
 async function fireProduction(
   ctx: TriggerCrankContext, program: anchor.Program<any>, view: TriggerView,
   feedHex: string, cfg: TickConfig,
+  /** B1.5 book optionals, or null/absent for the vault-peg fallback. */
+  book?: Record<string, PublicKey | null> | null,
 ): Promise<string> {
   // Lazy import keeps the receiver SDK off the dry-run/test path.
   const { PythSolanaReceiver } = await import("@pythnetwork/pyth-solana-receiver");
@@ -1179,6 +1294,7 @@ async function fireProduction(
     if (!priceUpdatePda) throw new Error(`no PriceUpdate PDA for feed ${feedHex}`);
     const accounts = assembleExecuteAccounts(
       view, Buffer.from(normHex(feedHex), "hex"), cfg.usdcMint, ctx.wallet.publicKey, priceUpdatePda, cfg.programId,
+      null, book,
     );
     const ix = await buildExecuteTriggerIx(program, accounts);
     return [

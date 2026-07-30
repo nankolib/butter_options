@@ -67,10 +67,14 @@ test("both ctx variants agree on every non-tape account", () => {
   const pyth = assembleExecuteAccounts(VIEW, feedBytes, USDC, CALLER, PRICE_UPDATE, PROGRAM, null);
   const sb = assembleExecuteAccounts(VIEW, feedBytes, USDC, CALLER, PRICE_UPDATE, PROGRAM, { queue: QUEUE });
   const tape = new Set(["priceUpdate", "sbQueue", "sbSlothashes", "sbInstructions"]);
+  // Null-safe: the eleven trailing book optionals are null on BOTH tapes unless a
+  // book fire supplies them, and `null.toBase58()` throws. Agreement is what this
+  // asserts, so "both null" is agreement — compare base58 only when set.
+  const show = (v: PublicKey | null) => (v === null ? null : v.toBase58());
   for (const k of Object.keys(pyth)) {
     if (tape.has(k)) continue;
     assert.equal(
-      (pyth[k] as PublicKey).toBase58(), (sb[k] as PublicKey).toBase58(),
+      show(pyth[k] as PublicKey | null), show(sb[k] as PublicKey | null),
       `account ${k} diverged between tapes`,
     );
   }

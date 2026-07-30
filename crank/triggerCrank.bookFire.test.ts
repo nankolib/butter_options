@@ -23,6 +23,8 @@ import {
   assembleBookAccounts,
   assembleBidAccounts,
   assembleExecuteAccounts,
+  bookAccountsForBuy,
+  classifyFireError,
   buildExecuteTriggerIx,
   loadTriggerProgram,
   BOOK_ACCOUNT_ROLES,
@@ -334,3 +336,105 @@ async function main(): Promise<void> {
   process.exit(failed > 0 ? 1 : 0);
 }
 main().catch((err) => { console.error("test runner crashed:", err); process.exit(1); });
+
+// ============================================================================
+// B1.5 — keeper book discovery wired into the fire path
+// ============================================================================
+// These are the gates that make the flip meaningful: before B1.5 the assembler
+// hardcoded all eleven optionals to null, so BOOK_TRIGGERS_ENABLED could never
+// be reached on-chain (routing is `flag && book_order.is_some()`).
+
+const BUY_VIEW: TriggerView = {
+  pubkey: Keypair.generate().publicKey.toBase58(),
+  owner: Keypair.generate().publicKey.toBase58(),
+  market: Keypair.generate().publicKey.toBase58(),
+  vault: VAULT.toBase58(),
+  optionMint: MINT.toBase58(),
+  holderOptionAta: Keypair.generate().publicKey.toBase58(),
+  kind: "buy", comparator: "ge", thresholdUsdc: usd(100),
+  quantity: 3n, maxPremiumPerContract: usd(5),
+};
+
+function mkProgram() {
+  const dummyWallet = {
+    publicKey: PROGRAM_ID,
+    signTransaction: async (t: any) => t,
+    signAllTransactions: async (t: any) => t,
+  };
+  return loadTriggerProgram(new Connection("http://127.0.0.1:8899"), dummyWallet as any);
+}
+
+test("B1.5 gate A: WriterAsk selection puts REAL keys at [21]-[27], sentinels elsewhere", async () => {
+  const program = mkProgram();
+  const ask = mkAsk({ kind: "writerAsk", pricePerContract: usd(4), quantityRemaining: 10n });
+  const book = bookAccountsForBuy([ask], usd(5), USDC, PROGRAM_ID, HOOK_ID);
+  assert.ok(book, "an ask within budget must produce book accounts");
+
+  const accounts = assembleExecuteAccounts(
+    BUY_VIEW, MINT.toBuffer(), USDC, PROGRAM_ID, PublicKey.default, program.programId, null, book);
+  const ix = await buildExecuteTriggerIx(program, accounts);
+  assert.equal(ix.keys.length, 32, "32 accounts on the wire");
+
+  const tail = ix.keys.slice(21);                       // [21]..[31]
+  const sentinel = (i: number) => tail[i].pubkey.equals(program.programId);
+  // [21]-[24] + [25]-[27] carry real keys on a WriterAsk fire.
+  for (const i of [0, 1, 2, 3, 4, 5, 6]) {
+    assert.ok(!sentinel(i), `slot [${21 + i}] must be a REAL key on a WriterAsk fire`);
+  }
+  // [28]-[31] stay sentinel: no hook triad on a writer ask, no sell destination.
+  for (const i of [7, 8, 9, 10]) {
+    assert.ok(sentinel(i), `slot [${21 + i}] must remain the program-id sentinel`);
+  }
+  // The order key really is the ask we selected — not some other slot's value.
+  assert.equal(tail[0].pubkey.toBase58(), ask.pubkey, "[21] is the selected ask");
+  assert.equal(tail[1].pubkey.toBase58(), ask.owner, "[22] is the ask maker");
+});
+
+test("B1.5 gate B: no eligible ask → all ELEVEN stay null (peg fallback regression)", async () => {
+  const program = mkProgram();
+  // Three ways to have nothing to lift; each must leave the wire untouched.
+  const cases: [string, ReturnType<typeof bookAccountsForBuy>][] = [
+    ["empty book", bookAccountsForBuy([], usd(5), USDC, PROGRAM_ID, HOOK_ID)],
+    ["all over budget", bookAccountsForBuy([mkAsk({ pricePerContract: usd(9) })], usd(5), USDC, PROGRAM_ID, HOOK_ID)],
+    ["zero depth", bookAccountsForBuy([mkAsk({ quantityRemaining: 0n })], usd(5), USDC, PROGRAM_ID, HOOK_ID)],
+  ];
+  for (const [label, book] of cases) {
+    assert.equal(book, null, `${label} must yield no book accounts`);
+    const accounts = assembleExecuteAccounts(
+      BUY_VIEW, MINT.toBuffer(), USDC, PROGRAM_ID, PublicKey.default, program.programId, null, book);
+    for (const role of BOOK_ACCOUNT_ROLES) {
+      const camel = role.replace(/_([a-z])/g, (_m, c) => c.toUpperCase());
+      assert.equal((accounts as any)[camel], null, `${label}: ${camel} must be null`);
+    }
+    const ix = await buildExecuteTriggerIx(program, accounts);
+    const tail = ix.keys.slice(21).filter((k) => k.pubkey.equals(program.programId));
+    assert.equal(tail.length, 11, `${label}: all eleven optionals are the sentinel → vault-peg fallback`);
+  }
+});
+
+test("B1.5 gate C: simulate-gate INHERITANCE — a Custom error on a book fire is terminal", () => {
+  // Not assumed: the send path's simulate-gate classifies a program rejection as
+  // terminal (stop this tick) and everything else as retryable. A book fire goes
+  // through the SAME gate, so a 6080 AskPriceExceedsMax must not be retried in a
+  // loop against a fresh quote.
+  const custom6080 = { InstructionError: [1, { Custom: 6080 }] };
+  assert.equal(classifyFireError(custom6080), "terminal", "6080 on a book fire is terminal");
+  assert.equal(classifyFireError({ err: { InstructionError: [1, { Custom: 6070 }] } }), "terminal",
+    "NotAWriterAsk is terminal too");
+  // Transport/gateway problems still retry with a fresh quote.
+  assert.equal(classifyFireError(new Error("fetch failed")), "retryable");
+  assert.equal(classifyFireError({ BlockhashNotFound: {} }), "retryable");
+});
+
+test("B1.5 gate D: discovery drops Bids and zero-depth, keeps both ask kinds", () => {
+  // selectBestAsk is the consumer; enumerateAsksForMint must never hand it a Bid
+  // (a StopEntryBuy lifts asks only) nor a zero-depth order.
+  const writer = mkAsk({ kind: "writerAsk", pricePerContract: usd(6) });
+  const resale = mkAsk({ kind: "resaleAsk", pricePerContract: usd(4) });
+  const chosen = bookAccountsForBuy([writer, resale], usd(8), USDC, PROGRAM_ID, HOOK_ID);
+  assert.ok(chosen, "a cheaper resale within budget is selectable");
+  assert.equal(chosen!.book_order!.toBase58(), resale.pubkey, "strictly-cheaper resale wins");
+  // …and its hook triad is populated while pot/position stay null.
+  assert.equal(chosen!.writer_ask_pot, null);
+  assert.ok(chosen!.book_hook_metas && chosen!.book_hook_program && chosen!.book_hook_state);
+});

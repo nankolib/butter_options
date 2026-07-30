@@ -2335,3 +2335,48 @@ the Aug-7 void-sweep session so all scavenging happens in one sitting (~3 SOL+).
 Alongside measured burn SOL/h, report **shells-created-per-hour post-fix** — it
 should be ~0 outside genuine spot moves. Burn/h alone shows the bleed *slowed*;
 shells/h ~0 is the direct proof the permanent-rent bleed is **dead**.
+
+---
+
+## DISCIPLINE (adopted 2026-07-30) — the ledger rule for MULTI-AGENT operation
+
+**Applies to every agent and every session, not just this one. Relay it.**
+
+Several agents operate this repo, this workstation and the VPS concurrently, with
+legitimate keys. That is normal. What is not normal is finding out about it from
+chain forensics.
+
+### 1. Every fund movement gets a ClickUp entry AT EXECUTION TIME
+Amount, source→destination, purpose, session identifier. Written when the
+transfer is sent, not batched afterwards.
+
+**An unledgered movement is an INCIDENT by default** and gets investigated as one
+until proven otherwise. That default is deliberate: the cost of a wasted
+investigation is an hour; the cost of ignoring a real drain is the treasury.
+
+### 2. Program upgrades additionally require a PRE-announce
+A `solana program deploy` against `CtzJ4MJYX6BFvF4g67i5C24tQuwRn6ddKkaE5L84z9Cq`
+invalidates any live canary and re-bases every running service. Announce BEFORE
+the buffer is funded, naming the commit and the expected downtime window. Check
+for running canaries first.
+
+### What triggered this (worked example)
+
+2026-07-30. A parallel agent needed ~11.56 SOL per deploy buffer, admin held
+~3.56, so it moved **8.0000 SOL writer → admin at 15:28:25Z** and upgraded the
+program at **16:28:53Z** — 24 minutes into a live writer-bid canary that had been
+greenlit specifically because a previous attempt failed.
+
+Reconstructing that cost a full forensic pass: transaction decode, VPS auth/cron/
+timer/service audit, a 7-day cross-wallet movement scan, and finally a byte-level
+match of the deployed program against the local `target/deploy/opta.so`. The
+conclusion — legitimate agent, own keys, no compromise — was reached only after
+seriously entertaining key exposure and drafting a rotation plan.
+
+**One ClickUp line at 15:28:25Z would have replaced all of it.**
+
+Two forensic lessons worth keeping:
+- `auditd` is NOT installed on the VPS, so there is no process-level attribution.
+  Chain-of-custody conclusions are inferential. Consider installing it.
+- `atime` is useless for proving keypair reads — `relatime` only updates atime
+  when it is older than mtime or >24h stale.

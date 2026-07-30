@@ -2380,3 +2380,30 @@ Two forensic lessons worth keeping:
   Chain-of-custody conclusions are inferential. Consider installing it.
 - `atime` is useless for proving keypair reads — `relatime` only updates atime
   when it is older than mtime or >24h stale.
+
+### DISCIPLINE (2026-07-30) — a monitor must prove it can see a nonzero signal
+
+Same rule as "a regression test must fail against the known-broken state". A
+measurement query that errors, mis-scopes, or matches nothing does not report
+"nothing happened" — it reports **success**, and success is what you were hoping
+for. That is the whole trap.
+
+**Before believing a zero, make the query produce a nonzero.** Point it at a
+window you know has activity, or invert the predicate, and confirm the count
+moves. Only then is a zero evidence.
+
+Three instances in one week, all mine, all initially read as clean results:
+
+| # | Query | Failure | Read as |
+|---|---|---|---|
+| 1 | `grep -ci "bid.*fail\|...\|cross"` | matched unrelated crank sweep errors | 4 phantom bid errors/tick |
+| 2 | Mutation harness `run()` | bash `local` is dynamically scoped — `restore()`'s `for f` clobbered `run()`'s `local f`, so every mutation hit the LAST file in the list | "16 SKIPs" — an entire result set that tested nothing |
+| 3 | `journalctl --since "…T18:07:48Z"` | ISO `Z` suffix is unparseable; use `"2026-07-30 18:07:48"` | 7 consecutive samples of all-zero bid activity — 9,398 journal lines were in that window |
+
+Instance 2 is the sharpest: it would have certified an untested safety framework
+as "20/20 mutations caught". The only reason it surfaced was that SKIP was
+printed rather than swallowed.
+
+**Corollary:** make monitors print what they scanned (line counts, row counts,
+window bounds), not just what they found. Instance 3 was caught by one stray
+`Failed to parse timestamp` line that happened to reach stdout.

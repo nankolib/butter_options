@@ -140,6 +140,28 @@ ssh -N -L 8791:127.0.0.1:8791 root@144.202.58.6 &
 cd app && VITE_EPOCH0_UI=1 VITE_POINTS_API_BASE=/api/points npx vite
 ```
 
+## 6b. Writer-bid widening — canary passed at 3 cells, widening is a GO-LIVE call
+
+The writer bid side is **LIVE** at `OPTA_WRITER_BID_MAX_CELLS=3`
+(`OPTA_WRITER_BID_ENABLED=1`), flipped 2026-07-30T16:04:28Z. A full clean hour
+passed on 2026-07-30 18:07–19:14Z: 7 posts, all exactly 1500 bps below model
+mark and 2273–2287 bps below their resting anchors, **zero crosses, zero fills,
+zero restarts**, quote-failure flat (267→265), boards unmoved.
+
+Three cells is a canary throttle, not a market. It produces a visible two-sided
+book on ~1 series at a time out of ~320.
+
+- [ ] **Widen to 20–50 cells** and run a SECOND canary hour at the wider setting
+      before calling the bid side done. The gates that matter change character at
+      scale: `cell-cap` stops binding (it absorbed 1,062 skips at 3 cells), so
+      `bidMaxNotionalPerAsset` / `bidMaxNotionalGlobal` / `bidReserveUsdc` become
+      the live constraints for the first time.
+- [ ] Re-verify no-cross across the wider set — 3 bids is a weak test of a
+      no-cross invariant that must hold across every series simultaneously.
+- [ ] Watch inventory: `OPTA_WRITER_MAX_LONG_PER_SERIES=10` has never bound,
+      because no bid has ever been filled. At 20–50 cells a fill becomes likely
+      and that cap gets its first real exercise.
+
 ## 7. Shadow → live cutover
 
 - [ ] Freeze `quests_v1.json` and `rules_v1` weights; a rules change after launch

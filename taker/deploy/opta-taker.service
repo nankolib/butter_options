@@ -1,44 +1,50 @@
+# Installed to /etc/systemd/system/opta-taker.service on the VPS.
+# Code lives in the opta-crank checkout (/opt/opta-crank/taker), state and
+# secrets live in /opt/opta-taker — the same split opta-writer and opta-indexer
+# use.
+#
+# ExecStart path note: dist/taker/src/main.js, not dist/src/main.js. tsconfig
+# sets rootDir to the repo root so the indexer's registry.ts compiles in, which
+# pushes everything one directory deeper than the indexer's layout.
 [Unit]
-Description=Opta treasury taker — buyer of last resort for user asks (service #8)
+Description=Opta treasury taker — buyer of last resort for user asks (DRY_RUN)
+Documentation=https://github.com/nankolib/opta
 After=network-online.target
 Wants=network-online.target
+# The tick loop never throws, so repeated restarts mean a BOOT failure (bad
+# keypair, unreadable IDL, empty band). Burst-limit them so a misconfig becomes a
+# stopped unit an operator notices, not a restart loop buried in the journal.
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
 User=opta
 Group=opta
-WorkingDirectory=/opt/opta-taker
+WorkingDirectory=/opt/opta-crank/taker
+# Secrets and tuning live in the env file (root:opta 0640), never in this unit —
+# units are world-readable and end up in git diffs and journal dumps.
+EnvironmentFile=/opt/opta-taker/.env
 ExecStart=/usr/bin/node dist/taker/src/main.js
 
-# Secrets and tuning live in the env file (root:opta 0640), never in this unit —
-# a unit file is world-readable and ends up in git diffs and journal dumps.
-EnvironmentFile=/etc/opta/taker.env
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=60
 
-Restart=always
-RestartSec=15
-# The loop never throws, so repeated restarts mean a BOOT failure (bad keypair,
-# unreadable IDL, empty band). Burst-limit them so a misconfig is a stopped unit
-# an operator notices, not an infinite restart loop buried in the journal.
-StartLimitIntervalSec=300
-StartLimitBurst=5
-
-# Sized against the indexer's measured streaming peak. The taker holds far less
-# — a few hundred orders and one quote cache — so 150M is generous. If this ever
-# OOMs, something is accumulating per tick; raise it only after finding what.
+# The taker holds a few hundred orders and one per-tick quote cache — far less
+# than the indexer's streaming render. If this ever OOMs, something is
+# accumulating per tick; raise it only after finding what.
 MemoryMax=150M
-
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/opt/opta-taker
-# The service holds a funded keypair. It needs to read /etc/opta/taker.env and
-# its own secrets dir, and write nothing else on the box.
-ReadOnlyPaths=/etc/opta
 
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=opta-taker
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/opta-taker
 
 [Install]
 WantedBy=multi-user.target

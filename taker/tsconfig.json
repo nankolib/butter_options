@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "lib": ["ES2020"],
+    "outDir": "dist",
+    // rootDir is the REPO ROOT so the indexer's registry.ts can be imported by
+    // relative path and compiled in. There is exactly one definition of
+    // "internal wallet" in this codebase and the taker must not fork it —
+    // filling a founder or bot order would put bot-on-bot wash on the tape.
+    // Emits dist/taker/src/*.js and dist/indexer/src/registry.js.
+    "rootDir": "..",
+    "strict": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "declaration": false,
+    "sourceMap": false
+  },
+  "include": ["src/**/*.ts", "scripts/**/*.ts", "../indexer/src/registry.ts"],
+  "exclude": ["node_modules", "dist", "**/*.test.ts"]
+}

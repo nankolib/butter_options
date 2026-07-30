@@ -1,0 +1,44 @@
+[Unit]
+Description=Opta treasury taker — buyer of last resort for user asks (service #8)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=opta
+Group=opta
+WorkingDirectory=/opt/opta-taker
+ExecStart=/usr/bin/node dist/taker/src/main.js
+
+# Secrets and tuning live in the env file (root:opta 0640), never in this unit —
+# a unit file is world-readable and ends up in git diffs and journal dumps.
+EnvironmentFile=/etc/opta/taker.env
+
+Restart=always
+RestartSec=15
+# The loop never throws, so repeated restarts mean a BOOT failure (bad keypair,
+# unreadable IDL, empty band). Burst-limit them so a misconfig is a stopped unit
+# an operator notices, not an infinite restart loop buried in the journal.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# Sized against the indexer's measured streaming peak. The taker holds far less
+# — a few hundred orders and one quote cache — so 150M is generous. If this ever
+# OOMs, something is accumulating per tick; raise it only after finding what.
+MemoryMax=150M
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/opta-taker
+# The service holds a funded keypair. It needs to read /etc/opta/taker.env and
+# its own secrets dir, and write nothing else on the box.
+ReadOnlyPaths=/etc/opta
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=opta-taker
+
+[Install]
+WantedBy=multi-user.target

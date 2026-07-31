@@ -2511,3 +2511,34 @@ printed rather than swallowed.
 **Corollary:** make monitors print what they scanned (line counts, row counts,
 window bounds), not just what they found. Instance 3 was caught by one stray
 `Failed to parse timestamp` line that happened to reach stdout.
+
+### DISCIPLINE EXTENSION (2026-07-31) — the ledger covers LIVE-SURFACE state too
+
+The ledger rule adopted 2026-07-30 named funds and program upgrades. Extend it:
+**any change that alters what the outside world can see or receive** gets a
+ClickUp entry at execution time, naming the flag, the old and new value, the
+reason, and the session.
+
+That includes, non-exhaustively: `REPLY_DRY_RUN` / `REPLIES_ENABLED` on
+opta-tweet, `OPTA_TAKER_ARMED` / `OPTA_TAKER_DRY_RUN`, `OPTA_WRITER_BID_ENABLED`,
+`VITE_EPOCH0_UI`, and any nginx route exposure. Funds and program bytes were never
+the point — **irreversibility** was. A posted tweet is not revertible by editing a
+file.
+
+**Worked example.** At 13:54:23Z an automated session on this workstation flipped
+`REPLY_DRY_RUN=false` and restarted opta-tweet. It was competent work — backup
+first, edit, restart — and it was unledgered. Five minutes later, at 13:59:45Z, a
+different session (me) wrote the ClickUp entry recording that the reply lane
+**stays in shadow through launch week** and flips only after ~10 accumulated
+drafts. Two sessions, five minutes apart, moving the same switch in opposite
+directions, neither aware of the other.
+
+One reply went out live before the revert: `2083202301074853964`. It was a good
+reply — correct, on-voice, on our own thread — which is precisely why this is
+worth writing down. The failure was not bad output. The failure was that the
+10-draft gate was decided, committed (`8c456b9`), and silently overridden, and the
+only reason anyone noticed is that Nanko happened to see a reply in the wild.
+
+**Corollary for agents sharing this environment:** before flipping any live-surface
+flag, read the current GO-LIVE checklist and grep HANDOFF for the flag name. If a
+gate exists, the gate wins — take it up in ClickUp rather than in `.env`.

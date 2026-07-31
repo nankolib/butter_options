@@ -1,3 +1,107 @@
+# SESSION CLOSE — 2026-07-31 14:05Z (opta-tweet arc CLOSED · both loops LIVE · postReply unverified)
+
+> Written for a reader with ZERO session memory. **This block is SCOPED TO
+> `opta-tweet` only.** It supersedes every earlier statement about the X bot.
+> It says NOTHING about the protocol side — the 2026-07-24 block below remains
+> authoritative for grid/keeper/3012/crossbar, all of which this session did not
+> touch. The 3012 strand fix and T2 are unaffected.
+
+## 1. What opta-tweet is and where it lives
+Standalone **private** repo `github.com/nankolib/opta-tweet` — **NOT** the opta
+monorepo. Deployed at `/opt/opta-tweet` on the crank VPS (144.202.58.6), systemd
+unit `opta-tweet.service`, code at **`6b22f30`**. Local clone:
+`D:\claude everything\opta-tweet`. One process, **two independent loops**.
+
+VPS git gotchas (cost time this session): the clone has **no `credential.helper`**
+despite `/root/.git-credentials` existing → set `git config credential.helper store`
+per repo; and **no upstream tracking branch** → use
+`git fetch origin main && git merge --ff-only origin/main`, not `git pull`. There
+is **no `sqlite3` CLI** on the box; query `data.db` via node + better-sqlite3, run
+from `/opt/opta-tweet` or the module won't resolve.
+
+## 2. BOTH loops LIVE as of 2026-07-31 13:56Z
+**Posting loop** — `DRY_RUN=false`, 4 posts/day on jittered slots, content-engine
+v3 analyst scope: flow-read/vol-structure 30, market-pulse 20, markets-almanac 15,
+tokenization-transition 15, mechanics 10, protocol 10. Weekend = crypto-only mode
+(equity lanes disabled, stale tape).
+
+**Reply loop** — `REPLY_DRY_RUN=false`, mentions timeline polled every 12 min with
+a `since_id` cursor in sqlite. Caps: **10 replies/day, 2/user/day, 1/thread
+all-time**, 40 reply model calls/day (metered SEPARATELY from posting's 30 so a
+mention flood cannot starve posting), 300 mention-reads/day → pause + ALERT until
+UTC rollover. Pipeline: code prefilters → code injection check → classify → draft
+→ guardrails → post.
+
+## 3. OPEN ITEM — FIRST THING NEXT SESSION
+**`postReply()` has NEVER executed against the live X API.** Shadow mode could not
+exercise it by construction, so the one path that has never run is the one that
+now runs unattended. Everything else is proven; this is not.
+
+**Verification:** founder reply-baits any bot tweet posted **after 2026-07-29**
+(earlier tweets have no stored `tweet_id` → resolve `context_missing` → IGNORE),
+then within ~12 min:
+```
+ssh root@144.202.58.6 'tail -n 5 /opt/opta-tweet/replies.md'
+```
+PASS = a `replies` row with `status=posted` and a **non-null `tweet_id`**.
+On failure the per-mention try/catch logs and the loop stays alive, so check
+`journalctl -u opta-tweet` — silence is not proof of health.
+
+## 4. Rollback levers (both = edit `.env` + `systemctl restart opta-tweet`)
+- **Soft:** `REPLY_DRY_RUN=true` → replies draft to `replies.md` only; posting
+  loop unaffected.
+- **Hard:** `REPLIES_ENABLED=false` → mentions loop never starts. No polls, no
+  reads, no spend.
+
+## 5. Founder inbox — 3 flags PENDING ACTION
+`/opt/opta-tweet/mentions-flagged.md` — the bot **never** auto-replies to these.
+Currently 3 unactioned: 2 partnership/BD approaches (@nanko1goatit re self-writing
+options vaults, @142C_) and 1 media request (@ownershipfm, Ownership Radio #21).
+FLAG covers token/airdrop/listing/price, partnership/BD, press, bug reports,
+distress/legal/harassment.
+
+## 6. Daily reads
+```
+ssh root@144.202.58.6 'tail -n 20 /opt/opta-tweet/replies.md'
+ssh root@144.202.58.6 'tail -n 20 /opt/opta-tweet/mentions-flagged.md'
+```
+**`shadow.md` is DEFUNCT for judging posts** — posting has been live since
+2026-07-24, so it is a duplicate log, not a review queue. Read `replies.md`.
+
+## 7. Queued next
+- **Exemplar corpus from founder** — hand-written reference posts for voice tuning.
+- **Detector-mining pass** — GEX, sweeps, max-pain from the OpenBB /
+  SmartMoneyTracker references, to widen `detectors.ts` beyond the current five.
+- Protocol side (3012 strand, T2) **unaffected** by this arc.
+
+## 8. Corrections / learnings worth persisting
+- **TWO-FLAG SCHEME — never conflate.** `DRY_RUN` gates **posting**;
+  `REPLY_DRY_RUN` gates **replies**. They are independent by design so one can be
+  live while the other is in shadow. Setting `DRY_RUN=1` to "stop the bot
+  replying" would silence the live posting loop and not touch replies at all.
+- **Forward-only `tweet_id` + cursor = NO retro-replies, ever.** `since_id`
+  advances past every mention whether or not it produced a reply, so anything
+  drafted in shadow is permanently behind the cursor (rows stay `status=shadow`,
+  `tweet_id` NULL). The two shadow drafts (@Butter4sol 07-29, @AmdfxfastMark
+  07-30) will never post. Corollary: mentions replying to tweets from before
+  2026-07-29 resolve `context_missing` and are IGNOREd.
+- **X API is pay-per-use — links cost ~13×.** $0.015/post vs **$0.20 with a URL**,
+  $0.005/read. Guardrails reject URLs partly for this reason. Polling costs reads
+  **even in shadow mode** — shadow is not free.
+- **A monitor that has never seen a nonzero signal is not proven** (same lesson as
+  the dark keeper, §3 of the 2026-07-24 block). `postReply()` is currently exactly
+  that.
+
+## 9. Close numbers (opta-tweet)
+Shadow ran 07-29 → 07-31: **26 mentions → 21 IGNORE / 3 FLAG / 2 ANSWER**, zero
+errors, zero injection attempts on real traffic. Tests **34 → 64** (+30). Caps at
+go-live all fresh for UTC day 07-31: 0/10 replies, 0/40 model calls, 0/300 reads.
+ClickUp: `86eyez7p1` (shadow), `86eyfw5ud` (LIVE), `86eyfw85c` (arc closed).
+Spec: `docs/superpowers/specs/2026-07-29-reply-engine-design.md` in the
+opta-tweet repo.
+
+---
+
 # SESSION CLOSE — 2026-07-24 11:10Z (grid cross-day PROVEN · trigger keeper live · 3012 strand fixed · crossbar blocker)
 
 > Written for a reader with ZERO session memory. **This block SUPERSEDES every

@@ -162,6 +162,57 @@ book on ~1 series at a time out of ~320.
       because no bid has ever been filled. At 20–50 cells a fill becomes likely
       and that cap gets its first real exercise.
 
+## 6c. Reply lane — stays SHADOW through launch week (decided 2026-07-31)
+
+`REPLY_DRY_RUN=true` on `opta-tweet`. **It does not flip at go-live.** The
+review found the filters refuse nothing — `prefilter()` 0 refusals,
+`detectInjection()` 0 refusals — so the narrow funnel is the classifier declining
+threads it cannot see, which is correct behaviour. Nothing needs loosening. What
+is missing is evidence: **two** shadow drafts is not a basis for turning on a
+public write path.
+
+**Draft surfacing already works — no build needed.** `processMention` emits every
+ANSWER to `/opt/opta-tweet/replies.md` with the mention, the draft, the reason and
+an `[our-thread]` marker. Both existing drafts are there, fully formed.
+
+- [ ] **Daily during launch week:** read `/opt/opta-tweet/replies.md`, post any
+      good draft **manually** from the @optafinance account. The bot writes
+      nothing.
+- [ ] **Flip gate (separate decision, NOT part of go-live):** at ~**10 accumulated
+      drafts**, review them as a set, then flip `REPLY_DRY_RUN=false` with
+      `MAX_REPLIES_PER_DAY=2` for the first week.
+- [ ] Do **not** read the `(draft N/10)` counter in `replies.md` as progress
+      toward that gate — it is `repliesToday+1 / MAX_REPLIES_PER_DAY`, a DAILY
+      counter. Both current drafts read `1/10` and they are days apart. Count
+      lines in the file instead.
+- [ ] At ~1 live mention/day this takes ~2 weeks. Accept the wait or accept a
+      thinner evidence base — deliberately, not by drift.
+- [ ] Do **not** add third-party thread fetching to lift the IGNORE rate. It pipes
+      attacker-controlled text from arbitrary threads into the prompt for marginal
+      gain; the live answer rate is already 2/2.
+
+---
+
+# EXECUTION ORDER — weight freeze Sun 2026-08-02, go-live Mon 2026-08-03
+
+Ordered so each step's blast radius is contained by the one before it, and so
+nothing user-visible appears before the thing behind it is proven.
+
+| # | Step | Why here |
+|---|------|----------|
+| 1 | **Ops** (§9) — backups, uptime check, `MemoryMax`, retention | Do it while nothing is live. After launch there is no quiet window. |
+| 2 | **nginx** (§1) — expose `/api/points` | Highest-risk step, touches the live domain. First, while attention is on it. Verify `https://opta.fyi/` still 200s BEFORE checking the new route. |
+| 3 | **X secret** (§2) — consolidate `X_BEARER_TOKEN` | Independent of the campaign; get the two-copy secret down to one before more services exist. |
+| 4 | **Vercel env + deploy** — `VITE_EPOCH0_UI=1` | The API must already be reachable (2) or the UI ships pointing at a 404. |
+| 5 | **Smoke** — quest panel visual pass (§6), signed-action round trip, mobile viewport | The one surface automated screenshots never covered. Must pass before anyone is invited. |
+| 6 | **Bid widen** (§6b) — `MAX_CELLS=3 → 30`, then a canary hour | A real two-sided book before users arrive. 30 is the midpoint of the proposed 20–50; the notional/reserve caps bind for the first time here. |
+| 7 | **Arm taker** — registry re-derive verified, then `DRY_RUN=0`, then `ARMED=1` | LAST of the machinery. Arming is one env flip because the registry half is already done; the boot marker must read `mode: "ARMED"` with the expected band and budgets. |
+| 8 | **Announcement** | Only after 1–7 are green. Everything above is reversible in seconds; an announcement is not. |
+
+Weight freeze on **Sunday 2026-08-02** (§7): `quests_v1.json` and `rules_v1`
+frozen, because a rules change after launch re-scores retroactively — correct by
+the TAPE/SCORE design, and alarming to a user mid-campaign.
+
 ## 7. Shadow → live cutover
 
 - [ ] Freeze `quests_v1.json` and `rules_v1` weights; a rules change after launch

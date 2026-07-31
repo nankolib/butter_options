@@ -2620,3 +2620,108 @@ escrow closed, rent to owner. Keeper is production-viable on both tapes.
   capital until expiry (no on-chain net-off, no early exercise on 0-pool vaults).
 - B3 OCO + B4 trigger sweep queued.
 - Aug-7 maintenance: void sweep + 108 orphans + VPS repo reconciliation + auditd.
+
+---
+
+# ARC CLOSE — EPOCH 0 BUILD COMPLETE (2026-07-31T15:26Z)
+
+**Read `indexer/GO-LIVE.md` first — it is the only launch source of truth and it
+carries the measured state snapshot. This block is the narrative around it.**
+
+Nothing is queued until Sunday's weight review. Any agent picking up work reads
+GO-LIVE.md and this block **before touching a flag**.
+
+## What Epoch 0 is, end to end
+
+A gamified devnet campaign, built as one pipeline and currently **entirely dark or
+in shadow**:
+
+```
+chain → TAPE (immutable, deterministic row ids)
+      → SCORE (pure, versioned, recomputable)
+      → quests + multiplier + provenance
+      → points API (loopback only, ed25519 signed writes)
+      → campaign UI (flag-gated OFF in prod)
+      → opta-taker (buyer of last resort, DRY_RUN + unarmed)
+      → writer bids (live, throttled to 3 cells)
+```
+
+The separation that makes it defensible: **TAPE is fact, SCORE is a function.**
+Rules can change and a full recompute reproduces the same result on the same tape.
+
+## Where it actually stands
+
+Everything user-visible is still off. Posting is the single live outward surface,
+and it predates this arc (LIVE since 2026-07-24). The reply lane is in shadow
+pending a founder ruling — see GO-LIVE §6c, which records a genuine conflict
+between two sessions rather than a decision.
+
+Proven this arc, with evidence rather than assertion:
+
+- **Reconciliation identity closes** — `[W]+[V]+[F]+[U] == 0`, residual **$8.57 on
+  $11.2M gross**. Reported, never tuned to pass.
+- **Bid canary PASSED a clean hour** — 7 posts, all exactly 1500bps under model
+  mark and 2273–2287bps under their resting anchors, **0 crosses, 0 fills,
+  0 restarts**, quote-failure flat 267→265, boards unmoved.
+- **Taker safety mutation-verified 20/20** — every gate broken deliberately and the
+  suite confirmed to fail. Arming is blocked in code until the wallet is in
+  `INTERNAL_WALLETS` (it now is, verified on a recompute).
+- **Upgrade compatibility clean** — the Jul-30 program upgrade was a one-line flag
+  flip; 38 events, 0 layout changes, all 7 consumed instructions byte-identical.
+  Tape rows since are sound; no re-index.
+- **Writer burn decomposed to 3 decimals** — reprice/cancel are rent-neutral
+  (370 txs = −0.00185 SOL against a −0.00186 measurement). The whole ~5 SOL/day is
+  `CreateSeries` rent on repost waves. **Steady-state burn is ~0.045 SOL/day.**
+
+## The three disciplines this arc produced
+
+All three came from real incidents, all three are in this file above:
+
+1. **Ledger rule** — fund movements and program upgrades get a ClickUp entry at
+   execution time. Unledgered movement is an incident by default.
+2. **Extended to live-surface flags** — `REPLY_DRY_RUN`, `OPTA_TAKER_ARMED`,
+   `OPTA_WRITER_BID_ENABLED`, `VITE_EPOCH0_UI`, nginx routes. Irreversibility was
+   always the criterion, not the asset class.
+3. **A monitor must prove it can see a nonzero signal** — three separate queries
+   this week reported clean zeros because they had silently errored.
+
+**A fourth, learned at arc close:** the ledger must be in **one** place. The
+reply-lane flip WAS documented — in git, 21 minutes after execution — and a
+ClickUp-only check read it as unledgered, producing a forensic pass and a revert
+that undid a deliberate, successful verification. Two honest agents, two
+good-faith records, two different systems. **ClickUp at execution time is the
+rule; a git commit is not a substitute.**
+
+## Dates
+
+- **Sunday 2026-08-02 — WEIGHT FREEZE.** `quests_v1.json` + `rules_v1` frozen. A
+  post-launch rules change re-scores retroactively: correct by design, alarming to
+  a user mid-campaign.
+- **Monday 2026-08-03 — GO-LIVE EXECUTION**, in the locked order in GO-LIVE.md:
+  ops → nginx → X secret → Vercel env+deploy → smoke → bid widen (3→30 + canary
+  hour) → arm taker → announcement. Sequenced by blast radius; everything before
+  the announcement is reversible in seconds.
+
+## Nanko's outstanding items
+
+1. **RULE ON THE REPLY LANE** (GO-LIVE §6c) — live per `fa93ef4`, or shadow until
+   ~10 drafts per `8c456b9`. `postReply()` is now verified either way. Blocking for
+   Monday.
+2. **3 founder flags unactioned** in `/opt/opta-tweet/mentions-flagged.md` — two
+   BD approaches (@nanko1goatit re self-writing vaults, @142C_) and one media
+   request (@ownershipfm). The bot never auto-replies to these.
+3. **Quest panel visual pass** — the one surface automated screenshots never
+   covered; needs a real wallet, both themes, mobile.
+4. **Confirm the 15:28Z 8 SOL writer→admin transfer** was the deploy top-up we
+   reconstructed (it funded a program-deploy buffer; balances all recovered).
+5. **Decide the airdrop posture** — 3.41 SOL/day at an 8% hit rate, and 22 of 23
+   declines are the faucet erroring, not throttling. Fine for steady state, thin
+   for repost-wave days.
+
+## Queued, not started
+
+- **Tenor-roll T-item** — no agent has touched it. Recon only, then ONE fix
+  direction with numbers. **No tenor logic changes without a separate greenlight.**
+- Stale IDL refresh at writer/indexer/taker/app (15-field `TriggerOrder`, drop the
+  `synth_warm_vol_oracle` testing artifact). Harmless today; one commit.
+- NYSE holiday table beyond 2026 + make exhaustion fail loud.

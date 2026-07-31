@@ -1,3 +1,41 @@
+# STATE SNAPSHOT — 2026-07-31T15:26Z (measured, not remembered)
+
+This file is the **only launch source of truth**. Every line below was read from
+the box or from chain at the timestamp above, not recalled.
+
+| Service | State |
+|---|---|
+| `opta-tweet` | posting **LIVE** (`DRY_RUN=false`, 4/day) · replies **SHADOW** (`REPLY_DRY_RUN=true`) · `REPLIES_ENABLED=true` · caps **2/day, 1/user** |
+| `opta-writer` | asks LIVE, `MAX_CELLS=470`, **440 live orders** · bids LIVE at **`BID_MAX_CELLS=3`** · quoteFailed 240/h steady |
+| `opta-taker` | **`DRY_RUN=1`, `ARMED=0`** · band 500/5000bps · float $10k · **OI cap $2.5k** · scanning 454 asks/tick, 0 eligible (453 internal + 1 settled) |
+| `opta-indexer` | schema **v5** · 104,969 txs · **98,936 events** · backfill done · wallets **23 ext / 7 int** |
+| Boards | profit **3** · volume **23** · referrals **0** · social **0** — UI still flag-gated OFF in prod |
+| All 7 units | `active`, **`NRestarts=0`** across writer/crank/taker/indexer/trigger/tweet/quotes |
+
+**Balances (chain):**
+
+| Wallet | SOL | USDC |
+|---|---:|---:|
+| writer | 13.93 | 190,531 |
+| taker | 7.00 | 10,000 |
+| faucet | 12.58 | 9,730,000 |
+| admin | 4.84 | 10,903,063 |
+| crank | 21.57 | 0 |
+
+**Airdrop — 24h+ figure now real (supersedes the 4-run partial):** 25 runs over
+28.2h, 2 grants x 2 SOL = **3.41 SOL/day actual**, 8% hit rate. Decline mix is the
+surprise: **22 of 23 are faucet `Internal error`, only 1 is rate-limiting** — the
+public faucet is mostly broken for us, not throttling us. Comfortably covers
+steady-state burn (~0.05 SOL/day); does NOT cover a repost-wave day.
+
+**Still queued, NOT done by any agent:** tenor-roll T-item (no commit touches
+`tenors.ts`/`ladder.ts` since Jul-30). Reconstruct the 08:54Z wave, confirm
+`EQUITY_MIN_LEAD_SECS=24h` explains the timing, decide whether ~5 SOL/day is
+sustained or roll-day-only, then propose ONE fix with numbers. No tenor changes
+without a separate greenlight.
+
+---
+
 # GO-LIVE checklist — EPOCH 0 campaign
 
 Everything on this list is **deliberately not done**. Each item is staged,
@@ -162,7 +200,37 @@ book on ~1 series at a time out of ~320.
       because no bid has ever been filled. At 20–50 cells a fill becomes likely
       and that cap gets its first real exercise.
 
-## 6c. Reply lane — stays SHADOW through launch week (decided 2026-07-31)
+## 6c. Reply lane — CONFLICTED, needs a founder ruling (do not resolve in .env)
+
+> **RECONCILED 2026-07-31T15:26Z.** Two sessions decided this in opposite
+> directions within four minutes and neither could see the other:
+>
+> | time (UTC) | event |
+> |---|---|
+> | 13:54:23 | a parallel agent set `REPLY_DRY_RUN=false` |
+> | 13:56:38 | this session committed `8c456b9` — "reply lane stays shadow" |
+> | 13:56:42 | their restart |
+> | 14:15:57 | their `fa93ef4` — documents both loops LIVE, names `postReply()` as THE open item, verification = "founder reply-baits a bot tweet" |
+> | 14:44:45 | @nanko1goatit reply-bait → reply posts — **their verification PASSED** |
+> | 14:51:49 | this session reverted to `REPLY_DRY_RUN=true` |
+>
+> The flip was **deliberate and documented** — in git, not ClickUp, 21 minutes
+> after execution, which is why a ClickUp-only check read it as unledgered. The
+> reply this session treated as an incident was their verification succeeding.
+>
+> **`postReply()` IS NOW VERIFIED.** Their open item is closed by evidence:
+> `2083202301074853964`, to @nanko1goatit, on our own msft thread, `status=posted`
+> with a non-null `tweet_id` — exactly the PASS condition `fa93ef4` specifies.
+> Reply quality was sound: correct on gap risk vs delta hedging, on-voice,
+> `injection=0`, full thread context.
+>
+> **CURRENT STATE: `REPLY_DRY_RUN=true`** (this session's revert), caps 2/day
+> 1/user. The 10-draft gate below and `fa93ef4`'s "both loops LIVE" are in direct
+> conflict. **Nanko rules; neither agent should flip it again in the meantime.**
+> Arguments both ways are recorded — the gate wanted evidence before a public
+> write path, and the evidence now exists (3 drafts + 1 verified live reply).
+
+### Original 6c decision (retained for the record)
 
 `REPLY_DRY_RUN=true` on `opta-tweet`. **It does not flip at go-live.** The
 review found the filters refuse nothing — `prefilter()` 0 refusals,

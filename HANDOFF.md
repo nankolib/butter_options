@@ -2542,3 +2542,81 @@ only reason anyone noticed is that Nanko happened to see a reply in the wild.
 **Corollary for agents sharing this environment:** before flipping any live-surface
 flag, read the current GO-LIVE checklist and grep HANDOFF for the flag name. If a
 gate exists, the gate wins — take it up in ClickUp rather than in `.env`.
+
+---
+
+## TRIGGER ARC CLOSED — 2026-07-31
+
+The trigger order arc (B0 → B4 scaffold) is complete through the live buy canary.
+`execute_trigger` routes fires to the BOOK on both tapes, in production.
+
+**What shipped**
+- **B1.5** (`bf8a6a0`) keeper book discovery: `enumerateAsksForMint` (gPA by
+  discriminator + option_mint) → `selectBestAsk` bounded by the trigger's
+  per-contract ceiling → `assembleBookAccounts`. Before this the keeper hardcoded
+  all eleven book optionals to null, so `BOOK_TRIGGERS_ENABLED` was unreachable —
+  routing is `flag && book_order.is_some()`, and the flag alone was a no-op.
+- **FLIP** (`6b04606`) deployed **slot 480011440**, hash-verified byte-exact. The
+  prod artifact grew 1,632,896 → 1,660,384 B: with the const false LLVM had
+  dead-code-eliminated both book arms.
+- **B1.6** (`ec24721`) ALT'd the fire. Legacy book fire + SB ed25519 quote
+  measured **1305 B** against the 1232 limit; resolving the static set through
+  table **8DhpYaktjhBLeEqQY1151yphbvSoFGkT8BmFUN36X464** brings it to **1031 B**
+  (274 B saved, 201 B headroom). Keeper suite 76/0.
+
+**Canary — fired end-to-end on live board liquidity**
+`QJJgQUnh9Rqtc8u9S6CMKjSSNsnRhLwN9ormtQf5JepPucqMydYwbeGfgeGp64sUVcmPfmLQrz38CrSrzWrzcnC`
+slot 480231064, v0 tx with 1 ALT lookup, SB tape, `route:"book"`.
+Conservation zero-residue: +1 contract minted to the founder; pot 0.968 → 1.936
+(= strike × 1); ask 2066 → 2065; maker +9001, treasury +45 (= 1 × ask 0.009046,
+fee = floor(9046 × 50bps)); escrow 20000 − 9046 = 10954 refunded; trigger and
+escrow closed, rent to owner. Keeper is production-viable on both tapes.
+
+### Lessons — carry these forward
+
+1. **`str.replace` patching is BANNED.** Three separate silent no-ops this arc
+   (a print block, a commit message, the ALT env-read that then shipped to the
+   VPS half-wired). Python's `str.replace` returns the input unchanged on a miss
+   and the script happily prints success. Use real edits with match verification.
+2. **Every env-read wire needs a gate.** The ALT suite was green while
+   `cfg.alt` was never populated from the environment, because no test asserted
+   the env → config path. A gate that cannot see the wire is not covering it.
+3. **One writing session at a time.** VPS `.env` flips and service restarts get
+   an immediate ClickUp checkpoint; a parallel agent enabling writer bids
+   mid-session invalidated a stated safety premise ("the bid side is empty")
+   without anyone noticing until a board read contradicted it.
+4. **`--max-sign-attempts 200` is the devnet deploy fix**, not priority fees.
+   Four deploys died on write-throughput with `--with-compute-unit-price`; the
+   fifth landed first try with the raised sign-attempt budget. Each failure
+   orphans a rent-exempt buffer — check `solana program show --buffers`.
+5. **Canary expiry must outlast plausible outages.** The B1-era canary series
+   expired mid-arc and forced a re-target; pick expiries weeks out, not days.
+6. **The ALT is at 250/256.** It works, but it cannot grow. Rebuild lean
+   (9 static only, ~245 B saved) at mainnet prep — mainnet needs its own table
+   regardless, since the SB queue is cluster-specific and the boot assertion
+   enforces it.
+
+### Open
+
+- **Vault `2gjf5cyHCv4JMXP7DPNwxcqJE85mRvQ78DeuCMj9Ykyn` — $100 recoverable, no
+  code fix needed.** Diagnosed 2026-07-31, read-only. NOT anomalous: the vault is
+  simply **unsettled**. `settle_expiry` ran at expiry+24s (SettlementRecord price
+  1.1134) but `settle_vault` never ran for this vault, so `is_settled` is still
+  false and `collateral_remaining` is still its initial 0 (settle_vault is what
+  sets it = total_collateral). The WriterPosition **does exist**
+  (`BPEcJarLfXH9WpRiiSJv5zEpznYhDquE5cPYztPzGnp`, owner `DnExEYnZ…`, shares 100,
+  deposited 100) — an earlier report of "zero WriterPosition accounts" was a
+  probe bug (memcmp at offset 8, which is `owner`; `vault` is at offset 40).
+  History: deposit 2026-07-23 → nothing ever minted (options_minted 0) → expiry →
+  settle_expiry → stop. Recovery is the NORMAL path: `settle_vault` then
+  `withdraw_post_settlement`. The void/`reclaim_unsettled` path is wrong here and
+  would revert (`initialize_void` requires an empty SettlementRecord).
+- **Class:** 3 vaults past expiry + unsettled + collateral > 0; 2 hold USDC,
+  **170.000001 total**. `fGvpt9Ao…` (70.000001, expired 2026-07-31) is normal
+  crank lag. Only `2gjf5cy…` is genuinely stale at 7 days — worth checking why
+  the settle crank skipped a vault with `options_minted == 0`.
+- Writer-bids C2 review pending (early unauthorized run reconciliation).
+- **C3 relist is mandatory before bid scale** — without it every bid fill is dead
+  capital until expiry (no on-chain net-off, no early exercise on 0-pool vaults).
+- B3 OCO + B4 trigger sweep queued.
+- Aug-7 maintenance: void sweep + 108 orphans + VPS repo reconciliation + auditd.

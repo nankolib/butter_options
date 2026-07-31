@@ -38,6 +38,7 @@
 
 import * as anchor from "@coral-xyz/anchor";
 import {
+  AddressLookupTableAccount,
   Connection, PublicKey, ComputeBudgetProgram, SystemProgram, TransactionInstruction,
 } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, getAssociatedTokenAddressSync } from "@solana/spl-token";
@@ -72,6 +73,9 @@ const WRITER_ASK_POSITION_SEED = "writer_ask_position";
 // opta-transfer-hook PDA seeds (programs/opta-transfer-hook/src/lib.rs:32-35).
 const EXTRA_ACCOUNT_METAS_SEED = "extra-account-metas";
 const HOOK_STATE_SEED = "hook-state";
+/** Switchboard On-Demand DEVNET queue — the cluster fingerprint the ALT boot
+ *  assertion checks. Mainnet has a different queue and therefore its own table. */
+export const SB_ON_DEMAND_QUEUE = new PublicKey("EYiAmGSdsQTuCw413V5BzaruWuCCSDgTPtBGvLkXHbe7");
 /** opta-transfer-hook program id. Same value as writer/src/ids.ts:22 and
  *  tests/bankrun/bootstrap.ts:42; execute_trigger ID-pins [29] against it. */
 export const HOOK_PROGRAM_ID = new PublicKey("83EW6a9o9P5CmGUkQKvVZvsz6v6Dgztiw5M4tVjfZMAG");
@@ -423,6 +427,12 @@ export interface TickConfig {
   usdcMint: PublicKey;
   programId: PublicKey;
   callerPubkey: PublicKey;
+  /** B1.6 Address Lookup Table. A BOOK fire does not fit in a legacy tx: real
+   *  book keys add 7 unique pubkeys and the SB tape also carries an ed25519
+   *  quote ix (measured 1305 B > the 1232 limit). Resolving the static set
+   *  through an ALT brings it to ~1031 B. null ⇒ legacy encoding: the PEG path
+   *  still fires, a BOOK fire refuses LOUDLY rather than silently downgrading. */
+  alt?: AddressLookupTableAccount | null;
 }
 
 const FETCHABLE = { triggerOrder: "triggerOrder", optionsMarket: "optionsMarket", sharedVault: "sharedVault" } as const;
@@ -824,6 +834,28 @@ export function bookAccountsForBuy(
   const best = selectBestAsk(asks, maxPremiumPerContract);
   if (!best) return null;
   return assembleBookAccounts(best, usdcMint, programId, hookProgramId);
+}
+
+/**
+ * B1.6 — load the trigger ALT and assert it is the RIGHT table for this cluster.
+ *
+ * The boot assertion is not ceremony: the SB queue is cluster-specific, so a
+ * mainnet keeper pointed at the devnet table would resolve a WRONG queue and
+ * every SB fire would verify a quote from the wrong oracle set. Fail at boot,
+ * loudly, rather than at fire time.
+ */
+export async function loadTriggerAlt(
+  connection: Connection, address: string, expectedSbQueue: PublicKey,
+): Promise<AddressLookupTableAccount> {
+  const res = await connection.getAddressLookupTable(new PublicKey(address));
+  if (!res.value) throw new Error(`OPTA_TRIGGER_ALT ${address} not found on this cluster`);
+  const addrs = res.value.state.addresses;
+  if (!addrs.some((a) => a.equals(expectedSbQueue))) {
+    throw new Error(
+      `OPTA_TRIGGER_ALT ${address} does not contain the expected SB queue ${expectedSbQueue.toBase58()} — wrong cluster's table?`,
+    );
+  }
+  return res.value;
 }
 
 /** Build the execute_trigger instruction (offline — no RPC). */
@@ -1241,9 +1273,16 @@ async function fireProductionSb(
       executeIx,
     ];
     const { blockhash } = await ctx.connection.getLatestBlockhash("confirmed");
+    // B1.6: resolve the static set through the ALT. A book fire WITHOUT a table
+    // does not fit — refuse loudly instead of emitting a tx that cannot encode.
+    if (book && !cfg.alt) {
+      throw new Error(
+        "book fire requires OPTA_TRIGGER_ALT (legacy encoding measured 1305 B > 1232 limit) — refusing to build",
+      );
+    }
     const msg = new (web3 as any).TransactionMessage({
       payerKey: ctx.wallet.publicKey, recentBlockhash: blockhash, instructions,
-    }).compileToV0Message();
+    }).compileToV0Message(cfg.alt ? [cfg.alt] : []);
     const tx = new (web3 as any).VersionedTransaction(msg);
 
     // (c) simulate-gate → classify. Terminal = the chain rejected it; do NOT
@@ -1287,7 +1326,14 @@ async function fireProduction(
   const { PythSolanaReceiver } = await import("@pythnetwork/pyth-solana-receiver");
   const vaa = await fetchHermesUpdate(feedHex, ctx.hermesBase);
   const receiver = new PythSolanaReceiver({ connection: ctx.connection, wallet: ctx.wallet as any });
-  const builder = receiver.newTransactionBuilder({ closeUpdateAccounts: true });
+  if (book && !cfg.alt) {
+    throw new Error(
+      "book fire requires OPTA_TRIGGER_ALT (legacy encoding exceeds the 1232 B limit) — refusing to build",
+    );
+  }
+  // PythSolanaReceiver takes the lookup table natively and already emits
+  // versioned txs, so the peg and book paths stay ONE code path.
+  const builder = receiver.newTransactionBuilder({ closeUpdateAccounts: true }, cfg.alt ?? undefined);
   await builder.addPostPriceUpdates([vaa.toString("base64")]);
   await builder.addPriceConsumerInstructions(async (getPriceUpdateAccount: (k: string) => PublicKey | undefined) => {
     const priceUpdatePda = getPriceUpdateAccount(`0x${normHex(feedHex)}`);
@@ -1347,7 +1393,21 @@ export async function runTriggerCrank(
     usdcMint: protocolState.usdcMint as PublicKey,
     programId: program.programId,
     callerPubkey: ctx.wallet.publicKey,
+    alt: null,
   };
+  // B1.6: optional, but REQUIRED for book fires. Unset ⇒ legacy encoding ⇒ the
+  // peg path still fires and a book fire refuses loudly (never a silent downgrade).
+  const altAddr = (process.env.OPTA_TRIGGER_ALT ?? "").trim();
+  if (altAddr) {
+    try {
+      const { lookupSbFeed } = require("./sbFeedRegistry") as typeof import("./sbFeedRegistry");
+      void lookupSbFeed;
+    } catch { /* registry optional */ }
+    cfg.alt = await loadTriggerAlt(ctx.connection, altAddr, SB_ON_DEMAND_QUEUE);
+    ctx.log("info", "trigger ALT loaded", { alt: altAddr, entries: cfg.alt.state.addresses.length });
+  } else {
+    ctx.log("warn", "OPTA_TRIGGER_ALT unset — legacy encoding; BOOK fires will refuse", {});
+  }
   const deps = realDeps(ctx, program, cfg);
   const state = { backoff: mkBackoff() };
 

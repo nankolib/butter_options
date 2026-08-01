@@ -5,7 +5,7 @@ the box or from chain at the timestamp above, not recalled.
 
 | Service | State |
 |---|---|
-| `opta-tweet` | posting **LIVE** (`DRY_RUN=false`, 4/day) · replies **SHADOW** (`REPLY_DRY_RUN=true`) · `REPLIES_ENABLED=true` · caps **2/day, 1/user** |
+| `opta-tweet` | posting **LIVE** (`DRY_RUN=false`, 4/day) · replies **LIVE** (`REPLY_DRY_RUN=false` as of 2026-08-01T09:50:10Z, §6c) · `REPLIES_ENABLED=true` · caps **2/day, 1/user** |
 | `opta-writer` | asks LIVE, `MAX_CELLS=470`, **440 live orders** · bids LIVE at **`BID_MAX_CELLS=3`** · quoteFailed 240/h steady |
 | `opta-taker` | **`DRY_RUN=1`, `ARMED=0`** · band 500/5000bps · float $10k · **OI cap $2.5k** · scanning 454 asks/tick, 0 eligible (453 internal + 1 settled) |
 | `opta-indexer` | schema **v5** · 104,969 txs · **98,936 events** · backfill done · wallets **23 ext / 7 int** |
@@ -200,7 +200,35 @@ book on ~1 series at a time out of ~320.
       because no bid has ever been filled. At 20–50 cells a fill becomes likely
       and that cap gets its first real exercise.
 
-## 6c. Reply lane — CONFLICTED, needs a founder ruling (do not resolve in .env)
+## 6c. Reply lane — RESOLVED **LIVE with tightened caps** (founder ruling 2026-08-01)
+
+> **FOUNDER RULING 2026-08-01T09:50:10Z — `REPLY_DRY_RUN=false`. Lane is LIVE.**
+>
+> The shadow-until-10-drafts gate below (`8c456b9`) is **superseded**. At the
+> tightened caps it is roughly a week of accumulation for evidence that already
+> exists: `postReply()` is verified live (`2083202301074853964`, `status=posted`,
+> non-null `tweet_id`). **The caps are the safety mechanism, not the shadow flag.**
+>
+> | field | value |
+> |---|---|
+> | flag | `REPLY_DRY_RUN` `true` → `false` |
+> | unchanged | `REPLIES_ENABLED=true`, `MAX_REPLIES_PER_DAY=2`, `MAX_REPLIES_PER_USER_PER_DAY=1` |
+> | executed | 2026-08-01T09:50:10Z, one-line `.env` diff, backup `.env.bak.20260801-reply-live` |
+> | verified | both loops up clean; reply loop logs `REPLY_DRY_RUN=false poll=12m caps: 2/day, 1/user, reads 300/day — LIVE, replying on X`; first poll clean; no errors in 60s; `NRestarts=0` |
+> | ledger | ClickUp `86eyg1yxu` (Opta › Engineering), filed at execution time |
+> | rollback | `cp /opt/opta-tweet/.env.bak.20260801-reply-live /opt/opta-tweet/.env && systemctl restart opta-tweet.service` |
+>
+> Everything below this block is **historical record**. The 10-draft flip gate is
+> closed as superseded; do not re-open it as a blocker.
+>
+> **Known behaviour, not a bug:** at `1/user/day` a second mention from the same
+> handle inside one UTC day is dropped by `replyFilters.ts` as
+> `per-user daily cap reached (1)` — before any model call, so it produces no
+> draft, no flag, and no journal line beyond the poll counter. This already
+> happened once (mention `2083227921557201156`, 2026-07-31T16:30Z). Silent-drop
+> is the intended cost of the cap.
+
+### Prior reconciliation (historical — superseded by the ruling above)
 
 > **RECONCILED 2026-07-31T15:26Z.** Two sessions decided this in opposite
 > directions within four minutes and neither could see the other:
@@ -224,13 +252,13 @@ book on ~1 series at a time out of ~320.
 > Reply quality was sound: correct on gap risk vs delta hedging, on-voice,
 > `injection=0`, full thread context.
 >
-> **CURRENT STATE: `REPLY_DRY_RUN=true`** (this session's revert), caps 2/day
+> **STATE AS OF THAT RECONCILIATION: `REPLY_DRY_RUN=true`** (that session's revert), caps 2/day
 > 1/user. The 10-draft gate below and `fa93ef4`'s "both loops LIVE" are in direct
 > conflict. **Nanko rules; neither agent should flip it again in the meantime.**
 > Arguments both ways are recorded — the gate wanted evidence before a public
 > write path, and the evidence now exists (3 drafts + 1 verified live reply).
 
-### Original 6c decision (retained for the record)
+### Original 6c decision (SUPERSEDED 2026-08-01 — retained for the record)
 
 `REPLY_DRY_RUN=true` on `opta-tweet`. **It does not flip at go-live.** The
 review found the filters refuse nothing — `prefilter()` 0 refusals,
@@ -243,12 +271,16 @@ public write path.
 ANSWER to `/opt/opta-tweet/replies.md` with the mention, the draft, the reason and
 an `[our-thread]` marker. Both existing drafts are there, fully formed.
 
-- [ ] **Daily during launch week:** read `/opt/opta-tweet/replies.md`, post any
+- [ ] **Daily during launch week:** read `/opt/opta-tweet/replies.md`. ~~post any
       good draft **manually** from the @optafinance account. The bot writes
-      nothing.
-- [ ] **Flip gate (separate decision, NOT part of go-live):** at ~**10 accumulated
+      nothing.~~ **As of 2026-08-01 the bot posts these itself** — the daily read
+      is now after-the-fact review of what already went out, capped at 2/day.
+- [x] ~~**Flip gate (separate decision, NOT part of go-live):** at ~**10 accumulated
       drafts**, review them as a set, then flip `REPLY_DRY_RUN=false` with
-      `MAX_REPLIES_PER_DAY=2` for the first week.
+      `MAX_REPLIES_PER_DAY=2` for the first week.~~ **CLOSED as superseded
+      2026-08-01** — founder ruled the caps are the safety mechanism and
+      `postReply()` was already verified. Flipped live; `MAX_REPLIES_PER_DAY=2`
+      retained as specified.
 - [ ] Do **not** read the `(draft N/10)` counter in `replies.md` as progress
       toward that gate — it is `repliesToday+1 / MAX_REPLIES_PER_DAY`, a DAILY
       counter. Both current drafts read `1/10` and they are days apart. Count

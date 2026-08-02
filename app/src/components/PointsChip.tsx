@@ -30,8 +30,8 @@ export const PointsChip: FC = () => {
         setData(null); // degrade silently — the chip is not worth an error state
         return;
       }
-      const p = res.data.points;
-      setData({ total: (p?.base ?? 0) + (p?.quests ?? 0) + (p?.social ?? 0), mult: res.data.multiplier ?? 1 });
+      // Serve-side total, never a client-side sum of the components.
+      setData({ total: res.data.points?.total ?? 0, mult: res.data.multiplier ?? 1 });
     })();
     return () => {
       live = false;

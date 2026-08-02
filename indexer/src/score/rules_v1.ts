@@ -40,6 +40,17 @@ export interface RulesConfig {
   settleExpiryPts: number;
   createMarketFirstPts: number;
   createMarketFloorPts: number;
+  /**
+   * D17 — LIFETIME cap on create_market points per wallet.
+   *
+   * create_market is permissionless (create_market.rs: a plain `Signer`, no
+   * admin constraint) and needs no capital, so the decay curve alone left it as
+   * the cheapest path on the board: ~20 markets is ~360 pts/day for 20 txs,
+   * while a trader needs $500 of premium for 500. The curve is untouched — the
+   * first market is still worth 100 — but a wallet stops earning from market
+   * creation once it has taken 200 points out of it (100 + 50 + 33.33 + 16.67).
+   */
+  createMarketLifetimeCapPts: number;
   dailyCapPoints: number;
   overCapMultiplier: number;
 }
@@ -53,6 +64,7 @@ export const DEFAULT_RULES: RulesConfig = {
   settleExpiryPts: 50,
   createMarketFirstPts: 100,
   createMarketFloorPts: 5,
+  createMarketLifetimeCapPts: 200,
   dailyCapPoints: 500,
   overCapMultiplier: 0.1,
 };
@@ -130,6 +142,8 @@ export function score(tape: TapeSource, cfg: RulesConfig, asOf: number): ScoreRe
 
   // ---- Pass 2: contributions ----------------------------------------------
   const marketsByCreator = new Map<string, number>();
+  /** D17: create_market points already paid to each wallet, lifetime. */
+  const createMarketPaid = new Map<string, number>();
 
   for (const e of tape()) {
     switch (e.name) {
@@ -172,7 +186,14 @@ export function score(tape: TapeSource, cfg: RulesConfig, asOf: number): ScoreRe
         if (!e.wallet) break;
         const n = (marketsByCreator.get(e.wallet) ?? 0) + 1;
         marketsByCreator.set(e.wallet, n);
-        const pts = Math.max(cfg.createMarketFirstPts / n, cfg.createMarketFloorPts);
+        // The decay curve is untouched; D17 only bounds the lifetime total.
+        // Counting every market (even unpaid ones) keeps the curve a pure
+        // function of how many markets the wallet made, so the cap cannot be
+        // reset by pausing and resuming.
+        const curve = Math.max(cfg.createMarketFirstPts / n, cfg.createMarketFloorPts);
+        const paid = createMarketPaid.get(e.wallet) ?? 0;
+        const pts = Math.min(curve, Math.max(0, cfg.createMarketLifetimeCapPts - paid));
+        if (pts > 0) createMarketPaid.set(e.wallet, paid + pts);
         add(e.wallet, e.block_time, "create_market", pts);
         break;
       }

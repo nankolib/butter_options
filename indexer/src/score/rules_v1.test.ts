@@ -106,6 +106,48 @@ test("create_market diminishes 100 / 50 / 33.3333, floored at 5", () => {
   assert.equal(Math.max(DEFAULT_RULES.createMarketFirstPts / 21, 5), 5);
 });
 
+// D17. create_market is permissionless and needs no capital, so before the
+// lifetime cap 30 markets paid ~440 points for 30 transactions and no risk —
+// strictly cheaper than any path a real trader could take. The decay curve is
+// unchanged; only the lifetime total is bounded.
+test("D17: create_market points are capped at 200 per wallet, lifetime", () => {
+  assert.equal(DEFAULT_RULES.createMarketLifetimeCapPts, 200);
+  const many = Array.from({ length: 30 }, () => evt({ name: "IxCreateMarket", source: "ix", wallet: A }));
+  const r = score(() => many, DEFAULT_RULES, 0);
+  const paid = r.scores.find((s) => s.wallet === A)!.breakdown.create_market;
+  assert.equal(paid, 200, "30 markets must pay exactly the cap, not ~440");
+});
+
+test("D17: the cap binds mid-curve — 100 + 50 + 33.33 then only 16.67 is left", () => {
+  const many = Array.from({ length: 4 }, () => evt({ name: "IxCreateMarket", source: "ix", wallet: A }));
+  const three = score(() => many.slice(0, 3), DEFAULT_RULES, 0);
+  assert.equal(pts(three, A), 183.3333, "under the cap, the curve is untouched");
+  const four = score(() => many, DEFAULT_RULES, 0);
+  assert.equal(pts(four, A), 200, "the 4th market is clipped from 25 to 16.6667");
+});
+
+test("D17: the cap is per wallet, not global", () => {
+  const rows = [
+    ...Array.from({ length: 10 }, () => evt({ name: "IxCreateMarket", source: "ix", wallet: A })),
+    ...Array.from({ length: 10 }, () => evt({ name: "IxCreateMarket", source: "ix", wallet: B })),
+  ];
+  const r = score(() => rows, DEFAULT_RULES, 0);
+  assert.equal(r.scores.find((s) => s.wallet === A)!.breakdown.create_market, 200);
+  assert.equal(r.scores.find((s) => s.wallet === B)!.breakdown.create_market, 200);
+});
+
+// The curve is a function of how many markets the wallet has made, NOT of how
+// many it was paid for. Otherwise a wallet could stop at the cap, wait, and
+// resume at a re-inflated rate.
+test("D17: exhausting the cap does not reset the decay curve", () => {
+  const many = Array.from({ length: 25 }, () => evt({ name: "IxCreateMarket", source: "ix", wallet: A }));
+  const r = score(() => many, DEFAULT_RULES, 0);
+  assert.equal(r.scores.find((s) => s.wallet === A)!.breakdown.create_market, 200);
+  // 26th market would be floored at 5 on the curve, and 0 after the cap.
+  const more = score(() => [...many, evt({ name: "IxCreateMarket", source: "ix", wallet: A })], DEFAULT_RULES, 0);
+  assert.equal(more.scores.find((s) => s.wallet === A)!.breakdown.create_market, 200);
+});
+
 test("held-to-settle: net-long at VaultSettled earns +10, flat holder does not", () => {
   const r = score(
     () => [

@@ -74,6 +74,19 @@ export function rebuildWallets(db: DB): void {
   })();
 }
 
+/** One wallet's total, fully decomposed. Persisted to `wallet_points`. */
+export interface PointRow {
+  wallet: string;
+  baseCapped: number;
+  baseMultiplied: number;
+  questPoints: number;
+  socialPoints: number;
+  bountyPoints: number;
+  referralBond: number;
+  referralCommission: number;
+  finalPoints: number;
+}
+
 export interface RecomputeResult extends ScoreResult {
   externalCount: number;
   internalCount: number;
@@ -85,6 +98,8 @@ export interface RecomputeResult extends ScoreResult {
   referrals: ReferralResult;
   /** wallet -> final points: (base x multiplier) + quests + referral income. */
   finalPoints: Map<string, number>;
+  /** The same total, decomposed — one row per wallet, as persisted. */
+  pointRows: PointRow[];
   faucetClaimCount: number;
   faucetClaimWallets: number;
   marketsKnown: number;
@@ -327,7 +342,22 @@ export function recompute(db: DB, asOf: number, cfg: RulesConfig = DEFAULT_RULES
     );
   }
 
-  persistProjections(db, asOf, { pnl, provenance, multipliers, quests, finalPoints });
+  // The full decomposition, so `wallet_points` is auditable rather than a
+  // scalar nobody can take apart. Component order matches the sum above.
+  const cappedByWallet = new Map(result.scores.map((s) => [s.wallet, s.pointsCapped]));
+  const pointRows: PointRow[] = [...finalPoints.keys()].sort().map((w) => ({
+    wallet: w,
+    baseCapped: round4(cappedByWallet.get(w) ?? 0),
+    baseMultiplied: round4(baseMultiplied.get(w) ?? 0),
+    questPoints: round4(quests.totals.get(w) ?? 0),
+    socialPoints: round4(socialByWallet.get(w) ?? 0),
+    bountyPoints: round4(bountyByWallet.get(w) ?? 0),
+    referralBond: round4(referrals.bondPoints.get(w) ?? 0),
+    referralCommission: round4(referrals.commission.get(w) ?? 0),
+    finalPoints: finalPoints.get(w) ?? 0,
+  }));
+
+  persistProjections(db, asOf, { pnl, provenance, multipliers, quests, pointRows });
 
   return {
     ...result,
@@ -339,6 +369,7 @@ export function recompute(db: DB, asOf: number, cfg: RulesConfig = DEFAULT_RULES
     quests,
     referrals,
     finalPoints,
+    pointRows,
     faucetClaimCount: allClaims.n,
     faucetClaimWallets: allClaims.w,
     marketsKnown,
@@ -354,7 +385,7 @@ function persistProjections(
     provenance: Map<string, ProvenanceRow>;
     multipliers: MultiplierResult;
     quests: EvaluatorResult;
-    finalPoints: Map<string, number>;
+    pointRows: PointRow[];
   },
 ): void {
   const insMetrics = db.prepare(
@@ -374,12 +405,20 @@ function persistProjections(
      VALUES (?,?,?,?,?,?,?)`,
   );
   const insShield = db.prepare("INSERT OR IGNORE INTO shield_events (wallet, day, action) VALUES (?,?,?)");
+  const insPoints = db.prepare(
+    `INSERT INTO wallet_points
+       (wallet, base_capped, base_multiplied, quest_points, social_points,
+        bounty_points, referral_bond, referral_commission, final_points, computed_at)
+     VALUES (@wallet,@base_capped,@base_multiplied,@quest_points,@social_points,
+             @bounty_points,@referral_bond,@referral_commission,@final_points,@computed_at)`,
+  );
 
   db.transaction(() => {
     db.exec("DELETE FROM wallet_metrics");
     db.prepare("DELETE FROM quest_completions WHERE quests_version = ?").run(QUESTS_VERSION);
     db.exec("DELETE FROM streak_state");
     db.exec("DELETE FROM shield_events");
+    db.exec("DELETE FROM wallet_points");
 
     // Bug B: never persist metrics for a program/token account.
     const notAWallet = programAccountSet(db);
@@ -424,6 +463,22 @@ function persistProjections(
       );
     }
     for (const e of d.multipliers.shieldEvents) insShield.run(e.wallet, e.day, e.action);
+    // THE number. Program/token accounts are excluded here too — a PDA with a
+    // points total on a public board is the same class of bug as Bug B.
+    for (const p of d.pointRows) {
+      if (notAWallet.has(p.wallet)) continue;
+      insPoints.run({
+        wallet: p.wallet,
+        base_capped: p.baseCapped,
+        base_multiplied: p.baseMultiplied,
+        quest_points: p.questPoints,
+        social_points: p.socialPoints,
+        bounty_points: p.bountyPoints,
+        referral_bond: p.referralBond,
+        referral_commission: p.referralCommission,
+        final_points: p.finalPoints,
+        computed_at: asOf,
+      });
+    }
   })();
-  void asOf;
 }

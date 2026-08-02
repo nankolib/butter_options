@@ -81,7 +81,9 @@ export const QuestPanel: FC = () => {
 // ---------------------------------------------------------------------------
 
 const Totals: FC<{ data: WalletResponse }> = ({ data }) => {
-  const total = (data.points?.base ?? 0) + (data.points?.quests ?? 0) + (data.points?.social ?? 0);
+  // THE number, straight from the engine. Reassembling it here dropped the
+  // multiplier on base, bounty points, and all referral income.
+  const total = data.points?.total ?? 0;
   const s = data.streak;
   return (
     <div className="flex flex-wrap items-baseline gap-x-8 gap-y-2">

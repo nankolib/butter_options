@@ -12,7 +12,7 @@
 //                               keyed by rules_version so old runs survive.
 // =============================================================================
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 export const SCHEMA_SQL = `
 -- ============ META ============
@@ -251,4 +251,29 @@ CREATE TABLE IF NOT EXISTS shield_events (
   action   TEXT NOT NULL,            -- 'earned' | 'consumed'
   PRIMARY KEY (wallet, day, action)
 );
+
+-- v6. THE number, and every component of it.
+--
+-- recompute() has always built finalPoints, but nothing persisted it: the API
+-- served the parts and the UI re-added them client-side as base+quests+social,
+-- which silently dropped the multiplier on base, bounty points, and the whole
+-- referral economy. Storing the total makes the served number the computed
+-- number; storing the components alongside it keeps that number auditable
+-- rather than a scalar nobody can decompose.
+--
+-- PROJECTION layer: dropped and rebuilt wholesale on every recompute.
+CREATE TABLE IF NOT EXISTS wallet_points (
+  wallet              TEXT PRIMARY KEY,
+  base_capped         REAL NOT NULL,  -- rules_v1 post-cap, PRE-multiplier
+  base_multiplied     REAL NOT NULL,  -- D11/D15: each day at THAT day's rate
+  quest_points        REAL NOT NULL,  -- dailies already multiplied in-evaluator
+  social_points       REAL NOT NULL,
+  bounty_points       REAL NOT NULL,
+  referral_bond       REAL NOT NULL,
+  referral_commission REAL NOT NULL,
+  final_points        REAL NOT NULL,
+  computed_at         INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_wp_final ON wallet_points(final_points DESC);
 `;

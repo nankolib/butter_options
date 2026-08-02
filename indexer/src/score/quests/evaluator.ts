@@ -13,6 +13,14 @@
 // took one or two actions in arbitrary order this yields a THIN funnel; that is
 // honest, and is retuned in shadow only if degenerate.
 //
+// D16 (2026-08-02 weight freeze): STANDALONE BONUSES. Strict sequencing means a
+// chain step nobody can perform is not one dead quest — it is a wall, and every
+// step behind it dies too. `TriggerPlaced` has no user-facing surface (the
+// Stop/TP-SL tabs in OrderTicket.tsx are gated "placement UI coming soon"), so
+// with O5 mid-chain O6, O7 and the OC bonus were unreachable for every wallet
+// on the board. O5/O5b moved to `cfg.bonuses`: evaluated independently of the
+// chain, blocking nothing, awarded the moment a trigger is actually armed.
+//
 // Internal wallets are evaluated (for sanity) but excluded from every board by
 // the caller. That is what stops crank-gas from farming W2 with its 47
 // settle_expiry calls — asserted in the tests.
@@ -28,10 +36,19 @@ import questsV1 from "./quests_v1.json";
 
 export const QUESTS_VERSION: string = questsV1.version;
 
+export interface QuestBonusQuest {
+  id: string;
+  name: string;
+  points: number;
+  bonus?: { id: string; name?: string; points: number };
+}
+
 export interface QuestConfig {
   version: string;
   chain: { id: string; name: string; points: number; bonus?: { id: string; points: number } }[];
   chainCompleteBonus: { id: string; name: string; points: number };
+  /** D16: awarded independently of the chain — order-free, blocking nothing. */
+  bonuses: QuestBonusQuest[];
   dailies: { id: string; name: string; points: number; thresholdUsdc?: number }[];
   weeklies: {
     id: string;
@@ -227,7 +244,6 @@ export function evaluate(input: EvaluatorInputs): EvaluatorResult {
 
     let unlockAt = 0;
     let step = 0;
-    let o5OrderMints: Set<string> | null = null;
 
     for (const q of cfg.chain) {
       let at: number | null = null;
@@ -244,12 +260,6 @@ export function evaluate(input: EvaluatorInputs): EvaluatorResult {
         case "O4":
           at = firstAtOrAfter(a.exercises, unlockAt);
           break;
-        case "O5":
-          at = firstAtOrAfter(a.triggersPlaced, unlockAt);
-          if (at != null) {
-            o5OrderMints = new Set(a.triggersPlaced.filter((r) => r.ts === at).map((r) => r.mint ?? ""));
-          }
-          break;
         case "O6": {
           at = firstAtOrAfter(heldByWallet.get(wallet) ?? [], unlockAt);
           break;
@@ -264,18 +274,34 @@ export function evaluate(input: EvaluatorInputs): EvaluatorResult {
       award(q.id, "", at, q.points);
       step += 1;
       unlockAt = at;
-
-      // O5 bonus: the SAME trigger order later fired.
-      if (q.id === "O5" && q.bonus) {
-        const fired = a.triggersExecuted.find(
-          (r) => r.ts >= at! && (!o5OrderMints?.size || o5OrderMints.has(r.mint ?? "")),
-        );
-        if (fired) award(q.bonus.id, "", fired.ts, q.bonus.points);
-      }
     }
     funnel.set(wallet, step);
     if (step === cfg.chain.length) {
       award(cfg.chainCompleteBonus.id, "", unlockAt, cfg.chainCompleteBonus.points);
+    }
+
+    // ---- Standalone bonuses (D16) — order-free, outside the chain ---------
+    // No `unlockAt`: these gate on nothing and gate nothing. A wallet can arm a
+    // trigger as its very first action and still be credited.
+    for (const q of cfg.bonuses) {
+      let at: number | null = null;
+      let orderMints: Set<string> | null = null;
+      if (q.id === "O5") {
+        at = firstAtOrAfter(a.triggersPlaced, 0);
+        if (at != null) {
+          orderMints = new Set(a.triggersPlaced.filter((r) => r.ts === at).map((r) => r.mint ?? ""));
+        }
+      }
+      if (at == null) continue;
+      award(q.id, "", at, q.points);
+
+      // Follow-on bonus: the SAME trigger order later fired.
+      if (q.bonus) {
+        const fired = a.triggersExecuted.find(
+          (r) => r.ts >= at! && (!orderMints?.size || orderMints.has(r.mint ?? "")),
+        );
+        if (fired) award(q.bonus.id, "", fired.ts, q.bonus.points);
+      }
     }
 
     // ---- Dailies (UTC), multiplier-eligible ------------------------------

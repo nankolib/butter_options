@@ -1,18 +1,25 @@
 {
   "version": "v1",
-  "notes": "Phase 2a catalog. Chain is STRICTLY SEQUENTIAL (D12): O(n) only counts a qualifying event at-or-after O(n-1)'s completion. Dailies are UTC days; weeklies are ISO weeks. Multiplier applies to base points + dailies only (D11).",
+  "notes": "EPOCH 0 catalog, FROZEN 2026-08-02 (tag rules-v1-frozen). Chain is STRICTLY SEQUENTIAL (D12): O(n) only counts a qualifying event at-or-after O(n-1)'s completion. Dailies are UTC days; weeklies are ISO weeks. Multiplier applies to base points + dailies only (D11). D16: O5/O5b are STANDALONE bonuses, NOT chain steps — there is no trigger-placement UI (OrderTicket.tsx gates the Stop/TP-SL tabs), so leaving them mid-chain made O6, O7 and OC structurally unreachable for every wallet. They stay in the catalog, dark, and re-enter the chain only if the placement UI ships. Total possible is unchanged at 625: chain 450 + OC 100 + O5 50 + O5b 25.",
   "chain": [
     { "id": "O1", "name": "First Fill", "points": 50 },
     { "id": "O2", "name": "First Write", "points": 75 },
     { "id": "O3", "name": "Make a Market", "points": 75 },
     { "id": "O4", "name": "First Exercise", "points": 75 },
-    { "id": "O5", "name": "Arm a Trigger", "points": 50, "bonus": { "id": "O5b", "points": 25 } },
     { "id": "O6", "name": "Diamond Hands", "points": 75 },
     { "id": "O7", "name": "Keeper", "points": 100 }
   ],
   "chainCompleteBonus": { "id": "OC", "name": "Chain Complete", "points": 100 },
+  "bonuses": [
+    {
+      "id": "O5",
+      "name": "Arm a Trigger",
+      "points": 50,
+      "bonus": { "id": "O5b", "name": "Trigger Fired", "points": 25 }
+    }
+  ],
   "dailies": [
-    { "id": "D1", "name": "Taker premium >= $100", "points": 30, "thresholdUsdc": 100000000 },
+    { "id": "D1", "name": "Taker premium >= $50", "points": 50, "thresholdUsdc": 50000000 },
     { "id": "D2", "name": "Two-sided day", "points": 40 },
     { "id": "D3", "name": "Faucet claim", "points": 10 }
   ],

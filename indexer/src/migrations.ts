@@ -135,6 +135,16 @@ function migrateV4toV5(db: DB): void {
   log.info("migration v4->v5 complete — account_kinds added (owner classification)");
 }
 
+/**
+ * v5 -> v6. ADDITIVE. Adds `wallet_points` (schema.ts already created it by the
+ * time this runs). The table is a pure projection — the next recompute fills it
+ * — so there is nothing to backfill and nothing to lose.
+ */
+function migrateV5toV6(db: DB): void {
+  db.prepare("UPDATE meta SET value = '6' WHERE key = 'schema_version'").run();
+  log.info("migration v5->v6 complete — wallet_points added (finalPoints is now stored, not discarded)");
+}
+
 export function migrate(db: DB): void {
   let v = currentVersion(db);
   if (v === 0) {
@@ -159,6 +169,10 @@ export function migrate(db: DB): void {
   if (v === 4) {
     migrateV4toV5(db);
     v = 5;
+  }
+  if (v === 5) {
+    migrateV5toV6(db);
+    v = 6;
   }
   if (v !== SCHEMA_VERSION) {
     throw new Error(

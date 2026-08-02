@@ -8,6 +8,7 @@ import * as path from "node:path";
 
 import type { DB } from "../db";
 import { isInternal, labelFor } from "../registry";
+import { DEFAULT_QUESTS } from "./quests/evaluator";
 import type { RecomputeResult } from "./recompute";
 
 export interface TapeStats {
@@ -262,8 +263,11 @@ function renderPhase2a(r: RecomputeResult): string[] {
   // ---- Chain funnel ------------------------------------------------------
   L.push("### Onboarding chain funnel (external wallets)");
   L.push("");
-  const steps = ["O1 First Fill", "O2 First Write", "O3 Make a Market", "O4 First Exercise", "O5 Arm a Trigger", "O6 Diamond Hands", "O7 Keeper"];
-  const reached = new Array(8).fill(0);
+  // Read the steps from the catalog, never a local copy — D16 moved O5 out of
+  // the chain and a hardcoded 7-step list would have silently mislabelled every
+  // row below it.
+  const steps = DEFAULT_QUESTS.chain.map((q) => `${q.id} ${q.name}`);
+  const reached = new Array(steps.length + 1).fill(0);
   for (const [w, step] of r.quests.funnel) {
     if (!ext(w)) continue;
     for (let i = 1; i <= step; i++) reached[i] += 1;
@@ -271,8 +275,19 @@ function renderPhase2a(r: RecomputeResult): string[] {
   L.push("| step | wallets |");
   L.push("|---|---:|");
   steps.forEach((s, i) => L.push(`| ${s} | ${reached[i + 1]} |`));
-  const complete = [...r.quests.funnel.entries()].filter(([w, s]) => ext(w) && s === 7).length;
+  const complete = [...r.quests.funnel.entries()].filter(([w, s]) => ext(w) && s === steps.length).length;
   L.push(`| **chain complete** | **${complete}** |`);
+  L.push("");
+
+  // Standalone bonuses sit outside the funnel by construction (D16), so the
+  // funnel table above cannot show them. Count them from the completions.
+  const bonusIds = DEFAULT_QUESTS.bonuses.flatMap((b) => [b.id, ...(b.bonus ? [b.bonus.id] : [])]);
+  L.push("| standalone bonus | wallets |");
+  L.push("|---|---:|");
+  for (const id of bonusIds) {
+    const n = new Set(r.quests.completions.filter((c) => c.questId === id && ext(c.wallet)).map((c) => c.wallet)).size;
+    L.push(`| ${id} | ${n} |`);
+  }
   L.push("");
 
   // ---- Multiplier distribution ------------------------------------------

@@ -12,6 +12,7 @@ import bs58 from "bs58";
 
 import type { DB } from "../db";
 import { isInternal } from "../registry";
+import { frozenSummary } from "../score/frozenGate";
 import { DEFAULT_QUESTS } from "../score/quests/evaluator";
 import { checkCooldown, verifySigned, type SignedEnvelope } from "./auth";
 import { verifyTweet, type XConfig } from "./xVerify";
@@ -139,7 +140,18 @@ export function getWallet(db: DB, pubkey: string): ApiResponse {
     .prepare("SELECT quest_id, period_key, completed_at, points FROM quest_completions WHERE wallet = ? ORDER BY quest_id, period_key")
     .all(pubkey) as { quest_id: string; period_key: string; completed_at: number; points: number }[];
   const questPoints = quests.reduce((a, q) => a + q.points, 0);
-  const chainStage = quests.filter((q) => /^O[1-7]$/.test(q.quest_id)).length;
+  // Chain stage is a position in THE CHAIN, so it must be derived from the
+  // catalog. A regex over /^O[1-7]$/ counted the standalone O5 bonus (D16) as a
+  // chain step and reported stage 5 for a wallet that had completed one.
+  const chainIds = new Set(DEFAULT_QUESTS.chain.map((q) => q.id));
+  const chainStage = quests.filter((q) => chainIds.has(q.quest_id)).length;
+
+  // THE number, read from the projection — never reassembled here or by the
+  // client. `wallet_points` is written by the same recompute that produced the
+  // components above, so total and parts are always from one pass.
+  const wp = db.prepare("SELECT * FROM wallet_points WHERE wallet = ?").get(pubkey) as
+    | Record<string, number>
+    | undefined;
 
   const referredBy = db.prepare("SELECT referrer_wallet, code, bound_at FROM referrals WHERE referee_wallet = ?").get(pubkey) as
     | { referrer_wallet: string; code: string; bound_at: number }
@@ -164,11 +176,18 @@ export function getWallet(db: DB, pubkey: string): ApiResponse {
     last_seen: w?.last_seen ?? null,
     on_tape: !!w,
     points: {
+      /** THE total. Equals recompute()'s finalPoints for this wallet. */
+      total: wp?.final_points ?? 0,
       base: s?.points_capped ?? 0,
       base_raw: s?.points ?? 0,
       base_breakdown: s ? JSON.parse(s.breakdown_json) : {},
-      quests: Math.round(questPoints * 1e4) / 1e4,
-      social: socialPoints,
+      /** Post-cap base with D11/D15 per-day multipliers applied — a `total` component. */
+      base_multiplied: wp?.base_multiplied ?? 0,
+      quests: wp?.quest_points ?? Math.round(questPoints * 1e4) / 1e4,
+      social: wp?.social_points ?? socialPoints,
+      bounty: wp?.bounty_points ?? 0,
+      referral_bond: wp?.referral_bond ?? 0,
+      referral_commission: wp?.referral_commission ?? 0,
     },
     multiplier: streak?.multiplier ?? 1,
     streak: streak
@@ -219,13 +238,44 @@ export function getQuests(db: DB): ApiResponse {
     wallets: byId.get(q.id)?.wallets ?? 0,
     completions: byId.get(q.id)?.completions ?? 0,
   });
+
+  // Nested bonuses were previously invisible here. A rules page built off this
+  // endpoint would have silently omitted 75 points (O5b + W3b) and the entire
+  // referral schedule — the exact way a published catalog stops matching the
+  // engine. Everything the evaluator can award is enumerated.
+  const bonuses = DEFAULT_QUESTS.bonuses.flatMap((b) => [
+    { ...decorate(b), standalone: true, unlocks: b.bonus?.id ?? null },
+    ...(b.bonus
+      ? [{ ...decorate({ id: b.bonus.id, name: b.bonus.name ?? b.bonus.id, points: b.bonus.points }), standalone: true, requires: b.id }]
+      : []),
+  ]);
+  const weeklies = DEFAULT_QUESTS.weeklies.flatMap((w) => [
+    decorate(w),
+    ...(w.spanBonus
+      ? [
+          {
+            ...decorate({ id: w.spanBonus.id, name: `${w.name} — class span`, points: w.spanBonus.points }),
+            requires: w.id,
+            buckets: w.spanBonus.buckets,
+          },
+        ]
+      : []),
+  ]);
+
   return ok({
     computed_at: computedAt(db),
     version: DEFAULT_QUESTS.version,
     chain: DEFAULT_QUESTS.chain.map(decorate),
     chain_complete_bonus: decorate(DEFAULT_QUESTS.chainCompleteBonus),
+    bonuses,
     dailies: DEFAULT_QUESTS.dailies.map(decorate),
-    weeklies: DEFAULT_QUESTS.weeklies.map(decorate),
+    weeklies,
+    referral: {
+      referee_bond_points: DEFAULT_QUESTS.referral.refereeBondPoints,
+      referrer_rate: DEFAULT_QUESTS.referral.referrerRate,
+      referrer_cap_fraction_of_self: DEFAULT_QUESTS.referral.referrerCapFractionOfSelf,
+      activation: "referee completes O3 (Make a Market)",
+    },
   });
 }
 
@@ -249,6 +299,9 @@ export function getStats(db: DB): ApiResponse {
     backfill_done: meta("backfill_done") === "1",
     schema_version: Number(meta("schema_version")),
     faucet_claims: (db.prepare("SELECT COUNT(*) n FROM faucet_claims").get() as { n: number }).n,
+    // Published so the rules page can cite a hash and any reader can verify the
+    // weights they are being scored under are the ones that were frozen.
+    rules_frozen: frozenSummary(),
   });
 }
 

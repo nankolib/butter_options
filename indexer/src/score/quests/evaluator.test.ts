@@ -51,29 +51,51 @@ test("D12 STRICT SEQUENCING: an out-of-order action does not retroactively count
   assert.equal(r.funnel.get(A), 1);
 });
 
+// D16: the chain is O1 O2 O3 O4 O6 O7 — SIX steps. O5 is a standalone bonus and
+// is deliberately absent from this fixture: completing the chain must not
+// require arming a trigger, because no user can.
 test("in-order chain completes and pays the completion bonus", () => {
   const r = run([
     evt({ name: "OrderFilled", wallet: A, block_time: D0 + 1 * DAY }),
     evt({ name: "VaultMinted", wallet: A, block_time: D0 + 2 * DAY }),
     evt({ name: "OrderFilled", wallet: B, counterparty: A, kind: 2, block_time: D0 + 3 * DAY }),
     evt({ name: "VaultExercised", wallet: A, block_time: D0 + 4 * DAY }),
-    evt({ name: "TriggerPlaced", wallet: A, block_time: D0 + 5 * DAY }),
     evt({ name: "OrderFilled", wallet: A, kind: 2, quantity: 5, block_time: D0 + 6 * DAY }),
     evt({ name: "VaultSettled", wallet: null, block_time: D0 + 7 * DAY }),
     evt({ name: "IxSettleExpiry", source: "ix", wallet: A, block_time: D0 + 8 * DAY }),
   ]);
-  assert.equal(r.funnel.get(A), 7);
+  assert.equal(r.funnel.get(A), 6);
   assert.equal(has(r, A, "OC"), true, "chain-complete bonus");
+  assert.equal(has(r, A, "O5"), false, "O5 is not part of the chain and was never armed");
 });
 
-test("O5 bonus only pays when the trigger actually fires afterwards", () => {
-  const base = [
+// D16 REGRESSION. This is the bug the freeze existed to catch: with O5 sitting
+// mid-chain, a wallet that could not arm a trigger — which is every wallet,
+// since the placement UI is gated — was walled off from O6, O7 and OC no matter
+// what else it did. The chain must complete without a trigger.
+test("D16: an unreachable trigger does NOT wall off the rest of the chain", () => {
+  const r = run([
     evt({ name: "OrderFilled", wallet: A, block_time: D0 + 1 * DAY }),
     evt({ name: "VaultMinted", wallet: A, block_time: D0 + 2 * DAY }),
     evt({ name: "OrderFilled", wallet: B, counterparty: A, kind: 2, block_time: D0 + 3 * DAY }),
     evt({ name: "VaultExercised", wallet: A, block_time: D0 + 4 * DAY }),
-    evt({ name: "TriggerPlaced", wallet: A, block_time: D0 + 5 * DAY }),
-  ];
+    evt({ name: "OrderFilled", wallet: A, kind: 2, quantity: 5, block_time: D0 + 6 * DAY }),
+    evt({ name: "VaultSettled", wallet: null, block_time: D0 + 7 * DAY }),
+    evt({ name: "IxSettleExpiry", source: "ix", wallet: A, block_time: D0 + 8 * DAY }),
+  ]);
+  for (const id of ["O6", "O7", "OC"]) {
+    assert.equal(has(r, A, id), true, `${id} must be reachable without arming a trigger`);
+  }
+});
+
+test("O5 is STANDALONE — awarded with no chain progress at all", () => {
+  const r = run([evt({ name: "TriggerPlaced", wallet: A, block_time: D0 + 1 * DAY })]);
+  assert.equal(has(r, A, "O5"), true, "arming a trigger pays on its own");
+  assert.equal(r.funnel.get(A), 0, "and advances the chain by nothing");
+});
+
+test("O5 bonus only pays when the trigger actually fires afterwards", () => {
+  const base = [evt({ name: "TriggerPlaced", wallet: A, block_time: D0 + 5 * DAY })];
   assert.equal(has(run(base), A, "O5b"), false);
   assert.equal(has(run([...base, evt({ name: "TriggerExecuted", wallet: A, block_time: D0 + 6 * DAY })]), A, "O5b"), true);
 });
@@ -117,15 +139,27 @@ test("period boundaries: daily rolls at UTC midnight, weekly on ISO weeks", () =
   assert.equal(isoWeek(Date.parse("2026-06-01T00:00:00Z") / 1000), isoWeek(Date.parse("2026-06-07T23:59:00Z") / 1000));
 });
 
-test("D1 requires >= $100 taker premium in one UTC day, aggregated", () => {
+test("D1 requires >= $50 taker premium in one UTC day, aggregated", () => {
   const day = D0;
-  const under = run([evt({ name: "OrderFilled", wallet: A, amount_usdc: 60 * USDC, block_time: day })]);
+  const under = run([evt({ name: "OrderFilled", wallet: A, amount_usdc: 30 * USDC, block_time: day })]);
   assert.equal(has(under, A, "D1"), false);
   const over = run([
-    evt({ name: "OrderFilled", wallet: A, amount_usdc: 60 * USDC, block_time: day }),
-    evt({ name: "OrderFilled", wallet: A, amount_usdc: 50 * USDC, block_time: day + 60 }),
+    evt({ name: "OrderFilled", wallet: A, amount_usdc: 30 * USDC, block_time: day }),
+    evt({ name: "OrderFilled", wallet: A, amount_usdc: 25 * USDC, block_time: day + 60 }),
   ]);
-  assert.equal(has(over, A, "D1"), true, "two fills aggregate to $110");
+  assert.equal(has(over, A, "D1"), true, "two fills aggregate to $55");
+});
+
+// The threshold is not a round number in the config — it is micro-USDC. Reading
+// 50_000_000 as "$50,000,000" once already sat in a catalog, so pin the unit.
+test("D1 threshold is 50_000_000 MICRO-usdc, i.e. $50", () => {
+  const d1 = DEFAULT_QUESTS.dailies.find((q) => q.id === "D1")!;
+  assert.equal(d1.thresholdUsdc, 50_000_000);
+  assert.equal(d1.points, 50);
+  const justUnder = run([evt({ name: "OrderFilled", wallet: A, amount_usdc: 49_999_999, block_time: D0 })]);
+  const exactly = run([evt({ name: "OrderFilled", wallet: A, amount_usdc: 50_000_000, block_time: D0 })]);
+  assert.equal(has(justUnder, A, "D1"), false);
+  assert.equal(has(exactly, A, "D1"), true, "the threshold is inclusive");
 });
 
 test("D2 needs BOTH sides on the same day, maker side kind != 3", () => {

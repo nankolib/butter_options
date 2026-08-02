@@ -10,6 +10,7 @@ import { ed25519 } from "@noble/curves/ed25519";
 import bs58 from "bs58";
 
 import { makeWriter, openDb, type DB, type EventRow, type TxRow } from "../db";
+import { SCHEMA_VERSION } from "../schema";
 import { recompute } from "../score/recompute";
 import { canonicalJson, canonicalMessage, verifySigned, type SignedEnvelope } from "./auth";
 import {
@@ -312,11 +313,29 @@ test("reads: every endpoint answers against a fixture DB", () => {
 
   const q = getQuests(db);
   assert.equal(q.status, 200);
-  assert.equal((q.body as { version: string }).version, "v1");
+  const qb = q.body as {
+    version: string;
+    chain: { id: string }[];
+    bonuses: { id: string }[];
+    weeklies: { id: string }[];
+    referral: Record<string, unknown>;
+  };
+  assert.equal(qb.version, "v1");
+  // Everything the evaluator can award must be enumerated here, or a rules page
+  // built off this endpoint silently omits it.
+  assert.deepEqual(qb.chain.map((c) => c.id), ["O1", "O2", "O3", "O4", "O6", "O7"]);
+  assert.deepEqual(qb.bonuses.map((b) => b.id), ["O5", "O5b"], "standalone bonuses must be listed");
+  assert.ok(qb.weeklies.some((w) => w.id === "W3b"), "the W3 class-span bonus must be listed");
+  assert.equal(qb.referral.referee_bond_points, 25);
+  assert.equal(qb.referral.referrer_rate, 0.1);
+  assert.equal(qb.referral.referrer_cap_fraction_of_self, 0.25);
 
   const s = getStats(db);
   assert.equal(s.status, 200);
-  assert.equal((s.body as { schema_version: number }).schema_version, 5);
+  const sb = s.body as { schema_version: number; rules_frozen: Record<string, unknown> };
+  assert.equal(sb.schema_version, SCHEMA_VERSION);
+  assert.ok(sb.rules_frozen, "stats must publish the freeze so a hash can be cited");
+  assert.equal(sb.rules_frozen.rules_version, "v1");
 
   db.close();
   fs.rmSync(dir, { recursive: true, force: true });

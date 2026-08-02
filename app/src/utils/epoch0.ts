@@ -103,7 +103,25 @@ export interface WalletResponse {
   wallet: string;
   is_internal: boolean;
   on_tape: boolean;
-  points: { base: number; base_raw: number; base_breakdown: Record<string, number>; quests: number; social: number };
+  /**
+   * `total` is THE number — the engine's finalPoints, served from
+   * `wallet_points`. Never re-add the components to derive it: the parts do not
+   * sum the way they look (base is pre-multiplier, base_multiplied is the
+   * component that actually counts), and a client-side sum is a second scoring
+   * implementation that will drift from the engine.
+   */
+  points: {
+    total: number;
+    base: number;
+    base_raw: number;
+    base_breakdown: Record<string, number>;
+    base_multiplied: number;
+    quests: number;
+    social: number;
+    bounty: number;
+    referral_bond: number;
+    referral_commission: number;
+  };
   multiplier: number;
   streak: { current: number; longest: number; shields_banked: number; shields_consumed: number; last_active_day: string | null } | null;
   chain_stage: number;

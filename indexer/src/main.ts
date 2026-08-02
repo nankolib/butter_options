@@ -42,6 +42,7 @@ import { CapitalPoller, emptyCapitalStats } from "./tape/capitalPoller";
 import { refreshMarkets } from "./tape/marketsRefresh";
 import { TokenAccountResolver } from "./tape/tokenAccounts";
 import { recompute } from "./score/recompute";
+import { FROZEN, assertFrozenWeights } from "./score/frozenGate";
 import { RULES_VERSION } from "./score/rules_v1";
 import { QUESTS_VERSION } from "./score/quests/evaluator";
 import { appendShadow, collectTapeStats, renderShadow } from "./score/shadow";
@@ -73,6 +74,12 @@ function readCommit(): string {
 }
 
 async function main(): Promise<void> {
+  // WEIGHT FREEZE GATE — before the DB is even opened. A rules change re-scores
+  // retroactively, so an indexer that boots with drifted scoring artifacts does
+  // not fail: it republishes everyone's history at unreviewed values. Hard-fail
+  // first, touch nothing.
+  assertFrozenWeights();
+
   const cfg = loadConfig();
   const db = openDb(cfg.dbPath);
   const idl = JSON.parse(fs.readFileSync(cfg.idlPath, "utf8"));
@@ -107,6 +114,7 @@ async function main(): Promise<void> {
     schemaVersion: SCHEMA_VERSION,
     rulesVersion: RULES_VERSION,
     questsVersion: QUESTS_VERSION,
+    weightsFrozen: FROZEN.gitTag || false,
     cursor: boot.cursorSig,
     backfillDone: boot.backfillDone,
     usdcMintOk: true,

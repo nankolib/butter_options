@@ -300,7 +300,7 @@ nothing user-visible appears before the thing behind it is proven.
 
 | # | Step | Why here |
 |---|------|----------|
-| 1 | **Ops** (§9) — backups, uptime check, `MemoryMax`, retention | Do it while nothing is live. After launch there is no quiet window. |
+| 1 | **Ops** (§9) — backups, uptime check, `MemoryMax`, retention, **+ snapshot `points.db` + `-wal` BEFORE first boot of the v6 build**, then deploy the frozen build and set `OPTA_INDEXER_COMMIT` (§7) | Do it while nothing is live. After launch there is no quiet window. **The v5→v6 migration is one-way — the snapshot is the rollback.** The boot gate ships in this build: a restart on a drifted `dist/` now refuses to start, so this must land before anything depends on the API. |
 | 2 | **nginx** (§1) — expose `/api/points` | Highest-risk step, touches the live domain. First, while attention is on it. Verify `https://opta.fyi/` still 200s BEFORE checking the new route. |
 | 3 | **X secret** (§2) — consolidate `X_BEARER_TOKEN` | Independent of the campaign; get the two-copy secret down to one before more services exist. |
 | 4 | **Vercel env + deploy** — `VITE_EPOCH0_UI=1` | The API must already be reachable (2) or the UI ships pointing at a 404. |
@@ -313,16 +313,109 @@ Weight freeze on **Sunday 2026-08-02** (§7): `quests_v1.json` and `rules_v1`
 frozen, because a rules change after launch re-scores retroactively — correct by
 the TAPE/SCORE design, and alarming to a user mid-campaign.
 
-## 7. Shadow → live cutover
+## 7. Shadow → live cutover — WEIGHTS FROZEN 2026-08-02
 
-- [ ] Freeze `quests_v1.json` and `rules_v1` weights; a rules change after launch
-      re-scores retroactively (the whole point of the TAPE/SCORE split, but
-      surprising to users mid-campaign)
-- [ ] Review the backdated funnel: currently **O1=14, O2–O7=0** under D12 strict
+> **FROZEN 2026-08-02T19:25:00Z · git tag `rules-v1-frozen` · `rules_version=v1`,
+> `quests_version=v1`.** A rules change after launch re-scores retroactively —
+> correct by the TAPE/SCORE design, alarming to a user mid-campaign. From here a
+> weight edit is a deliberate, tagged, re-frozen act, not a deploy side effect.
+
+### Weight edits applied at the freeze
+
+| # | Change | Why |
+|---|---|---|
+| D16 | Chain is **O1 O2 O3 O4 O6 O7** (6 steps). **O5/O5b moved OUT** to standalone bonuses | `TriggerPlaced` has no user surface — `OrderTicket.tsx` gates the Stop/TP-SL tabs "placement UI coming soon". With O5 mid-chain, strict D12 sequencing walled off O6, O7 and OC for **every** wallet. |
+| D17 | `createMarketLifetimeCapPts: 200` (decay curve untouched) | `create_market` is permissionless and needs no capital; ~20 markets paid ~360/day for 20 txs while a trader needed $500 premium for 500. |
+| — | **D1** threshold `100_000_000 → 50_000_000` µUSDC ($100 → $50), points **30 → 50** | D1 was priced below D2 (40) while being strictly harder; 0 lifetime completions. |
+
+**Points possible is unchanged at 625**: chain 450 + OC 100 = **550 reachable
+through the chain**, plus O5 50 + O5b 25 = **75 dark** until the trigger
+placement UI ships. O5/O5b stay in the catalog and pay the moment a trigger is
+actually armed — they block nothing.
+
+### finalPoints is now the served number
+
+`recompute()` always built `finalPoints` = (base × multiplier) + quests + social
++ bounty + referral bond + commission — and `persistProjections()` never read it.
+The UI reassembled its own total client-side as `base + quests + social`, which
+silently dropped the multiplier on base, all bounty points, and the entire
+referral economy. Schema **v6** adds `wallet_points` (total + all seven
+components); `GET /wallet` serves `points.total`; `QuestPanel` and `PointsChip`
+read it. On the measured tape this moves Σ external from **2,469.61 → 2,488.17**.
+
+### Freeze mechanism
+
+`indexer/src/score/FROZEN.json` pins 9 artifacts. The boot gate
+(`score/frozenGate.ts`, called first in `main()`) re-hashes each runtime entry
+through **`require.resolve()`** — the file Node actually loaded, not a path
+literal — plus a deep-equal on `DEFAULT_RULES` and both version strings, which a
+file hash cannot see. Any mismatch logs `SCORE_WEIGHTS_DRIFT expected/actual`
+and **refuses to start**: an indexer that boots with drifted weights does not
+fail, it quietly republishes everyone's history at unreviewed values.
+`node dist/scripts/freeze.js --check` is the same comparison, for CI and pre-deploy.
+
+| layer | sha256 | path |
+|---|---|---|
+| runtime | `5363c4ed4ea3137e552695c6340a8562839a73853b74a4c02f27793ba167fb5f` | `indexer/dist/src/score/quests/quests_v1.json` |
+| runtime | `42f969c7dbc21c987819b1958b82f435f52ae3a900a4aa47b6efa94ab458de26` | `indexer/dist/src/score/rules_v1.js` |
+| runtime | `2b3df8c9c898217b0fa2e8cf0a45b05eed73e25b6d53753e4e711cd49fc5b25c` | `indexer/dist/src/score/quests/evaluator.js` |
+| runtime | `ac993838a0eecf37fbb28e5e52cf9f4ef1860da653144c635c27b23ad90eb502` | `indexer/dist/src/score/multiplier.js` |
+| runtime | `7161781f693e3223297e74fec534f28b92c6df26661d997dd8ae4c0231336b01` | `indexer/dist/src/score/recompute.js` |
+| runtime | `0f583c5ce0d4743b63a9b453f96624dbe07b6f2b4e0436c18df0027aac0c7676` | `indexer/dist/src/score/positions.js` |
+| runtime | `6b60f9ad7706565fd26d68784983592867dd5a936866ab67c683223525612cbb` | `indexer/dist/src/score/referrals.js` |
+| source | `927a036c0aee5a61dc3f2793be7f900d67ec83ca2f233bc30ab59f792e25a93d` | `indexer/src/score/quests/quests_v1.json` |
+| source | `3ae81d42997d163c01f23757195481ccd218639c251bdb96b4dee98d26859c85` | `indexer/src/score/rules_v1.ts` |
+
+`referrals.js` is pinned because pinning the referral *parameters* is not the
+same as pinning the referral *rules*: the rate, bond and 25% cap live in
+`quests_v1.json`, but non-circularity, activation-gating and what the cap is
+measured against live in the code, and any of it can be changed without touching
+a config value.
+
+**Why hashes and not just the tag:** `indexer/dist/` is gitignored and the VPS
+deploy is a path-overlay into a checkout whose HEAD is a different commit, so the
+bytes that score the campaign are in no commit. A tag on `src/` would certify a
+file the runtime never opens.
+
+### Proof recorded at the freeze
+
+- **Determinism, pre-edit:** 3× recompute on the tape at `asOf=1785685388`
+  (2026-08-02T15:43:08Z; 123,819 txs / 117,435 events) — byte-identical, and
+  **residual 0** against the VPS's own last recorded recompute across `scores`
+  (24 rows), `quest_completions` (76) and `streak_state` (24).
+- **Determinism, post-edit:** 3× recompute on the same tape — byte-identical
+  (`26a62554fb6895177fa35b22cb2ddfa31c2f0a6bc2af7da7fc8dc47fcff14dc5`), including
+  the run on which the v5→v6 migration fires.
+- **Gate proven to reject:** a tampered `quests_v1.json` produces
+  `SCORE_WEIGHTS_DRIFT` and exit 1 from both `freeze --check` and the boot gate.
+- **Tests 97 → 118** (9 → 11 files), all passing. New: `finalPoints.test.ts`
+  (written red — 5/6 failed before the wiring fix), `frozenGate.test.ts`, D16
+  regression, D17 cap, D1 unit pin.
+- **Measured effect on the live tape:** O5 now pays 2 wallets × 50 that the old
+  chain blocked; the D17 cap clips `create_market` 374.77 → 200 and 259.29 → 200
+  (both **internal**, so no board moves); funnel unchanged at O1=14.
+- **D1 remains aspirational at $50:** the best taker-premium day ever recorded is
+  **$23.54**. Halving the threshold created zero retroactive completions.
+
+### Still open
+
+- [ ] Review the backdated funnel: **O1=14, O2–O7=0** under D12 strict
       sequencing. If the campaign starts fresh this is fine; if it credits
       history, retune D12 first
 - [ ] Decide whether existing internal wallets stay excluded (they should)
-- [ ] Publish the rules page before the API is public
+- [ ] Publish the rules page before the API is public — `GET /points/stats` now
+      returns `rules_frozen {tag, hashes}` so the page can cite a verifiable hash,
+      and `GET /points/quests` now enumerates O5b, W3b and the referral schedule
+      (it previously omitted 75 points of bonuses and the whole referral economy)
+- [ ] **Monday, ops step 1:** deploy the frozen build and set
+      `OPTA_INDEXER_COMMIT` in `/opt/opta-indexer/.env`. The boot gate ships in
+      this build — an indexer restart on an unfrozen or drifted `dist/` will now
+      refuse to start, by design. Deploy before nginx exposure (§1).
+- [ ] **Accepted for Epoch 0, revisit at E1:** social points are STORED TRUTH —
+      `OPTA_SOCIAL_POINTS=20` is stamped into `social_posts.points` at submit
+      time, so changing it does not re-score existing posts. This is the one
+      point source that is not a pure projection over the tape, and bounty points
+      (operator-typed per submission) are not freezable at all.
 
 ## 8. Purge Phase 2b test rows
 

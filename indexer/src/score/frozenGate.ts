@@ -175,16 +175,26 @@ export function assertFrozenWeights(): void {
   });
 }
 
-/** Compact form for GET /stats, so the public rules page can cite a hash. */
+/**
+ * Compact form for GET /stats, so the public rules page can cite a hash.
+ *
+ * Matches on layer + EXACT path, not `endsWith`. `indexer/dist/src/score/quests/
+ * quests_v1.json` also ends with `src/score/quests/quests_v1.json`, so a suffix
+ * match returned the dist hash under the `quests_sha256` label — a reader who
+ * checked it against the source file would have measured a mismatch and
+ * concluded the freeze was broken. The dist hashes are still published, under
+ * `runtime_sha256`, where they are labelled as what they are.
+ */
 export function frozenSummary(): Record<string, unknown> {
-  const find = (p: string) => FROZEN.entries.find((e) => e.path.endsWith(p))?.sha256 ?? null;
+  const find = (p: string) =>
+    FROZEN.entries.find((e) => e.layer === "source" && e.path === p)?.sha256 ?? null;
   return {
     tag: FROZEN.gitTag,
     frozen_at: FROZEN.frozenAt,
     rules_version: FROZEN.rulesVersion,
     quests_version: FROZEN.questsVersion,
-    quests_sha256: find("src/score/quests/quests_v1.json"),
-    rules_sha256: find("src/score/rules_v1.ts"),
+    quests_sha256: find("indexer/src/score/quests/quests_v1.json"),
+    rules_sha256: find("indexer/src/score/rules_v1.ts"),
     runtime_sha256: Object.fromEntries(
       FROZEN.entries.filter((e) => e.layer === "runtime").map((e) => [e.path.split("/score/")[1], e.sha256]),
     ),

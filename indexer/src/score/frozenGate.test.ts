@@ -26,6 +26,7 @@ import {
   RUNTIME_SPECIFIERS,
   checkDefaultRules,
   checkRuntimeHashes,
+  frozenSummary,
   sha256File,
   type FrozenEntry,
   type FrozenManifest,
@@ -152,6 +153,26 @@ test("the shipped manifest pins every runtime artifact, and the two source files
     "indexer/src/score/quests/quests_v1.json",
     "indexer/src/score/rules_v1.ts",
   ]);
+});
+
+// Caught live at go-live: `endsWith("src/score/quests/quests_v1.json")` also
+// matches the DIST path, so /stats published the dist hash under the source
+// label. A reader verifying the source file against it would have measured a
+// mismatch and concluded the freeze was broken.
+test("frozenSummary publishes SOURCE hashes under the source labels", () => {
+  if (FROZEN.entries.length === 0) return;
+  const s = frozenSummary() as Record<string, string>;
+  const src = (p: string) => FROZEN.entries.find((e) => e.layer === "source" && e.path === p)!.sha256;
+  assert.equal(s.quests_sha256, src("indexer/src/score/quests/quests_v1.json"));
+  assert.equal(s.rules_sha256, src("indexer/src/score/rules_v1.ts"));
+
+  const distQuests = FROZEN.entries.find((e) => e.layer === "runtime" && e.specifier === "./quests/quests_v1.json")!.sha256;
+  assert.notEqual(s.quests_sha256, distQuests, "quests_sha256 must not be the dist hash wearing a source label");
+
+  // The dist hashes are still published — under a name that says dist.
+  const runtime = (s as unknown as { runtime_sha256: Record<string, string> }).runtime_sha256;
+  assert.equal(runtime["quests/quests_v1.json"], distQuests);
+  assert.equal(Object.keys(runtime).length, RUNTIME_SPECIFIERS.length);
 });
 
 test("the shipped manifest matches the live config and the source files on disk", () => {

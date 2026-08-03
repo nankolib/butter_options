@@ -1,3 +1,194 @@
+# SESSION CLOSE — 2026-08-03 15:30Z (EPOCH 0 GO-LIVE EXECUTED · taker ARMED · bid widen DEFERRED on a cap bug)
+
+> Written for a reader with ZERO session memory. **This block supersedes every
+> block below it** where they disagree. It covers the EPOCH 0 launch: the weight
+> freeze deploy, the public points API, the campaign UI, the bid-widen canary,
+> and the taker arming. `indexer/GO-LIVE.md` §7 is the launch source of truth and
+> was updated in the freeze commit; this block is the execution record.
+>
+> **The campaign is LIVE and user-visible at https://opta.fyi.** That is new.
+> Everything below this block predates it.
+
+## 1. What went live, in the order it was done
+
+| # | Step | State |
+|---|---|---|
+| 1 | Frozen indexer build + schema v6 | **DONE** |
+| 2 | `/api/points` exposed through nginx on opta.fyi | **DONE** |
+| 3 | X bearer token consolidated | **DONE** |
+| 4 | `VITE_EPOCH0_UI=1` — campaign UI public | **DONE** |
+| 5 | Smoke with founder wallet | **PASSED** (founder-run) |
+| 6 | Reply lane | already live since 2026-08-01; **no-op** |
+| 7 | Bid widen 3→30 | **REVERTED — deferred, see §4** |
+| 8 | Taker armed | **DONE — armed and correctly idle** |
+| 9 | Announcement | founder's, from his own account |
+
+## 2. Live flag state at close (verified 15:29Z)
+
+```
+OPTA_WRITER_BID_ENABLED=1     OPTA_WRITER_BID_MAX_CELLS=3
+OPTA_TAKER_DRY_RUN=0          OPTA_TAKER_ARMED=1        <- ARMED
+DRY_RUN=false  REPLY_DRY_RUN=false  REPLIES_ENABLED=true
+OPTA_INDEXER_COMMIT=db4069e
+```
+All 8 units `active`, **`NRestarts=0`**. Indexer: schema **v6**, 133,786 txs /
+127,291 events, 23 external / 7 internal wallets, `freeze --check` **9/9**.
+
+## 3. The weight freeze is ENFORCED AT BOOT — read this before touching scoring
+
+`rules-v1-frozen` (commit `c909506`) pins 9 artifacts by sha256 in
+`indexer/src/score/FROZEN.json`. `score/frozenGate.ts` runs **first in `main()`,
+before the DB is opened**, re-hashes each runtime artifact through
+**`require.resolve()`** — the file Node actually loaded, not a path literal — plus
+a deep-equal on `DEFAULT_RULES` and both version strings. Any mismatch logs
+`SCORE_WEIGHTS_DRIFT expected/actual` and **refuses to start**.
+
+**Consequence: you cannot edit a scoring file and restart.** The service will not
+boot. The loop is: edit → `npm run build` → `node dist/scripts/freeze.js --tag <t>
+--at <ISO>` → `npm run build` again (so dist carries the manifest) → `--check` →
+recompute 3× and diff. A tag alone was never enough: `indexer/dist/` is gitignored
+and the VPS deploy is a path-overlay into a checkout whose HEAD is a different
+commit, so the bytes that score the campaign are in no commit.
+
+`db4069e` fixed a defect caught during the deploy: `/stats` published the **dist**
+hash under the `quests_sha256` label because `frozenSummary()` matched with
+`endsWith`, and `indexer/dist/src/score/quests/quests_v1.json` also ends with
+`src/score/quests/quests_v1.json`. Anyone verifying the source file against the
+published value would have concluded the freeze was broken. `frozenGate.ts` is
+deliberately not one of the 9 pinned artifacts, so no frozen hash changed.
+
+**Two ops facts worth keeping:**
+- `MemoryMax` was raised 200M → 512M via a systemd drop-in
+  (`/etc/systemd/system/opta-indexer.service.d/memory.conf`). This was
+  load-bearing, not precautionary: RSS was 151M at deploy and is **277M at
+  close**. The old 200M cap would have OOM-killed the service.
+- Rollback for the whole of step 1 lives in `/opt/opta-indexer/snapshots/`:
+  `points.db.pre-v6-20260803T111327Z` (cold, consistent, verified v5 /
+  integrity ok / `wallet_points` absent), `indexer-dist-src.pre-freeze-*.tgz`,
+  `.env.pre-freeze-*`. **The v5→v6 migration is one-way.**
+
+## 4. ⚠️ OPEN BUG — bid notional caps do not bind. Bid widen is BLOCKED on it.
+
+ClickUp **`86eygtf17`**. Found by the canary hour, and the reason step 7 was
+reverted.
+
+`writer/src/engine.ts:486-488` seeds `globalBidNotional = 0` and
+`perAsset = new Map()` **empty on every tick**, so the cap check at
+`writer/src/bids.ts:224` only ever sees notional posted *within the current
+tick*. Live bids carried over from previous ticks are invisible to it. Exposure
+ratchets up ~$250/asset and ~$2,500 global **per 5-minute tick**, with no ceiling
+over time. On the same lines `liveBidCells` **is** seeded correctly from
+`myBids.length` — that asymmetry is the entire bug, and it is why this stayed
+hidden: at 3 cells the working cell-cap bounded live bids to 3 (~$33) and masked
+the broken notional caps. GO-LIVE §6b predicted these caps would become the live
+constraint for the first time at 20–50 cells. They were, and they don't hold.
+
+Measured: BTC peak **concurrent** live notional **$378.32 vs a $250 cap (+51%)**.
+Only `bidReserveUsdc` is computed against live state, so the $5,000 free-USDC
+floor is currently the only real backstop.
+
+**Measurement trap — do not repeat it.** Cumulative posted notional over the hour
+was $1,538.71 across 71 posts / 44 pulls. Summing `bid-post-ok` notionals
+overstates BTC at $671 and falsely flags XAU as breaching. Breach must be measured
+as **concurrent** exposure by replaying `bid-post-ok` / `bid-pull-ok` in timestamp
+order against the order pubkey.
+
+**DRAIN DECISION — NO DRAIN (founder, 2026-08-03).** 30 canary bids remain live,
+$687.08 total, BTC $375.96 still over cap. Reverting `BID_MAX_CELLS` to 3 does
+**not** retire them: the cell-cap check is guarded by `if (!resting && ...)`, so
+existing bids are repriced forever rather than pulled. The exposure is **frozen** —
+`liveBidCells=30 ≥ 3` blocks every new cell — and stands deliberately because it
+is ~0.1% of free USDC and those 30 bids are **the only sell-side depth on the
+board at launch**. Draining would hand users a one-sided book on day one.
+
+**FIX SESSION (own session, this week), in order:**
+1. Cycle `OPTA_WRITER_BID_ENABLED` 0→1 to retire the 30 carried-over bids.
+2. Seed `perAsset` / `globalBidNotional` from the live bid set (the same `myBids`
+   that already seeds `liveBidCells`).
+3. **Red-first** test: a carried-over live bid must consume cap headroom on the
+   NEXT tick. That test fails against today's code.
+4. Also in scope: `taker/src/shadow.ts:75` emits `shadow-tick` even when the taker
+   is genuinely ARMED — rename to `armed-tick` or make it mode-aware. An operator
+   grepping for armed activity currently finds only the boot marker.
+5. Fresh clean canary hour, then widen.
+
+## 5. Canary hour — the three named gates PASSED
+
+12:25:43Z → 13:26:00Z at 30 cells. **0 crosses** across 71 posts (`bidPrice <
+askResting` every time, 962–2,343 bps below ask). **0 fills** board-wide.
+Quote-failure **flat**.
+
+**Gate 3 nearly failed on an artifact — remember this.** The raw heartbeat read
+`quoteFailed: 260` against a 245 baseline: z = **+4.62** against a 24h band of
+240–245, which reads as an alarming regression. It is not. That heartbeat covered
+`ticksSinceLast=13`, not 12, because the restart shifted tick alignment.
+Normalised, 260/13 = **20.000 failures/tick** against a 24h mean of 20.035 and sd
+0.090 → z = **−0.39**, exactly the baseline rate. The only genuine per-tick outlier
+in 24 hours is the *pre-flip* 12:23 reading. **Always normalise heartbeat counters
+by `ticksSinceLast` before comparing them.**
+
+## 6. Taker is ARMED and correctly idle
+
+Boot marker 15:17:28Z: `mode:"ARMED" dryRun:false armed:true registered:true`,
+band 500/5000 bps, budgets wallet $250/d, global $2,000/d, float $10,000, per-fill
+$100, OI $2,500; balances 7 SOL / $10,000 USDC.
+
+**It takes TWO flags, not one.** `taker/src/env.ts:10` — *"A fill requires
+DRY_RUN=0 AND ARMED=1. One flag would mean one typo."* Setting `ARMED=1` alone
+leaves it inert while looking armed.
+
+`registered:true` means the in-code arming preflight passed: `taker/src/main.ts:270`
+`fatal`-exits if the taker's own wallet is not in the indexer's
+`INTERNAL_WALLETS`, so a forgotten registration stops the bot instead of poisoning
+the tape. Verified on a fresh recompute: `taker-bot FeQnyJpy…5N7p` `is_internal=1`.
+
+**No fill has landed, and that is correct.** Every tick: `scanned 454`,
+`skipped.internal_owner: 453`, `settled: 1`, **`eligible: 0`**. The entire ask
+board belongs to the writer bot, and `identityGate` (`taker/src/eligibility.ts:200-207`)
+rejects internal owners before a quote is even paid for. The armed taker is
+refusing to trade with the treasury 453 times a minute. **The first real fill
+needs an external user to post an ask** — which is what the campaign exists to
+produce. Do not manufacture one to tick a box.
+
+## 7. Rollback levers (all one command, all verified present)
+
+| surface | lever |
+|---|---|
+| campaign UI | `vercel env rm VITE_EPOCH0_UI production` + redeploy |
+| points API | `cp /etc/nginx/sites-available/opta.fyi.conf.bak-pre-points … && nginx -t && systemctl reload nginx` |
+| taker | `cp /opt/opta-taker/.env.bak-pre-arm-20260803T151724Z … && systemctl restart opta-taker` |
+| writer bids | `/opt/opta-writer/.env.bak-pre-bidwiden-20260803T122523Z` (pre-flip), `.env.bak-post-canary-*` (pre-revert) |
+| X token | `/opt/opta-tweet/.env.bak-pre-xshare` + `.service.bak-pre-xshare` |
+| indexer | snapshots dir, §3 |
+| MemoryMax | `rm /etc/systemd/system/opta-indexer.service.d/memory.conf && systemctl daemon-reload` |
+
+## 8. Corrections to standing docs
+
+- **GO-LIVE §2 is now wrong about rotation.** The X bearer token has exactly
+  **one** live consumer, `/etc/opta/x-read.env` — not three. `/opt/opta-crank/.env`
+  does not contain it. The only other hits are five historical
+  `/opt/opta-tweet/.env.bak*` files, all 0600 root-only; prune the four predating
+  2026-08-03 after launch week.
+- **`app/.vercel/project.json` names the wrong project.** It says
+  `butter_options_app`; `opta.fyi` and `opta-solana.vercel.app` are both served by
+  project **`opta`**. Setting env on the wrong project silently does nothing.
+- Indexer tests and scripts must run **from WSL** — `indexer/node_modules/better-sqlite3`
+  is a Linux binary and Windows node cannot load it.
+
+## 9. Queued next
+
+1. **Bid cap fix session** (§4) — blocks any further widening.
+2. Watch for the first external ask; that is when the armed taker gets its first
+   real exercise, and when `bidMaxLongPerSeries=10` binds for the first time ever.
+3. Campaign day-1 watch: faucet SOL burn (351 claims banked), writer SOL burn
+   (~5 SOL/day, 12.9 SOL at close), `/opt/opta-tweet/mentions-flagged.md` (3
+   unactioned founder flags), `replies.md` daily read.
+4. GO-LIVE §7 still-open items: publish the rules page (it can now cite
+   `rules_frozen` from `/api/points/stats`), decide D12 backdating, keep internal
+   wallets excluded.
+
+---
+
 # SESSION CLOSE — 2026-07-31 14:05Z (opta-tweet arc CLOSED · both loops LIVE · postReply unverified)
 
 > Written for a reader with ZERO session memory. **This block is SCOPED TO

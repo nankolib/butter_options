@@ -1,17 +1,11 @@
 import type { FC } from "react";
 import { useEffect, useRef } from "react";
 
-/**
- * Map an Opta asset to a TradingView symbol. Covers every asset class Opta lists
- * — crypto (Binance pairs), US equities (Nasdaq), metals + oil (OANDA/TVC) —
- * from real exchange feeds. Unknown tickers fall back to a Binance USDT pair.
- */
-const TV_SYMBOL: Record<string, string> = {
-  BTC: "BINANCE:BTCUSDT", ETH: "BINANCE:ETHUSDT", SOL: "BINANCE:SOLUSDT",
-  AAPL: "NASDAQ:AAPL", TSLA: "NASDAQ:TSLA", NVDA: "NASDAQ:NVDA", MSFT: "NASDAQ:MSFT",
-  XAU: "OANDA:XAUUSD", XAG: "OANDA:XAGUSD", WTI: "TVC:USOIL",
-};
-export const tvSymbol = (asset: string) => TV_SYMBOL[asset.toUpperCase()] ?? `BINANCE:${asset.toUpperCase()}USDT`;
+// The symbol map moved to ./tvSymbol (a pure module) so it can be unit-tested —
+// app/src/pages/trade/wave1.test.ts holds the whole board covered. Re-exported
+// here so every existing `import { tvSymbol } from "./TradingViewWidget"` works
+// unchanged.
+export { tvSymbol } from "./tvSymbol";
 
 /**
  * TradingViewWidget — free Advanced Real-Time Chart embed. No account/login;

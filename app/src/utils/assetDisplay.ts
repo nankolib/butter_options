@@ -41,7 +41,18 @@ export function canonicalAsset(symbol: string | undefined | null): string | null
 
 /** Asset class for grouping/labels. Kept beside the display map so both are canonical. */
 export type AssetClass = "Crypto" | "Equities" | "Commodities" | "FX" | "Other";
-const CRYPTO = new Set(["BTC", "ETH", "SOL", "XRP", "FARTCOIN"]);
+// Every crypto ticker the protocol lists. This set drives GROUPING ONLY —
+// discovery is on-chain and the Markets tabs key off the numeric asset_class —
+// but a missing entry drops the ticker into "Other" in the Trade dropdown and
+// the Write selector. That is what happened to the Wave-1 memes: JUP/JTO/WIF/
+// BONK shipped 2026-07-14 and this set was never updated, so they sat under
+// "Other" until the 2026-08-04 audit. HYPE and RAY are registered with live
+// feeds and appear in the Write selector, so they belong here too.
+// Keep in sync with a new listing — app/src/pages/trade/wave1.test.ts gates it.
+const CRYPTO = new Set([
+  "BTC", "ETH", "SOL", "XRP", "FARTCOIN",
+  "JUP", "JTO", "WIF", "BONK", "HYPE", "RAY",
+]);
 // The full Switchboard equity board (asset_class 2 on-chain). Wave-2 shipped 11
 // on 2026-07-20 and Wave-2b added SPCX + HOOD on 2026-07-21; this set lagged at
 // 6, so the eight newest tickers grouped under "Other" in the Trade dropdown and

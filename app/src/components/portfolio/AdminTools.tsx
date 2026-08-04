@@ -49,6 +49,71 @@ type Tuple = {
   vaultPdas: PublicKey[];
 };
 
+/**
+ * Settleable (asset, expiry) tuples — the exact list the panel renders.
+ *
+ * Exported and pure so the collapsed Utilities header can badge the SAME count
+ * the panel will show. Do NOT re-derive this anywhere else: a second copy will
+ * drift from the oracle-source filter below and the badge will promise expiries
+ * the panel cannot settle.
+ *
+ * Tuples group vaults with `!is_settled` past expiry. We deliberately do NOT
+ * filter on SettlementRecord existence — vaults stuck after a partial
+ * settle_vault failure must remain visible so the user can re-trigger them.
+ */
+export function settleableTuples(
+  vaults: AccountRecord[],
+  markets: AccountRecord[],
+): Tuple[] {
+  const marketByPda = new Map<string, AccountRecord>();
+  for (const mkt of markets) marketByPda.set(mkt.publicKey.toBase58(), mkt);
+
+  const now = Math.floor(Date.now() / 1000);
+  const grouped = new Map<string, Tuple>();
+  for (const v of vaults) {
+    const expiry =
+      typeof v.account.expiry === "number" ? v.account.expiry : v.account.expiry.toNumber();
+    if (expiry >= now) continue;
+    if (v.account.isSettled) continue;
+    const market = marketByPda.get((v.account.market as PublicKey).toBase58());
+    if (!market) continue;
+    const asset = market.account.assetName as string;
+    if (!asset) continue;
+    // BLK-9 (audit 2026-08-04) — MITIGATION, NOT THE FIX.
+    //
+    // handleSettle is hard-wired to Hermes/Pyth: it calls getHermesBase() and
+    // passes `feedIdHex` straight to settleAllForExpiry + fetchHermesParsedPrice.
+    // For a Switchboard market that field is an SB feedHash, which Hermes 404s
+    // on, so the settle ALWAYS fails. On 2026-08-04 all 52 settleable tuples
+    // (2,193 vaults) were Switchboard and none were Pyth — the panel advertised
+    // 52 actions that could not succeed, and quest W2 plus the settle arm of O7
+    // were uncompletable board-wide.
+    //
+    // Until handleSettle branches on oracle_source, list ONLY what this code path
+    // can actually settle. `oracleSource` is a trailing byte: legacy 62-byte
+    // markets predate it and decode as undefined, which means Pyth — so `?? 0`
+    // is the correct read, not a defensive guess.
+    //
+    // REMOVE THIS FILTER in the same change that adds the SB settle branch, or
+    // SB expiries stay invisible forever.
+    if (Number(market.account.oracleSource ?? 0) !== 0) continue;
+    const key = `${asset}:${expiry}`;
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.vaultPdas.push(v.publicKey);
+    } else {
+      grouped.set(key, {
+        key,
+        asset,
+        expiry,
+        feedIdHex: hexFromBytes(market.account.pythFeedId as number[]),
+        vaultPdas: [v.publicKey],
+      });
+    }
+  }
+  return Array.from(grouped.values()).sort((a, b) => a.expiry - b.expiry);
+}
+
 export const AdminTools: FC<AdminToolsProps> = ({
   vaults,
   markets,
@@ -65,46 +130,10 @@ export const AdminTools: FC<AdminToolsProps> = ({
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<SettleConfirm | null>(null);
 
-  const marketByPda = useMemo(() => {
-    const m = new Map<string, AccountRecord>();
-    for (const mkt of markets) m.set(mkt.publicKey.toBase58(), mkt);
-    return m;
-  }, [markets]);
-
-  // Tuples = (asset, expiry) groups where at least one vault has
-  // !is_settled. We deliberately do NOT filter on SettlementRecord
-  // existence — vaults stuck after a partial settle_vault failure must
-  // remain visible so the user can re-trigger and complete them.
-  const tuples = useMemo<Tuple[]>(() => {
-    const now = Math.floor(Date.now() / 1000);
-    const grouped = new Map<string, Tuple>();
-    for (const v of vaults) {
-      const expiry =
-        typeof v.account.expiry === "number"
-          ? v.account.expiry
-          : v.account.expiry.toNumber();
-      if (expiry >= now) continue;
-      if (v.account.isSettled) continue;
-      const market = marketByPda.get((v.account.market as PublicKey).toBase58());
-      if (!market) continue;
-      const asset = market.account.assetName as string;
-      if (!asset) continue;
-      const key = `${asset}:${expiry}`;
-      const existing = grouped.get(key);
-      if (existing) {
-        existing.vaultPdas.push(v.publicKey);
-      } else {
-        grouped.set(key, {
-          key,
-          asset,
-          expiry,
-          feedIdHex: hexFromBytes(market.account.pythFeedId as number[]),
-          vaultPdas: [v.publicKey],
-        });
-      }
-    }
-    return Array.from(grouped.values()).sort((a, b) => a.expiry - b.expiry);
-  }, [vaults, marketByPda]);
+  const tuples = useMemo<Tuple[]>(
+    () => settleableTuples(vaults, markets),
+    [vaults, markets],
+  );
 
   useEffect(() => {
     if (!confirmation) return;

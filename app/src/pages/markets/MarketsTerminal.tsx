@@ -147,11 +147,20 @@ export const MarketsTerminal: FC<{ data: UseMarketsData }> = ({ data }) => {
       <div className="flex h-[34px] flex-none items-center gap-0 overflow-x-auto border-b border-l-hair px-5">
         <StripCell label="Active markets" value={summary.loaded ? String(summary.activeMarkets) : "—"} />
         <StripCell label="Open interest · live" value={summary.loaded ? fmtInt(liveOi) : "—"} />
-        <StripCell label="Vault TVL" value={summary.loaded ? <MoneyAmount value={summary.vaultTvl} /> : "—"} />
+        {/* BLK-7 (audit 2026-08-04): these two sum over ALL vaults
+            (useMarketsData.ts:273-277) while the pulse tiles below sum only LIVE
+            ones (marketsView.ts:222-228). Right now every one of the 998 open
+            vaults holds $0 — all collateral and premia sit in expired/settled
+            vaults — so the strip read "$3,113.28" directly above a tile reading
+            "$0 collateral" and the page looked broken. Labelled "lifetime" so the
+            two numbers stop contradicting each other. This is a LABEL fix only:
+            the aggregate is deliberately lifetime and must reconcile against
+            chain, so do NOT rescope it to live to make the tiles match. */}
+        <StripCell label="Vault TVL · lifetime" value={summary.loaded ? <MoneyAmount value={summary.vaultTvl} /> : "—"} />
         {/* Kept as its OWN cell, never folded into Vault TVL: pooled vault
             deposits and per-order writer-ask escrow are different claims. */}
         <StripCell label="Book depth · resting asks" value={summary.loaded ? <MoneyAmount value={summary.bookDepth} /> : "—"} testId="strip-book-depth" />
-        <StripCell label="Premia · cumulative" value={summary.loaded ? <MoneyAmount value={summary.premiaWritten} /> : "—"} last />
+        <StripCell label="Premia · lifetime" value={summary.loaded ? <MoneyAmount value={summary.premiaWritten} /> : "—"} last />
       </div>
 
       {/* Scroll body — a plain block (NOT flex-col): as a flex column its children

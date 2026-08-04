@@ -5,6 +5,7 @@ import { useSurfaceMode } from "../../hooks/useSurfaceMode";
 import { TerminalAppBar } from "../../components/TerminalAppBar";
 import { AssetDropdown } from "./AssetDropdown";
 import { ExpiryTabs } from "./ExpiryTabs";
+import { expiryCountdown } from "./expiryLabel";
 import { TradeChainV2, type FocusedContract } from "./TradeChainV2";
 import { ContractInspector } from "../markets/ContractInspector";
 import { TradeDock } from "./TradeDock";
@@ -239,8 +240,14 @@ export const TradePageV2: FC = () => {
     <div className="flex h-screen flex-col overflow-hidden bg-l-bg font-sans text-l-text">
       <TerminalAppBar mode={mode} onToggleMode={toggle} />
 
-      {/* Context strip */}
-      <div className="flex h-[46px] flex-none items-center gap-4 border-b border-l-hair px-5">
+      {/* Context strip.
+          BLK-6 (audit 2026-08-04): this was `h-[46px]` + no wrap, so at 390px the
+          Pro|Simple + Grid|Chart group overflowed to x 386–494 — entirely outside
+          the viewport, with no document scroll to reach it. No phone user could
+          open the chart, for any asset. Below sm the row now WRAPS and the toggle
+          group takes its own line; at sm+ every value resolves to the original
+          (h-46, nowrap, py-0) so the desktop bar is pixel-identical. */}
+      <div className="flex flex-none flex-wrap items-center gap-x-4 gap-y-2 border-b border-l-hair px-5 py-2 sm:h-[46px] sm:flex-nowrap sm:py-0">
         <AssetDropdown assets={chainAssets} selected={td.selectedAsset} onChange={td.setSelectedAsset} />
         <span className="font-mono-plex text-[15px] tabular-nums text-l-text">
           {td.spot != null ? `$${td.spot.toFixed(td.spot < 100 ? 4 : 2)}` : "—"}
@@ -249,11 +256,11 @@ export const TradePageV2: FC = () => {
           <span className="font-mono-plex text-[10px] tabular-nums text-l-muted">{formatAsOfUtc(td.spotAsOf)}</span>
         )}
         {td.stale && <span className="font-mono-plex text-[9px] uppercase tracking-[0.12em] text-l-faint">stale</span>}
-        <span className="ml-3 font-mono-plex text-[11px] tabular-nums text-l-muted">
-          {td.selectedExpiry ? countdown(td.selectedExpiry) : ""}
+        <span className="ml-3 whitespace-nowrap font-mono-plex text-[11px] tabular-nums text-l-muted">
+          {td.selectedExpiry ? expiryCountdown(td.selectedExpiry) : ""}
         </span>
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex w-full items-center justify-end gap-2 sm:w-auto">
           <Toggle options={[["pro", "Pro"], ["simple", "Simple"]]} value={persona} onChange={(v) => setPersona(v as Persona)} />
           {persona === "pro" && (
             <Toggle options={[["grid", "Grid"], ["chart", "Chart"]]} value={view} onChange={(v) => setView(v as View)} />
@@ -313,7 +320,7 @@ export const TradePageV2: FC = () => {
             </div>
           </div>
           <div className="flex-none border-t border-l-hair px-5 py-[7px] font-mono-plex text-[11px] tabular-nums text-l-muted">
-            {td.selectedAsset} {td.spot != null ? `$${td.spot.toFixed(2)}` : "—"} · Expiry {td.selectedExpiry ? countdown(td.selectedExpiry) : "—"}
+            {td.selectedAsset} {td.spot != null ? `$${td.spot.toFixed(2)}` : "—"} · Expiry {td.selectedExpiry ? expiryCountdown(td.selectedExpiry) : "—"}
           </div>
         </div>
       ) : (
@@ -411,16 +418,5 @@ const Toggle: FC<{ options: [string, string][]; value: string; onChange: (v: str
     ))}
   </div>
 );
-
-function countdown(expiryTs: number): string {
-  const now = Date.now() / 1000;
-  const diff = expiryTs - now;
-  const dateStr = new Date(expiryTs * 1000).toLocaleDateString("en-GB", { day: "2-digit", month: "short" }).toUpperCase();
-  if (diff <= 0) return `${dateStr} · EXPIRED`;
-  const d = Math.floor(diff / 86400);
-  const h = Math.floor((diff % 86400) / 3600);
-  const m = Math.floor((diff % 3600) / 60);
-  return d > 0 ? `${dateStr} · ${d}D ${h}H` : `${dateStr} · ${h}H ${m}M`;
-}
 
 export default TradePageV2;

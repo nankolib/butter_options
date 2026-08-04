@@ -10,9 +10,11 @@
 // =============================================================================
 
 import type { FC } from "react";
+import { useMemo } from "react";
 import { PublicKey } from "@solana/web3.js";
 import { SettleExpiriesSection } from "../SettleExpiriesSection";
 import { MigrateFeedSection } from "../MigrateFeedSection";
+import { settleableTuples } from "../../../components/portfolio/AdminTools";
 
 interface AccountWrapper {
   publicKey: PublicKey;
@@ -28,6 +30,17 @@ export const UtilitiesSection: FC<{
   onToggle: () => void;
 }> = ({ vaults, markets, settlementRecords, onRefetch, collapsed, onToggle }) => {
   const open = !collapsed;
+
+  // BLK-9 (audit 2026-08-04): this disclosure is closed by default and labelled
+  // "Utilities", so settle_expiry — a permissionless public good AND the only
+  // path to quest W2 — was invisible. Badge the count so there is a reason to
+  // open it. Uses the panel's own derivation so the badge can never promise an
+  // expiry the panel won't list.
+  const settleableCount = useMemo(
+    () => settleableTuples(vaults, markets).length,
+    [vaults, markets],
+  );
+
   return (
     <section className="mb-6 border-t border-l-hair pt-4" data-testid="utilities-band" data-collapsed={collapsed ? "true" : "false"}>
       <button
@@ -35,9 +48,19 @@ export const UtilitiesSection: FC<{
         onClick={onToggle}
         aria-expanded={open}
         data-testid="utilities-toggle"
-        className="flex w-full items-center justify-between font-mono-plex text-[10px] uppercase tracking-[0.16em] text-l-faint transition-colors hover:text-l-muted"
+        className="flex w-full items-center justify-between gap-3 font-mono-plex text-[10px] uppercase tracking-[0.16em] text-l-faint transition-colors hover:text-l-muted"
       >
-        <span>Utilities · settle · migrate</span>
+        <span className="flex items-center gap-2">
+          <span>Utilities · settle · migrate</span>
+          {settleableCount > 0 && (
+            <span
+              data-testid="utilities-settle-count"
+              className="rounded-[3px] border border-l-faint px-[5px] py-[1px] tabular-nums text-l-muted"
+            >
+              {settleableCount} {settleableCount === 1 ? "expiry" : "expiries"} awaiting settlement
+            </span>
+          )}
+        </span>
         <span aria-hidden="true">{open ? "−" : "+"}</span>
       </button>
       {open && (

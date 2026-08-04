@@ -23,13 +23,20 @@ export const MarketsNewMarketAction: FC<{ onMarketCreated?: () => void }> = ({
 
   return (
     <>
+      {/* BLK-5 (audit 2026-08-04): this was `hidden … sm:inline-flex`, so the ONLY
+          create-market entry on the terminal surface vanished below 640px and
+          quest O3 "Make a Market" was unreachable on a phone. The bar is tight at
+          390px, so mobile gets a compact "+ New" (shorter label + tighter padding);
+          at sm+ every value resolves to the original, so the desktop control is
+          pixel-identical. */}
       <button
         type="button"
         onClick={() => setShowNewMarket(true)}
         data-testid="new-market-open"
-        className="hidden items-center rounded-[6px] border border-l-muted px-[13px] py-[7px] font-sans text-[13px] font-medium text-l-text transition-colors duration-300 ease-opta hover:border-l-text sm:inline-flex"
+        className="inline-flex flex-none items-center whitespace-nowrap rounded-[6px] border border-l-muted px-[9px] py-[6px] font-sans text-[12px] font-medium text-l-text transition-colors duration-300 ease-opta hover:border-l-text sm:px-[13px] sm:py-[7px] sm:text-[13px]"
       >
-        New market
+        <span className="sm:hidden">+ New</span>
+        <span className="hidden sm:inline">New market</span>
       </button>
       {showNewMarket && (
         <NewMarketModal

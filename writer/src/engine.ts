@@ -28,7 +28,7 @@ import {
   createSeriesIx, createSharedVaultIx, postWriterAskIx, postBidIx, cancelOrderIx, CU, type BuildCtx,
 } from "./builders";
 import { isMarketHours } from "./marketHours";
-import { decideBid, type AskOutcome, type BidPolicy } from "./bids";
+import { decideBid, seedLiveBidExposure, type AskOutcome, type BidPolicy } from "./bids";
 
 /**
  * What the ask loop did to one cell this tick, plus the market context the bid
@@ -484,17 +484,42 @@ export class WriterEngine {
       }
     }
 
-    let globalBidNotional = 0;
-    let liveBidCells = myBids.length;
-    const perAsset = new Map<string, number>();
-
     // Group by asset so one asset's failure cannot stop the others.
     const byAsset = new Map<string, AskCellOutcome[]>();
+    const assetBySeries = new Map<string, string>();
     for (const o of outcomes) {
       const k = o.market.assetName;
       if (!byAsset.has(k)) byAsset.set(k, []);
       byAsset.get(k)!.push(o);
+      assetBySeries.set(o.seriesMint.toBase58(), k);
     }
+
+    // Seed the notional counters from bids ALREADY RESTING (ClickUp 86eygtf17).
+    // These used to start at zero every tick, so decideBid's cap checks only saw
+    // notional posted within the current tick and exposure ratcheted by up to a
+    // full cap per 5-minute tick, unbounded over time. `liveBidCells` was always
+    // seeded correctly from myBids.length — that asymmetry WAS the bug, and it
+    // stayed hidden because at 3 cells the working cell-cap masked it.
+    // Gated by bids.test.ts gate 10. Do NOT reset these to 0.
+    const seeded = seedLiveBidExposure(
+      myBids.map((b) => ({
+        optionMint: b.optionMint.toBase58(),
+        priceMicro: b.priceMicro,
+        quantityRemaining: b.quantityRemaining,
+      })),
+      assetBySeries,
+    );
+    let globalBidNotional = seeded.globalBidNotional;
+    let liveBidCells = myBids.length;
+    const perAsset = seeded.perAsset;
+
+    log.info("bid-exposure-seed", {
+      liveBids: myBids.length,
+      globalBidNotional: Number(globalBidNotional.toFixed(6)),
+      perAsset: Object.fromEntries(
+        [...perAsset.entries()].map(([a, v]) => [a, Number(v.toFixed(6))]),
+      ),
+    });
 
     for (const [asset, cells] of byAsset) {
       try {

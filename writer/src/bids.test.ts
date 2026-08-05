@@ -22,6 +22,7 @@ import {
   bidBudgetRemaining,
   decideBid,
   decideRelist,
+  seedLiveBidExposure,
   CROSS_GUARD_BPS,
   TICK_USDC,
   type BidDecisionInput,
@@ -400,4 +401,95 @@ test("gate 9: WING CELLS PRODUCE ZERO BID INTENT even with every cap wide open",
   }));
   assert.equal(pulled.action, "pull");
   assert.match((pulled as any).reason, /out-of-atm-band/);
+});
+
+// ---------------------------------------------------------------------------
+// gate 10: carried-over live bids must consume cap headroom on the NEXT tick.
+// ---------------------------------------------------------------------------
+// This is THE test that would have caught ClickUp 86eygtf17. engine.ts seeded
+// globalBidNotional/perAsset to zero every tick, so the caps only saw notional
+// posted within the current tick and live bids from previous ticks were
+// invisible. Exposure ratcheted ~$250/asset per 5-minute tick with no ceiling;
+// BTC reached a concurrent $378.32 against a $250 cap during the 2026-08-03
+// canary. decideBid was never wrong — the caller was.
+
+const liveBid = (mint: string, price: number, qty: number) => ({
+  optionMint: mint,
+  priceMicro: BigInt(Math.round(price * 1e6)),
+  quantityRemaining: BigInt(qty),
+});
+
+test("gate 10: seeding — a carried-over live bid is counted, per-asset and globally", () => {
+  const assetBySeries = new Map([["sBTC1", "BTC"], ["sBTC2", "BTC"], ["sETH1", "ETH"]]);
+  const seeded = seedLiveBidExposure(
+    [liveBid("sBTC1", 100, 2), liveBid("sBTC2", 40, 1), liveBid("sETH1", 25, 1)],
+    assetBySeries,
+  );
+  // The shipped code returned 0 / empty here — that is the bug.
+  assert.equal(seeded.globalBidNotional, 265, "global must include carried-over bids");
+  assert.equal(seeded.perAsset.get("BTC"), 240, "BTC = 100*2 + 40*1");
+  assert.equal(seeded.perAsset.get("ETH"), 25);
+});
+
+test("gate 10: a carried-over bid REFUSES the next tick's bid that would breach the asset cap", () => {
+  // $245 of BTC bids already resting against a $250 cap. The fixture cell is
+  // worth $9.25 (mark 1.00, bidSpread 750bps -> 0.925, qty capped at
+  // maxLongPerSeries=10), so 245 + 9.25 = $254.25 breaches. Under the shipped
+  // zero-seeding it was admitted, every tick, forever.
+  const assetBySeries = new Map([["sBTC1", "BTC"]]);
+  const { globalBidNotional, perAsset } = seedLiveBidExposure([liveBid("sBTC1", 122.5, 2)], assetBySeries);
+  assert.equal(perAsset.get("BTC"), 245);
+
+  const p = policy({ maxNotionalPerAsset: 250, maxNotionalGlobal: 2500, maxCells: 30, depthFrac: 1 });
+  const d = decideBid(inp({
+    policy: p,
+    assetBidNotional: perAsset.get("BTC") ?? 0,
+    globalBidNotional,
+    liveBidCells: 1,
+    freeUsdcAfterAsks: 1e9,
+  }));
+  assert.equal(d.action, "skip", "must refuse — $240 resting + new delta breaches $250");
+  assert.match((d as any).reason, /asset-cap/);
+
+  // Control: the SAME decision with the shipped zero-seeding is admitted. This is
+  // precisely the regression, expressed as a passing assertion about broken input.
+  const asShipped = decideBid(inp({
+    policy: p, assetBidNotional: 0, globalBidNotional: 0,
+    liveBidCells: 1, freeUsdcAfterAsks: 1e9,
+  }));
+  assert.equal(asShipped.action, "post", "zero-seeded input admits the bid — the defect");
+});
+
+test("gate 10: global cap binds across assets from carried-over bids", () => {
+  const assetBySeries = new Map([["a", "BTC"], ["b", "ETH"], ["c", "SOL"]]);
+  const { globalBidNotional, perAsset } = seedLiveBidExposure(
+    [liveBid("a", 800, 1), liveBid("b", 800, 1), liveBid("c", 895, 1)],
+    assetBySeries,
+  );
+  // 2495 resting + the fixture cell's $9.25 = $2,504.25, just over the $2,500 cap.
+  assert.equal(globalBidNotional, 2495);
+  const d = decideBid(inp({
+    policy: policy({ maxNotionalPerAsset: 1e9, maxNotionalGlobal: 2500, maxCells: 30, depthFrac: 1 }),
+    assetBidNotional: perAsset.get("BTC") ?? 0,
+    globalBidNotional,
+    liveBidCells: 3,
+    freeUsdcAfterAsks: 1e9,
+  }));
+  assert.equal(d.action, "skip");
+  assert.match((d as any).reason, /global-cap/);
+});
+
+test("gate 10: an unattributable series counts globally but not against any asset", () => {
+  // A bid whose series left the target set must never silently vanish from the
+  // global total — dropping it would re-open the ratchet through the back door.
+  const seeded = seedLiveBidExposure([liveBid("ghost", 50, 2)], new Map());
+  assert.equal(seeded.globalBidNotional, 100);
+  assert.equal(seeded.perAsset.size, 0);
+});
+
+test("gate 10: zero-row discipline — no bids, zero-qty bids, empty map", () => {
+  assert.deepEqual(seedLiveBidExposure([], new Map()), { globalBidNotional: 0, perAsset: new Map() });
+  const z = seedLiveBidExposure([liveBid("a", 100, 0), liveBid("b", 0, 5)], new Map([["a", "BTC"]]));
+  assert.equal(z.globalBidNotional, 0, "zero-notional bids contribute nothing");
+  assert.equal(z.perAsset.size, 0);
 });

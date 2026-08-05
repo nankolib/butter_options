@@ -66,13 +66,24 @@ export class ShadowTally {
     }
   }
 
-  /** Emit the tick roll-up and reset. Always emits — a zero line is a fact. */
-  emit(extra: Record<string, unknown> = {}): void {
+  /**
+   * Emit the tick roll-up and reset. Always emits — a zero line is a fact.
+   *
+   * The event name is MODE-AWARE: `armed-tick` when the taker can actually fill,
+   * `shadow-tick` otherwise. It used to be `shadow-tick` unconditionally, so an
+   * operator grepping for armed activity found only the one-off boot marker and
+   * nothing per-tick — the bot looked idle in exactly the posture where its
+   * activity matters most. Filling requires BOTH flags (env.ts:10: "A fill
+   * requires DRY_RUN=0 AND ARMED=1. One flag would mean one typo."), so the same
+   * conjunction decides the label — a DRY_RUN=1 + ARMED=1 box still says
+   * `shadow-tick`, truthfully.
+   */
+  emit(extra: Record<string, unknown> = {}, armed = false): void {
     const byReason: Record<string, number> = {};
     for (const [k, v] of this.reasons) byReason[k] = v;
     const seen: Record<string, number> = {};
     for (const [k, v] of this.byKind) seen[k] = v;
-    log.info("shadow-tick", {
+    log.info(armed ? "armed-tick" : "shadow-tick", {
       eligible: this.fills,
       eligibleNotionalUsdc: +this.notional.toFixed(2),
       eligibleOiCreatedUsd: +this.oiCreated.toFixed(2),

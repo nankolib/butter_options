@@ -72,7 +72,7 @@ async function tick(cfg: TakerConfig, chain: Chain, db: Db, hb: Heartbeat): Prom
   pruneSeen(db, new Set(asks.map((a) => a.pubkey.toBase58())), nowSecs);
 
   if (asks.length === 0) {
-    tally.emit({ scanned: 0 });
+    tally.emit({ scanned: 0 }, !cfg.dryRun && cfg.armed);
     return;
   }
 
@@ -202,7 +202,7 @@ async function tick(cfg: TakerConfig, chain: Chain, db: Db, hb: Heartbeat): Prom
   tally.emit({
     scanned: asks.length, filled: filledThisTick,
     floatUsdc: +readFloat(db).toFixed(2), oiUsd: +readOi(db).toFixed(2),
-  });
+  }, !cfg.dryRun && cfg.armed);
 }
 
 function candidateOf(ask: UserAsk, t: SeriesTerms): Candidate {

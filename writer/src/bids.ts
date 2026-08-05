@@ -254,3 +254,62 @@ export function decideRelist(inp: RelistInput): RelistDecision {
   if (qty <= 0) return { action: "none", reason: "nothing-unlisted" };
   return { action: "relist", qty, price: inp.askPrice };
 }
+
+// ---------------------------------------------------------------------------
+// Live-exposure seeding
+// ---------------------------------------------------------------------------
+
+/** One resting bid, reduced to what exposure seeding needs. */
+export interface LiveBid {
+  /** Series mint, base58 — the key that maps a bid to its asset. */
+  optionMint: string;
+  priceMicro: bigint;
+  quantityRemaining: bigint;
+}
+
+/** Seeded exposure for a tick, in USDC. */
+export interface SeededBidExposure {
+  globalBidNotional: number;
+  perAsset: Map<string, number>;
+}
+
+/**
+ * Exposure already committed by bids resting from PREVIOUS ticks.
+ *
+ * decideBid's cap checks are correct — they test `assetBidNotional + delta` and
+ * `globalBidNotional + delta`. What was wrong was the caller: engine.ts seeded
+ * both counters to ZERO at the top of every tick, so the caps only ever saw
+ * notional posted WITHIN the current tick and live carried-over bids were
+ * invisible. Exposure ratcheted by up to a full cap per 5-minute tick with no
+ * ceiling over time (ClickUp 86eygtf17; BTC peaked at $378.32 against a $250 cap).
+ *
+ * `liveBidCells` on the same lines WAS seeded correctly from `myBids.length`.
+ * That asymmetry is the entire bug, and it is why it hid for the whole life of
+ * the bid side: at 3 cells the working cell-cap bounded live bids to ~$33 and
+ * masked the broken notional caps.
+ *
+ * DELIBERATELY CONSERVATIVE, in two ways, both of which can only ever REFUSE a
+ * bid, never admit one:
+ *  - it counts every bid in `myBids`, including ones the orphan sweep just
+ *    cancelled earlier in the same tick. That matches the existing
+ *    `liveBidCells = myBids.length` convention, and if a cancel silently failed
+ *    the bid really is still live.
+ *  - a bid whose series is not in `assetBySeries` cannot be attributed to an
+ *    asset, so it counts toward GLOBAL only. It is never dropped.
+ */
+export function seedLiveBidExposure(
+  myBids: readonly LiveBid[],
+  assetBySeries: ReadonlyMap<string, string>,
+): SeededBidExposure {
+  let globalBidNotional = 0;
+  const perAsset = new Map<string, number>();
+  for (const b of myBids) {
+    const notional = (Number(b.priceMicro) / 1e6) * Number(b.quantityRemaining);
+    if (!(notional > 0)) continue;
+    globalBidNotional += notional;
+    const asset = assetBySeries.get(b.optionMint);
+    if (asset === undefined) continue; // global-only; see header
+    perAsset.set(asset, (perAsset.get(asset) ?? 0) + notional);
+  }
+  return { globalBidNotional, perAsset };
+}

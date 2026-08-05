@@ -32,13 +32,16 @@ export const UtilitiesSection: FC<{
   const open = !collapsed;
 
   // BLK-9 (audit 2026-08-04): this disclosure is closed by default and labelled
-  // "Utilities", so settle_expiry — a permissionless public good AND the only
-  // path to quest W2 — was invisible. Badge the count so there is a reason to
-  // open it. Uses the panel's own derivation so the badge can never promise an
-  // expiry the panel won't list.
+  // "Utilities", so the settle panel — a permissionless public good — was
+  // invisible. Badge the count so there is a reason to open it. Uses the panel's
+  // own derivation so the badge can never promise an expiry the panel won't list.
+  //
+  // Counts ACTIONABLE only. The `dark` tuples are shown inside the panel but are
+  // deliberately excluded here: badging work nobody can complete would be a lie
+  // on the collapsed header.
   const settleableCount = useMemo(
-    () => settleableTuples(vaults, markets).length,
-    [vaults, markets],
+    () => settleableTuples(vaults, markets, settlementRecords).actionable.length,
+    [vaults, markets, settlementRecords],
   );
 
   return (

@@ -19,6 +19,7 @@ import { log } from "../log";
 import {
   getLeaderboard,
   getQuests,
+  getRules,
   getStats,
   getWallet,
   postBountySubmit,
@@ -92,6 +93,7 @@ export function createApiServer(db: DB, cfg: Config): http.Server {
           return send(res, getLeaderboard(db, url.searchParams.get("board") ?? "profit", Number(url.searchParams.get("limit") ?? 50)));
         }
         if (path === "/api/points/quests") return send(res, getQuests(db));
+        if (path === "/api/points/rules") return send(res, getRules(db));
         if (path === "/api/points/stats") return send(res, getStats(db));
         if (path.startsWith("/api/points/wallet/")) {
           return send(res, getWallet(db, decodeURIComponent(path.slice("/api/points/wallet/".length))));

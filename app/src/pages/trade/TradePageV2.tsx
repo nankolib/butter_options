@@ -327,7 +327,7 @@ export const TradePageV2: FC = () => {
         <>
           <div className="flex flex-1 overflow-hidden">
             {/* Left: chain or chart. Below 1280px the book+tape stack under it. */}
-            <div className="min-w-0 flex-1 overflow-auto p-4">
+            <div data-tour="trade-grid" className="min-w-0 flex-1 overflow-auto p-4">
               {view === "grid" ? (
                 <TradeChainV2
                   rows={visibleRows}

@@ -50,8 +50,8 @@ export const TerminalAppBar: FC<{
 
       {/* Right cluster */}
       <div className="ml-auto flex items-center gap-[10px] md:ml-0">
-        <FaucetIconButton kind="sol" />
-        <FaucetIconButton kind="usdc" />
+        <span data-tour="faucet-sol"><FaucetIconButton kind="sol" /></span>
+        <span data-tour="faucet-usdc"><FaucetIconButton kind="usdc" /></span>
         {/* EPOCH 0 chip. Self-returns null when the flag is off, no wallet is
             connected, the API is down, or points are zero — so the bar's flex
             layout is untouched in every off state. */}
@@ -87,6 +87,7 @@ export const TerminalAppBar: FC<{
           <button
             type="button"
             onClick={() => setVisible(true)}
+            data-tour="connect-wallet"
             className="inline-flex items-center rounded-[6px] bg-l-up px-[14px] py-[8px] font-sans text-[13px] font-medium text-l-on-up transition-opacity duration-300 ease-opta hover:opacity-90"
           >
             Connect wallet

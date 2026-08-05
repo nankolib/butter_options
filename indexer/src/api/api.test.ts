@@ -12,7 +12,9 @@ import bs58 from "bs58";
 import { makeWriter, openDb, type DB, type EventRow, type TxRow } from "../db";
 import { SCHEMA_VERSION } from "../schema";
 import { recompute } from "../score/recompute";
-import { QUESTS_VERSION } from "../score/quests/evaluator";
+import { DEFAULT_QUESTS, QUESTS_VERSION } from "../score/quests/evaluator";
+import { DEFAULT_RULES, RULES_VERSION } from "../score/rules_v1";
+import { MULTIPLIER_STEP, MULTIPLIER_CAP, SHIELD_STREAK_LENGTH, SHIELD_BANK_MAX } from "../score/multiplier";
 import { canonicalJson, canonicalMessage, verifySigned, type SignedEnvelope } from "./auth";
 
 /** Shape of a quest row in the /quests catalog payload. */
@@ -20,6 +22,7 @@ type QuestCount = { id: string; wallets: number; completions: number };
 import {
   getLeaderboard,
   getQuests,
+  getRules,
   getStats,
   getWallet,
   postBountySubmit,
@@ -433,6 +436,65 @@ test("v1.1 regression: a STALE prior-version quest row is invisible to every rea
     r.status, 409,
     "a retired-version O1 must not block a bind under the current ruleset",
   );
+
+  db.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// ---------------------------------------------------------------------------
+// /points/rules — the no-drift contract behind the public rules page.
+// ---------------------------------------------------------------------------
+// The page renders live from this endpoint precisely so it cannot drift from the
+// frozen weights. The gate is therefore not "does it return numbers" but "are
+// they THE SAME OBJECTS as the frozen modules" — a literal copied into the
+// handler would pass a value check and silently rot at the next re-freeze.
+test("/rules serves the FROZEN constants, not copies", () => {
+  const { db, dir } = tmpDb();
+  const r = getRules(db) as ApiResponse;
+  assert.equal(r.status, 200);
+  const b = r.body as {
+    rules_version: string; quests_version: string;
+    base: Record<string, number>;
+    multiplier: Record<string, number>;
+    referral: Record<string, number>;
+    boards: string[];
+    profit_board_requires_faucet_provenance: boolean;
+  };
+
+  assert.equal(b.rules_version, RULES_VERSION);
+  assert.equal(b.quests_version, QUESTS_VERSION);
+
+  // Field-for-field against the frozen rules module.
+  assert.equal(b.base.taker_pts_per_usdc, DEFAULT_RULES.takerPtsPerUsdc);
+  assert.equal(b.base.maker_pts_per_usdc, DEFAULT_RULES.makerPtsPerUsdc);
+  assert.equal(b.base.exercise_pts, DEFAULT_RULES.exercisePts);
+  assert.equal(b.base.held_to_settle_pts, DEFAULT_RULES.heldToSettlePts);
+  assert.equal(b.base.trigger_executed_pts, DEFAULT_RULES.triggerExecutedPts);
+  assert.equal(b.base.settle_expiry_pts, DEFAULT_RULES.settleExpiryPts);
+  assert.equal(b.base.create_market_first_pts, DEFAULT_RULES.createMarketFirstPts);
+  assert.equal(b.base.create_market_floor_pts, DEFAULT_RULES.createMarketFloorPts);
+  assert.equal(b.base.create_market_lifetime_cap_pts, DEFAULT_RULES.createMarketLifetimeCapPts);
+  assert.equal(b.base.daily_cap_points, DEFAULT_RULES.dailyCapPoints);
+  assert.equal(b.base.over_cap_multiplier, DEFAULT_RULES.overCapMultiplier);
+
+  // EVERY key of DEFAULT_RULES must be published — a rules page that silently
+  // omits a weight is exactly the drift this endpoint exists to prevent.
+  assert.equal(
+    Object.keys(b.base).length, Object.keys(DEFAULT_RULES).length,
+    "every DEFAULT_RULES key must appear in /rules.base",
+  );
+
+  assert.equal(b.multiplier.step, MULTIPLIER_STEP);
+  assert.equal(b.multiplier.cap, MULTIPLIER_CAP);
+  assert.equal(b.multiplier.shield_streak_length, SHIELD_STREAK_LENGTH);
+  assert.equal(b.multiplier.shield_bank_max, SHIELD_BANK_MAX);
+
+  assert.equal(b.referral.referee_bond_points, DEFAULT_QUESTS.referral.refereeBondPoints);
+  assert.equal(b.referral.referrer_rate, DEFAULT_QUESTS.referral.referrerRate);
+  assert.equal(b.referral.referrer_cap_fraction_of_self, DEFAULT_QUESTS.referral.referrerCapFractionOfSelf);
+
+  assert.deepEqual(b.boards, ["profit", "volume", "writer", "referrals", "social"]);
+  assert.equal(b.profit_board_requires_faucet_provenance, true);
 
   db.close();
   fs.rmSync(dir, { recursive: true, force: true });

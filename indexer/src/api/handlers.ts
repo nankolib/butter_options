@@ -14,6 +14,13 @@ import type { DB } from "../db";
 import { isInternal } from "../registry";
 import { frozenSummary } from "../score/frozenGate";
 import { DEFAULT_QUESTS, QUESTS_VERSION } from "../score/quests/evaluator";
+import { DEFAULT_RULES, RULES_VERSION } from "../score/rules_v1";
+import {
+  MULTIPLIER_STEP,
+  MULTIPLIER_CAP,
+  SHIELD_STREAK_LENGTH,
+  SHIELD_BANK_MAX,
+} from "../score/multiplier";
 import { checkCooldown, verifySigned, type SignedEnvelope } from "./auth";
 import { verifyTweet, type XConfig } from "./xVerify";
 
@@ -283,6 +290,57 @@ export function getQuests(db: DB): ApiResponse {
       referrer_cap_fraction_of_self: DEFAULT_QUESTS.referral.referrerCapFractionOfSelf,
       activation: "referee completes O3 (Make a Market)",
     },
+  });
+}
+
+/**
+ * GET /api/points/rules — the scoring constants, served from the FROZEN modules.
+ *
+ * This endpoint exists so the public rules page can render live and therefore
+ * cannot drift from what wallets are actually scored under. Every number below is
+ * READ from the frozen source of truth (`DEFAULT_RULES`, `multiplier.ts`,
+ * `DEFAULT_QUESTS.referral`) — nothing here is a literal, and nothing may be
+ * hardcoded in the frontend either. If a value moves in a future re-freeze the
+ * page moves with it on the next request, with no deploy.
+ *
+ * This handler is deliberately NOT a frozen artifact: it only READS the frozen
+ * modules. `freeze --check` is unaffected by edits here, which is what lets the
+ * rules page evolve without a re-freeze ceremony.
+ */
+export function getRules(db: DB): ApiResponse {
+  return ok({
+    computed_at: computedAt(db),
+    rules_version: RULES_VERSION,
+    quests_version: QUESTS_VERSION,
+    // Published alongside so a reader can verify these values against the tag.
+    rules_frozen: frozenSummary(),
+    base: {
+      taker_pts_per_usdc: DEFAULT_RULES.takerPtsPerUsdc,
+      maker_pts_per_usdc: DEFAULT_RULES.makerPtsPerUsdc,
+      exercise_pts: DEFAULT_RULES.exercisePts,
+      held_to_settle_pts: DEFAULT_RULES.heldToSettlePts,
+      trigger_executed_pts: DEFAULT_RULES.triggerExecutedPts,
+      settle_expiry_pts: DEFAULT_RULES.settleExpiryPts,
+      create_market_first_pts: DEFAULT_RULES.createMarketFirstPts,
+      create_market_floor_pts: DEFAULT_RULES.createMarketFloorPts,
+      create_market_lifetime_cap_pts: DEFAULT_RULES.createMarketLifetimeCapPts,
+      daily_cap_points: DEFAULT_RULES.dailyCapPoints,
+      over_cap_multiplier: DEFAULT_RULES.overCapMultiplier,
+    },
+    multiplier: {
+      step: MULTIPLIER_STEP,
+      cap: MULTIPLIER_CAP,
+      shield_streak_length: SHIELD_STREAK_LENGTH,
+      shield_bank_max: SHIELD_BANK_MAX,
+    },
+    referral: {
+      referee_bond_points: DEFAULT_QUESTS.referral.refereeBondPoints,
+      referrer_rate: DEFAULT_QUESTS.referral.referrerRate,
+      referrer_cap_fraction_of_self: DEFAULT_QUESTS.referral.referrerCapFractionOfSelf,
+    },
+    boards: ["profit", "volume", "writer", "referrals", "social"],
+    // The profit board is faucet-provenance gated; the others are not.
+    profit_board_requires_faucet_provenance: true,
   });
 }
 

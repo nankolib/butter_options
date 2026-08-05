@@ -33,6 +33,7 @@ import {
   type StepState,
 } from "../../utils/epoch0Format";
 import { buildEnvelope, writeErrorCopy, type Epoch0Action, type SignState } from "../../utils/epoch0Sign";
+import { resumeTour } from "../../components/tour/TourOverlay";
 
 export const QuestPanel: FC = () => {
   const { publicKey, connected, signMessage } = useWallet();
@@ -60,6 +61,10 @@ export const QuestPanel: FC = () => {
 
   return (
     <Section title="Campaign">
+      {/* data-tour wraps the REAL panel body: an empty marker div measures 0x0
+          and the overlay treats a zero-size anchor as unresolved, which would
+          silently downgrade this step to a centred card. */}
+      <div data-tour="quest-panel">
       {!connected && <Muted>Connect a wallet to see your rank.</Muted>}
       {connected && failed && <Muted>{UNAVAILABLE_LINE}</Muted>}
       {connected && !failed && !data && <SkeletonBlock />}
@@ -72,6 +77,17 @@ export const QuestPanel: FC = () => {
           <Bounty sign={signMessage} wallet={publicKey?.toBase58() ?? ""} />
         </div>
       )}
+      {connected && (
+        <button
+          type="button"
+          onClick={resumeTour}
+          data-testid="tour-resume"
+          className="mt-4 font-mono-plex text-[10px] uppercase tracking-[0.14em] text-l-faint underline-offset-4 transition-colors hover:text-l-muted hover:underline"
+        >
+          resume walkthrough
+        </button>
+      )}
+      </div>
     </Section>
   );
 };

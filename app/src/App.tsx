@@ -10,11 +10,12 @@ import { MarketsPage as Markets } from "./pages/markets";
 import { TradePage as Trade } from "./pages/trade";
 import { WritePage as Write } from "./pages/write";
 import { PortfolioPage } from "./pages/portfolio";
-import { DocsLayout, DocsIndex, DocsSection } from "./pages/docs";
+import { DocsLayout, DocsIndex, DocsSection, DocsRules } from "./pages/docs";
 import { Privacy } from "./pages/Privacy";
 import { Support } from "./pages/Support";
 import { Terms } from "./pages/Terms";
 import { EPOCH0_UI } from "./utils/epoch0";
+import { TourOverlay } from "./components/tour/TourOverlay";
 
 /**
  * EPOCH 0 campaign surface — flag-gated (VITE_EPOCH0_UI, default OFF).
@@ -96,6 +97,9 @@ function AppShell() {
     <div className="min-h-screen bg-bg-primary text-text-primary">
       {showHeader && <Header />}
       <ToastContainer />
+      {/* Shaded tutorial. Self-gates on EPOCH0_UI, dismissal and quest state, so
+          mounting it here costs nothing when the campaign is off. */}
+      <TourOverlay />
       <Routes>
         <Route path="/" element={<Landing />} />
         <Route path="/markets" element={<Markets />} />
@@ -118,6 +122,10 @@ function AppShell() {
         <Route path="/terms" element={<Terms />} />
         <Route path="/docs" element={<DocsLayout />}>
           <Route index element={<DocsIndex />} />
+          {/* Static segment declared before the catch-all: /docs/rules is the
+              live scoring page, NOT a whitepaper section, so it must not reach
+              the build-time slicer (findSection would miss and 404). */}
+          <Route path="rules" element={<DocsRules />} />
           <Route path=":sectionSlug" element={<DocsSection />} />
         </Route>
       </Routes>

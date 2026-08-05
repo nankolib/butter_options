@@ -324,6 +324,7 @@ export const WriteTerminalPage: FC = () => {
                 : undefined
             }
             data-testid="write-primary"
+            data-tour="write-submit"
             className="ml-auto inline-flex items-center justify-center rounded-[6px] bg-l-up px-[18px] py-[9px] font-sans text-[13px] font-medium text-l-on-up transition-opacity duration-300 ease-opta hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {primaryLabel}

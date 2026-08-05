@@ -146,8 +146,51 @@ export interface QuestsResponse {
   version: string;
   chain: QuestCatalogEntry[];
   chain_complete_bonus: QuestCatalogEntry;
+  /** Standalone bonuses (O5/O5b) — evaluated outside the chain, D16. */
+  bonuses: QuestCatalogEntry[];
   dailies: QuestCatalogEntry[];
   weeklies: QuestCatalogEntry[];
+}
+
+
+/**
+ * GET /rules — the scoring constants, read from the FROZEN modules server-side.
+ *
+ * The rules page renders from this so it cannot drift from the weights wallets
+ * are actually scored under. NOTHING from this shape may be hardcoded in a
+ * component: if a value moves in a re-freeze the page must move with it on the
+ * next request, with no deploy.
+ */
+export interface RulesResponse {
+  computed_at: number | null;
+  rules_version: string;
+  quests_version: string;
+  rules_frozen: {
+    tag: string;
+    frozen_at: string;
+    rules_version: string;
+    quests_version: string;
+    rules_sha256: string;
+    quests_sha256: string;
+    runtime_sha256: Record<string, string>;
+  } | null;
+  base: {
+    taker_pts_per_usdc: number;
+    maker_pts_per_usdc: number;
+    exercise_pts: number;
+    held_to_settle_pts: number;
+    trigger_executed_pts: number;
+    settle_expiry_pts: number;
+    create_market_first_pts: number;
+    create_market_floor_pts: number;
+    create_market_lifetime_cap_pts: number;
+    daily_cap_points: number;
+    over_cap_multiplier: number;
+  };
+  multiplier: { step: number; cap: number; shield_streak_length: number; shield_bank_max: number };
+  referral: { referee_bond_points: number; referrer_rate: number; referrer_cap_fraction_of_self: number };
+  boards: string[];
+  profit_board_requires_faucet_provenance: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -160,6 +203,8 @@ export const fetchLeaderboard = (board: string, limit = 50) =>
 export const fetchWallet = (pubkey: string) => get<WalletResponse>(`/wallet/${encodeURIComponent(pubkey)}`);
 
 export const fetchQuests = () => get<QuestsResponse>("/quests");
+
+export const fetchRules = () => get<RulesResponse>("/rules");
 
 export const postReferralCode = (env: unknown) => post<{ code: string; created: boolean }>("/referral/code", env);
 export const postReferralBind = (env: unknown) => post<{ bound: boolean; referrer: string; code: string }>("/referral/bind", env);

@@ -33,6 +33,7 @@ export const MarketsNewMarketAction: FC<{ onMarketCreated?: () => void }> = ({
         type="button"
         onClick={() => setShowNewMarket(true)}
         data-testid="new-market-open"
+        data-tour="new-market-open"
         className="inline-flex flex-none items-center whitespace-nowrap rounded-[6px] border border-l-muted px-[9px] py-[6px] font-sans text-[12px] font-medium text-l-text transition-colors duration-300 ease-opta hover:border-l-text sm:px-[13px] sm:py-[7px] sm:text-[13px]"
       >
         <span className="sm:hidden">+ New</span>

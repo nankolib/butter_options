@@ -320,7 +320,7 @@ test("reads: every endpoint answers against a fixture DB", () => {
     weeklies: { id: string }[];
     referral: Record<string, unknown>;
   };
-  assert.equal(qb.version, "v1");
+  assert.equal(qb.version, "v1.1"); // rules-v1.1: W2/O7 settle_vault amendment
   // Everything the evaluator can award must be enumerated here, or a rules page
   // built off this endpoint silently omits it.
   assert.deepEqual(qb.chain.map((c) => c.id), ["O1", "O2", "O3", "O4", "O6", "O7"]);
@@ -335,7 +335,7 @@ test("reads: every endpoint answers against a fixture DB", () => {
   const sb = s.body as { schema_version: number; rules_frozen: Record<string, unknown> };
   assert.equal(sb.schema_version, SCHEMA_VERSION);
   assert.ok(sb.rules_frozen, "stats must publish the freeze so a hash can be cited");
-  assert.equal(sb.rules_frozen.rules_version, "v1");
+  assert.equal(sb.rules_frozen.rules_version, "v1.1"); // /stats must publish the LIVE tag
 
   db.close();
   fs.rmSync(dir, { recursive: true, force: true });

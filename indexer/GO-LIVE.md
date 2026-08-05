@@ -313,6 +313,93 @@ Weight freeze on **Sunday 2026-08-02** (§7): `quests_v1.json` and `rules_v1`
 frozen, because a rules change after launch re-scores retroactively — correct by
 the TAPE/SCORE design, and alarming to a user mid-campaign.
 
+## 7a. AMENDMENT — `rules-v1.1-frozen` (2026-08-05), the W2/O7 settle_vault change
+
+**The first change to the frozen scoring surface since the 2026-08-02 freeze.**
+`rules-v1-frozen` stays in history, untouched and re-checkable; `rules-v1.1-frozen`
+supersedes it as the live tag.
+
+### What changed — three things, nothing else
+
+1. `settle_vault` added to `IX_TARGETS` (`tape/ixDecode.ts`) at **ZERO base
+   points**. `rules_v1`'s scoring switch has no case for `IxSettleVault` and ends
+   in `default: break`, so it earns no `takerPts`, no `makerPts`, no flat award.
+   Quest credit only.
+2. **W2** now counts **DISTINCT `(asset, expiry)` settlement records per ISO
+   week**, not raw settle events. `settle_expiry` fires once per tuple so the two
+   were equivalent under v1; `settle_vault` fires once per **vault**, so without
+   the dedupe one click finalising a 129-vault expiry would have scored 129×.
+   **60 points and the 3/week cap are unchanged.**
+3. **O7's settle arm** credits `settle_vault` the same way. **The `create_market`
+   arm is untouched.**
+
+### Why
+
+W2 — "Settle an expiry" — was **structurally crank-owned and effectively
+unearnable by a user**. `settle_expiry` is the only act v1 credited, and for a
+Switchboard market its signed quote is verifiable for only
+`SB_SETTLE_WINDOW_SECS = 300` after expiry, against a SlotHashes sysvar that
+retains ~512 slots. A human could not realistically win that race, and the crank
+settles automatically.
+
+`settle_vault` is the **user-facing settle act**: permissionless, oracle-free,
+no deadline, and the half the crank deliberately does not do — `settleGuardJul31.ts`
+states it outright: *"the guard settles TUPLES, not vaults."* Crediting it puts
+the quest on the work a user can actually perform.
+
+### Retroactive effect: **EXACTLY ZERO**, for two independent reasons
+
+1. `settle_vault` was never in `IX_TARGETS`, so there are **zero `IxSettleVault`
+   rows on the tape**. The 101 `VaultSettled` rows are emitted logs with
+   `wallet = null` and cannot attribute an executor. The amendment is
+   **forward-only**.
+2. **Even with a full backfill it is still zero.** All 101 historical
+   `settle_vault` instructions, across 35 signatures, were executed by exactly two
+   wallets — **both INTERNAL** (crank-gas 99, admin 2), and both excluded from
+   every board. Their W2 is already saturated: crank-gas sits at the **3/week cap
+   (180 = 3×60)** in W27–W31 from `settle_expiry` alone, and admin's 2
+   `settle_vault` tuples are the **same tuples** it already earned `settle_expiry`
+   credit for in W27.
+
+Measured on copies against one shared tape snapshot: **baseline v1 → amended
+(no backfill) = 0 diffs / 35 wallets. baseline v1 → amended (101 rows
+backfilled) = 0 diffs / 35 wallets.** External wallet delta **0.00** in both.
+**No wallet's total changes. Nothing needs a public correction.**
+
+Those zeros are evidence only because a positive control proved the harness could
+go non-zero: 3 synthetic `IxSettleVault` rows for an external wallet in a clean
+week, spanning 2 distinct settlement records, produced W2 = **120 = 2×60 (not
+180)** — proving both the credit path and the tuple dedupe — with the delta
+entirely in `quest_points` and `base_capped` unchanged, proving zero base points.
+
+### Version strings — all three move together or it will not boot
+
+`RULES_VERSION` `"v1.1"` (`rules_v1.ts`) · `quests_v1.json` `version` `"v1.1"` ·
+`FROZEN.json` `rulesVersion`/`questsVersion` `"v1.1"`. `frozenGate` deep-equals
+all three, so a partial bump refuses to start. **Filenames are unchanged on
+purpose** — renaming would churn every frozen `path`/`specifier` for no benefit.
+The version is the contract, not the filename.
+
+### Tags
+
+| tag | meaning |
+|---|---|
+| `rules-v1-frozen` (`c909506`) | the 2026-08-02 freeze. **Untouched**, still in history, still re-checkable. |
+| `rules-v1.1-frozen` | live from 2026-08-05. 9 artifacts re-hashed, `freeze --check` 9/9, 3× recompute byte-identical (`e509c938…`). |
+
+### ⚠️ Read RULE 4 in HANDOFF before running any analysis against scoring
+
+This amendment's own measurement session recomputed the **live** database twice by
+accident — `OPTA_DB_PATH` was passed where the indexer reads `OPTA_INDEXER_DB`, so
+the unknown variable was ignored and `loadConfig()` fell back to the default state
+dir. Blast radius was nil and was **proven** nil, but by luck. HANDOFF **RULE 4**
+now governs: simulation runs on copies only, live `points.db` is service-owned,
+scripts must print the resolved `dbPath`, a negative result requires a positive
+control, and the live-untouched invariant is `wallet_points.computed_at` — **never
+file mtime**, which the service moves continuously while indexing.
+
+---
+
 ## 7. Shadow → live cutover — WEIGHTS FROZEN 2026-08-02
 
 > **FROZEN 2026-08-02T19:25:00Z · git tag `rules-v1-frozen` · `rules_version=v1`,
@@ -406,7 +493,14 @@ file the runtime never opens.
 - [ ] Publish the rules page before the API is public — `GET /points/stats` now
       returns `rules_frozen {tag, hashes}` so the page can cite a verifiable hash,
       and `GET /points/quests` now enumerates O5b, W3b and the referral schedule
-      (it previously omitted 75 points of bonuses and the whole referral economy)
+      (it previously omitted 75 points of bonuses and the whole referral economy)
+      - **STILL UNPUBLISHED as of 2026-08-05.** The v1.1 amendment therefore has
+        no live page to amend. When it ships it MUST carry this line verbatim,
+        and cite `rules-v1.1-frozen`:
+        > *"From rules v1.1, W2 (Settle an expiry) credits `settle_vault` — the
+        > permissionless settle step a user performs — in addition to
+        > `settle_expiry`. One expiry counts once however many vaults it
+        > finalises. No wallet's points changed retroactively."*
 - [ ] **Monday, ops step 1:** deploy the frozen build and set
       `OPTA_INDEXER_COMMIT` in `/opt/opta-indexer/.env`. The boot gate ships in
       this build — an indexer restart on an unfrozen or drifted `dist/` will now

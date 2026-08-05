@@ -217,5 +217,5 @@ test("empty tape yields an empty, well-formed result", () => {
   const r = score(() => [], DEFAULT_RULES, 123);
   assert.deepEqual(r.scores, []);
   assert.equal(r.asOf, 123);
-  assert.equal(r.rulesVersion, "v1");
+  assert.equal(r.rulesVersion, "v1.1");
 });

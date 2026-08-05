@@ -29,7 +29,15 @@ import type { TapeSource } from "../db";
 import { ORDER_KIND } from "../tape/allowlist";
 import { computePositions } from "./positions";
 
-export const RULES_VERSION = "v1";
+// rules-v1.1 (2026-08-05, W2/O7 settle_vault amendment). The FIRST change to the
+// frozen scoring surface. Bumped in lockstep with quests_v1.json's `version`
+// field and FROZEN.json's rulesVersion/questsVersion — frozenGate deep-equals all
+// three, so a partial bump refuses to boot.
+//
+// The filename stays rules_v1.ts on purpose: renaming would churn every frozen
+// `path` and `specifier` in the manifest for no benefit. The VERSION is the
+// contract, not the filename.
+export const RULES_VERSION = "v1.1";
 
 export interface RulesConfig {
   takerPtsPerUsdc: number;

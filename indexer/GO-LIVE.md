@@ -520,13 +520,14 @@ file the runtime never opens.
       sequencing. If the campaign starts fresh this is fine; if it credits
       history, retune D12 first
 - [ ] Decide whether existing internal wallets stay excluded (they should)
-- [ ] Publish the rules page before the API is public — `GET /points/stats` now
+- [x] **DONE 2026-08-05** — rules page published at `/docs/rules` — `GET /points/stats` now
       returns `rules_frozen {tag, hashes}` so the page can cite a verifiable hash,
       and `GET /points/quests` now enumerates O5b, W3b and the referral schedule
       (it previously omitted 75 points of bonuses and the whole referral economy)
-      - **STILL UNPUBLISHED as of 2026-08-05.** The v1.1 amendment therefore has
-        no live page to amend. When it ships it MUST carry this line verbatim,
-        and cite `rules-v1.1-frozen`:
+      - **PUBLISHED 2026-08-05.** Renders LIVE from `/api/points/rules` +
+        `/api/points/quests`, so it cannot drift from the frozen weights. Gated by
+        a headless check comparing 42 rendered values field-for-field against the
+        live API. Carries the amendment line verbatim:
         > *"From rules v1.1, W2 (Settle an expiry) credits `settle_vault` — the
         > permissionless settle step a user performs — in addition to
         > `settle_expiry`. One expiry counts once however many vaults it

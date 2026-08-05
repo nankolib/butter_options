@@ -13,7 +13,7 @@ import bs58 from "bs58";
 import type { DB } from "../db";
 import { isInternal } from "../registry";
 import { frozenSummary } from "../score/frozenGate";
-import { DEFAULT_QUESTS } from "../score/quests/evaluator";
+import { DEFAULT_QUESTS, QUESTS_VERSION } from "../score/quests/evaluator";
 import { checkCooldown, verifySigned, type SignedEnvelope } from "./auth";
 import { verifyTweet, type XConfig } from "./xVerify";
 
@@ -137,8 +137,13 @@ export function getWallet(db: DB, pubkey: string): ApiResponse {
     | undefined;
   const streak = db.prepare("SELECT * FROM streak_state WHERE wallet = ?").get(pubkey) as Record<string, unknown> | undefined;
   const quests = db
-    .prepare("SELECT quest_id, period_key, completed_at, points FROM quest_completions WHERE wallet = ? ORDER BY quest_id, period_key")
-    .all(pubkey) as { quest_id: string; period_key: string; completed_at: number; points: number }[];
+    // quests_version filter is LOAD-BEARING: the PK is
+    // (quests_version, wallet, quest_id, period_key) and recompute deletes only
+    // its OWN version before reinserting, so every prior ruleset's rows survive
+    // on purpose as an audit trail. Without this filter the endpoint returned
+    // each quest once PER VERSION the moment v1.1 shipped.
+    .prepare("SELECT quest_id, period_key, completed_at, points FROM quest_completions WHERE wallet = ? AND quests_version = ? ORDER BY quest_id, period_key")
+    .all(pubkey, QUESTS_VERSION) as { quest_id: string; period_key: string; completed_at: number; points: number }[];
   const questPoints = quests.reduce((a, q) => a + q.points, 0);
   // Chain stage is a position in THE CHAIN, so it must be derived from the
   // catalog. A regex over /^O[1-7]$/ counted the standalone O5 bonus (D16) as a
@@ -230,8 +235,10 @@ export function getWallet(db: DB, pubkey: string): ApiResponse {
 
 export function getQuests(db: DB): ApiResponse {
   const counts = db
-    .prepare("SELECT quest_id, COUNT(DISTINCT wallet) AS wallets, COUNT(*) AS completions FROM quest_completions GROUP BY quest_id")
-    .all() as { quest_id: string; wallets: number; completions: number }[];
+    // Same reason as the wallet path: COUNT(*) across versions double-counted
+    // every completion (O1 read 34 instead of 17) from the moment v1.1 shipped.
+    .prepare("SELECT quest_id, COUNT(DISTINCT wallet) AS wallets, COUNT(*) AS completions FROM quest_completions WHERE quests_version = ? GROUP BY quest_id")
+    .all(QUESTS_VERSION) as { quest_id: string; wallets: number; completions: number }[];
   const byId = new Map(counts.map((c) => [c.quest_id, c]));
   const decorate = (q: { id: string; name: string; points: number }) => ({
     ...q,
@@ -364,7 +371,13 @@ export function postReferralBind(deps: ApiDeps, env: SignedEnvelope): ApiRespons
   // 3. referee not already bound
   if (db.prepare("SELECT 1 FROM referrals WHERE referee_wallet = ?").get(a.wallet)) return err(409, "already_bound");
   // 4. bind must PRECEDE the referee's first fill (O1)
-  const o1 = db.prepare("SELECT 1 FROM quest_completions WHERE wallet = ? AND quest_id = 'O1'").get(a.wallet);
+  // Version-scoped like the other two reads. This one was not MIS-BEHAVING under
+  // v1.1 (a duplicate still returns a row), but it was semantically unscoped: a
+  // completion under a RETIRED ruleset would keep blocking a bind under the
+  // current one. Fixed with the same defect, not after the next one.
+  const o1 = db
+    .prepare("SELECT 1 FROM quest_completions WHERE wallet = ? AND quest_id = 'O1' AND quests_version = ?")
+    .get(a.wallet, QUESTS_VERSION);
   if (o1) return err(409, "already_active", { detail: "bind must precede your first fill" });
   // 5. referrer must not be internal
   if (isInternal(owner.wallet)) return err(403, "internal_referrer");

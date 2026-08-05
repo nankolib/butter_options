@@ -12,7 +12,11 @@ import bs58 from "bs58";
 import { makeWriter, openDb, type DB, type EventRow, type TxRow } from "../db";
 import { SCHEMA_VERSION } from "../schema";
 import { recompute } from "../score/recompute";
+import { QUESTS_VERSION } from "../score/quests/evaluator";
 import { canonicalJson, canonicalMessage, verifySigned, type SignedEnvelope } from "./auth";
+
+/** Shape of a quest row in the /quests catalog payload. */
+type QuestCount = { id: string; wallets: number; completions: number };
 import {
   getLeaderboard,
   getQuests,
@@ -188,7 +192,7 @@ test("bind rejection matrix — all five cases", () => {
   assert.equal((postReferralBind(d, sign(KP_B, "referral.bind", { code })) as ApiResponse).status, 409);
   // 4. referee already completed O1
   const KP_C = keypair();
-  db.prepare("INSERT INTO quest_completions (quests_version, wallet, quest_id, period_key, completed_at, points) VALUES ('v1',?, 'O1','',?,50)").run(KP_C.wallet, NOW);
+  db.prepare("INSERT INTO quest_completions (quests_version, wallet, quest_id, period_key, completed_at, points) VALUES (?,?, 'O1','',?,50)").run(QUESTS_VERSION, KP_C.wallet, NOW);
   const r4 = postReferralBind(d, sign(KP_C, "referral.bind", { code })) as ApiResponse;
   assert.equal(r4.status, 409);
   assert.equal((r4.body as { error: string }).error, "already_active");
@@ -371,3 +375,65 @@ test("end-to-end: a bind + a social post surface in recompute output", () => {
 });
 
 void fakeX;
+
+// ---------------------------------------------------------------------------
+// rules-v1.1 regression: quest_completions is VERSIONED, reads must filter.
+// ---------------------------------------------------------------------------
+// quest_completions' PK is (quests_version, wallet, quest_id, period_key) and
+// recompute deletes only its OWN version before reinserting, so rows from every
+// prior ruleset survive on purpose as an audit trail. Three read paths queried
+// the table with no version filter, so the moment a second version existed (the
+// 2026-08-05 v1.1 amendment) they double-counted: /wallet returned every quest
+// twice and /quests reported completions at 2x (O1 34 instead of 17, W1 38, W2 12).
+// Scoring was never affected — wallet_points comes from the evaluator, not from
+// summing this table — but the public read surface was wrong.
+test("v1.1 regression: a STALE prior-version quest row is invisible to every read path", () => {
+  const { db, dir } = tmpDb();
+  const d = deps(db);
+
+  const KP = keypair();
+  db.prepare("INSERT INTO wallets (pubkey, is_internal, label, first_seen, last_seen) VALUES (?,0,NULL,?,?)").run(KP.wallet, NOW, NOW);
+  const ins = db.prepare(
+    "INSERT INTO quest_completions (quests_version, wallet, quest_id, period_key, completed_at, points) VALUES (?,?,?,?,?,?)",
+  );
+  // The SAME completion recorded under a retired ruleset AND the current one —
+  // exactly the shape recompute leaves behind after a version bump.
+  ins.run("v0-retired", KP.wallet, "O1", "", NOW, 50);
+  ins.run(QUESTS_VERSION, KP.wallet, "O1", "", NOW, 50);
+  // And one that exists ONLY under the retired ruleset: it must not resurface.
+  ins.run("v0-retired", KP.wallet, "W2", "2026-W27", NOW, 60);
+
+  // 1. wallet path — each quest exactly once, and no retired-only quest.
+  const w = getWallet(db, KP.wallet) as ApiResponse;
+  assert.equal(w.status, 200);
+  const quests = (w.body as { quests: { quest_id: string; period_key: string }[] }).quests;
+  assert.equal(quests.length, 1, "one current-version row -> exactly one entry");
+  assert.equal(quests[0].quest_id, "O1");
+  assert.equal(
+    quests.filter((q) => q.quest_id === "W2").length, 0,
+    "a quest that exists only under a retired ruleset must not appear",
+  );
+
+  // 2. quests catalog — counts are single-version truth, not a sum across versions.
+  const cat = getQuests(db) as ApiResponse;
+  const all = [...(cat.body as { chain: QuestCount[] }).chain, ...(cat.body as { weeklies: QuestCount[] }).weeklies];
+  const o1 = all.find((q) => q.id === "O1")!;
+  assert.equal(o1.completions, 1, "O1 counted once, not once per version");
+  assert.equal(o1.wallets, 1);
+  const w2 = all.find((q) => q.id === "W2")!;
+  assert.equal(w2.completions, 0, "retired-only completions must not be counted");
+
+  // 3. referral O1 gate — must key off the CURRENT ruleset's O1.
+  const KP2 = keypair();
+  db.prepare("INSERT INTO wallets (pubkey, is_internal, label, first_seen, last_seen) VALUES (?,0,NULL,?,?)").run(KP2.wallet, NOW, NOW);
+  ins.run("v0-retired", KP2.wallet, "O1", "", NOW, 50); // retired only
+  db.prepare("INSERT INTO referral_codes (code, wallet, created_at) VALUES ('VERTST',?,?)").run(KP.wallet, NOW);
+  const r = postReferralBind(d, sign(KP2, "referral.bind", { code: "VERTST" })) as ApiResponse;
+  assert.notEqual(
+    r.status, 409,
+    "a retired-version O1 must not block a bind under the current ruleset",
+  );
+
+  db.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});

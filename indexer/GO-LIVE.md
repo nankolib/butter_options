@@ -380,6 +380,36 @@ all three, so a partial bump refuses to start. **Filenames are unchanged on
 purpose** — renaming would churn every frozen `path`/`specifier` for no benefit.
 The version is the contract, not the filename.
 
+### Re-freeze checklist — AMENDED 2026-08-05, and this defect is the citation
+
+**Every re-freeze must now include a READ-PATH SWEEP before the tag is cut:**
+grep every consumer of every VERSIONED table and confirm each read filters on the
+version column. A versioned table is any table whose primary key carries a
+version — today `quest_completions` `(quests_version, wallet, quest_id, period_key)`.
+
+**Why.** `rules-v1.1-frozen` shipped with `freeze --check` 9/9, the boot gate
+green, and a **provably zero** live points diff — and still broke the public API.
+`recompute` deletes only its OWN version before reinserting, so prior rulesets'
+rows survive by design as an audit trail. Three read paths queried the table with
+no version filter, and the moment a second version existed they double-counted:
+`/points/wallet/<w>` returned every quest twice, and `/points/quests` reported
+`completions` at 2x (O1 **34** instead of 17, W1 **38**, W2 **12**). Scoring was
+never wrong — `wallet_points` comes from the evaluator, not from summing that
+table — which is exactly why every existing gate passed and nothing caught it.
+
+**The lesson is about what the gates measure.** `freeze --check`, the boot gate
+and a zero points-diff all verify the SCORING surface. None of them look at a
+read path. A version bump changes the shape of the data every reader sees, so the
+readers are part of the change whether or not they are in the manifest.
+
+Fixed in `handlers.ts` (wallet path, quests catalog, and the referral O1 gate —
+the third was not yet mis-behaving but was equally unscoped). Gated by
+`api.test.ts` *"a STALE prior-version quest row is invisible to every read path"*,
+which fails against the unfiltered code. `handlers.ts` is not a frozen artifact:
+`freeze --check` stayed **9/9** across the fix, which is the proof of that claim.
+
+---
+
 ### Tags
 
 | tag | meaning |

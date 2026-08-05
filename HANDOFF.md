@@ -2584,6 +2584,42 @@ via XAU). USDC $1,535,631 locked / $139,367 free. SOL 4.94. strand=0 throughout.
 
 ---
 
+## RULE 4 — simulation and analysis run on COPIES; live points.db is service-owned (2026-08-05)
+
+**The live `/opt/opta-indexer/points.db` is written by the deployed indexer service
+and by explicitly greenlit migrations. Nothing else.** One-off analysis or
+simulation scripts against live projections are now in the same class as flag
+flips: **propose-before-execute**.
+
+Why this exists. During the W2/O7 amendment session, two "simulation" recomputes
+were pointed at a copy with `OPTA_DB_PATH=/tmp/simA.db`. The indexer reads
+**`OPTA_INDEXER_DB`** (`env.ts:88`). The unknown variable was silently ignored,
+`loadConfig()` fell back to the default state dir, and both runs recomputed the
+**live production database** with an unreviewed, unfrozen build. Blast radius was
+nil — the amendment is inert without backfilled tape rows, and every one of the 8
+point columns across all 35 wallets was afterwards proven byte-identical to a
+fresh v1 recompute on the same tape — but that was luck, not design.
+
+**Two habits this session earned, both non-negotiable:**
+
+1. **Print the resolved path, do not trust the knob.** Any script that takes a DB
+   must echo `path.resolve(loadConfig().dbPath)` before it writes, and assert each
+   copy's mtime moved. A knob you have not proven connected is not a knob.
+2. **A negative result requires a positive control.** Sim A ("no retroactive
+   effect") and Sim B ("no effect even with backfill") both returned a 0-diff —
+   which is also exactly what a completely broken harness returns. The result only
+   became evidence once a deliberately-detectable control (an injected
+   `IxSettleVault` for an external wallet in a clean week) produced the expected
+   non-zero. **If your control cannot go red, your zero means nothing.**
+
+**Do not use file mtime as the "live untouched" invariant.** The indexer writes
+`points.db` continuously as it indexes the tape, so mtime moves on its own and
+produced a false alarm on the first run of the fixed harness. The precise
+invariant is **`wallet_points.computed_at`**, which only `recompute` stamps: if it
+lands inside your run window, you wrote to live.
+
+---
+
 ## RULE 3 — no loose WIP in the shared tree; unauthored state is untrusted (2026-07-21)
 
 This clone's working tree is shared by multiple concurrent agent sessions. Loose

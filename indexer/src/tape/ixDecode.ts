@@ -37,6 +37,26 @@ export const IX_TARGETS: IxTarget[] = [
     capture: { market: 1, settlement_record: 3 },
   },
   {
+    // W2/O7 amendment (rules-v1.1). settle_vault is the USER-FACING settle act:
+    // permissionless, oracle-free, no deadline. settle_expiry — the only thing
+    // W2 credited under v1 — is structurally crank-owned for Switchboard markets,
+    // where a signed quote is verifiable for only ~300s after expiry, so a user
+    // could never realistically land one.
+    //
+    // ZERO BASE POINTS. This IX is quest-credit only: it is deliberately absent
+    // from rules_v1's base-scoring switch, so it earns no takerPts, no makerPts
+    // and no flat award. Adding one here would be a second, unreviewed scoring
+    // surface.
+    //
+    // `settlement_record` is the (asset, expiry) tuple identity and is what W2
+    // dedupes on — one click fanning 129 vaults emits 129 of these against ONE
+    // settlement_record, and must count as ONE completion.
+    name: "settle_vault",
+    eventName: "IxSettleVault",
+    actorIndex: 0, // authority (Signer)
+    capture: { shared_vault: 1, market: 2, settlement_record: 3 },
+  },
+  {
     name: "create_market",
     eventName: "IxCreateMarket",
     actorIndex: 0, // creator

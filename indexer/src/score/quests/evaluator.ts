@@ -135,8 +135,12 @@ interface WalletActivity {
   exercises: Ev[];
   triggersPlaced: Ev[];
   triggersExecuted: Ev[];
-  keeperActions: Ev[]; // IxSettleExpiry | IxCreateMarket
-  settleExpiries: Ev[];
+  keeperActions: Ev[]; // IxSettleExpiry | IxCreateMarket | IxSettleVault
+  /** Settle acts, each tagged with the (asset, expiry) tuple it belongs to.
+   *  W2 counts DISTINCT tuples per ISO week, not raw events — one settle_vault
+   *  click fans out one instruction per vault against a single settlement_record
+   *  and must score as ONE completion, not 129. */
+  settleExpiries: (Ev & { tuple: string })[];
 }
 
 function blankActivity(): WalletActivity {
@@ -150,6 +154,22 @@ function blankActivity(): WalletActivity {
     keeperActions: [],
     settleExpiries: [],
   };
+}
+
+/**
+ * The (asset, expiry) tuple a settle act belongs to, as its SettlementRecord PDA
+ * — one per (asset, expiry) by construction, so it is the exact dedupe key W2
+ * needs. Falls back to the event id, which can only ever OVER-count (each event
+ * its own tuple); it must never collapse two real tuples into one.
+ */
+function tupleOf(e: EventRow): string {
+  try {
+    const f = JSON.parse(e.fields_json) as { settlement_record?: string | null };
+    if (f.settlement_record) return f.settlement_record;
+  } catch {
+    /* fall through */
+  }
+  return `ev:${e.id}`;
 }
 
 const toEv = (e: EventRow): Ev => ({
@@ -190,7 +210,15 @@ export function evaluate(input: EvaluatorInputs): EvaluatorResult {
       case "IxSettleExpiry":
         if (e.wallet) {
           get(e.wallet).keeperActions.push(toEv(e));
-          get(e.wallet).settleExpiries.push(toEv(e));
+          get(e.wallet).settleExpiries.push({ ...toEv(e), tuple: tupleOf(e) });
+        }
+        break;
+      // rules-v1.1 — the settle_vault arm. Credits W2 and the O7 settle arm
+      // exactly as settle_expiry does; the create_market arm of O7 is untouched.
+      case "IxSettleVault":
+        if (e.wallet) {
+          get(e.wallet).keeperActions.push(toEv(e));
+          get(e.wallet).settleExpiries.push({ ...toEv(e), tuple: tupleOf(e) });
         }
         break;
       case "IxCreateMarket":
@@ -335,13 +363,18 @@ export function evaluate(input: EvaluatorInputs): EvaluatorResult {
         const weeks = new Set((heldByWallet.get(wallet) ?? []).map((h) => isoWeek(h.ts)));
         for (const w of [...weeks].sort()) award(q.id, w, 0, q.points);
       } else if (q.id === "W2") {
-        const byWeek = new Map<string, number>();
+        // rules-v1.1: DISTINCT (asset, expiry) tuples per ISO week. Under v1 this
+        // counted raw events, which was equivalent because settle_expiry fires
+        // once per tuple. settle_vault fires once per VAULT, so without the
+        // dedupe a single click on a 129-vault expiry would score 129x.
+        const byWeek = new Map<string, Set<string>>();
         for (const s of a.settleExpiries) {
           const w = isoWeek(s.ts);
-          byWeek.set(w, (byWeek.get(w) ?? 0) + 1);
+          if (!byWeek.has(w)) byWeek.set(w, new Set());
+          byWeek.get(w)!.add(s.tuple);
         }
         for (const w of [...byWeek.keys()].sort()) {
-          const n = Math.min(byWeek.get(w)!, q.maxPerWeek ?? 1);
+          const n = Math.min(byWeek.get(w)!.size, q.maxPerWeek ?? 1);
           award(q.id, w, 0, q.points * n);
         }
       } else if (q.id === "W3") {

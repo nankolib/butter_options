@@ -32,11 +32,27 @@ const SOURCES = ["src/utils/epoch0Format.ts", "src/utils/epoch0Sign.ts", "src/ut
 
 fs.rmSync(outDir, { recursive: true, force: true });
 
+// Call the compiler's JS entrypoint under THIS node — not `npx tsc`, and not the
+// .bin shim.
+//
+// `npx tsc` from repoRoot resolved the unrelated `tsc` npm package installed at
+// the repo root and died with "This is not the tsc command you are looking for",
+// so this runner silently failed for every invocation and the campaign UI tests
+// were not running at all (found 2026-08-04). The `.bin/tsc.cmd` shim is not the
+// fix either: since Node 20, execFileSync refuses to spawn a .cmd without
+// `shell: true`, and this repo lives under a path with a space, which makes
+// shell quoting a second trap. Resolving the entrypoint directly avoids both.
+const tscJs = path.join(appDir, "node_modules", "typescript", "bin", "tsc");
+if (!fs.existsSync(tscJs)) {
+  console.error("epoch0 tests: typescript not found at", tscJs, "— run `npm i` in app/");
+  process.exit(1);
+}
+
 try {
   execFileSync(
-    process.platform === "win32" ? "npx.cmd" : "npx",
+    process.execPath,
     [
-      "tsc",
+      tscJs,
       ...SOURCES.map((s) => path.join(appDir, s)),
       "--outDir", outDir,
       "--module", "commonjs",

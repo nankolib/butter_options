@@ -32,6 +32,14 @@ export const INTERNAL_WALLETS: InternalWallet[] = [
   // taker would appear on the leaderboard as a top trader and its buys would
   // score as organic volume. Adding it here arms nothing.
   { pubkey: "FeQnyJpyhxAHGUcNTx7W22BRbnsbctyPvSoav5zq5N7p", label: "taker-bot" },
+  // Throwaway keypairs used to probe the live faucet during the 2026-08-04 fix
+  // session (BLK-1). They are not users: each holds exactly one faucet grant and
+  // has never traded, so on the profit board they would read as real wallets
+  // sitting at $10,000 deployed / 0 PnL. Scored for sanity, excluded from the
+  // boards — same treatment as every other wallet we operate.
+  { pubkey: "2VSPpJ5gdDYGoCnpZUTAG283obtE7fvbJZajYYxgDf4E", label: "faucet-probe-1" },
+  { pubkey: "FPSmTjwGEm1UucPMwECCe8cA8riRLRwecYqvBV1hHXML", label: "faucet-probe-2" },
+  { pubkey: "BqNX89nQe9bSshsdekc6Pw3NQsvENn7manuSR5QD8NZs", label: "faucet-probe-3" },
 ];
 
 const BY_PUBKEY = new Map(INTERNAL_WALLETS.map((w) => [w.pubkey, w]));

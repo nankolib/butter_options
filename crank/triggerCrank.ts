@@ -452,6 +452,15 @@ export interface TickConfig {
 
 const FETCHABLE = { triggerOrder: "triggerOrder", optionsMarket: "optionsMarket", sharedVault: "sharedVault" } as const;
 
+/**
+ * COST NOTE (measured 2026-08-07, crank/_rpc_burn_report.mjs). This helper is the
+ * single largest RPC consumer in the whole system: at the old 15s tick it issued
+ * 5,720 getProgramAccounts/day, 98.6% of ALL gPA traffic on the Helius key, while
+ * every tick logged triggersFound: 0. That is what exhausted the key on 2026-08-06.
+ *
+ * The tick is now 5min (see TRIGGER-UI-REVERT below). If you add a caller here,
+ * or restore the 15s tick with the trigger UI, re-run the burn report first.
+ */
 /** Crank-local getProgramAccounts + fresh-IDL coder decode (orphan-tolerant).
  *  `extraFilters` are ANDed with the discriminator memcmp — e.g. a memcmp on a
  *  field offset to scope the scan (WriterPosition.vault @ offset 40). */

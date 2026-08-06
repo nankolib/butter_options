@@ -2584,6 +2584,28 @@ via XAU). USDC $1,535,631 locked / $139,367 free. SOL 4.94. strand=0 throughout.
 
 ---
 
+## OPEN QUESTION — is the stranded-vault case a CLASS or a one-off?
+
+Recorded because the local scratch probe that asked it (`crank/_probe_vault_anomaly.ts`)
+was deleted on 2026-08-07: it never compiled, and it was blocking every `crank/`
+commit behind `--no-verify`.
+
+Its diagnostic value was one scan the rest of the tooling does **not** reproduce:
+*vaults with `total_shares > 0`, **zero** WriterPosition accounts, and `vault_usdc > 0`* —
+i.e. collateral with no writer to claim it. It was written for vault
+`2gjf5cyHCv4JMXP7DPNwxcqJE85mRvQ78DeuCMj9Ykyn` ($100 stranded).
+
+**The Session-H recovery scan used a DIFFERENT predicate** (expired + unsettled +
+`tvl>0 or premium>0`) and found 2 tuples / 3 vaults. Those two predicates do not
+have to agree, so the class question is **still open**: there may be vaults with
+orphaned collateral that the recovery scan never looked at.
+
+Worth one clean read-only pass when someone next has RPC budget to spend. The
+probe body is not worth resurrecting — it used `p.account.sharedVault.fetch`,
+which is exactly the Anchor typing that made it fail to compile.
+
+---
+
 ## PROOF — the 2026-08-06 RPC outage lost NO tape data (window enumerated)
 
 **Window: `2026-08-06T18:21:35Z` -> `19:52:47Z`, 91 minutes.** Enumerated from

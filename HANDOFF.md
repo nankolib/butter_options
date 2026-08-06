@@ -2584,6 +2584,50 @@ via XAU). USDC $1,535,631 locked / $139,367 free. SOL 4.94. strand=0 throughout.
 
 ---
 
+## RULE 5 — two standing facts from the 2026-08-07 maintenance audit
+
+### The crank settles TUPLES, not vaults. 2,184 vaults depend on someone clicking.
+
+`settle_expiry` writes the per-(asset,expiry) SettlementRecord and the crank
+stops there, deliberately — `settleGuardJul31.ts` says so outright: *"the guard
+settles TUPLES, not vaults: one settle_expiry per tuple makes every vault at that
+(asset,expiry) settleable."* The per-vault fan-out is `settle_vault`, which is
+**permissionless, oracle-free, has no deadline — and has exactly two callers,
+both in the frontend.** The crank never calls it.
+
+**There is no `options_minted == 0` skip anywhere.** The only guard in the fan-out
+path is `!v || v.isSettled`. Vaults sit unsettled because nobody has clicked, not
+because anything filtered them — and until Session C removed the BLK-9
+oracle-source filter, the UI was not even listing the 45 record-backed tuples.
+
+So **2,184 vaults currently depend on a human opening /portfolio → Utilities and
+pressing settle.** That is a real operational gap, not a bug: holders cannot claim
+and writers cannot withdraw until someone does it. If it should be automatic, the
+fix is a crank job that watches for SettlementRecords and fans out — not a change
+to the settle instructions, which already work.
+
+### VPS working-tree "drift" is CRLF-only. Compare NORMALISED, or you will chase ghosts.
+
+`/opt/opta-crank` sits at an old HEAD with a hand-built index, because the deploy
+is a path-overlay, not a checkout. A raw `git status` there shows ~128 entries and
+reads like heavy drift. It is not:
+
+- `crank/`, `writer/`, `deploy/` — **0 files differ from origin/main**
+- of the 16 `indexer/` files listed, **10 differ by exactly 0 lines** — line
+  endings only
+- EOL-normalised shas MATCH origin/main and the frozen manifest: `rules_v1.ts`
+  box `990bcf013d2de94c` = origin `990bcf013d2de94c` = the `FROZEN.json` source
+  hash
+- the files that look "deleted" are untracked in the stale index; they exist and
+  are correct
+
+**Future drift audits must compare EOL-normalised content**
+(`tr -d '' | sha256sum`), not `git status`. And do NOT reconcile by resetting:
+that would destroy the deployed `dist/` overlays and risk all seven live units to
+fix a cosmetic index. `freeze --check` 9/9 is the real proof the bytes are right.
+
+---
+
 ## RULE 4 — simulation and analysis run on COPIES; live points.db is service-owned (2026-08-05)
 
 **The live `/opt/opta-indexer/points.db` is written by the deployed indexer service

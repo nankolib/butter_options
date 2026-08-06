@@ -285,7 +285,12 @@ export const TradePageV2: FC = () => {
       ) : !hasAssets ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3">
           <p className="font-mono-plex text-[12px] text-l-muted">
-            {chain.error ? "Couldn't reach devnet — the public RPC may be rate-limited." : "No active markets — visit Markets to create one."}
+            {/* The old copy blamed "the public RPC", which is wrong in production:
+                prod reads through rpc.opta.fyi (a paid provider), and during the
+                2026-08-06 outage the public RPC was the one endpoint that still
+                worked. Naming the wrong component sends the reader — and us —
+                down the wrong path. State the situation, not a guess at the cause. */}
+            {chain.error ? "Can't reach the network right now — the RPC endpoint is unavailable. This is on our side, not yours; it retries automatically." : "No active markets — visit Markets to create one."}
           </p>
           {chain.error && (
             <button

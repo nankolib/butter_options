@@ -24,10 +24,15 @@ export interface PollStats {
   fetchFailures: number;
   normalizeFailures: number;
   truncated: number;
+  /** Batch-level RPC failures. NON-ZERO MEANS THE CURSOR MUST NOT ADVANCE —
+   *  see the guarantee in poller.cursor.test.ts. Distinct from fetchFailures,
+   *  which also counts individual null tx results (a pruned tx is not an
+   *  outage, and must not stall ingestion forever). */
+  batchFailures: number;
 }
 
 function emptyStats(): PollStats {
-  return { txsSeen: 0, txsIndexed: 0, eventsIndexed: 0, fetchFailures: 0, normalizeFailures: 0, truncated: 0 };
+  return { txsSeen: 0, txsIndexed: 0, eventsIndexed: 0, fetchFailures: 0, batchFailures: 0, normalizeFailures: 0, truncated: 0 };
 }
 
 export class Poller {
@@ -51,6 +56,10 @@ export class Poller {
         results = await this.rpc.getTransactionBatch(slice.map((s) => s.signature));
       } catch (e) {
         stats.fetchFailures += slice.length;
+        // Recorded separately so tail() can refuse to advance the cursor. The
+        // swallow itself is deliberate — one bad batch should not abort the
+        // whole tick — but it must not be invisible to the cursor decision.
+        stats.batchFailures += 1;
         log.warn("batch fetch failed", { n: slice.length, err: (e as Error).message });
         continue;
       }
@@ -148,6 +157,24 @@ export class Poller {
 
     const newest = pages[0][0].signature;
     for (const page of pages.reverse()) await this.ingest(page, stats);
+
+    // THE GUARANTEE (see poller.cursor.test.ts). Advancing the cursor over work
+    // that did not land makes those signatures unreachable forever: the next
+    // tick asks only for what is strictly newer. A wallet that earned points in
+    // that window would never get them, and nothing downstream would notice —
+    // recompute scores a holed tape and reports success.
+    //
+    // So we advance only when every batch fetched. Leaving the cursor put is
+    // free: txs.sig is a PRIMARY KEY and event ids are deterministic, so the
+    // re-read on the next tick is idempotent.
+    if (stats.batchFailures > 0) {
+      log.warn("cursor NOT advanced — batch failures this tick", {
+        batchFailures: stats.batchFailures,
+        txsIndexed: stats.txsIndexed,
+        note: "will re-walk from the existing cursor next tick",
+      });
+      return stats;
+    }
     setCursorSig(this.db, newest);
     return stats;
   }

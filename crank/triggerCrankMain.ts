@@ -65,7 +65,9 @@ const isTrue = (v: string | undefined) => {
   return s === "1" || s === "true";
 };
 
-(async () => {
+const BOOT_RETRY_MS = 30_000;
+
+async function main(): Promise<void> {
   const rpcUrl = process.env.OPTA_RPC_URL;
   if (!rpcUrl) die("OPTA_RPC_URL is required");
 
@@ -116,7 +118,39 @@ const isTrue = (v: string | undefined) => {
 
   await runTriggerCrank(ctx, options);
   log("info", "trigger keeper exited cleanly", {});
-})().catch((err) => {
-  log("fatal", "trigger keeper crashed", { err: String(err), stack: (err as any)?.stack });
-  process.exit(1);
+}
+
+void main().catch((err) => {
+  // 503 PARITY (2026-08-07). This used to exit(1) on ANY error, which turned the
+  // 2026-08-06 Helius outage into a crash-restart loop: boot -> 503 -> fatal ->
+  // systemd restart -> 503 -> ... for 91 minutes, and NRestarts climbed while the
+  // other three services simply logged and retried.
+  //
+  // The tick loop was never the problem — runTickWithGuard already catches per
+  // tick ("trigger tick crashed (will retry next interval)"). It is the BOOT path
+  // that had no tolerance: one transient RPC failure before the loop starts and
+  // the process dies.
+  //
+  // A transient RPC error is not a reason to die. A bad config is. Exit non-zero
+  // only for the latter, so systemd's restart still catches genuine misconfig
+  // rather than being used as a retry mechanism for a flaky upstream.
+  const msg = String(err);
+  const transient =
+    /50[0-9]|-32603|Service unavailable|ETIMEDOUT|ECONNRESET|ENOTFOUND|fetch failed|socket hang up/i.test(msg);
+
+  if (!transient) {
+    log("fatal", "trigger keeper crashed", { err: msg, stack: (err as any)?.stack });
+    process.exit(1);
+  }
+
+  log("error", "trigger keeper boot failed on a transient RPC error (will retry)", {
+    err: msg,
+    retryInMs: BOOT_RETRY_MS,
+  });
+  setTimeout(() => {
+    // Re-exec self rather than unwinding a half-built context: simplest correct
+    // restart, and it keeps systemd's NRestarts counter clean because the
+    // process never exits.
+    void main();
+  }, BOOT_RETRY_MS);
 });

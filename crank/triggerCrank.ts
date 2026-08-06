@@ -81,7 +81,22 @@ export const SB_ON_DEMAND_QUEUE = new PublicKey("EYiAmGSdsQTuCw413V5BzaruWuCCSDg
 export const HOOK_PROGRAM_ID = new PublicKey("83EW6a9o9P5CmGUkQKvVZvsz6v6Dgztiw5M4tVjfZMAG");
 
 // ---- Tunables --------------------------------------------------------------
-export const DEFAULT_TRIGGER_TICK_MS = 15_000; // 15s — stops can't fire 5 min late
+// TEMPORARILY WIDENED 2026-08-07 (15s -> 5min) after the Helius credit
+// exhaustion. Measured burn: this crank issued 5,720 getProgramAccounts/day,
+// 98.6% of ALL gPA traffic on the key, and every single tick logged
+// triggersFound: 0. gPA is the most credit-expensive method, so one subsystem
+// finding nothing accounted for essentially the whole expensive-call load.
+//
+// The original 15s existed so "stops can't fire 5 min late". That reasoning is
+// sound and will apply again — but there is NO trigger-placement UI today
+// (OrderTicket.tsx gates the Stop/TP-SL tabs "coming soon", which is why O5/O5b
+// read as coming soon on the rules page), so no user can arm a trigger and the
+// latency cost is currently zero. TRIGGER-UI-REVERT: REVERT THIS TO 15_000 IN THE SAME
+// CHANGE THAT SHIPS THE TRIGGER-PLACEMENT UI — a 5-minute stop latency against
+// real user triggers is a product defect, not a saving.
+//
+// Override without a deploy: OPTA_TRIGGER_TICK_MS.
+export const DEFAULT_TRIGGER_TICK_MS = 300_000; // 5min — see TRIGGER-UI-REVERT above
 export const DEFAULT_FIRE_MARGIN_BPS = 50; // 0.50% — headroom over measured SOL spot↔EMA gap (calm p90 ~16bps, move-peak ~33bps; P3.4 characterization)
 export const DEFAULT_FEED_STALE_SECS = 120; // a Hermes price older than this = stale
 export const EXECUTE_CU_LIMIT = 400_000; // BUY+BS-2002 path; the keeper IS the caller

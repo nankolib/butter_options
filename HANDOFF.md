@@ -2584,6 +2584,28 @@ via XAU). USDC $1,535,631 locked / $139,367 free. SOL 4.94. strand=0 throughout.
 
 ---
 
+## TICKET — trigger-placement UI carries a REVERT obligation (TRIGGER-UI-REVERT)
+
+The Trade trigger-placement UI is a parked FE slice (HANDOFF "Next candidate FE
+slices"). Whoever picks it up **must also revert the trigger crank tick from
+5min back to 15s** in the same change.
+
+Why the two are bound together. On 2026-08-07, after the Helius credit
+exhaustion, `DEFAULT_TRIGGER_TICK_MS` was widened 15s -> 5min. The measured
+justification: the trigger crank was issuing **5,720 getProgramAccounts/day —
+98.6% of all gPA traffic on the key** — while every tick logged
+`triggersFound: 0`. That was free to widen ONLY because the placement UI does
+not exist, so no user can arm a trigger and no stop can be late.
+
+**The moment placement ships, that reasoning inverts.** A stop that fires up to
+5 minutes late against a real user trigger is a product defect. The saving was
+borrowed against a feature that did not exist yet; shipping the feature repays it.
+
+Grep `TRIGGER-UI-REVERT` — it appears in `crank/triggerCrank.ts` beside the constant
+and here. Both must change together.
+
+---
+
 ## RULE 5 — two standing facts from the 2026-08-07 maintenance audit
 
 ### The crank settles TUPLES, not vaults. 2,184 vaults depend on someone clicking.

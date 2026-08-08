@@ -43,7 +43,6 @@ import {
   type WriteSuccessPayload,
 } from "../useWriteSubmit";
 import type { WriterFormValues, AssetOption } from "../WriterForm";
-import { writePausedBlock as computeWritePausedBlock } from "../writePauseGate";
 
 export const ALL_TENORS: TenorLabel[] = ["Weekly", "Monthly", "Quarterly"];
 
@@ -80,10 +79,6 @@ export type WriteController = {
   marketHoursBlock: Gate;
   volOracleBlock: Gate;
   americanQuoteBlock: Gate;
-  /** FE-only mint-gate: non-null when the chosen asset is an OLD Pyth BTC/SOL
-   *  market being wound down to Switchboard. Auto-frees when the SB rebirth
-   *  lands (oracle_source flips 0→1). See writePauseGate.ts. */
-  writePausedBlock: Gate;
   /** True iff every required field is populated (asset, strike, contracts, expiry). */
   fieldsReady: boolean;
   /** True iff submit is allowed right now (fieldsReady && no blocking gate). */
@@ -297,14 +292,6 @@ export function useWriteController(input: ControllerInput): WriteController {
     return { tooltip: amerReason ?? "Awaiting a fresh on-chain quote for this American option." };
   }, [values.exerciseStyle, chosen, strikeNum, activeExpiry, amerFresh, amerReason]);
 
-  // FE-only mint-gate for winding-down old Pyth BTC/SOL markets. Keyed off
-  // oracle_source==0 so it auto-frees the instant the SB rebirth lands at the
-  // same PDA with oracle_source==1.
-  const writePausedBlock = useMemo<Gate>(
-    () => computeWritePausedBlock(chosen),
-    [chosen],
-  );
-
   const fieldsReady =
     !!chosen &&
     strikeNum > 0 &&
@@ -318,8 +305,7 @@ export function useWriteController(input: ControllerInput): WriteController {
     cells.length > 0 &&
     marketHoursBlock === null &&
     volOracleBlock === null &&
-    americanQuoteBlock === null &&
-    writePausedBlock === null;
+    americanQuoteBlock === null;
 
   const submit = async () => {
     if (!chosen || !canSubmit) return;
@@ -391,7 +377,6 @@ export function useWriteController(input: ControllerInput): WriteController {
     marketHoursBlock,
     volOracleBlock,
     americanQuoteBlock,
-    writePausedBlock,
     fieldsReady,
     canSubmit,
     submitting,

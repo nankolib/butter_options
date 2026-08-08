@@ -4,7 +4,6 @@ import { Link } from "react-router-dom";
 import { PublicKey } from "@solana/web3.js";
 import { ExpiryPicker, type ExpiryPresetId } from "./ExpiryPicker";
 import { AMERICAN_ENABLED_UI } from "../../utils/constants";
-import { writePausedBlock } from "./writePauseGate";
 
 export type WriterFormValues = {
   asset: string | null;
@@ -138,12 +137,6 @@ export const WriterForm: FC<WriterFormProps> = ({
   );
 
   const contractsNum = parseInt(values.contracts || "0", 10) || 0;
-
-  // FE-only mint-gate for winding-down old Pyth BTC/SOL markets (self-computed
-  // from the chosen asset's on-chain oracle_source). Auto-frees when the SB
-  // rebirth flips oracle_source 0→1. See writePauseGate.ts.
-  const chosenAsset = assets.find((a) => a.ticker === values.asset) ?? null;
-  const writePaused = writePausedBlock(chosenAsset);
 
   if (assets.length === 0) {
     return (
@@ -298,17 +291,6 @@ export const WriterForm: FC<WriterFormProps> = ({
         />
       )}
 
-      {writePaused && (
-        <div className="border border-crimson rounded-sm p-3">
-          <div className="font-mono font-medium text-[10.5px] uppercase tracking-[0.2em] text-crimson mb-1">
-            Writes paused
-          </div>
-          <div className="font-sans italic font-medium leading-[1.5] text-ink-body text-[12.5px]">
-            {writePaused.tooltip}
-          </div>
-        </div>
-      )}
-
       {marketHoursBlock && (
         <div className="border border-crimson rounded-sm p-3">
           <div className="font-mono font-medium text-[10.5px] uppercase tracking-[0.2em] text-crimson mb-1">
@@ -354,7 +336,6 @@ export const WriterForm: FC<WriterFormProps> = ({
           connected &&
           (submitting ||
             !fieldsReady ||
-            writePaused !== null ||
             marketHoursBlock !== null ||
             volOracleBlock !== null ||
             (ladderBlock ?? null) !== null ||
@@ -362,9 +343,7 @@ export const WriterForm: FC<WriterFormProps> = ({
         }
         title={
           connected
-            ? writePaused
-              ? writePaused.tooltip
-              : ladderBlock
+            ? ladderBlock
                 ? ladderBlock.tooltip
                 : americanQuoteBlock
                   ? americanQuoteBlock.tooltip

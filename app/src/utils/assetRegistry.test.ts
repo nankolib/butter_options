@@ -251,3 +251,139 @@ test("KNOWN GAP: the create modal still offers raw provenance tickers like UKOIL
   const rows = buildAssetRegistry([c(UK, "Commodities.UKOILSPOT/USD", "UKOILSPOT", 1)], []);
   assert.ok(find(rows, "UKOILSPOT"), "documents today's behaviour, not desired behaviour");
 });
+
+// =============================================================================
+// K3 — THE SOURCE RESOLUTION RULE (2026-08-08)
+// =============================================================================
+//
+// A curated SB feedHash means oracle_source = SB. Unconditionally. Liveness no
+// longer downgrades an SB-curated asset to Pyth.
+//
+// WHY THE OLD FALLBACK WAS WRONG, not merely conservative: it optimised for the
+// create SUCCEEDING, and `oracle_source` is immutable. Routing an equity to
+// Pyth because Switchboard was closed did not produce a working market — it
+// produced a permanent one bound to a Pyth equity feed that 404s outside NYSE
+// hours, i.e. a market that cannot be settled at an 08:00 UTC expiry. Failing
+// the create is recoverable. Minting the wrong market is not.
+//
+// Pyth remains the source for assets with ZERO SB coverage. That set is real
+// and must keep working: HYPE, RAY (no SB crypto feed), XAG (SB silver
+// migration blocked — no feed exists), USOILSPOT.
+// =============================================================================
+
+const TSLA_PYTH = "16dad506d7db00000000000000000000000000000000000000000000000000ee";
+const TSLA_SB = "24f5404db181873fead6fd9ad15c7edc2265e8b7a494b3168055fa3bfbb3ced3";
+/** TSM — the founder's original 2AM repro. class 2, and NO curated SB feed. */
+const TSM_PYTH = "e722560a660000000000000000000000000000000000000000000000000000ff";
+
+const closedMap = (pyth: string | null, sbHash: string | null): LivenessMap => ({
+  updatedAt: 1_000_000,
+  feeds: {
+    ...(pyth ? { [pyth]: { source: 0 as const, live: false, asOf: 1_000_000, samples: 2 } } : {}),
+    ...(sbHash ? { [sbHash]: { source: 1 as const, live: false, asOf: 1_000_000, samples: 2 } } : {}),
+  },
+});
+
+test("K3: an equity create OUT OF HOURS resolves to Switchboard, never Pyth", () => {
+  // The exact 2AM shape: US market closed, both peers reporting dead. Before
+  // this rule the "neither live" branch returned Pyth and minted a permanent
+  // Pyth equity market.
+  const r = resolveSource(
+    { pythFeedId: TSLA_PYTH, sbFeedHash: TSLA_SB, canonicalSource: 1, assetClass: 2 },
+    closedMap(TSLA_PYTH, TSLA_SB),
+    1_000_100,
+  );
+  assert.equal(r?.oracleSource, 1, "an SB-curated equity was downgraded to Pyth by liveness");
+  assert.equal(r?.feedIdHex, TSLA_SB);
+  assert.equal(r?.stale, true, "the caller needs the advisory to show the market-hours copy");
+});
+
+test("K3: the same equity IN HOURS resolves to Switchboard with no advisory", () => {
+  const open: LivenessMap = {
+    updatedAt: 1_000_000,
+    feeds: { [TSLA_SB]: { source: 1, live: true, asOf: 1_000_000, samples: 2 } },
+  };
+  const r = resolveSource(
+    { pythFeedId: TSLA_PYTH, sbFeedHash: TSLA_SB, canonicalSource: 1, assetClass: 2 },
+    open,
+    1_000_100,
+  );
+  assert.equal(r?.oracleSource, 1);
+  assert.equal(r?.stale, false, "a live SB feed must not raise the market-hours copy");
+});
+
+test("K3: a live Pyth peer does NOT reclaim an SB-curated asset", () => {
+  // Gold is the dual-source case: Pyth trading, the SB feed briefly dead. The
+  // deleted fallback would have routed this to Pyth.
+  const XAU_PYTH = "765d2ba906db00000000000000000000000000000000000000000000000000aa";
+  const XAU_SB = "6c3c5cc720d1ffd8108aca22bf7834d659612b7e1a4e5f623b76846d1167355e";
+  const m: LivenessMap = {
+    updatedAt: 1_000_000,
+    feeds: {
+      [XAU_PYTH]: { source: 0, live: true, asOf: 1_000_000, samples: 2 },
+      [XAU_SB]: { source: 1, live: false, asOf: 1_000_000, samples: 2 },
+    },
+  };
+  const r = resolveSource(
+    { pythFeedId: XAU_PYTH, sbFeedHash: XAU_SB, canonicalSource: 1, assetClass: 1 },
+    m,
+    1_000_100,
+  );
+  assert.equal(r?.oracleSource, 1, "a live Pyth peer must not override a curated SB feed");
+});
+
+test("K3: a stale/absent liveness map still resolves an SB-curated asset to SB", () => {
+  const r = resolveSource(
+    { pythFeedId: TSLA_PYTH, sbFeedHash: TSLA_SB, canonicalSource: 0, assetClass: 2 },
+    null,
+  );
+  // canonicalSource is deliberately 0 here: the rule is a property of HAVING a
+  // curated SB feed, not of a field a caller could set wrong.
+  assert.equal(r?.oracleSource, 1, "the rule must not depend on canonicalSource being right");
+  assert.equal(r?.feedIdHex, TSLA_SB);
+});
+
+// ---- the Pyth-by-design set must keep working -------------------------------
+
+test("K3: TSM — the founder's repro asset — has NO SB feed, so it stays Pyth", () => {
+  // Recorded because it is easy to assume this rule fixed the original 2AM
+  // report. It did not. TSM is not one of the 13 curated SB equities, so there
+  // is no SB feed to route to and Pyth is the only source it has.
+  const r = resolveSource(
+    { pythFeedId: TSM_PYTH, sbFeedHash: null, canonicalSource: 0, assetClass: 2 },
+    closedMap(TSM_PYTH, null),
+    1_000_100,
+  );
+  assert.equal(r?.oracleSource, 0, "an asset with zero SB coverage must still resolve");
+  assert.equal(r?.feedIdHex, TSM_PYTH);
+  assert.equal(r?.stale, true, "known-dead Pyth still raises the advisory");
+});
+
+test("K3: the four Pyth-by-design assets resolve to Pyth in-window, unchanged", () => {
+  // HYPE, RAY (no SB crypto feed), XAG (SB silver blocked), USOILSPOT.
+  const ids = {
+    HYPE: "4279e31cc300000000000000000000000000000000000000000000000000ab01",
+    RAY: "91568baa8b00000000000000000000000000000000000000000000000000ab02",
+    XAG: "f2fb02c32b00000000000000000000000000000000000000000000000000ab03",
+    USOILSPOT: "925ca92ff000000000000000000000000000000000000000000000000000ab04",
+  };
+  const live: LivenessMap = {
+    updatedAt: 1_000_000,
+    feeds: Object.fromEntries(
+      Object.values(ids).map((h) => [h, { source: 0 as const, live: true, asOf: 1_000_000, samples: 2 }]),
+    ),
+  };
+  for (const [ticker, id] of Object.entries(ids)) {
+    const r = resolveSource({ pythFeedId: id, sbFeedHash: null, canonicalSource: 0, assetClass: 1 }, live, 1_000_100);
+    assert.equal(r?.oracleSource, 0, `${ticker} must still route Pyth`);
+    assert.equal(r?.feedIdHex, id, `${ticker} must keep its feed`);
+    assert.equal(r?.stale, false, `${ticker} is live — no advisory`);
+  }
+});
+
+test("K3: an asset with NO feed of either kind is still unroutable, not defaulted", () => {
+  assert.equal(
+    resolveSource({ pythFeedId: null, sbFeedHash: null, canonicalSource: 0, assetClass: 2 }, null),
+    null,
+  );
+});

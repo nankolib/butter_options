@@ -2655,6 +2655,29 @@ and here. Both must change together.
 
 ---
 
+## RULE 6 — `freeze --check` is a DEPLOY-time gate, not a local one (2026-08-08)
+
+FROZEN.json pins hashes of `indexer/dist/**` — **compiler output**. Those bytes
+depend on the toolchain that produced them, so the byte check only means
+something where the deployed build is produced: VPS preflight and the boot gate.
+It is green there. On 2026-08-08 the live gate logged `score weights verified
+against freeze, gitTag: rules-v1.1-frozen, artifacts: 7`.
+
+The same check run from a Windows/WSL working copy reports all 7 dist artifacts
+drifted, from a CLEAN tree with zero indexer changes. That is **toolchain noise,
+not weight drift** — the source-level artifacts match, and `git status` on
+`indexer/` is clean. Do not chase it, and do not re-freeze to silence it:
+re-freezing from a local build would overwrite the manifest the VPS verifies
+against and break the boot gate on the next deploy.
+
+So the pre-push gate locally is the SEMANTIC one — the scoring deep-equal plus
+the test suites. The byte gate runs at deploy. If you want the byte check to be
+meaningful locally, the fix is to pin the compiler/Node version or to freeze
+SOURCE hashes rather than emitted JS; until then a local FAIL is expected and
+proves nothing.
+
+---
+
 ## RULE 5 — two standing facts from the 2026-08-07 maintenance audit
 
 ### The crank settles TUPLES, not vaults. 2,184 vaults depend on someone clicking.

@@ -59,6 +59,54 @@ function normTicker(t: string): string {
 
 const keyOf = (cls: number, ticker: string) => `${cls}:${normTicker(ticker)}`;
 
+/** Quote leg of a Hermes symbol: "Equity.US.MSFT/USD.POST" → "USD",
+ *  "Crypto.SOL/ETH" → "ETH". null when there is no parseable quote leg. */
+function quoteLegOf(hermesSymbol: string): string | null {
+  const i = hermesSymbol.indexOf("/");
+  if (i < 0) return null;
+  const q = hermesSymbol.slice(i + 1).split(".")[0];
+  return q ? q.toUpperCase() : null;
+}
+
+/** Trading-session suffix (".PRE" / ".POST" / ".ON"), or null for the regular
+ *  session. Pyth publishes four feeds per US equity; only one is the RTH print. */
+function sessionSuffixOf(hermesSymbol: string): string | null {
+  const m = /\/[A-Za-z0-9]+\.(PRE|POST|ON)$/i.exec(hermesSymbol);
+  return m ? m[1].toUpperCase() : null;
+}
+
+/**
+ * Is this Pyth feed a legitimate candidate to price a market on its ticker?
+ *
+ * `hermesCatalog.deriveTicker` returns the BASE ALONE for every class except FX,
+ * so two very different kinds of feed collapse onto the same (class, ticker) key
+ * without being competing candidates for it:
+ *
+ *   - a different NUMERAIRE (Crypto.SOL/ETH keys as "SOL"). Our collateral is
+ *     USDC, so a market bound to this feed would carry an ETH-denominated strike
+ *     and settlement against USDC collateral. Never a candidate.
+ *   - a different SESSION (Equity.US.MSFT/USD.PRE keys as "MSFT"). Same asset,
+ *     same numeraire, but a print that only exists outside regular hours.
+ *
+ * Excluding both is what makes the ambiguity guard below mean what it says. It
+ * is not a tie-break: a genuine collision between two regular-session USD feeds
+ * (FDX vs FDXF) still refuses to guess.
+ *
+ * FX is EXEMPT: deriveTicker returns base+quote there ("USDJPY"), so the pair is
+ * the asset and the quote leg is not a masquerade.
+ *
+ * Abstains (returns true) on an unparseable symbol — `hermesSymbol` is
+ * `attrs.symbol ?? ""`, and an entry we cannot judge must not be silently
+ * deleted from the create surface.
+ */
+export function isPythCandidate(e: CatalogEntry): boolean {
+  if (e.suggestedAssetClass === 3) return true; // FX: ticker is base+quote
+  const q = quoteLegOf(e.hermesSymbol);
+  if (q === null) return true; // cannot judge → keep
+  if (q !== "USD") return false;
+  return sessionSuffixOf(e.hermesSymbol) === null;
+}
+
 /**
  * Merge the live Pyth catalog (broad base) with the curated SB feed data into one
  * row per asset. DEGRADES, never throws: an empty `pythEntries` (Hermes catalog
@@ -74,10 +122,25 @@ export function buildAssetRegistry(
   pythEntries: CatalogEntry[],
   sbData: SbFeedDatum[],
 ): AssetRegistryEntry[] {
+  // Only CANDIDATE feeds are eligible to price a row — see isPythCandidate.
+  // Everything downstream (dedup, ambiguity counting, the SB join) operates on
+  // this set, so a non-USD or off-session feed can neither become a row's Pyth
+  // id nor block an SB join by inflating the collision count.
+  //
+  // Measured against the live catalog on 2026-08-08: 2967 entries → 2049
+  // candidates, 2741 (class,ticker) rows → 2038. The 703 rows that disappear are
+  // ones whose ONLY prints are non-USD — 604 foreign-listed equities quoted in
+  // HKD/KRW/GBP/JPY, 93 crypto redemption-rate feeds quoted in their underlying,
+  // 6 EUR commodity futures. Each would have minted a market whose settlement
+  // price is in a different currency from its collateral, so this removes a trap
+  // rather than an option. 11 rows remain genuinely ambiguous (FDX/FDXF,
+  // USD0/USD0++, spot-vs-.RR duplicates); none carry an SB feed.
+  const candidates = pythEntries.filter(isPythCandidate);
+
   // Count DISTINCT Pyth feed ids per (class, ticker) for ambiguity detection
   // (before dedup, so a true >1 collision is visible).
   const pythCount = new Map<string, Set<string>>();
-  for (const e of pythEntries) {
+  for (const e of candidates) {
     const k = keyOf(e.suggestedAssetClass, e.suggestedTicker);
     if (!pythCount.has(k)) pythCount.set(k, new Set());
     pythCount.get(k)!.add(e.feedIdHex);
@@ -86,7 +149,7 @@ export function buildAssetRegistry(
   // 1. Pyth-only base rows, deduped by (class, ticker) — first feed wins as the
   //    row's Pyth fallback id. One row per asset.
   const byKey = new Map<string, AssetRegistryEntry>();
-  for (const e of pythEntries) {
+  for (const e of candidates) {
     const k = keyOf(e.suggestedAssetClass, e.suggestedTicker);
     if (byKey.has(k)) continue;
     byKey.set(k, {
@@ -118,8 +181,20 @@ export function buildAssetRegistry(
       const row = byKey.get(k)!;
       row.sbFeedHash = hash;
       row.commonName = d.symbol; // prefer the SB symbol as the display label
-      // Resolved default: SB for TradFi, Pyth for crypto (no SB-crypto exists).
-      row.canonicalSource = d.suggestedAssetClass === 0 ? 0 : 1;
+      // Resolved default: SB wherever a curated SB feed exists.
+      //
+      // This used to read `d.suggestedAssetClass === 0 ? 0 : 1` — crypto to
+      // Pyth — and the comment beside it said "no SB-crypto exists". That was
+      // true when it was written. The crypto board has since migrated: BTC and
+      // SOL both read `oracle_source = 1` on chain (measured 2026-08-08), and
+      // all ten crypto feeds in SB_FEED_DATA are curated and warm. The line
+      // outlived its premise and was pinning new crypto markets to the source
+      // the protocol had already left.
+      //
+      // Being in SB_FEED_DATA is the whole condition: the list is curated, every
+      // hash re-derives under sbFeedRegistry's parity guard, and resolveSource
+      // still re-routes to Pyth when liveness proves the SB feed is dead.
+      row.canonicalSource = 1;
     } else {
       // Zero Pyth match → SB-only row (no Pyth row to duplicate).
       byKey.set(k, {

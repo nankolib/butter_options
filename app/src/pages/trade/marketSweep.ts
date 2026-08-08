@@ -19,6 +19,7 @@
 // =============================================================================
 
 import { Program, BN } from "@coral-xyz/anchor";
+import { withResolvedOutcome } from "../../utils/txOutcome";
 import { Transaction, ComputeBudgetProgram, type TransactionInstruction } from "@solana/web3.js";
 import { fetchBook, invalidateBookCache, type BookOrder } from "../../utils/exchangeData";
 import {
@@ -71,7 +72,8 @@ export async function executeSweep(
   const fills = built.map((b) => b.fill);
   const cu = Math.min(1_400_000, 220_000 * plan.legs.length + 120_000);
   const tx = new Transaction().add(ComputeBudgetProgram.setComputeUnitLimit({ units: cu }), ...pre, ...fills);
-  return await (program.provider as any).sendAndConfirm(tx);
+  return await withResolvedOutcome(program.provider.connection as never, () =>
+    (program.provider as any).sendAndConfirm(tx));
 }
 
 // ---- Marketable-limit crossing (Phase 2) ------------------------------------

@@ -19,6 +19,7 @@
 // =============================================================================
 
 import { PythSolanaReceiver } from "@pythnetwork/pyth-solana-receiver";
+import { withResolvedOutcome } from "./txOutcome";
 import {
   Connection,
   PublicKey,
@@ -463,11 +464,18 @@ export async function submitWithFallback(
 
   let lastSig = "";
   for (const signedTx of userSigned) {
-    const sig = await connection.sendRawTransaction(signedTx.serialize(), {
-      skipPreflight: false,
-      maxRetries: 3,
+    // D2: the signature-only confirm form is the deprecated 30s wait. This path
+    // has no lastValidBlockHeight in scope to switch strategies with, so the
+    // wait stays as-is — but the TIMEOUT is now resolved against the chain
+    // instead of surfacing as "unknown if it succeeded or failed".
+    const sig = await withResolvedOutcome(connection as never, async () => {
+      const s = await connection.sendRawTransaction(signedTx.serialize(), {
+        skipPreflight: false,
+        maxRetries: 3,
+      });
+      await connection.confirmTransaction(s, "confirmed");
+      return s;
     });
-    await connection.confirmTransaction(sig, "confirmed");
     lastSig = sig;
   }
   return lastSig;
@@ -1063,11 +1071,18 @@ export async function settleAllForExpiry(
     }).compileToV0Message();
     const tx = new VersionedTransaction(message);
     const signed = (await wallet.signAllTransactions([tx]))[0];
-    const sig = await connection.sendRawTransaction(signed.serialize(), {
-      skipPreflight: false,
-      maxRetries: 3,
+    // D2: the signature-only confirm form is the deprecated 30s wait. This path
+    // has no lastValidBlockHeight in scope to switch strategies with, so the
+    // wait stays as-is — but the TIMEOUT is now resolved against the chain
+    // instead of surfacing as "unknown if it succeeded or failed".
+    const sig = await withResolvedOutcome(connection as never, async () => {
+      const s = await connection.sendRawTransaction(signed.serialize(), {
+        skipPreflight: false,
+        maxRetries: 3,
+      });
+      await connection.confirmTransaction(s, "confirmed");
+      return s;
     });
-    await connection.confirmTransaction(sig, "confirmed");
     vaultSigs.push(sig);
   }
 

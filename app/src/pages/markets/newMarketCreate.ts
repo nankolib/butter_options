@@ -18,6 +18,7 @@
 // =============================================================================
 
 import { PublicKey, VersionedTransaction, type Connection } from "@solana/web3.js";
+import { withResolvedOutcome } from "../../utils/txOutcome";
 import { decodeError } from "../../utils/errorDecoder";
 
 export type SbCreateResponse = {
@@ -211,19 +212,21 @@ export async function submitSbCreateMarket(args: {
     // 3. Submit + confirm. ONLY a genuine stale signal here triggers the single
     //    refetch-retry; everything else fails fast.
     try {
-      const sig = await args.connection.sendRawTransaction(signed.serialize(), {
-        skipPreflight: false,
-        maxRetries: 3,
+      return await withResolvedOutcome(args.connection as never, async () => {
+        const sig = await args.connection.sendRawTransaction(signed.serialize(), {
+          skipPreflight: false,
+          maxRetries: 3,
+        });
+        await args.connection.confirmTransaction(
+          {
+            signature: sig,
+            blockhash: tx.message.recentBlockhash,
+            lastValidBlockHeight: resp.lastValidBlockHeight,
+          },
+          "confirmed",
+        );
+        return sig;
       });
-      await args.connection.confirmTransaction(
-        {
-          signature: sig,
-          blockhash: tx.message.recentBlockhash,
-          lastValidBlockHeight: resp.lastValidBlockHeight,
-        },
-        "confirmed",
-      );
-      return sig;
     } catch (e) {
       if (attempt === 0 && isStaleSubmitError(e)) {
         // Stale → loop re-POSTs a FRESH tx + re-signs it. Never re-submit the

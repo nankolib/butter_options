@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { withResolvedOutcome } from "../../utils/txOutcome";
 import * as anchor from "@coral-xyz/anchor";
 import {
   PublicKey,
@@ -537,5 +538,6 @@ async function burnTokens({
     ),
   );
 
-  await provider.sendAndConfirm(tx, [], { commitment: "confirmed" });
+  await withResolvedOutcome(provider.connection as never, () =>
+    provider.sendAndConfirm(tx, [], { commitment: "confirmed" }));
 }

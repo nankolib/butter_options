@@ -15,6 +15,7 @@
 // =============================================================================
 
 import { Program, BN } from "@coral-xyz/anchor";
+import { withResolvedOutcome } from "../../utils/txOutcome";
 import {
   PublicKey, SystemProgram, ComputeBudgetProgram, SYSVAR_RENT_PUBKEY, type TransactionInstruction,
 } from "@solana/web3.js";
@@ -88,12 +89,14 @@ export async function pegFill(
   const takerUsdc = getAssociatedTokenAddressSync(c.usdcMint, taker, false, TOKEN_PROGRAM_ID);
   const ataIx = createAssociatedTokenAccountIdempotentInstruction(
     taker, takerOption, taker, a.optionMint, TOKEN_2022_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID);
-  return program.methods.fillVaultPeg(new BN(quantity), maxPremiumMicro).accountsStrict({
-    taker, sharedVault: a.vault, vaultMintRecord: a.record, market: a.market, volOracle: a.volOracle,
-    protocolState: c.protocolState, optionMint: a.optionMint, takerOptionAccount: takerOption,
-    takerUsdcAccount: takerUsdc, vaultUsdcAccount: a.vaultUsdc, treasury: c.treasury,
-    tokenProgram: TOKEN_PROGRAM_ID, token2022Program: TOKEN_2022_PROGRAM_ID,
-  }).preInstructions([CU(400_000), ataIx]).rpc();
+  return withResolvedOutcome(program.provider.connection as never, () =>
+    program.methods.fillVaultPeg(new BN(quantity), maxPremiumMicro).accountsStrict({
+      taker, sharedVault: a.vault, vaultMintRecord: a.record, market: a.market, volOracle: a.volOracle,
+      protocolState: c.protocolState, optionMint: a.optionMint, takerOptionAccount: takerOption,
+      takerUsdcAccount: takerUsdc, vaultUsdcAccount: a.vaultUsdc, treasury: c.treasury,
+      tokenProgram: TOKEN_PROGRAM_ID, token2022Program: TOKEN_2022_PROGRAM_ID,
+    }).preInstructions([CU(400_000), ataIx]).rpc()
+  );
 }
 
 /**
@@ -120,12 +123,14 @@ export async function postSeriesOrder(
   const ownerOption = getAssociatedTokenAddressSync(a.optionMint, owner, false, TOKEN_2022_PROGRAM_ID);
   const ownerUsdc = getAssociatedTokenAddressSync(c.usdcMint, owner, false, TOKEN_PROGRAM_ID);
   const kindArg = kind === "bid" ? { bid: {} } : kind === "resaleAsk" ? { resaleAsk: {} } : { writerAsk: {} };
-  return program.methods.postOrder(kindArg, priceMicro, new BN(quantity), nonce).accountsStrict({
-    owner, sharedVault: a.vault, market: a.market, vaultMintRecord: a.record, optionMint: a.optionMint,
-    order, escrow, protocolState: c.protocolState, ownerOptionAccount: ownerOption, ownerUsdcAccount: ownerUsdc,
-    usdcMint: c.usdcMint, transferHookProgram: TRANSFER_HOOK_PROGRAM_ID, extraAccountMetaList: a.eaml, hookState: a.hookState,
-    tokenProgram: TOKEN_PROGRAM_ID, token2022Program: TOKEN_2022_PROGRAM_ID, systemProgram: SystemProgram.programId, rent: SYSVAR_RENT_PUBKEY,
-  }).preInstructions([CU(400_000)]).rpc();
+  return withResolvedOutcome(program.provider.connection as never, () =>
+    program.methods.postOrder(kindArg, priceMicro, new BN(quantity), nonce).accountsStrict({
+      owner, sharedVault: a.vault, market: a.market, vaultMintRecord: a.record, optionMint: a.optionMint,
+      order, escrow, protocolState: c.protocolState, ownerOptionAccount: ownerOption, ownerUsdcAccount: ownerUsdc,
+      usdcMint: c.usdcMint, transferHookProgram: TRANSFER_HOOK_PROGRAM_ID, extraAccountMetaList: a.eaml, hookState: a.hookState,
+      tokenProgram: TOKEN_PROGRAM_ID, token2022Program: TOKEN_2022_PROGRAM_ID, systemProgram: SystemProgram.programId, rent: SYSVAR_RENT_PUBKEY,
+    }).preInstructions([CU(400_000)]).rpc()
+  );
 }
 
 /**
@@ -176,14 +181,16 @@ export async function fillSeriesOrder(
   const recipientAta = order.kind === "bid" ? makerOption : takerOption;
   const ataIx = createAssociatedTokenAccountIdempotentInstruction(
     taker, recipientAta, recipient, optionMint, TOKEN_2022_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID);
-  return program.methods.fillOrder(new BN(quantity)).accountsStrict({
-    taker, optionMint, order: new PublicKey(order.pubkey), maker, sharedVault: vault,
-    escrow: pda([Buffer.from(RESTING_ORDER_ESCROW_SEED), new PublicKey(order.pubkey).toBuffer()]),
-    protocolState: c.protocolState, treasury: c.treasury,
-    takerUsdcAccount: takerUsdc, makerUsdcAccount: makerUsdc, takerOptionAccount: takerOption, makerOptionAccount: makerOption,
-    transferHookProgram: TRANSFER_HOOK_PROGRAM_ID, extraAccountMetaList: eaml, hookState,
-    tokenProgram: TOKEN_PROGRAM_ID, token2022Program: TOKEN_2022_PROGRAM_ID, systemProgram: SystemProgram.programId,
-  }).preInstructions([CU(400_000), ataIx]).rpc();
+  return withResolvedOutcome(program.provider.connection as never, () =>
+    program.methods.fillOrder(new BN(quantity)).accountsStrict({
+      taker, optionMint, order: new PublicKey(order.pubkey), maker, sharedVault: vault,
+      escrow: pda([Buffer.from(RESTING_ORDER_ESCROW_SEED), new PublicKey(order.pubkey).toBuffer()]),
+      protocolState: c.protocolState, treasury: c.treasury,
+      takerUsdcAccount: takerUsdc, makerUsdcAccount: makerUsdc, takerOptionAccount: takerOption, makerOptionAccount: makerOption,
+      transferHookProgram: TRANSFER_HOOK_PROGRAM_ID, extraAccountMetaList: eaml, hookState,
+      tokenProgram: TOKEN_PROGRAM_ID, token2022Program: TOKEN_2022_PROGRAM_ID, systemProgram: SystemProgram.programId,
+    }).preInstructions([CU(400_000), ataIx]).rpc()
+  );
 }
 
 /**
@@ -221,13 +228,15 @@ export async function fillWriterAsk(
     taker, takerUsdc, taker, c.usdcMint, TOKEN_PROGRAM_ID);
   const makerUsdcIx = createAssociatedTokenAccountIdempotentInstruction(
     taker, makerUsdc, maker, c.usdcMint, TOKEN_PROGRAM_ID);
-  return program.methods.fillWriterAsk(new BN(quantity)).accountsStrict({
-    taker, optionMint, order: orderPk, maker, sharedVault: vault,
-    vaultMintRecord: record, escrow, protocolState: c.protocolState, treasury: c.treasury,
-    takerUsdcAccount: takerUsdc, makerUsdcAccount: makerUsdc, takerOptionAccount: takerOption,
-    writerAskPot, writerAskPotUsdc, writerAskPosition, usdcMint: c.usdcMint,
-    tokenProgram: TOKEN_PROGRAM_ID, token2022Program: TOKEN_2022_PROGRAM_ID, systemProgram: SystemProgram.programId,
-  }).preInstructions([CU(400_000), takerOptIx, takerUsdcIx, makerUsdcIx]).rpc();
+  return withResolvedOutcome(program.provider.connection as never, () =>
+    program.methods.fillWriterAsk(new BN(quantity)).accountsStrict({
+      taker, optionMint, order: orderPk, maker, sharedVault: vault,
+      vaultMintRecord: record, escrow, protocolState: c.protocolState, treasury: c.treasury,
+      takerUsdcAccount: takerUsdc, makerUsdcAccount: makerUsdc, takerOptionAccount: takerOption,
+      writerAskPot, writerAskPotUsdc, writerAskPosition, usdcMint: c.usdcMint,
+      tokenProgram: TOKEN_PROGRAM_ID, token2022Program: TOKEN_2022_PROGRAM_ID, systemProgram: SystemProgram.programId,
+    }).preInstructions([CU(400_000), takerOptIx, takerUsdcIx, makerUsdcIx]).rpc()
+  );
 }
 
 // =============================================================================
@@ -382,13 +391,15 @@ export async function cancelOrder(
   const orderPk = new PublicKey(order.pubkey);
   const ownerOption = getAssociatedTokenAddressSync(optionMint, owner, false, TOKEN_2022_PROGRAM_ID);
   const ownerUsdc = getAssociatedTokenAddressSync(c.usdcMint, owner, false, TOKEN_PROGRAM_ID);
-  return program.methods.cancelOrder().accountsStrict({
-    owner, optionMint, order: orderPk,
-    escrow: pda([Buffer.from(RESTING_ORDER_ESCROW_SEED), orderPk.toBuffer()]),
-    protocolState: c.protocolState, ownerOptionAccount: ownerOption, ownerUsdcAccount: ownerUsdc,
-    transferHookProgram: TRANSFER_HOOK_PROGRAM_ID,
-    extraAccountMetaList: deriveExtraAccountMetaListPda(optionMint)[0],
-    hookState: deriveHookStatePda(optionMint)[0],
-    tokenProgram: TOKEN_PROGRAM_ID, token2022Program: TOKEN_2022_PROGRAM_ID, systemProgram: SystemProgram.programId,
-  }).preInstructions([CU(400_000)]).rpc();
+  return withResolvedOutcome(program.provider.connection as never, () =>
+    program.methods.cancelOrder().accountsStrict({
+      owner, optionMint, order: orderPk,
+      escrow: pda([Buffer.from(RESTING_ORDER_ESCROW_SEED), orderPk.toBuffer()]),
+      protocolState: c.protocolState, ownerOptionAccount: ownerOption, ownerUsdcAccount: ownerUsdc,
+      transferHookProgram: TRANSFER_HOOK_PROGRAM_ID,
+      extraAccountMetaList: deriveExtraAccountMetaListPda(optionMint)[0],
+      hookState: deriveHookStatePda(optionMint)[0],
+      tokenProgram: TOKEN_PROGRAM_ID, token2022Program: TOKEN_2022_PROGRAM_ID, systemProgram: SystemProgram.programId,
+    }).preInstructions([CU(400_000)]).rpc()
+  );
 }

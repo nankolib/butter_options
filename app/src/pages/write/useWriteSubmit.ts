@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { withResolvedOutcome } from "../../utils/txOutcome";
 import {
   PublicKey,
   SystemProgram,
@@ -393,8 +394,8 @@ async function sendEpochSeriesCell(
   }
   if (infraIxs.length > 0) {
     try {
-      await program.provider.sendAndConfirm(
-        new Transaction().add(EXTRA_CU_600K, ...infraIxs), [], { commitment: "confirmed" });
+      await withResolvedOutcome(conn as never, () => program.provider.sendAndConfirm(
+        new Transaction().add(EXTRA_CU_600K, ...infraIxs), [], { commitment: "confirmed" }));
     } catch (err: any) {
       // Idempotent: a concurrent write (or a wallet-replay) may have created them.
       // Re-check both before failing; only rethrow if still missing.

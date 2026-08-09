@@ -276,10 +276,29 @@ function formatDelta(fromUnixSec: number, toUnixSec: number): string {
   return `${mins}m from now`;
 }
 
-/** Build the tooltip body shown on the disabled submit button when
- *  `isMarketHours` returns ok:false. Always surfaces the "from now"
- *  delta to the next valid session per W3 refinement (2) — never
- *  silently shifts the user forward without the delta visible. */
+/**
+ * Build the tooltip body shown on the disabled submit button when
+ * `isMarketHours` returns ok:false. Always surfaces the "from now" delta to the
+ * next valid session per W3 refinement (2) — never silently shifts the user
+ * forward without the delta visible.
+ *
+ * THE SENTENCE HAS TWO CLOCKS, AND IT MUST SAY SO (fresh-wallet smoke,
+ * 2026-08-09):
+ *
+ *   On a Sunday, AAPL on /write read "NYSE not yet open. Next session opens
+ *   Friday at 13:30 UTC (4d 22h from now)." That was reported as a broken
+ *   calendar. The calendar was right. `result` describes the SELECTED EXPIRY
+ *   (an epoch weekly, Friday 08:00 UTC — before that Friday's open), while the
+ *   delta is measured from NOW. Two subjects in one sentence, and the reader
+ *   supplied the wrong one: read as a statement about the present it says NYSE
+ *   next opens on Friday, which on a Sunday is four days wrong.
+ *
+ * So the sentence names its subject up front. The reason still follows, because
+ * WHY the expiry is out of hours (weekend / holiday / pre-open / early close)
+ * is the part that tells the user how to move it.
+ */
+const EXPIRY_SUBJECT = "The selected expiry is outside NYSE hours.";
+
 export function buildMarketClosedTooltip(
   result: Extract<MarketHoursResult, { ok: false }>,
   nowUnixSec: number,
@@ -296,5 +315,5 @@ export function buildMarketClosedTooltip(
   const hh = String(nextDate.getUTCHours()).padStart(2, "0");
   const mm = String(nextDate.getUTCMinutes()).padStart(2, "0");
   const delta = formatDelta(nowUnixSec, next);
-  return `${result.reason} Next session opens ${weekday} at ${hh}:${mm} UTC (${delta}).`;
+  return `${EXPIRY_SUBJECT} ${result.reason} Next session opens ${weekday} at ${hh}:${mm} UTC (${delta}).`;
 }

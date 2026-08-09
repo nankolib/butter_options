@@ -236,6 +236,186 @@ export async function withResolvedOutcome<T>(
   }
 }
 
+// =============================================================================
+// Polling confirmation — do not let a websocket decide whether a trade worked
+// =============================================================================
+//
+// THE INCIDENT THIS EXISTS FOR (prod, 2026-08-09):
+//
+//   EVERY market buy sat "Submitting…" for 30 seconds and then reported the
+//   D2 fallback. The fallback was correct every time — the transactions had
+//   landed in normal time — but a path built for the rare case was running at
+//   a 100% rate, which means it was not the fallback, it was the mechanism.
+//
+//   Cause, measured rather than guessed. Anchor's sendAndConfirmRawTransaction
+//   calls `connection.confirmTransaction(signature, commitment)` whenever no
+//   blockhash is passed, and this app never passes one. That signature-only
+//   overload selects web3.js's LEGACY strategy, whose only completion path is
+//   `onSignature` — a websocket `signatureSubscribe`. It contains no HTTP
+//   polling of any kind; its only other exit is a setTimeout. So if the socket
+//   never opens, the strategy cannot succeed, only expire.
+//
+//   And the socket could not open: nginx fronting rpc.opta.fyi carried
+//   `proxy_set_header Connection ""` with no `Upgrade` header, so the upgrade
+//   was stripped and the handshake came back 404. web3.js logged "ws error:
+//   Unexpected server response: 404" on a retry loop for the whole wait.
+//
+//   Three timings against the prod endpoint, same transaction:
+//     getSignatureStatuses poll @1s      →    902 ms  (confirmed, first poll)
+//     confirmTransaction(sig)            → 30 468 ms  TransactionExpiredTimeout
+//     confirmTransaction({bh, lvbh})     → 50 008 ms  BlockheightExceeded
+//
+//   The third number is the one that matters for the fix: passing a blockhash
+//   is NOT the answer. That strategy polls getBlockHeight only to decide when
+//   to GIVE UP; the success signal is still `onSignature`. With a dead socket
+//   it fails slower. HTTP polling for the status is the only strategy that
+//   completes without a websocket.
+//
+// THE RULE: confirmation is a question the chain can answer over plain HTTP.
+// Asking it that way costs one request per second and works whenever the RPC
+// works at all. A websocket is an optimisation, never a dependency.
+// =============================================================================
+
+/** How often to ask, and how long before we call it dropped. The cap matches
+ *  Anchor's own outer resend loop so a genuinely dropped transaction surfaces
+ *  as `dropped` rather than being resent underneath us. */
+export const POLL_INTERVAL_MS = 1000;
+export const POLL_TIMEOUT_MS = 60_000;
+
+const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * Wait for `signature` to reach commitment by polling the chain.
+ *
+ * Returns the same three-way TxOutcome the rest of this module speaks, so a
+ * caller never has to distinguish "the wait ended" from "the transaction
+ * ended". `sleep` is injectable so the tests do not spend real seconds.
+ */
+export async function confirmByPolling(
+  fetcher: StatusFetcher,
+  signature: string,
+  opts: {
+    intervalMs?: number;
+    timeoutMs?: number;
+    sleep?: (ms: number) => Promise<void>;
+    now?: () => number;
+  } = {},
+): Promise<TxOutcome> {
+  const intervalMs = opts.intervalMs ?? POLL_INTERVAL_MS;
+  const timeoutMs = opts.timeoutMs ?? POLL_TIMEOUT_MS;
+  const sleep = opts.sleep ?? defaultSleep;
+  const now = opts.now ?? (() => Date.now());
+
+  const started = now();
+  let lastError: unknown = null;
+
+  for (;;) {
+    try {
+      const st = (await fetcher.getStatuses([signature]))?.[0] ?? null;
+      if (st) {
+        if (st.err) {
+          let logs: string[] = [];
+          if (fetcher.getLogs) {
+            try {
+              logs = await fetcher.getLogs(signature);
+            } catch {
+              logs = [];
+            }
+          }
+          return { kind: "failed", signature, err: st.err, logs };
+        }
+        // `confirmationStatus` is absent on some RPC shapes; a non-null status
+        // with no error and confirmations settled is already good enough to
+        // stop waiting, which is exactly what the legacy strategy would have
+        // reported off the socket.
+        const cs = st.confirmationStatus;
+        if (cs === undefined || cs === "confirmed" || cs === "finalized") {
+          return { kind: "landed", signature, slot: st.slot };
+        }
+      }
+    } catch (e) {
+      // A failed poll is not evidence of absence — keep asking until the
+      // deadline, then report the lookup failure rather than inventing one.
+      lastError = e;
+    }
+
+    if (now() - started >= timeoutMs) {
+      return {
+        kind: "dropped",
+        signature,
+        reason: lastError
+          ? `status lookup kept failing (${(lastError as Error)?.message ?? lastError}) — the transaction may still have landed; check the signature before resending`
+          : `not on chain after ${Math.round(timeoutMs / 1000)}s`,
+      };
+    }
+    await sleep(intervalMs);
+  }
+}
+
+/** The subset of Connection that the polling confirm actually needs. */
+type ConfirmableConnection = Parameters<typeof statusFetcher>[0];
+
+/**
+ * Return `conn` with `confirmTransaction` replaced by the polling strategy.
+ *
+ * A Proxy rather than a subclass or Object.create: every other member is read
+ * straight off the real Connection and bound to it, so all internal state and
+ * private bookkeeping keep working and `instanceof Connection` still holds.
+ * Nothing else about the connection changes.
+ *
+ * This is deliberately applied at the CONNECTION, not at the six prod-proven
+ * fill paths: it fixes `.rpc()`, `sendAndConfirm`, and every direct
+ * `confirmTransaction` call at once without altering a byte of what any of
+ * them send.
+ */
+export function withPollingConfirm<T extends ConfirmableConnection>(
+  conn: T,
+  /** Poll tuning. Production passes nothing; the tests inject a clock so the
+   *  dropped-case deadline does not cost them sixty real seconds. */
+  pollOpts: Parameters<typeof confirmByPolling>[2] = {},
+): T {
+  const fetcher = statusFetcher(conn);
+
+  const confirmTransaction = async (
+    strategyOrSignature: string | { signature: string },
+    _commitment?: string,
+  ): Promise<{ context: { slot: number }; value: { err: unknown } }> => {
+    const signature =
+      typeof strategyOrSignature === "string"
+        ? strategyOrSignature
+        : strategyOrSignature?.signature;
+    if (!signature) {
+      throw new TxOutcomeError({
+        kind: "dropped",
+        signature: null,
+        reason: "no signature to confirm",
+      });
+    }
+    const outcome = await confirmByPolling(fetcher, signature, pollOpts);
+    if (outcome.kind === "landed") {
+      return { context: { slot: outcome.slot }, value: { err: null } };
+    }
+    if (outcome.kind === "failed") {
+      // Hand the rejection back in the shape callers expect. Anchor turns this
+      // into a ConfirmError and re-fetches logs, exactly as before.
+      return { context: { slot: 0 }, value: { err: outcome.err } };
+    }
+    // Dropped. Thrown as a TxOutcomeError so it passes through
+    // withResolvedOutcome untouched and reaches the user as a fact — and,
+    // importantly, is NOT named TimeoutError, which Anchor would treat as a
+    // cue to resend the transaction underneath us.
+    throw new TxOutcomeError(outcome);
+  };
+
+  return new Proxy(conn, {
+    get(target, prop, receiver) {
+      if (prop === "confirmTransaction") return confirmTransaction;
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as T;
+}
+
 /** Program logs off a thrown SendTransactionError / AnchorError, if present. */
 export function extractLogs(err: unknown): string[] {
   const e = err as { logs?: unknown; transactionLogs?: unknown } | null;

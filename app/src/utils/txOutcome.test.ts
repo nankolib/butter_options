@@ -23,6 +23,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  confirmByPolling,
   describeOutcome,
   isConfirmationTimeout,
   outcomeOfSignature,
@@ -30,6 +31,7 @@ import {
   retryAllowed,
   signatureFromError,
   TxOutcomeError,
+  withPollingConfirm,
   withResolvedOutcome,
   type SigStatus,
   type StatusFetcher,
@@ -222,4 +224,159 @@ test("withResolvedOutcome passes a real rejection straight through, untouched", 
 test("withResolvedOutcome returns the value untouched on the happy path", async () => {
   const conn = { getSignatureStatuses: async () => ({ value: [null] }) };
   assert.equal(await withResolvedOutcome(conn, async () => "sig123"), "sig123");
+});
+
+// ---------------------------------------------------------------------------
+// Polling confirmation — the 2026-08-09 "every buy times out" incident
+// ---------------------------------------------------------------------------
+//
+// nginx stripped the websocket upgrade on rpc.opta.fyi, so web3.js's
+// signature-only confirmTransaction — whose ONLY completion path is
+// signatureSubscribe — could never succeed. Measured on prod: 902 ms by
+// polling, 30 468 ms by socket wait. These pin the polling strategy so the
+// confirm can never go back to depending on a socket.
+
+/** A fetcher that reports "not there yet" for `missesBeforeLanding` polls. */
+function slowFetcher(missesBeforeLanding: number, final: SigStatus | null = { slot: 99, confirmations: 1, err: null, confirmationStatus: "confirmed" }): StatusFetcher & { calls: number } {
+  const f = {
+    calls: 0,
+    async getStatuses() {
+      f.calls++;
+      return [f.calls > missesBeforeLanding ? final : null];
+    },
+  };
+  return f;
+}
+
+const noSleep = async () => {};
+
+test("confirmByPolling returns landed as soon as the chain says so", async () => {
+  const f = slowFetcher(0);
+  const outcome = await confirmByPolling(f, SIG, { sleep: noSleep });
+  assert.equal(outcome.kind, "landed");
+  assert.equal(f.calls, 1, "a healthy confirm costs exactly one request");
+});
+
+test("confirmByPolling keeps asking while the signature is not yet visible", async () => {
+  const f = slowFetcher(3);
+  const outcome = await confirmByPolling(f, SIG, { sleep: noSleep });
+  assert.equal(outcome.kind, "landed");
+  assert.equal(f.calls, 4);
+});
+
+test("confirmByPolling reports a program rejection as failed, with logs", async () => {
+  const f: StatusFetcher = {
+    async getStatuses() {
+      return [{ slot: 5, confirmations: 1, err: { InstructionError: [0, { Custom: 6014 }] }, confirmationStatus: "confirmed" }];
+    },
+    async getLogs() {
+      return ["Program log: Error Code: SelfTrade. Error Number: 6014."];
+    },
+  };
+  const outcome = await confirmByPolling(f, SIG, { sleep: noSleep });
+  assert.equal(outcome.kind, "failed");
+  if (outcome.kind === "failed") assert.match(outcome.logs[0], /SelfTrade/);
+});
+
+test("confirmByPolling gives up as dropped only after the deadline", async () => {
+  let clock = 0;
+  const f: StatusFetcher = { async getStatuses() { return [null]; } };
+  const outcome = await confirmByPolling(f, SIG, {
+    sleep: async () => { clock += 1000; },
+    now: () => clock,
+    timeoutMs: 5000,
+  });
+  assert.equal(outcome.kind, "dropped");
+  assert.equal(retryAllowed(outcome), true, "a genuinely absent tx is the one safe retry");
+});
+
+test("confirmByPolling does not call a failing lookup 'dropped' while time remains", async () => {
+  // An RPC that errors is not evidence of absence. It must keep asking, and if
+  // it never recovers, say the lookup failed rather than invent an outcome.
+  let clock = 0;
+  const f: StatusFetcher = { async getStatuses() { throw new Error("502 bad gateway"); } };
+  const outcome = await confirmByPolling(f, SIG, {
+    sleep: async () => { clock += 1000; },
+    now: () => clock,
+    timeoutMs: 3000,
+  });
+  assert.equal(outcome.kind, "dropped");
+  if (outcome.kind === "dropped") {
+    assert.match(outcome.reason, /502 bad gateway/);
+    assert.match(outcome.reason, /may still have landed/);
+  }
+});
+
+test("withPollingConfirm replaces confirmTransaction and leaves everything else alone", async () => {
+  const calls: string[] = [];
+  const conn = {
+    someField: 42,
+    async getSignatureStatuses(_sigs: string[], _cfg?: { searchTransactionHistory?: boolean }) {
+      calls.push("status");
+      return { value: [{ slot: 7, confirmations: 1, err: null, confirmationStatus: "confirmed" as const }] };
+    },
+    async getBalance() {
+      calls.push("balance");
+      return 1234;
+    },
+    async confirmTransaction(_s: unknown, _c?: string): Promise<{ context: { slot: number }; value: { err: unknown } }> {
+      calls.push("NATIVE_CONFIRM");
+      throw new Error("the websocket path must not run");
+    },
+  };
+  const wrapped = withPollingConfirm(conn);
+
+  // Untouched members pass straight through.
+  assert.equal(wrapped.someField, 42);
+  assert.equal(await wrapped.getBalance(), 1234);
+
+  const res = await wrapped.confirmTransaction(SIG, "confirmed");
+  assert.deepEqual(res, { context: { slot: 7 }, value: { err: null } });
+  assert.equal(calls.includes("NATIVE_CONFIRM"), false, "the socket-bound confirm is never reached");
+});
+
+test("withPollingConfirm accepts the blockhash-strategy argument shape too", async () => {
+  const conn = {
+    async getSignatureStatuses(_sigs: string[], _cfg?: { searchTransactionHistory?: boolean }) {
+      return { value: [{ slot: 8, confirmations: 1, err: null, confirmationStatus: "finalized" as const }] };
+    },
+    async confirmTransaction(_s: unknown, _c?: string): Promise<{ context: { slot: number }; value: { err: unknown } }> {
+      throw new Error("the websocket path must not run");
+    },
+  };
+  const wrapped = withPollingConfirm(conn);
+  const res = await wrapped.confirmTransaction(
+    { signature: SIG, blockhash: "bh", lastValidBlockHeight: 1 } as never,
+    "confirmed",
+  );
+  assert.equal(res.value.err, null);
+});
+
+test("withPollingConfirm throws a TxOutcomeError — never a TimeoutError — when dropped", async () => {
+  // Anchor's sendAndConfirmRawTransaction RESENDS the transaction when it sees
+  // err.name === "TimeoutError". A dropped confirm must not be able to trigger
+  // a duplicate send underneath us.
+  let clock = 0;
+  const conn = {
+    async getSignatureStatuses(_sigs: string[], _cfg?: { searchTransactionHistory?: boolean }) {
+      return { value: [null] };
+    },
+    async confirmTransaction(_s: unknown, _c?: string): Promise<{ context: { slot: number }; value: { err: unknown } }> {
+      throw new Error("the websocket path must not run");
+    },
+  };
+  const wrapped = withPollingConfirm(conn, {
+    sleep: async () => { clock += 1000; },
+    now: () => clock,
+    timeoutMs: 3000,
+  });
+  await assert.rejects(
+    () => wrapped.confirmTransaction(SIG, "confirmed"),
+    (e: Error) => {
+      assert.equal(e.name, "TxOutcomeError");
+      assert.notEqual(e.name, "TimeoutError");
+      assert.equal((e as TxOutcomeError).retryAllowed, true);
+      return true;
+    },
+  );
 });

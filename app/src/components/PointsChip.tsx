@@ -1,9 +1,17 @@
 // =============================================================================
 // PointsChip — nav chip: points total + multiplier. Flag-gated, mono.
 // =============================================================================
-// Renders NOTHING when: the flag is off, no wallet is connected, the API is
-// unreachable, or the wallet has zero points (founder call — an empty chip is
-// noise). The nav bar's flex layout is therefore untouched in every off state.
+// Renders NOTHING when: the flag is off, no wallet is connected, or the API is
+// unreachable. The nav bar's flex layout is therefore untouched in every off
+// state.
+//
+// A wallet with ZERO points DOES render, as "0 · 1.0x" (founder call,
+// 2026-08-09, reversing the earlier "an empty chip is noise" call). The earlier
+// rule was written when zero was indistinguishable from unreachable: a new
+// wallet 404'd, the chip degraded silently, and blank meant both "you have no
+// points" and "we cannot tell you". fetchWallet now resolves that 404 into a
+// real zero, so a rendered 0 is a fact about the wallet and blank is reserved
+// for "we could not ask".
 // =============================================================================
 
 import { useEffect, useState, type FC } from "react";
@@ -38,7 +46,7 @@ export const PointsChip: FC = () => {
     };
   }, [connected, publicKey]);
 
-  if (!EPOCH0_UI || !connected || !data || data.total <= 0) return null;
+  if (!EPOCH0_UI || !connected || !data) return null;
 
   return (
     <Link

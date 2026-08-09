@@ -200,7 +200,72 @@ export interface RulesResponse {
 export const fetchLeaderboard = (board: string, limit = 50) =>
   get<LeaderboardResponse>(`/leaderboard?board=${encodeURIComponent(board)}&limit=${limit}`);
 
-export const fetchWallet = (pubkey: string) => get<WalletResponse>(`/wallet/${encodeURIComponent(pubkey)}`);
+/**
+ * The scoreboard a wallet has before it has done anything.
+ *
+ * THE INCIDENT THIS EXISTS FOR (fresh-wallet smoke, 2026-08-09 15:59 UTC):
+ *
+ *   A wallet that had never traded connected to /portfolio and was told
+ *   "Points unavailable." Nothing was unavailable. The indexer was healthy,
+ *   nginx was routing, and `/api/points/wallet/<pubkey>` answered in 12 ms —
+ *   with 404 `{"error":"unknown_wallet"}`, which is the correct thing for that
+ *   endpoint to say about a wallet it has never seen (handlers.ts: 404 only
+ *   when the wallet is unknown to the tape AND to referrals, posts, codes and
+ *   bounties). The client turned that fact into a failure.
+ *
+ * THE RULE: "you have not scored yet" is an ANSWER, not an outage. A new wallet
+ * is the campaign's most common visitor and its first impression must be a
+ * board of zeros it can go fill in — never an error telling it the product is
+ * broken. Only `unreachable` and non-404 statuses are failures.
+ *
+ * Zeros, not nulls, for the point components: every one is a number the engine
+ * would have computed as 0. `computed_at` stays null because nothing was
+ * computed, and `streak`/`provenance`/`pnl` stay null because those records
+ * genuinely do not exist yet — the panel already renders those absences.
+ */
+export function zeroWallet(pubkey: string): WalletResponse {
+  return {
+    computed_at: null,
+    wallet: pubkey,
+    is_internal: false,
+    on_tape: false,
+    points: {
+      total: 0,
+      base: 0,
+      base_raw: 0,
+      base_breakdown: {},
+      base_multiplied: 0,
+      quests: 0,
+      social: 0,
+      bounty: 0,
+      referral_bond: 0,
+      referral_commission: 0,
+    },
+    multiplier: 1,
+    streak: null,
+    chain_stage: 0,
+    quests: [],
+    provenance: null,
+    pnl: null,
+    referral: { my_code: null, referred_by: null, referee_count: 0 },
+    x_handle: null,
+    ranks: { profit: null, volume: null, writer: null },
+  };
+}
+
+/**
+ * A wallet's campaign standing. A 404 is resolved into the zero-state ABOVE
+ * rather than surfaced as an error — see `zeroWallet`. Everything else (an
+ * unreachable API, a 5xx, a 400) still returns `{ ok: false }` so a genuine
+ * outage stays visibly distinct from a wallet with nothing on the board.
+ */
+export const fetchWallet = async (pubkey: string): Promise<ApiResult<WalletResponse>> => {
+  const res = await get<WalletResponse>(`/wallet/${encodeURIComponent(pubkey)}`);
+  if (!res.ok && res.reason === "error" && res.status === 404) {
+    return { ok: true, data: zeroWallet(pubkey) };
+  }
+  return res;
+};
 
 export const fetchQuests = () => get<QuestsResponse>("/quests");
 

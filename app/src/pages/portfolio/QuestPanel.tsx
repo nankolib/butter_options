@@ -47,8 +47,18 @@ export const QuestPanel: FC = () => {
       setData(res.data);
       setFailed(false);
     } else {
+      // Every remaining reason IS a failure: `unconfigured` means the campaign
+      // shipped without an API base, `unreachable`/`error` mean the service is
+      // down. The one case that used to land here and is NOT a failure — a 404
+      // for a wallet that has simply never scored — is resolved into the zero
+      // state by fetchWallet, so it arrives as ok:true above.
+      //
+      // (This was `res.reason !== "unconfigured" ? true : true` — a ternary
+      // whose branches were identical, which read as a distinction being drawn
+      // while drawing none. If a reason ever deserves different handling, it
+      // gets a real branch here.)
       setData(null);
-      setFailed(res.reason !== "unconfigured" ? true : true);
+      setFailed(true);
     }
   }, [publicKey]);
 

@@ -9,6 +9,7 @@ import { useBook, type BookOrder } from "../../hooks/useBook";
 import { usePegFill, usePostOrder, useFillOrder, useFillWriterAsk } from "../../hooks/useOrderFlows";
 import { deriveOrderPubkey } from "./orderFlows";
 import { refreshAfterMutation } from "./orderRefresh";
+import { TxOutcomeError } from "../../utils/txOutcome";
 import { planSweep, executeSweep, buildAskLevels, buildBidLevels, crossLimit, buyRoutesToPeg } from "./marketSweep";
 import { calculateCallGreeks, calculatePutGreeks, getDefaultVolatility, applyVolSmile } from "../../utils/blackScholes";
 import { TOKEN_2022_PROGRAM_ID, MARKET_SEED, PROGRAM_ID, DEVNET_USDC_MINT } from "../../utils/constants";
@@ -351,13 +352,46 @@ export const OrderTicket: FC<{
         onDone();
       }
     } catch (e: any) {
-      setStatus({ kind: "err", msg: (e?.message ?? String(e)).slice(0, 140) });
+      // A confirmation that timed out and then resolved to LANDED is a success
+      // that took the slow road, not a failure. D2 still throws it — the
+      // caller asked to confirm and we could not, so the optimistic path must
+      // not continue as if it had — but the user's trade is on chain, and
+      // telling them so in red while leaving their positions stale is how a
+      // working buy comes to look like a broken one.
+      const landed = e instanceof TxOutcomeError && e.outcome.kind === "landed";
+      if (landed) {
+        setStatus({ kind: "ok", msg: e.message });
+        // Reconcile-only: this path has no trustworthy optimistic delta (the
+        // throw happened inside the send, so `removed`/`added` never got set),
+        // so we take chain truth for book, chain grid and dock, and let onDone
+        // refresh balances, positions and open orders.
+        if (program) refreshAfterMutation(program);
+        onDone();
+      } else {
+        setStatus({ kind: "err", msg: (e?.message ?? String(e)).slice(0, 140) });
+      }
     } finally {
       setBusy(false);
     }
   }
 
   const submitting = busy || peg.submitting || post.submitting || fill.submitting || fillWA.submitting;
+
+  // Elapsed seconds in flight. A button that reads "Submitting…" unchanged for
+  // half a minute is indistinguishable from a hung one, which is how a confirm
+  // that was merely slow got read as a failure. The counter only appears once
+  // the wait is longer than a normal confirm, so the fast path stays quiet.
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!submitting) {
+      setElapsed(0);
+      return;
+    }
+    const startedAt = Date.now();
+    setElapsed(0);
+    const id = setInterval(() => setElapsed(Math.floor((Date.now() - startedAt) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [submitting]);
   // Never emit negative-zero ("$-0.0000" → "$0.0000").
   const fmt = (n: number) => {
     let s = n.toFixed(Math.abs(n) < 100 ? 4 : 2);
@@ -539,7 +573,7 @@ export const OrderTicket: FC<{
           disabled ? "cursor-not-allowed bg-l-surface-2 text-l-muted" : "bg-l-up text-l-on-up hover:opacity-90"
         }`}>
         {!publicKey ? "Connect wallet"
-          : submitting ? "Submitting…"
+          : submitting ? (elapsed >= PENDING_HINT_S ? `Submitting… ${elapsed}s · confirming on chain` : "Submitting…")
           : isWrite ? (writeGate ?? amerQuoteGate ?? `Write ${qty} · ask ${fmt(limitPrice)}`)
           : limitGate ? limitGate
           : amerQuoteGate ? amerQuoteGate
@@ -566,6 +600,11 @@ export const OrderTicket: FC<{
     </div>
   );
 };
+
+/** Seconds in flight before the submit button starts showing its elapsed
+ *  count. A healthy confirm lands inside a second, so anything past this is
+ *  worth narrating rather than leaving as a static "Submitting…". */
+const PENDING_HINT_S = 5;
 
 const fmtStrike = (n: number): string => (n >= 1000 ? n.toLocaleString(undefined, { maximumFractionDigits: 0 }) : String(n));
 

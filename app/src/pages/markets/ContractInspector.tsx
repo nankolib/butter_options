@@ -17,6 +17,7 @@ import { SolscanLink } from "../../components/SolscanLink";
 import { OpenOrders } from "../trade/OpenOrders";
 import { refreshAfterMutation } from "../trade/orderRefresh";
 import { fmtPrice, fmtStrike, fmtInt, fmtUsdCompact, expiryLabel } from "./marketsView";
+import { SpotValue, type SpotStatus } from "./SpotValue";
 
 /**
  * ContractInspector — the shared contract detail surface (design lock 2026-07-09).
@@ -33,19 +34,26 @@ import { fmtPrice, fmtStrike, fmtInt, fmtUsdCompact, expiryLabel } from "./marke
  * Oracle provenance is never named in either.
  */
 export type ContractInspectorProps =
-  | { mode?: "modal"; row: MarketRow; onClose: () => void }
+  | { mode?: "modal"; row: MarketRow; spotStatus?: SpotStatus; onClose: () => void }
   | {
       mode: "docked";
       row: UnifiedChainRow;
       spot: number | null;
+      spotStatus?: SpotStatus;
       onDone: () => void;
       onLegacyBuy: (row: UnifiedChainRow) => void;
       onClose?: () => void;
     };
 
+/**
+ * `spotStatus` is OPTIONAL and defaults to "ready": callers that own a spot
+ * value but not the read's lifecycle (the Trade rail) keep their existing
+ * behaviour untouched, while /markets threads the real status through so an
+ * absent price reads as loading / failed / genuinely-none rather than "—".
+ */
 export const ContractInspector: FC<ContractInspectorProps> = (props) => {
   if (props.mode === "docked") return <DockedInspector {...props} />;
-  return <ModalInspector row={props.row} onClose={props.onClose} />;
+  return <ModalInspector row={props.row} spotStatus={props.spotStatus ?? "ready"} onClose={props.onClose} />;
 };
 
 // ============================================================================
@@ -118,9 +126,12 @@ const ANALYTICS_KEY = "opta.trade.analytics";
 const DockedInspector: FC<{
   row: UnifiedChainRow;
   spot: number | null;
+  /** Defaults to "ready" — the Trade rail owns its own spot and has no read
+   *  lifecycle to report, so its copy is unchanged. */
+  spotStatus?: SpotStatus;
   onDone: () => void;
   onLegacyBuy: (row: UnifiedChainRow) => void;
-}> = ({ row, spot, onDone, onLegacyBuy }) => {
+}> = ({ row, spot, spotStatus = "ready", onDone, onLegacyBuy }) => {
   const { publicKey } = useWallet();
   const { program } = useProgram();
   const { orders } = useBook();
@@ -333,7 +344,11 @@ const DockedInspector: FC<{
                 ))}
               </div>
             ) : (
-              <div className="font-mono-plex text-[11px] text-l-muted">Greeks unavailable — spot warming up.</div>
+              <div className="font-mono-plex text-[11px] text-l-muted">
+                {spotStatus === "error"
+                  ? "Greeks unavailable — the price could not be read."
+                  : "Greeks unavailable — spot warming up."}
+              </div>
             )}
             {payoff && !settled && (
               <div className="mt-[12px]">
@@ -403,7 +418,7 @@ const PosStat: FC<{ label: string; value: string }> = ({ label, value }) => (
 // ============================================================================
 // Modal inspector (Markets discovery) — MarketRow. Unchanged behavior.
 // ============================================================================
-const ModalInspector: FC<{ row: MarketRow; onClose: () => void }> = ({ row, onClose }) => {
+const ModalInspector: FC<{ row: MarketRow; spotStatus: SpotStatus; onClose: () => void }> = ({ row, spotStatus, onClose }) => {
   const navigate = useNavigate();
   const { program } = useProgram();
   const isCall = row.side === "call";
@@ -575,13 +590,20 @@ const ModalInspector: FC<{ row: MarketRow; onClose: () => void }> = ({ row, onCl
             // Distinct from vault depth: per-order maker collateral escrowed
             // behind live resting writer asks on this contract.
             ["Book depth", fmtUsdCompact(row.bookDepth ?? 0)],
-            ["Spot", row.spot != null ? fmtPrice(row.spot) : "—"],
           ].map(([k, v]) => (
             <div key={k} className="flex flex-col gap-[3px]">
               <span className="font-mono-plex text-[9px] uppercase tracking-[0.1em] text-l-muted">{k}</span>
               <span className="font-mono-plex text-[13px] tabular-nums text-l-text">{v}</span>
             </div>
           ))}
+          {/* Spot sits outside the map: unlike the three counts above it can be
+              ABSENT, and the reason it is absent has to be renderable. */}
+          <div className="flex flex-col gap-[3px]">
+            <span className="font-mono-plex text-[9px] uppercase tracking-[0.1em] text-l-muted">Spot</span>
+            <span className="font-mono-plex text-[13px] tabular-nums text-l-text">
+              <SpotValue value={row.spot} status={spotStatus} format={fmtPrice} settled={settled} />
+            </span>
+          </div>
         </div>
 
         {/* Actions */}

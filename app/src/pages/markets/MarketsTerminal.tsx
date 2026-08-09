@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { type MarketRow, type UseMarketsData } from "./useMarketsData";
 import { PulseTiles } from "./PulseTiles";
 import { ContractInspector } from "./ContractInspector";
+import { SpotValue, spotStatusOf, type SpotStatus } from "./SpotValue";
 import { MoneyAmount } from "../../components/MoneyAmount";
 import { formatAsOfUtc } from "../../utils/format";
 import {
@@ -40,7 +41,11 @@ import {
  * flex-none and the table/tiles scroll inside.
  */
 export const MarketsTerminal: FC<{ data: UseMarketsData }> = ({ data }) => {
-  const { rows, summary, asOf, loading } = data;
+  const { rows, summary, asOf, loading, spotLoading, spotError } = data;
+  // One page-wide verdict on the spot read, threaded into every cell that can
+  // render an absent price. Without it "—" meant loading, failure and genuinely-
+  // no-price all at once — see SpotValue.
+  const spotStatus = spotStatusOf(spotLoading, spotError);
 
   const [view, setView] = useState<"assets" | "contracts">("assets");
   const [tab, setTab] = useState<ClassTab>("Crypto");
@@ -257,7 +262,7 @@ export const MarketsTerminal: FC<{ data: UseMarketsData }> = ({ data }) => {
                         <span className="text-[11px] text-l-muted">{it.tab}</span>
                       </span>
                       <span className="font-mono-plex text-[12px] tabular-nums text-l-muted">
-                        {it.spot != null ? fmtPrice(it.spot) : "—"}
+                        <SpotValue value={it.spot} status={spotStatus} format={fmtPrice} />
                       </span>
                     </button>
                   ))}
@@ -318,16 +323,16 @@ export const MarketsTerminal: FC<{ data: UseMarketsData }> = ({ data }) => {
                         <Cell right>
                           {asOf[a.asset] != null ? (
                             <span className="inline-flex flex-col items-end leading-none">
-                              <span>{a.spot != null ? fmtPrice(a.spot) : "—"}</span>
+                              <span><SpotValue value={a.spot} status={spotStatus} format={fmtPrice} /></span>
                               <span className="mt-[2px] font-mono-plex text-[9px] text-l-muted">{formatAsOfUtc(asOf[a.asset])}</span>
                             </span>
-                          ) : a.spot != null ? (
-                            fmtPrice(a.spot)
                           ) : (
-                            "—"
+                            <SpotValue value={a.spot} status={spotStatus} format={fmtPrice} />
                           )}
                         </Cell>
-                        <Cell right muted>{a.atmIv != null ? fmtIv(a.atmIv) : "—"}</Cell>
+                        {/* ATM IV is derived from spot — it is absent for exactly
+                            the same reasons, so it carries the same status. */}
+                        <Cell right muted><SpotValue value={a.atmIv} status={spotStatus} format={fmtIv} /></Cell>
                         <Cell right>{fmtInt(a.oiSum)}</Cell>
                         <Cell right>{fmtUsdCompact(a.vaultDepthSum)}</Cell>
                         <Cell right muted>{String(a.marketCount)}</Cell>
@@ -361,7 +366,7 @@ export const MarketsTerminal: FC<{ data: UseMarketsData }> = ({ data }) => {
                           </div>
                         )}
                         {g.rows.map((r) => (
-                          <ContractRow key={r.publicKey.toBase58()} r={r} cols={B_COLS} onOpen={() => setInspect(r)} />
+                          <ContractRow key={r.publicKey.toBase58()} r={r} cols={B_COLS} onOpen={() => setInspect(r)} spotStatus={spotStatus} />
                         ))}
                       </div>
                     ))}
@@ -388,7 +393,7 @@ export const MarketsTerminal: FC<{ data: UseMarketsData }> = ({ data }) => {
                             .slice()
                             .sort((a, b) => b.expiry - a.expiry)
                             .map((r) => (
-                              <ContractRow key={r.publicKey.toBase58()} r={r} cols={B_COLS} onOpen={() => setInspect(r)} settled />
+                              <ContractRow key={r.publicKey.toBase58()} r={r} cols={B_COLS} onOpen={() => setInspect(r)} settled spotStatus={spotStatus} />
                             ))}
                       </>
                     )}
@@ -410,7 +415,7 @@ export const MarketsTerminal: FC<{ data: UseMarketsData }> = ({ data }) => {
         </div>
       </div>
 
-      {inspect && <ContractInspector row={inspect} mode="modal" onClose={() => setInspect(null)} />}
+      {inspect && <ContractInspector row={inspect} mode="modal" spotStatus={spotStatus} onClose={() => setInspect(null)} />}
     </div>
   );
 };
@@ -460,7 +465,13 @@ const Cell: FC<{ children: ReactNode; right?: boolean; muted?: boolean; classNam
   </span>
 );
 
-const ContractRow: FC<{ r: MarketRow; cols: string; onOpen: () => void; settled?: boolean }> = ({ r, cols, onOpen, settled }) => {
+const ContractRow: FC<{
+  r: MarketRow;
+  cols: string;
+  onOpen: () => void;
+  settled?: boolean;
+  spotStatus: SpotStatus;
+}> = ({ r, cols, onOpen, settled, spotStatus }) => {
   // Settled/expired rows are the one legit --text-3 (l-faint) use — genuinely
   // de-emphasized content, not labels. Live rows keep --text-2 (l-muted) / text.
   const num = settled ? "text-l-faint" : "text-l-text";
@@ -484,8 +495,12 @@ const ContractRow: FC<{ r: MarketRow; cols: string; onOpen: () => void; settled?
       </span>
       <span className={`px-3 text-right font-mono-plex text-[12px] tabular-nums ${num}`}>{fmtStrike(r.strike)}</span>
       <span className={`px-3 font-mono-plex text-[12px] ${sub}`}>{expiryLabel(r.expiry)}</span>
-      <span className={`px-3 text-right font-mono-plex text-[12px] tabular-nums ${num}`}>{r.spot != null ? fmtPrice(r.spot) : "—"}</span>
-      <span className={`px-3 text-right font-mono-plex text-[12px] tabular-nums ${num}`}>{settled || r.iv == null ? "—" : fmtIv(r.iv)}</span>
+      <span className={`px-3 text-right font-mono-plex text-[12px] tabular-nums ${num}`}>
+        <SpotValue value={r.spot} status={spotStatus} format={fmtPrice} settled={settled} />
+      </span>
+      <span className={`px-3 text-right font-mono-plex text-[12px] tabular-nums ${num}`}>
+        <SpotValue value={r.iv} status={spotStatus} format={fmtIv} settled={settled} />
+      </span>
       <span className={`px-3 text-right font-mono-plex text-[12px] tabular-nums ${num}`}>{settled ? "—" : fmtInt(r.openInterest)}</span>
       <span className={`px-3 text-right font-mono-plex text-[12px] tabular-nums ${num}`}>{fmtUsdCompact(r.vaultTvl ?? 0)}</span>
       <span className="flex items-center gap-[6px] px-3">

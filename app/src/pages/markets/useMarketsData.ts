@@ -71,6 +71,12 @@ export type UseMarketsData = {
   /** Sample timestamp (unix secs) per asset, only for on-chain-fallback spot. */
   asOf: Record<string, number>;
   loading: boolean;
+  /** True while a spot price could still arrive for rows that have none.
+   *  Consumers MUST distinguish this from "no price exists" — see SpotValue. */
+  spotLoading: boolean;
+  /** Non-null when the spot read itself failed. Previously swallowed here,
+   *  which made a dead feed and a slow feed render identically. */
+  spotError: string | null;
   refetch: () => Promise<void>;
 };
 
@@ -188,7 +194,28 @@ export function useMarketsData(): UseMarketsData {
     }
     return out;
   }, [vaults, markets]);
-  const { prices: spotPrices, asOf: spotAsOf } = useSpotPrices(feeds);
+  const {
+    prices: spotPrices,
+    asOf: spotAsOf,
+    loading: spotFetching,
+    error: spotError,
+  } = useSpotPrices(feeds);
+
+  // A row can only carry a spot once the account sweep has produced `feeds` AND
+  // the spot read has come back. Three things therefore count as "still
+  // loading", and the last one is the subtle one:
+  //
+  //   1. the sweep is running                    → no feeds exist yet
+  //   2. the spot read is in flight              → the obvious case
+  //   3. feeds exist, nothing resolved, no error → the gap between the sweep
+  //      finishing and the spot effect firing. usePythPrices reports
+  //      loading:false for an empty feed list, so without this clause there is
+  //      a render where every cell is settled-empty and flashes "—" before the
+  //      real fetch has even started. That flash is the reported symptom.
+  const spotLoading =
+    loading ||
+    spotFetching ||
+    (feeds.length > 0 && Object.keys(spotPrices).length === 0 && !spotError);
 
   const rows = useMemo<MarketRow[]>(() => {
     const now = Math.floor(Date.now() / 1000);
@@ -293,5 +320,5 @@ export function useMarketsData(): UseMarketsData {
     };
   }, [rows, vaults, loading, escrowByVault, askVaults]);
 
-  return { rows, summary, spotPrices, asOf: spotAsOf ?? {}, loading, refetch };
+  return { rows, summary, spotPrices, asOf: spotAsOf ?? {}, loading, spotLoading, spotError, refetch };
 }

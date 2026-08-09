@@ -15,7 +15,7 @@
 // =============================================================================
 
 import type { FC } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { PublicKey } from "@solana/web3.js";
 import { useWallet } from "@solana/wallet-adapter-react";
@@ -28,6 +28,7 @@ import { useSpotPrices } from "../../hooks/useSpotPrices";
 import { useVolOracleStatus } from "../../hooks/useVolOracleStatus";
 import { hexFromBytes } from "../../utils/format";
 import { canonicalAsset } from "../../utils/assetDisplay";
+import { ASSET_CLASS_EQUITY, ASSET_CLASS_ETF } from "../../utils/marketHours";
 import { TerminalAppBar } from "../../components/TerminalAppBar";
 import { refreshAfterMutation } from "../trade/orderRefresh";
 import { weeklyExpiry, type TenorLabel } from "../../utils/tenors";
@@ -155,6 +156,31 @@ export const WriteTerminalPage: FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tickers.join(","), searchParams]);
 
+  // ---- Equity/ETF: Epoch is structurally unwritable, so don't open on it ----
+  //
+  // Epoch expiries are Friday 08:00 UTC. NYSE opens 13:30 UTC (DST) / 14:30 UTC
+  // (standard). An equity or ETF epoch vault therefore expires before its own
+  // settlement venue has opened, on every Friday of the year — the market-hours
+  // gate blocks the submit button 100% of the time. Landing on EPOCH for AAPL
+  // presents a mode that can never be submitted and explains it only through a
+  // disabled button's tooltip.
+  //
+  // So EPOCH is not the default for these classes. This is a DEFAULT, not a
+  // prohibition: the switch fires once per newly-chosen asset (tracked by
+  // ticker), so a user who deliberately selects EPOCH afterwards is left there,
+  // with the gate and its now-explicit tooltip doing the explaining. Nothing
+  // about expiry or settlement semantics changes here — this only picks which
+  // mode the panel opens on.
+  const chosenAssetClass = chosen ? Number(chosen.market.account.assetClass ?? 0) : null;
+  const isNyseGated = chosenAssetClass === ASSET_CLASS_EQUITY || chosenAssetClass === ASSET_CLASS_ETF;
+  const autoSwitchedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!chosen || !isNyseGated) return;
+    if (autoSwitchedFor.current === chosen.ticker) return;
+    autoSwitchedFor.current = chosen.ticker;
+    setMode((m) => (m === "epoch" ? "custom" : m));
+  }, [chosen, isNyseGated]);
+
   const handleSuccess = (payload: WriteSuccessPayload) => {
     setLastSuccess(payload);
     refetchMarkets();
@@ -238,6 +264,17 @@ export const WriteTerminalPage: FC = () => {
             </div>
           ) : (
             <>
+              {/* Says out loud why the panel opened on CUSTOM for this asset,
+                  and why EPOCH stays blocked if the user switches back to it. */}
+              {isNyseGated && (
+                <div
+                  data-testid="equity-epoch-notice"
+                  className="mb-6 rounded-[6px] border border-l-hair bg-l-surface px-[12px] py-[9px] font-mono-plex text-[11px] leading-[1.5] text-l-muted"
+                >
+                  {values.asset} settles on NYSE — epoch expiries settle outside NYSE hours, so use a custom expiry.
+                </div>
+              )}
+
               <div className="grid grid-cols-1 gap-x-10 gap-y-8 lg:grid-cols-[1fr_380px]">
                 <div className="lg:order-1">
                   <WriteContractPanel

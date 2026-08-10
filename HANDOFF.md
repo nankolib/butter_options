@@ -1,4 +1,4 @@
-# SESSION CLOSE — 2026-08-03 15:30Z (EPOCH 0 GO-LIVE EXECUTED · taker ARMED · bid widen DEFERRED on a cap bug)
+# SESSION CLOSE — 2026-08-03 15:30Z, §4 §1 §2 REFRESHED 2026-08-10 (EPOCH 0 GO-LIVE EXECUTED · taker ARMED · bid widen DONE, cap bug FIXED)
 
 > Written for a reader with ZERO session memory. **This block supersedes every
 > block below it** where they disagree. It covers the EPOCH 0 launch: the weight
@@ -8,6 +8,12 @@
 >
 > **The campaign is LIVE and user-visible at https://opta.fyi.** That is new.
 > Everything below this block predates it.
+>
+> **LESSON (2026-08-10): a stale top block misled a whole session.** §4 still
+> described the cap bug as open five days after `bfa8b0d` fixed, shipped and
+> deployed it, so a fix session was planned to rewrite code that was already
+> live and to flip flags already flipped. **Refresh this block at every session
+> close — shipping is not documenting.**
 
 ## 1. What went live, in the order it was done
 
@@ -19,15 +25,15 @@
 | 4 | `VITE_EPOCH0_UI=1` — campaign UI public | **DONE** |
 | 5 | Smoke with founder wallet | **PASSED** (founder-run) |
 | 6 | Reply lane | already live since 2026-08-01; **no-op** |
-| 7 | Bid widen 3→30 | **REVERTED — deferred, see §4** |
+| 7 | Bid widen 3→30 | reverted 2026-08-03; **redone 2026-08-05T14:01:45Z and stable since — see §4** |
 | 8 | Taker armed | **DONE — armed and correctly idle** |
 | 9 | Announcement | founder's, from his own account |
 
-## 2. Live flag state at close (verified 15:29Z)
+## 2. Live flag state — REFRESHED 2026-08-10 (was verified 2026-08-03 15:29Z)
 
 ```
-OPTA_WRITER_BID_ENABLED=1     OPTA_WRITER_BID_MAX_CELLS=3
-OPTA_TAKER_DRY_RUN=0          OPTA_TAKER_ARMED=1        <- ARMED
+OPTA_WRITER_BID_ENABLED=1     OPTA_WRITER_BID_MAX_CELLS=30   <- 30 since 2026-08-05T14:01:49Z
+OPTA_TAKER_DRY_RUN=0          OPTA_TAKER_ARMED=1             <- ARMED
 DRY_RUN=false  REPLY_DRY_RUN=false  REPLIES_ENABLED=true
 OPTA_INDEXER_COMMIT=db4069e
 ```
@@ -67,50 +73,79 @@ deliberately not one of the 9 pinned artifacts, so no frozen hash changed.
   integrity ok / `wallet_points` absent), `indexer-dist-src.pre-freeze-*.tgz`,
   `.env.pre-freeze-*`. **The v5→v6 migration is one-way.**
 
-## 4. ⚠️ OPEN BUG — bid notional caps do not bind. Bid widen is BLOCKED on it.
+## 4. ✅ FIXED — bid notional caps bind. Widen is DONE and stable at 30 cells.
 
-ClickUp **`86eygtf17`**. Found by the canary hour, and the reason step 7 was
-reverted.
+ClickUp **`86eygtf17` — CLOSED.** Fixed at commit **`bfa8b0d`** (2026-08-05),
+deployed, and running. **Everything this section used to instruct is done.**
 
-`writer/src/engine.ts:486-488` seeds `globalBidNotional = 0` and
-`perAsset = new Map()` **empty on every tick**, so the cap check at
-`writer/src/bids.ts:224` only ever sees notional posted *within the current
-tick*. Live bids carried over from previous ticks are invisible to it. Exposure
-ratchets up ~$250/asset and ~$2,500 global **per 5-minute tick**, with no ceiling
-over time. On the same lines `liveBidCells` **is** seeded correctly from
-`myBids.length` — that asymmetry is the entire bug, and it is why this stayed
-hidden: at 3 cells the working cell-cap bounded live bids to 3 (~$33) and masked
-the broken notional caps. GO-LIVE §6b predicted these caps would become the live
-constraint for the first time at 20–50 cells. They were, and they don't hold.
+`writer/src/engine.ts` now seeds `globalBidNotional` and `perAsset` from the same
+`myBids` that already seeded `liveBidCells`, via `seedLiveBidExposure()` in
+`writer/src/bids.ts`. The asymmetry that WAS the bug is gone. Every tick emits
+**`bid-exposure-seed`** carrying the live set it seeded — that line is both the
+operator's proof the caps are live and the correct measurement instrument for any
+future canary. Gated by `bids.test.ts` "gate 10" (5 tests).
 
-Measured: BTC peak **concurrent** live notional **$378.32 vs a $250 cap (+51%)**.
-Only `bidReserveUsdc` is computed against live state, so the $5,000 free-USDC
-floor is currently the only real backstop.
+**Verify the running code by HASH, never by the checkout SHA.** `/opt/opta-crank`
+git HEAD reads `d1d0471` with ~129 dirty files and is **misleading** — the fix was
+applied as working-tree edits. The deployed sources are byte-identical to
+`bfa8b0d`:
 
-**Measurement trap — do not repeat it.** Cumulative posted notional over the hour
-was $1,538.71 across 71 posts / 44 pulls. Summing `bid-post-ok` notionals
-overstates BTC at $671 and falsely flags XAU as breaching. Breach must be measured
-as **concurrent** exposure by replaying `bid-post-ok` / `bid-pull-ok` in timestamp
-order against the order pubkey.
+```
+engine.ts b5e9457657e1 · bids.ts 1b887c6c68eb · shadow.ts b747481794e6 · cancel-bids.ts 5cb4b74e9b6c
+```
 
-**DRAIN DECISION — NO DRAIN (founder, 2026-08-03).** 30 canary bids remain live,
-$687.08 total, BTC $375.96 still over cap. Reverting `BID_MAX_CELLS` to 3 does
-**not** retire them: the cell-cap check is guarded by `if (!resting && ...)`, so
-existing bids are repriced forever rather than pulled. The exposure is **frozen** —
-`liveBidCells=30 ≥ 3` blocks every new cell — and stands deliberately because it
-is ~0.1% of free USDC and those 30 bids are **the only sell-side depth on the
-board at launch**. Draining would hand users a one-sided book on day one.
+Runtime proof: `bid-exposure-seed` fires every tick; taker logs `armed-tick`
+(60/h) and `shadow-tick` **0**, so §4 item 4 is also shipped.
 
-**FIX SESSION (own session, this week), in order:**
-1. Cycle `OPTA_WRITER_BID_ENABLED` 0→1 to retire the 30 carried-over bids.
-2. Seed `perAsset` / `globalBidNotional` from the live bid set (the same `myBids`
-   that already seeds `liveBidCells`).
-3. **Red-first** test: a carried-over live bid must consume cap headroom on the
-   NEXT tick. That test fails against today's code.
-4. Also in scope: `taker/src/shadow.ts:75` emits `shadow-tick` even when the taker
-   is genuinely ARMED — rename to `armed-tick` or make it mode-aware. An operator
-   grepping for armed activity currently finds only the boot marker.
-5. Fresh clean canary hour, then widen.
+**24h canary readback (2026-08-10)** — measured from `bid-exposure-seed`, i.e.
+the live set, never summed posts:
+
+| gate | result |
+|---|---|
+| 0 crosses | `would-cross` **0**; 172 posts / 172 pulls over 3h |
+| ≤ $250 / asset | peak **XAU $244.52**, ETH $125.05, SOL $51.52, rest < $1.10 |
+| ≤ $2,500 global | peak **$415.88** |
+| quote-failure flat | **3.89/tick** (3h) vs **4.00/tick** (24h) — normalized by tick count |
+
+Caps **bind**, not merely go unbreached: `asset-cap` fired once in 3h holding XAU
+under $250, and global notional is flat at ~$413.4 across 3h with no tick-over-tick
+ratchet. Pre-fix it grew by up to a full cap per tick.
+
+**MEASUREMENT TRAP — still true, still do not repeat it.** Summing `bid-post-ok`
+notionals overstates exposure (it read BTC $671 and falsely flagged XAU). Measure
+**concurrent** exposure. The easy way now is to read `bid-exposure-seed` directly;
+the manual way is replaying `bid-post-ok`/`bid-pull-ok` in timestamp order against
+the order pubkey.
+
+**TWO CORRECTIONS to what this section used to instruct:**
+
+1. **Cycling `OPTA_WRITER_BID_ENABLED` 0→1 does NOT retire bids.** The flag is
+   INERT by design — `bidPass()`: *"disabled means this pass does nothing at all —
+   it does not even sweep resting bids."* Old fix-step 1 was wrong and would have
+   reported a retire that never happened. **Retire with
+   `writer/src/tools/cancel-bids.ts`**, added in `bfa8b0d` for exactly this.
+2. **The 30 over-cap canary bids are GONE.** Live set is 30 bids / **$413.50**
+   with **BTC absent entirely**, vs the incident's 30 / $687.08 with BTC $375.96.
+   The board turned over under the fixed caps; the NO-DRAIN decision held and no
+   drain was ever needed.
+
+**FLAG LEDGER — `BID_MAX_CELLS`**, reconstructed 2026-08-10 from the `/opt/opta-writer/.env`
+snapshot chain (`cp -a` preserves mtime, so each backup carries the value live at
+its timestamp). Ledgered late; journald only retains from 2026-08-08, so this
+chain is the trail.
+
+| when (UTC) | cells | note |
+|---|---|---|
+| 2026-07-29 18:53 | 3 | first bid canary, `enabled=1` |
+| **2026-08-03 12:25:23** | 3 → **30** | Aug-3 canary hour — found the cap bug |
+| 2026-08-03 ~14:14 | 30 → 3 | post-canary revert |
+| 2026-08-05 11:30 | 3 | pre-drain |
+| 2026-08-05 12:52 | 3, `enabled=0` | drain window |
+| **2026-08-05 14:01:45** | 3 → **30** | **current state**, set in the `bfa8b0d` session |
+| 2026-08-09 18:51 | 30 | untouched by the Helius key rotation |
+
+`BID_MAX_CELLS=30` has been continuously live since **2026-08-05T14:01:49Z** —
+~5 days at time of writing, covering the 24h readback above.
 
 ## 5. Canary hour — the three named gates PASSED
 

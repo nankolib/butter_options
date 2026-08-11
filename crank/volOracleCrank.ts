@@ -38,6 +38,10 @@ import {
   submitWithFallback,
   type SignerWallet,
 } from "@app/utils/pythPullPost";
+// SLICE 1 — the reactive fast-seed loop lives in its own module (the logic is
+// substantial and independently testable); this file owns the hourly cadence
+// and the shared in-flight hand-off between the two.
+import { runFastSeedLoop, type FastSeedConfig } from "./volOracleFastSeed";
 
 // ---- Types -----------------------------------------------------------------
 
@@ -61,6 +65,8 @@ export interface VolOracleCrankContext {
 export interface VolOracleCrankOptions {
   /** When true, run exactly one tick and return; for smoke testing. */
   tickOnce?: boolean;
+  /** SLICE 1 fast-seed loop config. Omitted → env defaults (see fastSeedConfigFromEnv). */
+  fastSeed?: FastSeedConfig;
 }
 
 export interface TickReport {
@@ -103,6 +109,9 @@ export async function runVolOracleCrank(
 
   if (options.tickOnce) {
     try {
+      // TICK_ONCE exercises the HOURLY pass only. The fast-seed loop is a
+      // continuous-mode construct (it is defined by its cadence); running one
+      // of its ticks here would prove nothing the hourly pass doesn't.
       const report = await tickOnce(ctx);
       ctx.log("info", "vol-oracle crank exiting (TICK_ONCE)", { ...report });
     } catch (err) {
@@ -118,6 +127,26 @@ export async function runVolOracleCrank(
   // Then align to the next wall-clock hour boundary.
   await runTickWithGuard(ctx);
 
+  // SLICE 1 — the two loops share ONE `inFlight` set so the hourly pass and the
+  // fast-seed loop can never both submit an init for the same feed inside this
+  // process. Cross-process races (a second crank, an operator script) are caught
+  // by the fast loop's post-failure existence re-check, not by this set.
+  const inFlight = new Set<string>();
+
+  await Promise.all([
+    runHourlyLoop(ctx, inFlight),
+    runFastSeedLoop(ctx, inFlight, options.fastSeed),
+  ]);
+
+  ctx.log("info", "vol-oracle crank stopped cleanly");
+}
+
+/** The original hourly cadence, extracted verbatim so the fast loop can run
+ *  beside it. Behaviour unchanged bar the shared `inFlight` hand-off. */
+async function runHourlyLoop(
+  ctx: VolOracleCrankContext,
+  inFlight: Set<string>,
+): Promise<void> {
   while (!ctx.shouldShutdown()) {
     const sleepMs = msUntilNextHourBoundary(Date.now());
     ctx.log("info", "vol-oracle crank sleeping until next hour boundary", {
@@ -126,16 +155,17 @@ export async function runVolOracleCrank(
     });
     await sleepInterruptibly(sleepMs, ctx.shouldShutdown);
     if (ctx.shouldShutdown()) break;
-    await runTickWithGuard(ctx);
+    await runTickWithGuard(ctx, inFlight);
   }
-
-  ctx.log("info", "vol-oracle crank stopped cleanly");
 }
 
 /** Wrapper that logs + swallows tick-level exceptions so the loop survives. */
-async function runTickWithGuard(ctx: VolOracleCrankContext): Promise<void> {
+async function runTickWithGuard(
+  ctx: VolOracleCrankContext,
+  inFlight?: Set<string>,
+): Promise<void> {
   try {
-    await tickOnce(ctx);
+    await tickOnce(ctx, inFlight);
   } catch (err) {
     ctx.log("error", "vol-oracle tick crashed (will retry next hour)", {
       err: String(err),
@@ -156,6 +186,10 @@ async function runTickWithGuard(ctx: VolOracleCrankContext): Promise<void> {
  */
 export async function tickOnce(
   ctx: VolOracleCrankContext,
+  /** SLICE 1: feeds the fast-seed loop is mid-init on. A feed in this set is
+   *  SKIPPED by this pass's init branch — the other loop owns it this instant.
+   *  Optional so TICK_ONCE and the existing tests call in unchanged. */
+  inFlight?: Set<string>,
 ): Promise<TickReport> {
   const startMs = Date.now();
   const report: TickReport = {
@@ -215,7 +249,7 @@ export async function tickOnce(
       });
       continue;
     }
-    await processOneFeed(ctx, feedIdBytes, seedVol, report);
+    await processOneFeed(ctx, feedIdBytes, seedVol, report, inFlight);
   }
 
   report.durationMs = Date.now() - startMs;
@@ -228,6 +262,7 @@ async function processOneFeed(
   feedIdBytes: number[],
   seedVol: number,
   report: TickReport,
+  inFlight?: Set<string>,
 ): Promise<void> {
   const feedIdHex = hexFromBytes(feedIdBytes);
   const feedShort = feedIdHex.slice(0, 8);
@@ -251,6 +286,22 @@ async function processOneFeed(
   }
 
   if (!existing) {
+    // SLICE 1 collision guard. The fast-seed loop may be mid-init on this exact
+    // feed right now (it read the same "missing" state seconds ago). Anchor's
+    // plain `init` would make the loser revert "already in use", which is a
+    // correct on-chain outcome but a spurious ERROR in the crank's log stream —
+    // and this pass would then count it under feedsErrored, which is what a
+    // monitor pages on. Skipping is free: the fast loop will finish the init,
+    // and this feed's first push lands on the next hourly pass.
+    if (inFlight?.has(feedIdHex)) {
+      ctx.log("info", "vol-oracle init skipped (fast-seed loop owns this feed)", {
+        feed: feedShort,
+        pda: oraclePda.toBase58(),
+      });
+      report.feedsSkippedOther += 1;
+      return;
+    }
+
     // -------- Init + immediate seed --------
     // Two txs back-to-back. The seed push goes through the seed branch
     // (last_spot_price == 0) which skips the rate-limit check, so they

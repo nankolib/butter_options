@@ -87,6 +87,28 @@ export function isUserRejection(e: any): boolean {
  *  to a message, never `0x3`. Matching them therefore cannot retry a real failure. */
 export function isStaleSubmitError(e: any): boolean {
   const name = String(e?.name ?? "");
+
+  // ── SLICE 2A: the STRUCTURED fingerprint, checked first ────────────────────
+  // D2/G1 wrapped every connection in `withPollingConfirm`, which deliberately
+  // stopped throwing web3.js's TransactionExpired* classes and started throwing
+  // `TxOutcomeError` instead — specifically so Anchor would not resend beneath
+  // it. Correct for its purpose, and it silently disabled the retry below: the
+  // new error's name is "TxOutcomeError" and its message is "Not on chain —
+  // not found on chain. Safe to send again.", so neither the class check nor
+  // any text match fired. The slow-approve case this whole function exists for
+  // stopped being handled, loudly enough to break nothing and quietly enough
+  // that nobody noticed.
+  //
+  // We read the OUTCOME rather than adding a third magic string, because the
+  // outcome is data and the message is prose. `dropped` means the chain was
+  // asked and the transaction is genuinely not there; `retryAllowed` is that
+  // module's own verdict on resending. Both must agree — a `landed` outcome
+  // must NEVER retry (the market already exists; a resend is a second create),
+  // and neither must `failed` (the program rejected it on its merits).
+  if (name === "TxOutcomeError") {
+    return e?.outcome?.kind === "dropped" && e?.retryAllowed === true;
+  }
+
   if (
     name === "TransactionExpiredBlockheightExceededError" ||
     name === "TransactionExpiredTimeoutError"
@@ -239,6 +261,52 @@ export async function submitSbCreateMarket(args: {
   }
   // Unreachable: the loop returns on success or throws. Defensive only.
   throw new Error("SB create: exhausted retries");
+}
+
+/**
+ * SLICE 2A — the PYTH arm's first retry, ever.
+ *
+ * The SB arm has had a single refetch since `62f228e`; the Pyth arm never did,
+ * and it is the arm that serves EVERY non-curated asset — i.e. almost anything
+ * a user can actually create. A slow wallet approve there produced the same
+ * dead end, with no recovery at all.
+ *
+ * Why this rebuilds rather than resubmits: a Pyth create carries a Hermes price
+ * update and a blockhash inside the signed transaction. Once either has expired
+ * the bytes are worthless, so resending them is guaranteed to fail a second
+ * time. The retry has to go all the way back to `build` for a fresh update and
+ * a fresh blockhash, and the user re-signs the FRESH transaction — never the
+ * stale one.
+ *
+ * Deliberately generic over the tx type: this file must not import the Pyth
+ * builder (it stays free of the receiver SDK), so the caller passes both halves
+ * in. Exactly one retry, on exactly the same stale signal as the SB arm.
+ */
+export async function submitPythCreateWithRetry<T>(args: {
+  /** Build the transaction set — fresh price update + fresh blockhash. */
+  build: () => Promise<T>;
+  /** Sign + send + confirm. Throws on failure. */
+  submit: (txs: T) => Promise<string>;
+  /** Fires just before the second wallet prompt so the caller can say why a
+   *  second approval is being asked for. */
+  onRefetch?: () => void;
+}): Promise<string> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const txs = await args.build();
+    try {
+      return await args.submit(txs);
+    } catch (e) {
+      // A user rejection is a decision, not a failure — never retried.
+      if (isUserRejection(e)) throw e;
+      if (attempt === 0 && isStaleSubmitError(e)) {
+        args.onRefetch?.();
+        continue;
+      }
+      throw e;
+    }
+  }
+  // Unreachable: the loop returns on success or throws. Defensive only.
+  throw new Error("Pyth create: exhausted retries");
 }
 
 /** Map an SB create failure to a clean inline toast message (title fixed to

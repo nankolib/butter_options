@@ -30,11 +30,20 @@ import { MARKET_SEED } from "../../utils/constants";
 import { buildPostUpdateAndCreateMarketTx, submitWithFallback } from "../../utils/pythPullPost";
 import {
   submitSbCreateMarket,
+  submitPythCreateWithRetry,
   mapSbError,
   SbUserRejectedError,
 } from "./newMarketCreate";
+import {
+  IDENTITY_TIMEOUT_MS,
+  looksLikeMint,
+  resolveTokenIdentity,
+  type TokenIdentity,
+} from "../../utils/tokenIdentity";
+import { VOL_ORACLE_EXPECTED_WAIT, VOL_ORACLE_POLL_MS } from "../../hooks/useVolOracleStatus";
+import { VOL_ORACLE_SEED } from "../../utils/constants";
 import { invalidateAccountScans } from "../../hooks/useFetchAccounts";
-import { resolveMintSymbol, parseMintAddress } from "../../utils/resolveMintSymbol";
+import { parseMintAddress, resolveMintSymbol } from "../../utils/resolveMintSymbol";
 import { SolscanLink } from "../../components/SolscanLink";
 
 type Props = {
@@ -85,15 +94,31 @@ type CatalogState =
 const entriesOf = (s: CatalogState): CatalogEntry[] | null =>
   s.kind === "fresh" || s.kind === "stale" ? s.entries : null;
 
-// Smart asset input (crypto paste path) resolution state.
+// ---------------------------------------------------------------------------
+// SLICE 2A — identity and listability are TWO questions, asked in that order.
+//
+// The old state machine collapsed them: a token with no price feed produced
+// "no-feed" and nothing else, so a real, verified, well-known token rendered as
+// a bare rejection with no name attached. Worse, identity failure and feed
+// absence shared a code path, so "we could not read this token" and "this token
+// cannot be listed" were indistinguishable to the user.
+//
+// Now: resolve WHO it is first and always show that. Then, separately, say
+// whether it can be listed. BP is "Backpack, verified — no settlement feed yet",
+// which is the truth; it used to be twelve seconds of spinner followed by a
+// one-line refusal.
+// ---------------------------------------------------------------------------
 type Resolve =
   | { kind: "idle" }
   | { kind: "resolving" }
-  | { kind: "resolved"; choice: FeedChoice; symbol: string; mint: string }
-  | { kind: "no-feed"; symbol: string }
-  | { kind: "not-found" }
-  | { kind: "no-metadata" }
-  | { kind: "transport-error" }
+  /** Identity known AND a catalog feed matched — this can be created. */
+  | { kind: "listable"; identity: TokenIdentity; choice: FeedChoice }
+  /** Identity known, no settlement feed. An honest dead end, with a name on it. */
+  | { kind: "no-feed"; identity: TokenIdentity }
+  /** Every source answered; none knows this token. */
+  | { kind: "unknown" }
+  /** We could not check (timeout / transport). NOT the same as unknown. */
+  | { kind: "unavailable"; reason: "timeout" | "transport" }
   | { kind: "invalid" };
 
 // Inline availability of the on-chain identifier.
@@ -108,7 +133,7 @@ type Avail =
 type Phase =
   | { kind: "form" }
   | { kind: "submitting"; label: string }
-  | { kind: "success"; sig: string; assetName: string }
+  | { kind: "success"; sig: string; assetName: string; feedIdHex: string; oracleSource: number }
   | { kind: "failed"; message: string; sig?: string };
 
 export const NewMarketTerminalModal: FC<Props> = ({ onClose, onCreated }) => {
@@ -198,56 +223,122 @@ export const NewMarketTerminalModal: FC<Props> = ({ onClose, onCreated }) => {
       .map(toChoice);
   }, [registry, selectedClass, query, looksLikeAddress]);
 
-  // ---- smart paste resolution (crypto only) ----
+  // WHEN do we ask the identity service? A pasted address always. A typed name
+  // ONLY once our own asset list has come up empty — otherwise every keystroke
+  // toward a listed asset would fire a lookup we do not need. This is what lets
+  // someone type "backpack", get no local match, and still be told what the
+  // token is and why it cannot be listed, instead of a bare "No assets match".
+  const identityQuery = useMemo(() => {
+    if (!isCrypto || advancedActive || classNotEnabled) return "";
+    const q = query.trim();
+    if (looksLikeAddress) return q;
+    if (q.length >= 2 && results.length === 0 && catalog.kind !== "loading") return q;
+    return "";
+  }, [isCrypto, advancedActive, classNotEnabled, looksLikeAddress, query, results.length, catalog.kind]);
+
+  // ---- SLICE 2A: identity resolution (bounded, catalog-first) ----
+  //
+  // WHAT THIS REPLACES. The previous effect called an RPC-only resolver that
+  // walked 2-5 sequential round-trips with a silent retry and NO TIMEOUT.
+  // Measured on 2026-08-11 against the app's own mainnet fallback RPC, a single
+  // BP mint read took 12,292 ms, and the same read repeated ran 4,676 / 215 /
+  // 1,663 ms. That is the "infinite spinner": not a hang, an unbounded wait.
+  // Both reported dead ends (BP, 9cRCn9…pump) were real, resolvable tokens —
+  // "Backpack" and "ANSEM" — that simply never got the chance to say so.
+  //
+  // resolveTokenIdentity is catalog-first (~0.4 s) with the on-chain resolver
+  // kept as the fallback for tokens no catalog has indexed, and a HARD deadline
+  // over the whole thing. It cannot hang.
+  //
+  // Runs for a pasted ADDRESS or a typed NAME once the local catalog has no
+  // match — so a user who types "backpack" and gets nothing from our own asset
+  // list still learns what the token is and why it is not listable.
   useEffect(() => {
-    if (!looksLikeAddress) {
+    const raw = query.trim();
+    if (!identityQuery) {
       setResolve({ kind: "idle" });
       return;
     }
-    const raw = query.trim();
     const seq = ++resolveSeq.current;
+    const ctrl = new AbortController();
     setResolve({ kind: "resolving" });
+
     const t = window.setTimeout(async () => {
-      const mint = parseMintAddress(raw);
-      if (!mint) {
+      const isAddr = looksLikeMint(raw);
+      const mint = isAddr ? parseMintAddress(raw) : null;
+      if (isAddr && !mint) {
         if (resolveSeq.current === seq) setResolve({ kind: "invalid" });
         return;
       }
-      const res = await resolveMintSymbol(connection, mint);
-      if (resolveSeq.current !== seq) return;
-      if (res.kind === "not-found") {
-        setResolve({ kind: "not-found" });
-        return;
-      }
-      if (res.kind === "transport-error") {
-        setResolve({ kind: "transport-error" });
-        return;
-      }
-      if (res.kind === "no-metadata") {
-        setResolve({ kind: "no-metadata" });
-        return;
-      }
-      // Anti-spoof: use the resolved symbol ONLY to look up a canonical crypto
-      // catalog asset; the feed is taken from that matched row, never the mint.
-      const sym = normTicker(res.symbol);
-      const match = registry.find((r) => r.assetClass === 0 && normTicker(r.ticker) === sym);
-      if (match) {
-        setResolve({
-          kind: "resolved",
-          choice: toChoice(match),
-          symbol: res.symbol,
-          mint: mint.toBase58(),
-        });
-      } else {
-        setResolve({ kind: "no-feed", symbol: res.symbol });
-      }
-    }, 350);
-    return () => window.clearTimeout(t);
-  }, [looksLikeAddress, query, connection, registry]);
 
-  // When a paste resolves to a catalog asset, adopt it as the selection.
+      const out = await resolveTokenIdentity(raw, {
+        endpoint: sbEndpoint,
+        mint,
+        // The on-chain resolver is injected rather than imported by the identity
+        // module, so that module stays free of ./env and therefore testable.
+        chainFallback: async (mk) => {
+          const r = await resolveMintSymbol(connection, mk);
+          if (r.kind === "resolved") {
+            return {
+              kind: "found",
+              identity: {
+                mint: mk.toBase58(),
+                symbol: r.symbol,
+                name: r.name,
+                // On-chain metadata is self-asserted: never inherits a badge.
+                verified: false,
+                tags: [],
+                decimals: null,
+                tokenProgram: null,
+                iconDataUri: null,
+                origin: "chain",
+              },
+            };
+          }
+          if (r.kind === "transport-error") return { kind: "unavailable", reason: "transport" };
+          return { kind: "unknown" };
+        },
+        timeoutMs: IDENTITY_TIMEOUT_MS,
+        signal: ctrl.signal,
+      });
+      if (resolveSeq.current !== seq) return;
+
+      if (out.kind === "unavailable") {
+        setResolve({ kind: "unavailable", reason: out.reason });
+        return;
+      }
+      if (out.kind === "unknown") {
+        setResolve({ kind: "unknown" });
+        return;
+      }
+
+      // Identity is known. NOW ask the separate question: is it listable?
+      //
+      // ANTI-SPOOF, unchanged and load-bearing: the resolved symbol only ever
+      // SELECTS a canonical catalog row. The feed a market is created against
+      // always comes from that row, never from the pasted mint or the catalog's
+      // own metadata — so a spoofed symbol can at worst point at a legitimate
+      // asset, and can never inject a feed.
+      const sym = normTicker(out.identity.symbol);
+      const match = sym
+        ? registry.find((r) => r.assetClass === 0 && normTicker(r.ticker) === sym)
+        : undefined;
+      setResolve(
+        match
+          ? { kind: "listable", identity: out.identity, choice: toChoice(match) }
+          : { kind: "no-feed", identity: out.identity },
+      );
+    }, 250);
+
+    return () => {
+      window.clearTimeout(t);
+      ctrl.abort();
+    };
+  }, [identityQuery, query, connection, registry, sbEndpoint]);
+
+  // A listable identity becomes the selection (and seeds the on-chain name).
   useEffect(() => {
-    if (resolve.kind === "resolved") {
+    if (resolve.kind === "listable") {
       setSelected(resolve.choice);
       if (!userEditedRef.current) setAssetName(resolve.choice.ticker);
     }
@@ -370,7 +461,13 @@ export const NewMarketTerminalModal: FC<Props> = ({ onClose, onCreated }) => {
         if (existingHex === activeFeed.feedIdHex) {
           invalidateAccountScans(program, ["optionsMarket"]);
           onCreated();
-          setPhase({ kind: "success", sig: "", assetName });
+          setPhase({
+            kind: "success",
+            sig: "",
+            assetName,
+            feedIdHex: activeFeed.feedIdHex,
+            oracleSource: activeFeed.oracleSource,
+          });
           return;
         }
         setPhase({ kind: "failed", message: `Name taken by a different asset.` });
@@ -396,24 +493,40 @@ export const NewMarketTerminalModal: FC<Props> = ({ onClose, onCreated }) => {
             setPhase({ kind: "submitting", label: "Fetching a fresh quote — approve promptly…" }),
         });
       } else {
-        // --- Pyth arm (byte-identical to legacy; oracle_source forwarded) ---
-        const txs = await buildPostUpdateAndCreateMarketTx(
-          program,
-          anchorWallet,
-          assetName,
-          activeFeed.feedIdHex,
-          activeFeed.assetClass,
-          getHermesBase(),
-          activeFeed.oracleSource,
-        );
-        sig = await submitWithFallback(program.provider.connection, anchorWallet, txs);
+        // --- Pyth arm — now with the single refetch the SB arm has had since
+        // `62f228e`, and which this arm has NEVER had. It serves every
+        // non-curated asset, i.e. almost everything a user can create, so a
+        // slow wallet approve here was a dead end with no recovery at all.
+        // The retry REBUILDS (fresh price update + fresh blockhash) rather than
+        // resending bytes that are already expired.
+        sig = await submitPythCreateWithRetry({
+          build: () =>
+            buildPostUpdateAndCreateMarketTx(
+              program,
+              anchorWallet,
+              assetName,
+              activeFeed.feedIdHex,
+              activeFeed.assetClass,
+              getHermesBase(),
+              activeFeed.oracleSource,
+            ),
+          submit: (txs) => submitWithFallback(program.provider.connection, anchorWallet, txs),
+          onRefetch: () =>
+            setPhase({ kind: "submitting", label: "Refreshing the price update — approve promptly…" }),
+        });
       }
 
       // Create-success refetch — drop the coalesced optionsMarket scan so the
       // parent's refetch reads chain-fresh (no manual reload).
       invalidateAccountScans(program, ["optionsMarket"]);
       onCreated();
-      setPhase({ kind: "success", sig, assetName });
+      setPhase({
+        kind: "success",
+        sig,
+        assetName,
+        feedIdHex: activeFeed.feedIdHex,
+        oracleSource: activeFeed.oracleSource,
+      });
     } catch (e) {
       if (e instanceof SbUserRejectedError) {
         setPhase({ kind: "failed", message: "Rejected in wallet." });
@@ -456,7 +569,13 @@ export const NewMarketTerminalModal: FC<Props> = ({ onClose, onCreated }) => {
 
         <div className="flex-1 overflow-y-auto px-6 py-5">
           {phase.kind === "success" ? (
-            <SuccessMoment sig={phase.sig} assetName={phase.assetName} onClose={onClose} />
+            <SuccessMoment
+              sig={phase.sig}
+              assetName={phase.assetName}
+              feedIdHex={phase.feedIdHex}
+              oracleSource={phase.oracleSource}
+              onClose={onClose}
+            />
           ) : (
             <div className="space-y-6">
               {/* Asset class */}
@@ -536,7 +655,7 @@ export const NewMarketTerminalModal: FC<Props> = ({ onClose, onCreated }) => {
                   />
 
                   {/* Smart paste resolution states (crypto) */}
-                  {looksLikeAddress && <ResolveRow resolve={resolve} />}
+                  {!!identityQuery && <ResolveRow resolve={resolve} />}
 
                   {/* Text search results */}
                   {!looksLikeAddress && results.length > 0 && (
@@ -565,7 +684,7 @@ export const NewMarketTerminalModal: FC<Props> = ({ onClose, onCreated }) => {
                       })}
                     </ul>
                   )}
-                  {!looksLikeAddress && selectedClass !== null && query.trim() && results.length === 0 && catalog.kind !== "loading" && (
+                  {!identityQuery && selectedClass !== null && query.trim() && results.length === 0 && catalog.kind !== "loading" && (
                     <p className="mt-2 font-mono-plex text-[10.5px] uppercase tracking-[0.12em] text-l-muted">
                       No assets match "{query.trim()}".
                     </p>
@@ -729,11 +848,19 @@ const Section: FC<{ label: string; children: React.ReactNode }> = ({ label, chil
   </div>
 );
 
+// -----------------------------------------------------------------------------
+// ResolveRow — identity FIRST, then a separate verdict on listability.
+//
+// The two lines are deliberately independent. "We don't know what this is" and
+// "we know exactly what this is and it can't be listed" are different answers
+// and deserve different words; the old single-line design could only say the
+// second one, so a verified, well-known token read as a flat refusal.
+// -----------------------------------------------------------------------------
 const ResolveRow: FC<{ resolve: Resolve }> = ({ resolve }) => {
   if (resolve.kind === "resolving") {
     return (
-      <p className="mt-2 font-mono-plex text-[12px] text-l-muted" data-testid="resolve-state">
-        Resolving token…
+      <p className="mt-2 font-mono-plex text-[12px] text-l-muted" data-testid="resolve-state" data-state="resolving">
+        Looking this token up…
       </p>
     );
   }
@@ -744,55 +871,90 @@ const ResolveRow: FC<{ resolve: Resolve }> = ({ resolve }) => {
       </p>
     );
   }
-  if (resolve.kind === "not-found") {
+  if (resolve.kind === "unknown") {
     return (
-      <p className="mt-2 font-mono-plex text-[12px] text-l-muted" data-testid="resolve-state" data-state="not-found">
-        Token not found.
+      <p className="mt-2 font-mono-plex text-[12px] text-l-muted" data-testid="resolve-state" data-state="unknown">
+        No token found with that address or name.
       </p>
     );
   }
-  if (resolve.kind === "transport-error") {
+  if (resolve.kind === "unavailable") {
+    // NEVER "not found". We could not check — saying the token does not exist
+    // would be a claim we have not earned.
     return (
-      <p className="mt-2 font-mono-plex text-[12px] text-l-muted" data-testid="resolve-state" data-state="transport-error">
-        Couldn't verify this token right now — retry.
+      <p className="mt-2 font-mono-plex text-[12px] text-l-muted" data-testid="resolve-state" data-state="unavailable">
+        {resolve.reason === "timeout"
+          ? "Lookup timed out — try again."
+          : "Couldn't reach the token lookup right now — try again."}
       </p>
     );
   }
-  if (resolve.kind === "no-metadata") {
-    return (
-      <p className="mt-2 font-mono-plex text-[12px] text-l-muted" data-testid="resolve-state" data-state="no-metadata">
-        Couldn't read token metadata for this address.
-      </p>
-    );
-  }
-  if (resolve.kind === "no-feed") {
-    return (
-      <p className="mt-2 font-mono-plex text-[12px] text-l-down" data-testid="resolve-state" data-state="no-feed">
-        No price feed exists for this token — it can't be listed yet.
-      </p>
-    );
-  }
-  if (resolve.kind === "resolved") {
-    return (
-      <div
-        className="mt-2 rounded-[6px] border border-l-hair bg-l-surface px-3 py-2"
-        data-testid="resolve-state"
-        data-state="resolved"
-      >
-        <div className="flex items-center justify-between gap-3 font-mono-plex text-[12px]">
-          <span className="font-medium text-l-text">{resolve.choice.ticker}</span>
-          <span className="tabular-nums text-l-faint">
-            {resolve.mint.slice(0, 4)}…{resolve.mint.slice(-4)}
+
+  // "idle" reaches here only if the caller renders the row before a query
+  // exists; nothing to say yet.
+  if (resolve.kind === "idle") return null;
+
+  const id = resolve.identity;
+  const listable = resolve.kind === "listable";
+  return (
+    <div
+      className="mt-2 rounded-[6px] border border-l-hair bg-l-surface px-3 py-2"
+      data-testid="resolve-state"
+      data-state={listable ? "listable" : "no-feed"}
+    >
+      {/* ---- Identity ---- */}
+      <div className="flex items-center gap-2.5">
+        {id.iconDataUri ? (
+          // Always a data: URI (enforced client- and server-side). A remote URL
+          // would be blocked by our img-src and render as a broken image.
+          <img
+            src={id.iconDataUri}
+            alt=""
+            width={22}
+            height={22}
+            className="h-[22px] w-[22px] flex-none rounded-full"
+            data-testid="resolve-icon"
+          />
+        ) : (
+          <span className="flex h-[22px] w-[22px] flex-none items-center justify-center rounded-full border border-l-hair font-mono-plex text-[9px] text-l-faint">
+            {(id.symbol || "?").slice(0, 2)}
           </span>
-        </div>
-        <div className="mt-1 font-mono-plex text-[10.5px] text-l-up-text">price feed available</div>
-        <div className="mt-0.5 font-mono-plex text-[10.5px] text-l-muted">
-          Matches catalog asset: {resolve.choice.ticker}
-        </div>
+        )}
+        <span className="font-mono-plex text-[13px] font-medium text-l-text" data-testid="resolve-symbol">
+          {id.symbol || "—"}
+        </span>
+        {id.name && id.name !== id.symbol && (
+          <span className="truncate font-mono-plex text-[11.5px] text-l-muted">{id.name}</span>
+        )}
+        {id.verified && (
+          <span
+            className="ml-auto flex-none rounded-[4px] border border-l-hair px-[6px] py-[1px] font-mono-plex text-[9px] uppercase tracking-[0.12em] text-l-up-text"
+            data-testid="resolve-verified"
+          >
+            ✓ Verified
+          </span>
+        )}
       </div>
-    );
-  }
-  return null;
+
+      <div className="mt-1 font-mono-plex text-[10px] tabular-nums text-l-faint">
+        {id.mint.slice(0, 4)}…{id.mint.slice(-4)}
+        {id.origin === "chain" && " · on-chain metadata, unlisted"}
+      </div>
+
+      {/* ---- Verdict: a SEPARATE question from identity ---- */}
+      <div className="mt-2 border-t border-l-hair pt-2" data-testid="feed-verdict" data-listable={listable}>
+        {listable ? (
+          <span className="font-mono-plex text-[11px] text-l-up-text">
+            Price feed live — this can be listed.
+          </span>
+        ) : (
+          <span className="font-mono-plex text-[11px] text-l-muted">
+            No settlement feed yet — this can't be listed.
+          </span>
+        )}
+      </div>
+    </div>
+  );
 };
 
 const AvailabilityLine: FC<{ avail: Avail; valid: boolean; assetName: string }> = ({ avail, valid }) => {
@@ -827,40 +989,107 @@ const AvailabilityLine: FC<{ avail: Avail; valid: boolean; assetName: string }> 
   );
 };
 
-const SuccessMoment: FC<{ sig: string; assetName: string; onClose: () => void }> = ({ sig, assetName, onClose }) => (
-  <div className="space-y-5 py-2" data-testid="create-success">
-    <div className="font-mono-plex text-[10px] uppercase tracking-[0.2em] text-l-up-text">● Market created</div>
-    <div className="font-mono-plex text-[30px] leading-none tracking-[0.02em] text-l-text">{assetName}</div>
-    {sig && (
-      <div className="flex items-center gap-2 font-mono-plex text-[11px] text-l-muted">
-        <span className="text-l-faint">SIG</span>
-        <span className="tabular-nums">
-          {sig.slice(0, 4)}…{sig.slice(-4)}
-        </span>
-        <SolscanLink kind="tx" id={sig} label="transaction" />
+// -----------------------------------------------------------------------------
+// SuccessMoment — two honest variants, decided by how the market is priced.
+//
+// A market is registered the instant create lands, but it is not WRITABLE until
+// its VolOracle PDA exists. Which of those two states you are in depends on the
+// oracle source, and until now the modal said the same thing either way:
+// "Not tradeable until the first option is written" — true, and silent about the
+// wait that actually blocks you.
+//
+//   Switchboard-sourced → the curated feeds all have oracles already, so the
+//     market is writable NOW. Say so.
+//   Pyth-sourced (every non-curated asset) → the oracle is seeded reactively by
+//     the crank. Measured 114 s end-to-end on 2026-08-11. So: say ~2 minutes,
+//     then POLL and flip the copy the moment it lands — the user should watch it
+//     go green, not be told to come back and reload.
+// -----------------------------------------------------------------------------
+const SuccessMoment: FC<{
+  sig: string;
+  assetName: string;
+  feedIdHex: string;
+  oracleSource: number;
+  onClose: () => void;
+}> = ({ sig, assetName, feedIdHex, oracleSource, onClose }) => {
+  const { program } = useProgram();
+  // SB-curated markets are born writable — their oracle predates the market.
+  const [oracleReady, setOracleReady] = useState(oracleSource === 1);
+
+  useEffect(() => {
+    if (oracleReady || !program || !/^[0-9a-f]{64}$/.test(feedIdHex)) return;
+    let cancelled = false;
+    const [pda] = PublicKey.findProgramAddressSync(
+      [Buffer.from(VOL_ORACLE_SEED), Buffer.from(feedIdHex, "hex")],
+      program.programId,
+    );
+    const check = async () => {
+      try {
+        const info = await program.provider.connection.getAccountInfo(pda, "confirmed");
+        if (!cancelled && info && info.owner.equals(program.programId)) setOracleReady(true);
+      } catch {
+        /* transient — the next tick retries */
+      }
+    };
+    check();
+    const id = window.setInterval(check, VOL_ORACLE_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [oracleReady, program, feedIdHex]);
+
+  return (
+    <div className="space-y-5 py-2" data-testid="create-success">
+      <div className="font-mono-plex text-[10px] uppercase tracking-[0.2em] text-l-up-text">● Market created</div>
+      <div className="font-mono-plex text-[30px] leading-none tracking-[0.02em] text-l-text">{assetName}</div>
+      {sig && (
+        <div className="flex items-center gap-2 font-mono-plex text-[11px] text-l-muted">
+          <span className="text-l-faint">SIG</span>
+          <span className="tabular-nums">
+            {sig.slice(0, 4)}…{sig.slice(-4)}
+          </span>
+          <SolscanLink kind="tx" id={sig} label="transaction" />
+        </div>
+      )}
+
+      <div data-testid="write-readiness" data-ready={oracleReady}>
+        {oracleReady ? (
+          <p className="font-mono-plex text-[12px] leading-[1.6] text-l-up-text">
+            Registered on-chain and ready to write. It becomes tradeable once the first option is written.
+          </p>
+        ) : (
+          <p className="font-mono-plex text-[12px] leading-[1.6] text-l-muted">
+            Registered on-chain. Pricing is warming up — this takes {VOL_ORACLE_EXPECTED_WAIT}. You can
+            leave this open; it updates itself.
+          </p>
+        )}
       </div>
-    )}
-    <p className="font-mono-plex text-[12px] leading-[1.6] text-l-muted">
-      Registered on-chain. Not tradeable until the first option is written.
-    </p>
-    <div className="flex flex-wrap items-center gap-3 pt-1">
-      <Link
-        to={`/write?asset=${encodeURIComponent(assetName)}`}
-        onClick={onClose}
-        data-testid="write-first-option"
-        className="inline-flex items-center justify-center rounded-[6px] bg-l-up px-[16px] py-[8px] font-sans text-[13px] font-medium text-l-on-up no-underline transition-opacity hover:opacity-90"
-      >
-        Write first option
-      </Link>
-      <Link
-        to="/markets"
-        onClick={onClose}
-        className="inline-flex items-center justify-center rounded-[6px] border border-l-hair px-[16px] py-[8px] font-sans text-[13px] font-medium text-l-muted no-underline transition-colors hover:text-l-text"
-      >
-        View on Markets
-      </Link>
+
+      <div className="flex flex-wrap items-center gap-3 pt-1">
+        <Link
+          to={`/write?asset=${encodeURIComponent(assetName)}`}
+          onClick={onClose}
+          data-testid="write-first-option"
+          aria-disabled={!oracleReady}
+          className={`inline-flex items-center justify-center rounded-[6px] px-[16px] py-[8px] font-sans text-[13px] font-medium no-underline transition-opacity ${
+            oracleReady
+              ? "bg-l-up text-l-on-up hover:opacity-90"
+              : "border border-l-hair text-l-faint pointer-events-none opacity-50"
+          }`}
+        >
+          {oracleReady ? "Write first option" : "Waiting for pricing…"}
+        </Link>
+        <Link
+          to="/markets"
+          onClick={onClose}
+          className="inline-flex items-center justify-center rounded-[6px] border border-l-hair px-[16px] py-[8px] font-sans text-[13px] font-medium text-l-muted no-underline transition-colors hover:text-l-text"
+        >
+          View on Markets
+        </Link>
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 export default NewMarketTerminalModal;

@@ -23,6 +23,7 @@ import { useProgram } from "../../../hooks/useProgram";
 import { deriveEpochConfig } from "../../../hooks/useAccounts";
 import { showToast } from "../../../components/Toast";
 import { useOptionPriceQuoteFreshness } from "../../../hooks/useOptionPriceQuoteFreshness";
+import { VOL_ORACLE_EXPECTED_WAIT } from "../../../hooks/useVolOracleStatus";
 import {
   applyVolSmile,
   calculateCallPremium,
@@ -255,7 +256,7 @@ export function useWriteController(input: ControllerInput): WriteController {
     if (!chosen) return null;
     if (!unseededTickers.has(chosen.ticker)) return null;
     return {
-      tooltip: `Vol oracle for ${chosen.ticker} not yet seeded. New markets need ~1 hour for the oracle crank to initialize the oracle. Try again later, or contact support if this persists past 24 hours.`,
+      tooltip: `Pricing for ${chosen.ticker} is still warming up — this takes ${VOL_ORACLE_EXPECTED_WAIT} after a market is created. This unblocks itself; no need to reload.`,
     };
   }, [chosen, unseededTickers]);
 
@@ -316,7 +317,7 @@ export function useWriteController(input: ControllerInput): WriteController {
       const oracleOk = await checkVolOracle(feedIdHex);
       if (!oracleOk) {
         throw new Error(
-          `Vol oracle for ${chosen.ticker} not yet seeded. New markets need ~1 hour for the oracle crank to initialize the oracle. Try again later, or contact support if this persists past 24 hours.`,
+          `Pricing for ${chosen.ticker} is still warming up — this takes ${VOL_ORACLE_EXPECTED_WAIT} after a market is created. This unblocks itself; no need to reload.`,
         );
       }
 

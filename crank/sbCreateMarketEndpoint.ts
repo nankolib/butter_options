@@ -60,6 +60,7 @@ import { lookupSbFeedDatum, normSbFeedHash } from "@app/utils/sbFeedData";
 import { isSupportedSbFeed } from "./sbFeedRegistry";
 import { buildSwitchboardCreateMarketTx } from "./switchboardCreateMarket";
 import { getLivenessMap } from "./livenessStore";
+import { handleTokenIdentity } from "./tokenIdentity";
 
 type LogFn = (
   level: "info" | "warn" | "error",
@@ -112,6 +113,10 @@ interface EndpointConfig {
   rateWindowMs: number;
   buildAttempts: number;
   trustProxy: boolean;
+  /** SLICE 2A — OPTIONAL tokens.xyz enrichment key. Unset = Jupiter only, which
+   *  is the fully-working default; the key can only ever raise confidence in the
+   *  verified flag, never gate the lookup. */
+  tokensXyzApiKey: string | undefined;
 }
 
 function readConfig(): EndpointConfig {
@@ -130,6 +135,9 @@ function readConfig(): EndpointConfig {
     rateWindowMs: num(process.env.OPTA_SB_CREATE_RATE_WINDOW_MS, DEFAULT_RATE_WINDOW_MS),
     buildAttempts: num(process.env.OPTA_SB_CREATE_BUILD_ATTEMPTS, DEFAULT_BUILD_ATTEMPTS),
     trustProxy: (process.env.OPTA_SB_CREATE_TRUST_PROXY ?? "") === "1",
+    // Empty string is treated as UNSET (the same trap that turned a cleared
+    // OPTA_WRITER_EXCLUDE_CLASSES into [0]).
+    tokensXyzApiKey: (process.env.TOKENS_XYZ_API_KEY ?? "").trim() || undefined,
   };
 }
 
@@ -272,7 +280,7 @@ async function handleRequest(
   // CORS preflight.
   if (req.method === "OPTIONS") {
     const headers: Record<string, string> = {
-      "access-control-allow-methods": "POST, OPTIONS",
+      "access-control-allow-methods": "GET, POST, OPTIONS",
       "access-control-allow-headers": "content-type",
       "access-control-max-age": "600",
     };
@@ -309,6 +317,28 @@ async function handleRequest(
     }
     res.writeHead(200, headers);
     res.end(JSON.stringify(getLivenessMap()));
+    return;
+  }
+
+  // GET /token-identity (SLICE 2A) — resolve a pasted mint / typed name to its
+  // catalog identity, with the logo INLINED as a data: URI.
+  //
+  // It lives here because this file is already the create flow's backend, and
+  // because the alternative (browser-direct) cannot show a logo at all: our CSP
+  // allows no remote image host, and token icons live on arbitrary third
+  // parties. Inlining costs zero CSP change — `data:` is already permitted, and
+  // this host is already in connect-src.
+  //
+  // Rate-limited like the create path: it is an unauthenticated GET that makes
+  // upstream calls, so it gets the same per-IP budget rather than a free one.
+  if (req.method === "GET" && path === "/token-identity") {
+    // `ip` is derived here rather than reused: the create path computes it
+    // further down, after this route has already returned.
+    if (!rateLimit(clientIp(req, cfg.trustProxy), Date.now())) {
+      sendJson(res, 429, echoOrigin, { error: "rate limited" });
+      return;
+    }
+    await handleTokenIdentity(req, res, echoOrigin, cfg.tokensXyzApiKey, ctx.log);
     return;
   }
 

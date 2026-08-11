@@ -8,19 +8,26 @@ import { VOL_ORACLE_SEED } from "../utils/constants";
 // useVolOracleStatus — surface vol-oracle coverage state to the Write flow
 // =============================================================================
 //
-// Background. The vol-oracle crank polls discovered feeds on an hourly
-// cadence (see project_phase2_stage_b memory + project_crank_phase1_hardening).
-// Between the moment a market is permissionlessly created via create_market
-// and the next crank tick, the corresponding VolOracle PDA does not exist,
-// and any mint_from_vault call against that market reverts with Anchor 3007
-// (AccountOwnedByWrongProgram — the on-chain doc comment in
-// mint_from_vault.rs:472-475 documents this exact failure mode).
+// Background. Between the moment a market is permissionlessly created via
+// create_market and the moment its VolOracle PDA exists, any mint_from_vault
+// against that market reverts with Anchor 3007 (AccountOwnedByWrongProgram —
+// mint_from_vault.rs:472-475 documents this exact failure mode). This hook is
+// the user-facing defense: detect the gap before the user signs anything and
+// say so, instead of a confusing 3007 in their wallet's error stream.
 //
-// W2 (crank reactive seeding via onLogs(MarketCreated)) closes that race
-// window from hours to seconds. W1 (this hook) is the user-facing defense
-// in the meantime: detects the gap before the user signs anything and
-// surfaces a clear "Oracle pending" message instead of a confusing 3007
-// in their wallet's error stream.
+// ⚠️ CORRECTION (SLICE 1, 2026-08-11). This header used to claim that "W2
+// (crank reactive seeding via onLogs(MarketCreated)) closes that race window
+// from hours to seconds". IT DID NOT EXIST. There is no MarketCreated event in
+// the program — create_market.rs emits only msg! — and there was no listener
+// anywhere in the repo. The only seeder was an hourly pass aligned to the
+// wall-clock hour, so the real wait was up to 60 minutes for the whole time
+// this comment claimed otherwise. A comment describing work nobody did is
+// worse than no comment: it is why nobody looked again for months.
+//
+// What is true NOW: crank/volOracleFastSeed.ts polls every 120 s and seeds
+// reactively. Measured end-to-end on devnet 2026-08-11 — market created
+// 15:29:59Z, oracle seeded 15:31:53Z, 114 seconds. That is why this hook now
+// polls (below) instead of telling the user to come back later.
 //
 // Cache semantics
 //   - "seeded" is monotonic: once we observe a VolOracle PDA exists +
@@ -42,6 +49,16 @@ import { VOL_ORACLE_SEED } from "../utils/constants";
 //   case: the user's submit succeeds without a confusing "Oracle pending"
 //   block when the oracle was just seeded.
 // =============================================================================
+
+/** Poll cadence while an oracle is pending. The crank's fast-seed loop ticks
+ *  every 120 s and lands a seed inside ~2 min of a market being created, so a
+ *  10 s poll surfaces the flip promptly without being a busy-wait. */
+export const VOL_ORACLE_POLL_MS = 10_000;
+
+/** Human-facing wait, used by every "oracle pending" string. ONE constant, so
+ *  the copy can never drift from the crank's actual behaviour again — it said
+ *  "~1 hour" for weeks after the hourly pass stopped being the only seeder. */
+export const VOL_ORACLE_EXPECTED_WAIT = "about 2 minutes";
 
 function deriveVolOraclePda(feedIdHex: string, programId: PublicKey): PublicKey {
   const hex = feedIdHex.replace(/^0x/, "").toLowerCase();
@@ -139,6 +156,27 @@ export function useVolOracleStatus(
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, [scan]);
+
+  // ---- SLICE 2A: poll while anything is unseeded --------------------------
+  //
+  // Before SLICE 1 the wait was up to an hour, so polling would have been an
+  // hour of pointless RPC and the tooltip told the user to come back later.
+  // The crank now seeds reactively — proven at 114 s end-to-end on 2026-08-11 —
+  // so the wait is short enough to simply WAIT THROUGH, and a user who is
+  // staring at a disabled button should watch it enable itself rather than be
+  // told to reload.
+  //
+  // Only runs while `unseeded` is non-empty, so a healthy board costs nothing:
+  // the effect tears its own interval down the moment the set empties (and
+  // `seeded` is monotonic, so it cannot re-arm spuriously). Paused while the
+  // tab is hidden — the visibilitychange handler above re-scans on return.
+  useEffect(() => {
+    if (unseeded.size === 0) return;
+    const id = window.setInterval(() => {
+      if (!document.hidden) scan();
+    }, VOL_ORACLE_POLL_MS);
+    return () => window.clearInterval(id);
+  }, [unseeded.size, scan]);
 
   const checkOne = useCallback(
     async (feedIdHex: string): Promise<boolean> => {

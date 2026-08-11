@@ -1,3 +1,60 @@
+# SLICE 1 PROVEN — 2026-08-11 (reactive vol-oracle seeding: 60-min unwritable window CLOSED, measured 114s)
+
+> Prepended 2026-08-11. Everything below this line predates it and is otherwise
+> unchanged. Read this first; the EPOCH 0 block follows.
+>
+> **A permissionlessly created market used to be unwritable for up to 60 minutes.**
+> `/write`'s `volOracleBlock` gate stays shut until a `VolOracle` PDA exists, and
+> the only thing that made one was `volOracleCrank`'s hourly pass, aligned to the
+> wall-clock hour. `useVolOracleStatus.ts:19-22` claimed since W1 that an
+> `onLogs(MarketCreated)` seeder already closed this — **it never existed**: the
+> program emits no `MarketCreated` event and no listener was ever written. A
+> comment describing work nobody did is why nobody looked again.
+>
+> **Shipped `7d72d6f`** (master + main): a fast-seed loop in the vol crank,
+> `crank/volOracleFastSeed.ts`. Polls every 120 s, gated on
+> `ProtocolState.total_markets` so a quiet tick costs ONE 123-byte
+> `getAccountInfo` (measured 36 ms vs 627 ms for a sweep). Pyth-sourced markets
+> only — SB creates are gated to the 23 curated feeds, all of which already have
+> oracles, so SB markets are born writable and the reachable gap is exactly the
+> non-curated set. **No program change.**
+>
+> **LIVE PROOF, founder-run, ORE 2026-08-11:** create `15:29:59Z`
+> (`3hcKQLS2…w1kU`) → seed `15:31:53Z` (`5y1vtufs…`) = **114 seconds**. Heartbeat
+> at the seed: watermark `475→476`, marketsSeen `31→32`, oraclesKnown `7→8`,
+> seededTotal `0→1`, `swept=true`, next tick `swept=false`. Cadence unbroken
+> across ticks 50–58, `failuresTotal=0`. Oracle `BBADwVqr…` born correct:
+> `source=0`, `seed_vol=0.80`, `last_spot_price=$62.212987`, `sample_count=0` —
+> **priceable from minute one.**
+>
+> **Idempotency is by STATE, not error string.** On any init failure the loop
+> re-reads the PDA; if it exists we lost the race and that is a *success*. Only a
+> still-missing PDA earns a backoff. A shared `inFlight` set stops the hourly pass
+> and the fast loop both submitting for one feed.
+>
+> **Seeding is NOT price-free** — `initialize_vol_oracle` reads live spot on both
+> arms (seed-at-birth writes `last_spot_price`/`last_sample_ts`, and
+> `price_american` gates on spot+freshness *before* vol). So an equity outside
+> NYSE hours is unseedable by physics, not policy; hence per-feed exponential
+> backoff. Do not "optimise" the Hermes fetch out of this path.
+>
+> **VPS git was repaired the same day.** `/opt/opta-crank/.git` had 878
+> root-owned objects; git as `opta` reported `fatal: loose object … is corrupt`,
+> which is git's message for *unreadable*, not damaged. `chown -R opta:opta` on
+> `.git` **and** on `crank/ app/ indexer/ writer/` (222 more entries). **STANDING
+> RULE: git on that box runs as `opta`, NEVER root** — running it as root is what
+> caused this. Still root-owned, deliberately: `taker/` (6197, live service),
+> `mobile/`, `tests/`, `programs/`, `scripts/`, and two `.env.bak-*` secret
+> backups. ⚠️ `git checkout HEAD -- indexer/` is **DESTRUCTIVE**: all 55 tracked
+> indexer files legitimately differ from the enclosing HEAD `d1d0471` because
+> `indexer/` is pinned at `OPTA_INDEXER_COMMIT=db4069e` via path-overlay. Always
+> overlay `indexer/` at its intended ref.
+>
+> Rollback: `cp crank/volOracleCrank.ts.bak-slice1 crank/volOracleCrank.ts` +
+> restart, or `OPTA_VOL_FAST_DISABLED=1`. ClickUp `86eykhx1g`.
+
+---
+
 # SESSION CLOSE — 2026-08-03 15:30Z, §4 §1 §2 REFRESHED 2026-08-10 (EPOCH 0 GO-LIVE EXECUTED · taker ARMED · bid widen DONE, cap bug FIXED)
 
 > Written for a reader with ZERO session memory. **This block supersedes every

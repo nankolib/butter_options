@@ -39,16 +39,92 @@ function run(tape: EventRow[], faucetClaims: { wallet: string; block_time: numbe
 const has = (r: ReturnType<typeof run>, wallet: string, id: string) =>
   r.completions.some((c) => c.wallet === wallet && c.questId === id);
 
-test("D12 STRICT SEQUENCING: an out-of-order action does not retroactively count", () => {
-  // Wallet mints (O2) BEFORE its first fill (O1). Strict order means O2 needs a
-  // mint at-or-after O1, and there is none, so the chain stops at O1.
+test("D12 STRICT SEQUENCING still holds for every step EXCEPT the O2 carve-out", () => {
+  // O3 needs a maker fill at-or-after O2. Here the maker fill predates the
+  // chain entirely, so it must not retroactively satisfy O3.
   const r = run([
-    evt({ name: "VaultMinted", wallet: A, block_time: D0 }),
+    evt({ name: "OrderFilled", wallet: B, counterparty: A, kind: 2, block_time: D0 }),
     evt({ name: "OrderFilled", wallet: A, block_time: D0 + DAY }),
+    evt({ name: "VaultDeposited", wallet: A, block_time: D0 + 2 * DAY }),
   ]);
   assert.equal(has(r, A, "O1"), true);
-  assert.equal(has(r, A, "O2"), false, "the earlier mint must NOT satisfy O2");
-  assert.equal(r.funnel.get(A), 1);
+  assert.equal(has(r, A, "O2"), true);
+  assert.equal(has(r, A, "O3"), false, "the earlier maker fill must NOT satisfy O3");
+  assert.equal(r.funnel.get(A), 2);
+});
+
+// ---- v1.2 AMENDMENT (2026-08-12) -------------------------------------------
+// O2 used to credit VaultMinted, which in the mint-on-fill model only happens
+// when a BUYER FILLS YOU — so "First Write" meant "someone bought your option".
+// Live tape at amendment time: 124,369 OrderPosted vs 21 VaultMinted; 36 wallets
+// held O1 and 2 held O2.
+
+test("v1.2 RED: a pooled-vault write (VaultDeposited) credits O2", () => {
+  const r = run([
+    evt({ name: "OrderFilled", wallet: A, block_time: D0 }),
+    evt({ name: "VaultDeposited", wallet: A, block_time: D0 + DAY }),
+  ]);
+  assert.equal(has(r, A, "O2"), true);
+});
+
+test("v1.2 RED: a writer-ask post (OrderPosted kind=WriterAsk) credits O2", () => {
+  const r = run([
+    evt({ name: "OrderFilled", wallet: A, block_time: D0 }),
+    evt({ name: "OrderPosted", wallet: A, kind: 2, block_time: D0 + DAY }),
+  ]);
+  assert.equal(has(r, A, "O2"), true, "the modern /write path must count");
+});
+
+test("v1.2: a NON-writer-ask OrderPosted does NOT credit O2", () => {
+  // A bid is not a write. Crediting it would hand O2 to every buyer.
+  for (const kind of [0, 1, 3]) {
+    const r = run([
+      evt({ name: "OrderFilled", wallet: A, block_time: D0 }),
+      evt({ name: "OrderPosted", wallet: A, kind, block_time: D0 + DAY }),
+    ]);
+    assert.equal(has(r, A, "O2"), false, `kind ${kind} must not credit O2`);
+  }
+});
+
+test("v1.2: VaultMinted alone NO LONGER credits O2 — being bought is not writing", () => {
+  const r = run([
+    evt({ name: "OrderFilled", wallet: A, block_time: D0 }),
+    evt({ name: "VaultMinted", wallet: A, block_time: D0 + DAY }),
+  ]);
+  assert.equal(has(r, A, "O2"), false);
+});
+
+test("v1.2 CARVE-OUT: a write BEFORE the first fill still credits O2", () => {
+  // The ruling: four real wallets wrote 27-35 SECONDS before their first fill.
+  // Denying them for exploring in an arbitrary order is not something the quest
+  // copy ever asked of them.
+  const r = run([
+    evt({ name: "VaultDeposited", wallet: A, block_time: D0 }),
+    evt({ name: "OrderFilled", wallet: A, block_time: D0 + DAY }),
+  ]);
+  assert.equal(has(r, A, "O2"), true, "an earlier write now counts");
+  assert.equal(r.funnel.get(A), 2);
+});
+
+test("v1.2: an early write is AWARDED at the O1 timestamp, never before it", () => {
+  // Award order must stay sequential even though the qualifying event is not.
+  const r = run([
+    evt({ name: "VaultDeposited", wallet: A, block_time: D0 }),
+    evt({ name: "OrderFilled", wallet: A, block_time: D0 + DAY }),
+  ]);
+  const o1 = r.completions.find((c) => c.wallet === A && c.questId === "O1")!;
+  const o2 = r.completions.find((c) => c.wallet === A && c.questId === "O2")!;
+  assert.ok(o2.completedAt >= o1.completedAt, `O2 (${o2.completedAt}) must not be awarded before O1 (${o1.completedAt})`);
+  assert.equal(o2.completedAt, o1.completedAt, "clamped forward to unlockAt");
+});
+
+test("v1.2: a LATER write keeps its own timestamp", () => {
+  const r = run([
+    evt({ name: "OrderFilled", wallet: A, block_time: D0 }),
+    evt({ name: "VaultDeposited", wallet: A, block_time: D0 + 5 * DAY }),
+  ]);
+  const o2 = r.completions.find((c) => c.wallet === A && c.questId === "O2")!;
+  assert.equal(o2.completedAt, D0 + 5 * DAY, "not clamped when it is already after O1");
 });
 
 // D16: the chain is O1 O2 O3 O4 O6 O7 — SIX steps. O5 is a standalone bonus and
@@ -57,7 +133,7 @@ test("D12 STRICT SEQUENCING: an out-of-order action does not retroactively count
 test("in-order chain completes and pays the completion bonus", () => {
   const r = run([
     evt({ name: "OrderFilled", wallet: A, block_time: D0 + 1 * DAY }),
-    evt({ name: "VaultMinted", wallet: A, block_time: D0 + 2 * DAY }),
+    evt({ name: "VaultDeposited", wallet: A, block_time: D0 + 2 * DAY }),
     evt({ name: "OrderFilled", wallet: B, counterparty: A, kind: 2, block_time: D0 + 3 * DAY }),
     evt({ name: "VaultExercised", wallet: A, block_time: D0 + 4 * DAY }),
     evt({ name: "OrderFilled", wallet: A, kind: 2, quantity: 5, block_time: D0 + 6 * DAY }),
@@ -76,7 +152,7 @@ test("in-order chain completes and pays the completion bonus", () => {
 test("D16: an unreachable trigger does NOT wall off the rest of the chain", () => {
   const r = run([
     evt({ name: "OrderFilled", wallet: A, block_time: D0 + 1 * DAY }),
-    evt({ name: "VaultMinted", wallet: A, block_time: D0 + 2 * DAY }),
+    evt({ name: "VaultDeposited", wallet: A, block_time: D0 + 2 * DAY }),
     evt({ name: "OrderFilled", wallet: B, counterparty: A, kind: 2, block_time: D0 + 3 * DAY }),
     evt({ name: "VaultExercised", wallet: A, block_time: D0 + 4 * DAY }),
     evt({ name: "OrderFilled", wallet: A, kind: 2, quantity: 5, block_time: D0 + 6 * DAY }),

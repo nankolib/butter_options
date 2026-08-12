@@ -85,7 +85,7 @@ test("finalPoints: served total equals the engine total for a plain trading wall
   seed(db, [
     evt({ wallet: ALICE, counterparty: BOB, amount_usdc: 40_000_000, block_time: NOW - 3 * DAY }),
     evt({ wallet: ALICE, counterparty: BOB, amount_usdc: 25_000_000, block_time: NOW - 2 * DAY }),
-    evt({ name: "VaultMinted", wallet: ALICE, block_time: NOW - 2 * DAY }),
+    evt({ name: "VaultDeposited", wallet: ALICE, block_time: NOW - 2 * DAY }),
   ]);
   const r = recompute(db, NOW);
 
@@ -138,7 +138,7 @@ test("finalPoints: referral bond + commission reach the served totals of BOTH pa
   // fill (O1), then write (O2), before her maker fill can count as O3.
   seed(db, [
     evt({ wallet: ALICE, counterparty: BOB, amount_usdc: 200_000_000, block_time: NOW - 5 * DAY }),
-    evt({ name: "VaultMinted", wallet: ALICE, block_time: NOW - 4 * DAY }),
+    evt({ name: "VaultDeposited", wallet: ALICE, block_time: NOW - 4 * DAY }),
     evt({ wallet: BOB, counterparty: ALICE, amount_usdc: 200_000_000, block_time: NOW - 3 * DAY }),
     evt({ wallet: BOB, counterparty: ALICE, amount_usdc: 200_000_000, block_time: NOW - 2 * DAY }),
   ]);

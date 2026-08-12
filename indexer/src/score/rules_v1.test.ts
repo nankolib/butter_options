@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import type { EventRow } from "../db";
-import { DEFAULT_RULES, score } from "./rules_v1";
+import { DEFAULT_RULES, score, RULES_VERSION } from "./rules_v1";
 
 const A = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const B = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
@@ -217,5 +217,5 @@ test("empty tape yields an empty, well-formed result", () => {
   const r = score(() => [], DEFAULT_RULES, 123);
   assert.deepEqual(r.scores, []);
   assert.equal(r.asOf, 123);
-  assert.equal(r.rulesVersion, "v1.1");
+  assert.equal(r.rulesVersion, RULES_VERSION);
 });

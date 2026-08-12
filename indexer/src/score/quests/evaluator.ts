@@ -132,6 +132,8 @@ interface WalletActivity {
   fillsTaker: Ev[];
   fillsMakerReal: Ev[]; // kind != 3
   mints: Ev[];
+  /** v1.2 — events that constitute WRITING an option. See the O2 case. */
+  writes: Ev[];
   exercises: Ev[];
   triggersPlaced: Ev[];
   triggersExecuted: Ev[];
@@ -148,6 +150,7 @@ function blankActivity(): WalletActivity {
     fillsTaker: [],
     fillsMakerReal: [],
     mints: [],
+    writes: [],
     exercises: [],
     triggersPlaced: [],
     triggersExecuted: [],
@@ -197,6 +200,16 @@ export function evaluate(input: EvaluatorInputs): EvaluatorResult {
         break;
       case "VaultMinted":
         if (e.wallet) get(e.wallet).mints.push(toEv(e));
+        break;
+      // ---- v1.2: what "writing an option" actually emits -------------------
+      // Pooled-vault write. 193 on the tape at amendment time.
+      case "VaultDeposited":
+        if (e.wallet) get(e.wallet).writes.push(toEv(e));
+        break;
+      // Writer-ask write — the modern /write path, and the overwhelming
+      // majority: 124,369 OrderPosted rows vs 21 VaultMinted.
+      case "OrderPosted":
+        if (e.wallet && e.kind === ORDER_KIND.WriterAsk) get(e.wallet).writes.push(toEv(e));
         break;
       case "VaultExercised":
         if (e.wallet) get(e.wallet).exercises.push(toEv(e));
@@ -279,9 +292,36 @@ export function evaluate(input: EvaluatorInputs): EvaluatorResult {
         case "O1":
           at = firstAtOrAfter(a.fillsTaker, unlockAt);
           break;
-        case "O2":
-          at = firstAtOrAfter(a.mints, unlockAt);
+        case "O2": {
+          // ---- v1.2 AMENDMENT (2026-08-12) --------------------------------
+          //
+          // v1 credited "First Write" from `a.mints` (VaultMinted). In the
+          // mint-on-fill model NOTHING MINTS WHEN YOU WRITE — it mints when a
+          // BUYER FILLS YOU. So "First Write" actually meant "someone bought
+          // your option", and the tape shows what that cost: 36 wallets reached
+          // O1, and exactly 2 ever cleared O2. The chain is strictly
+          // sequential, so O2 also blocked O3 "Make a Market" — users who
+          // created a market AND wrote an option sat frozen at step 1.
+          //
+          // Now O2 credits the events a write actually emits, and — per the
+          // 2026-08-12 ruling — it counts a qualifying write WHENEVER it
+          // occurred, not only at-or-after O1. Four wallets wrote 27-35
+          // SECONDS before their first fill; under the strict ordering they
+          // would still have been denied for exploring the app in the order
+          // they felt like, which is not a thing the quest copy ever asked of
+          // them.
+          //
+          // Sequential AWARD ORDER is preserved by clamping the timestamp
+          // forward to `unlockAt`: the chain still reads O1 → O2 → O3 in time,
+          // and every downstream step still measures from this award, so no
+          // later quest can be satisfied by an event that predates it.
+          const earliest = a.writes.reduce<number | null>(
+            (b, r) => (b === null || r.ts < b ? r.ts : b),
+            null,
+          );
+          at = earliest === null ? null : Math.max(earliest, unlockAt);
           break;
+        }
         case "O3":
           at = firstAtOrAfter(a.fillsMakerReal, unlockAt);
           break;

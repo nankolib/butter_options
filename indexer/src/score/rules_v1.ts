@@ -37,7 +37,7 @@ import { computePositions } from "./positions";
 // The filename stays rules_v1.ts on purpose: renaming would churn every frozen
 // `path` and `specifier` in the manifest for no benefit. The VERSION is the
 // contract, not the filename.
-export const RULES_VERSION = "v1.1";
+export const RULES_VERSION = "v1.2";
 
 export interface RulesConfig {
   takerPtsPerUsdc: number;

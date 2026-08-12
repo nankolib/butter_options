@@ -13,6 +13,7 @@ import { makeWriter, openDb, type DB, type EventRow, type TxRow } from "../db";
 import { SCHEMA_VERSION } from "../schema";
 import { recompute } from "../score/recompute";
 import { DEFAULT_QUESTS, QUESTS_VERSION } from "../score/quests/evaluator";
+import { RULES_VERSION } from "../score/rules_v1";
 import { DEFAULT_RULES, RULES_VERSION } from "../score/rules_v1";
 import { MULTIPLIER_STEP, MULTIPLIER_CAP, SHIELD_STREAK_LENGTH, SHIELD_BANK_MAX } from "../score/multiplier";
 import { canonicalJson, canonicalMessage, verifySigned, type SignedEnvelope } from "./auth";
@@ -327,7 +328,10 @@ test("reads: every endpoint answers against a fixture DB", () => {
     weeklies: { id: string }[];
     referral: Record<string, unknown>;
   };
-  assert.equal(qb.version, "v1.1"); // rules-v1.1: W2/O7 settle_vault amendment
+  // Bound to the constant, not a literal: this line was hardcoded "v1.1" and
+  // broke the whole reads test on the v1.2 amendment for no reason of its own.
+  // What the endpoint must guarantee is that it SERVES the shipped version.
+  assert.equal(qb.version, QUESTS_VERSION);
   // Everything the evaluator can award must be enumerated here, or a rules page
   // built off this endpoint silently omits it.
   assert.deepEqual(qb.chain.map((c) => c.id), ["O1", "O2", "O3", "O4", "O6", "O7"]);
@@ -342,7 +346,7 @@ test("reads: every endpoint answers against a fixture DB", () => {
   const sb = s.body as { schema_version: number; rules_frozen: Record<string, unknown> };
   assert.equal(sb.schema_version, SCHEMA_VERSION);
   assert.ok(sb.rules_frozen, "stats must publish the freeze so a hash can be cited");
-  assert.equal(sb.rules_frozen.rules_version, "v1.1"); // /stats must publish the LIVE tag
+  assert.equal(sb.rules_frozen.rules_version, RULES_VERSION); // /stats must publish the LIVE tag
 
   db.close();
   fs.rmSync(dir, { recursive: true, force: true });

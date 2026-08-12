@@ -1,37 +1,99 @@
 {
-  "version": "v1.1",
-  "notes": "EPOCH 0 catalog. v1.1 (2026-08-05, tag rules-v1.1-frozen) amends W2/O7 only: settle_vault now credits the settle arm, and W2 counts DISTINCT (asset,expiry) settlement records per ISO week rather than raw settle events — settle_expiry fires once per tuple so the two were equivalent under v1, but settle_vault fires once per VAULT. Points, caps and every other quest are UNCHANGED, and the retroactive delta measured EXACTLY ZERO. v1 was FROZEN 2026-08-02 (tag rules-v1-frozen). Chain is STRICTLY SEQUENTIAL (D12): O(n) only counts a qualifying event at-or-after O(n-1)'s completion. Dailies are UTC days; weeklies are ISO weeks. Multiplier applies to base points + dailies only (D11). D16: O5/O5b are STANDALONE bonuses, NOT chain steps — there is no trigger-placement UI (OrderTicket.tsx gates the Stop/TP-SL tabs), so leaving them mid-chain made O6, O7 and OC structurally unreachable for every wallet. They stay in the catalog, dark, and re-enter the chain only if the placement UI ships. Total possible is unchanged at 625: chain 450 + OC 100 + O5 50 + O5b 25.",
+  "version": "v1.2",
+  "notes": "EPOCH 0 catalog. v1.2 (2026-08-12) amends O2 ONLY. v1/v1.1 credited O2 'First Write' from VaultMinted, but in the mint-on-fill model nothing mints when you WRITE \u2014 it mints when a BUYER FILLS you. 'First Write' therefore meant 'someone bought your option'. Measured on the live tape at amendment time: 124,369 OrderPosted vs 21 VaultMinted; 36 wallets held O1 and exactly 2 held O2. Because the onboarding chain is strictly sequential (D12), O2 also blocked O3 'Make a Market', so wallets that created a market AND wrote an option sat frozen at step 1. O2 now credits VaultDeposited OR OrderPosted(kind=WriterAsk). Per the 2026-08-12 ruling the qualifying write counts WHENEVER it occurred, not only at-or-after O1 \u2014 four wallets wrote 27-35 seconds before their first fill and would otherwise stay denied for exploring in an arbitrary order. Sequential AWARD ORDER is preserved by clamping the award timestamp to max(O1 completion, write time). Points, caps and every other quest are UNCHANGED. Unlike v1.1's amendment the retroactive delta is NOT zero and was dry-run and approved before going live. ",
   "chain": [
-    { "id": "O1", "name": "First Fill", "points": 50 },
-    { "id": "O2", "name": "First Write", "points": 75 },
-    { "id": "O3", "name": "Make a Market", "points": 75 },
-    { "id": "O4", "name": "First Exercise", "points": 75 },
-    { "id": "O6", "name": "Diamond Hands", "points": 75 },
-    { "id": "O7", "name": "Keeper", "points": 100 }
+    {
+      "id": "O1",
+      "name": "First Fill",
+      "points": 50
+    },
+    {
+      "id": "O2",
+      "name": "First Write",
+      "points": 75
+    },
+    {
+      "id": "O3",
+      "name": "Make a Market",
+      "points": 75
+    },
+    {
+      "id": "O4",
+      "name": "First Exercise",
+      "points": 75
+    },
+    {
+      "id": "O6",
+      "name": "Diamond Hands",
+      "points": 75
+    },
+    {
+      "id": "O7",
+      "name": "Keeper",
+      "points": 100
+    }
   ],
-  "chainCompleteBonus": { "id": "OC", "name": "Chain Complete", "points": 100 },
+  "chainCompleteBonus": {
+    "id": "OC",
+    "name": "Chain Complete",
+    "points": 100
+  },
   "bonuses": [
     {
       "id": "O5",
       "name": "Arm a Trigger",
       "points": 50,
-      "bonus": { "id": "O5b", "name": "Trigger Fired", "points": 25 }
+      "bonus": {
+        "id": "O5b",
+        "name": "Trigger Fired",
+        "points": 25
+      }
     }
   ],
   "dailies": [
-    { "id": "D1", "name": "Taker premium >= $50", "points": 50, "thresholdUsdc": 50000000 },
-    { "id": "D2", "name": "Two-sided day", "points": 40 },
-    { "id": "D3", "name": "Faucet claim", "points": 10 }
+    {
+      "id": "D1",
+      "name": "Taker premium >= $50",
+      "points": 50,
+      "thresholdUsdc": 50000000
+    },
+    {
+      "id": "D2",
+      "name": "Two-sided day",
+      "points": 40
+    },
+    {
+      "id": "D3",
+      "name": "Faucet claim",
+      "points": 10
+    }
   ],
   "weeklies": [
-    { "id": "W1", "name": "Hold to settlement", "points": 75 },
-    { "id": "W2", "name": "Settle an expiry", "points": 60, "maxPerWeek": 3 },
+    {
+      "id": "W1",
+      "name": "Hold to settlement",
+      "points": 75
+    },
+    {
+      "id": "W2",
+      "name": "Settle an expiry",
+      "points": 60,
+      "maxPerWeek": 3
+    },
     {
       "id": "W3",
       "name": "Three distinct underlyings",
       "points": 100,
       "distinctUnderlyings": 3,
-      "spanBonus": { "id": "W3b", "points": 50, "buckets": ["crypto", "equity", "commodity"] }
+      "spanBonus": {
+        "id": "W3b",
+        "points": 50,
+        "buckets": [
+          "crypto",
+          "equity",
+          "commodity"
+        ]
+      }
     }
   ],
   "referral": {

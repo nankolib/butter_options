@@ -1,8 +1,8 @@
 {
-  "frozenAt": "2026-08-05T17:38:12Z",
-  "gitTag": "rules-v1.1-frozen",
-  "rulesVersion": "v1.1",
-  "questsVersion": "v1.1",
+  "frozenAt": "2026-08-12T09:37:01Z",
+  "gitTag": "rules-v1.2-frozen",
+  "rulesVersion": "v1.2",
+  "questsVersion": "v1.2",
   "defaultRules": {
     "takerPtsPerUsdc": 1,
     "makerPtsPerUsdc": 0.5,
@@ -21,19 +21,19 @@
       "path": "indexer/dist/src/score/quests/quests_v1.json",
       "layer": "runtime",
       "specifier": "./quests/quests_v1.json",
-      "sha256": "4777a9ed7854e5529fbf024b78cc5521e18431ccc3e24c069d9bfd1ac948536c"
+      "sha256": "dca7ffc4a364bc8c8f0d0d13edc8b166f7f7808caa9394a1e347cbf044e104f6"
     },
     {
       "path": "indexer/dist/src/score/rules_v1.js",
       "layer": "runtime",
       "specifier": "./rules_v1",
-      "sha256": "180c917c988e5d5ca93a7e9b4209c261ef1464a6c002a4ce28ddde8744dbf630"
+      "sha256": "3be4ac0010ffdcc5e3855db18a396d321a0820606c795c13b0cec33af997a788"
     },
     {
       "path": "indexer/dist/src/score/quests/evaluator.js",
       "layer": "runtime",
       "specifier": "./quests/evaluator",
-      "sha256": "01e2144603524edcf142a09a6968f909f91b61bc6ae9bda25b62edc95b7160d9"
+      "sha256": "eda97e115d183b2cb5ce08e6e4f514b9a0b4131cecf72edbfb3848115cc9d7de"
     },
     {
       "path": "indexer/dist/src/score/multiplier.js",
@@ -62,12 +62,12 @@
     {
       "path": "indexer/src/score/quests/quests_v1.json",
       "layer": "source",
-      "sha256": "f6f28a137a074e24d4488224420b064d13a763729177f9382d2ab1d05df3806c"
+      "sha256": "ec1f721e127c79534458bccc5488919d0196c3b8645860c5557243306ba72d4c"
     },
     {
       "path": "indexer/src/score/rules_v1.ts",
       "layer": "source",
-      "sha256": "990bcf013d2de94c437a498b822f4bc158e21f086933119fa1f012a72b15268e"
+      "sha256": "a11634b0d30c65889505f74d9db8eeffcb9f3ea9edb0b47a39fe520dc4180010"
     }
   ]
 }

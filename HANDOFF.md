@@ -1,7 +1,66 @@
-# SLICE 1 PROVEN — 2026-08-11 (reactive vol-oracle seeding: 60-min unwritable window CLOSED, measured 114s)
+# CREATE-MARKET ARC — 2026-08-11 (SLICE 1 + SLICE 2A shipped and proven; 2B in flight)
 
-> Prepended 2026-08-11. Everything below this line predates it and is otherwise
-> unchanged. Read this first; the EPOCH 0 block follows.
+> Refreshed at the 2A close. Everything below this block predates it. Read this
+> first; the EPOCH 0 block follows.
+>
+> ## Where the arc stands
+>
+> | Slice | Ships | State |
+> |---|---|---|
+> | **1** | reactive vol-oracle seeding (`7d72d6f`) | **LIVE + PROVEN — 114 s measured on ORE** |
+> | **2A** | create-flow identity + honesty (`ca7a6a3`) | **LIVE — founder browser proof pending** |
+> | **2B** | written-position visibility + arc close-out | in flight |
+>
+> ## SLICE 2A — `ca7a6a3`, live on opta.fyi + crank restarted 17:10 UTC
+>
+> **The reported bug was never a hang.** Two addresses "hung the create modal
+> forever" — BP (`BPxxfRCX…`) and `9cRCn9…pump`. Both are real, both always
+> resolved correctly: BP is *Backpack*, the pump token is *ANSEM*. The resolver
+> simply had **no timeout**. Measured against the app's own mainnet fallback RPC:
+> one BP mint read took **12,292 ms**, and the same read repeated ran 4,676 / 215
+> / 1,663 ms — and the resolver walks 2–5 of those sequentially. Unbounded, not
+> infinite; indistinguishable to a user.
+>
+> **Identity and listability are now two questions.** Icon / symbol / name /
+> ✓Verified / mint first, then a SEPARATE verdict line. Four states replace the
+> old conflation: `listable` · `no-feed` · `unknown` · `unavailable`. That last
+> one exists because *"we could not check"* must never render as *"this does not
+> exist"* — a dead lookup is not evidence about a token.
+>
+> **Source: Jupiter, proxied through `sb-create.opta.fyi/token-identity`.** NOT a
+> CORS decision — Jupiter's CORS echoes our origin. A **CSP** decision:
+> `img-src 'self' data: blob:` permits no remote image host and token icons live
+> on arbitrary third parties, so browser-direct means wildcarding `img-src` (a
+> security regression) or shipping no logos. Server-side + `data:` URI = **zero
+> CSP change**. Measured live: 100–800 ms cold, 0 ms cached. tokens.xyz was
+> evaluated and REJECTED as primary (`401` without a key); it is optional
+> enrichment behind `TOKENS_XYZ_API_KEY`, and with the key unset/401/timing out
+> the Jupiter answer stands.
+>
+> **A retry regression I caused the conditions for.** `62f228e` gave the SB arm a
+> single auto-refetch on slow wallet approve. D2/G1 then wrapped every connection
+> in `withPollingConfirm`, which — correctly, so Anchor would not resend beneath
+> it — stopped throwing `TransactionExpired*` and started throwing
+> `TxOutcomeError`. `isStaleSubmitError` matched on name and message text, so the
+> retry silently stopped firing on the confirm leg: the exact case it existed
+> for. It now reads the **structured** outcome (`kind === "dropped" &&
+> retryAllowed`), because the outcome is data and the message is prose. A
+> `landed` outcome must never retry — that is a second create.
+> **The Pyth arm got its first retry ever**, and it REBUILDS rather than
+> resubmits (a Pyth create carries an expired price update inside signed bytes).
+>
+> **Success moment, two variants.** SB-curated → writable now. Pyth → "pricing
+> warming, about 2 minutes" + polls the VolOracle PDA and flips live with no
+> refresh. Same poll clears the `/write` block, whose tooltip had said "~1 hour"
+> since before Slice 1 made that false. One exported constant owns that number.
+>
+> **Known, NOT fixed in 2A** (all carried into 2B): cache key is lowercased while
+> base58 is case-sensitive (`crank/tokenIdentity.ts`) — create is unaffected, the
+> feed always comes from the anti-spoofed catalog row; Jupiter NAME search ranks
+> poorly ("backpack" → SKHY before BP); `TOKENS_XYZ_API_KEY` is staged locally
+> but NOT on the VPS, so enrichment is dormant. ClickUp `86eykm4ek`.
+>
+> ## SLICE 1 — `7d72d6f`, and why it mattered
 >
 > **A permissionlessly created market used to be unwritable for up to 60 minutes.**
 > `/write`'s `volOracleBlock` gate stays shut until a `VolOracle` PDA exists, and

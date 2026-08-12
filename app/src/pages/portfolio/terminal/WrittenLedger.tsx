@@ -13,6 +13,8 @@ import { Link } from "react-router-dom";
 import { SolscanLink } from "../../../components/SolscanLink";
 import { usdcToNumber } from "../../../utils/format";
 import { EXERCISE_WINDOW_SECONDS, type WriterRow, type WriterRowAction } from "../writerRows";
+import type { AskRow } from "../askRows";
+import { expiryShort } from "../../markets/marketsView";
 import {
   SectionBand, Th, Td, StyleBadge, OriginBadge, StatusPill, RowAction, EmptyLine, SkeletonRows,
   contractLabel, fmtExpiry, fmtUsd, fmtCountdown,
@@ -34,6 +36,8 @@ const GROUP_LABEL: Record<Group, string> = { claimable: "Claimable", open: "Open
 
 export const WrittenLedger: FC<{
   rows: WriterRow[];
+  /** SLICE 2B — resting writer-asks. READ-ONLY: shown, never actioned here. */
+  askRows: AskRow[];
   loading: boolean;
   nowSecs: number;
   onAction: (row: WriterRow, a: WriterRowAction) => void;
@@ -41,7 +45,7 @@ export const WrittenLedger: FC<{
   busyLabel: string | null;
   collapsed: boolean;
   onToggle: () => void;
-}> = ({ rows, loading, nowSecs, onAction, busyId, busyLabel, collapsed, onToggle }) => {
+}> = ({ rows, askRows, loading, nowSecs, onAction, busyId, busyLabel, collapsed, onToggle }) => {
   const sorted = [...rows].sort(
     (a, b) => GROUP_ORDER.indexOf(groupOf(a)) - GROUP_ORDER.indexOf(groupOf(b)) || a.expiry - b.expiry,
   );
@@ -52,7 +56,7 @@ export const WrittenLedger: FC<{
         accent="down"
         label="Written"
         sublabel="Short"
-        count={rows.length}
+        count={rows.length + askRows.length}
         footnote="Settled vaults unlock for writers 24h after settlement — holders claim first."
         testid="written-band"
         collapsible
@@ -73,7 +77,7 @@ export const WrittenLedger: FC<{
           <tbody>
             {loading && rows.length === 0 ? (
               <SkeletonRows cols={10} />
-            ) : rows.length === 0 ? (
+            ) : rows.length === 0 && askRows.length === 0 ? (
               <tr><td colSpan={10}><EmptyLine>Nothing written. <Link to="/write" className="text-l-up-text no-underline hover:underline">→ Write</Link></EmptyLine></td></tr>
             ) : (
               sorted.map((row, i) => {
@@ -118,6 +122,57 @@ export const WrittenLedger: FC<{
                   </>
                 );
               })
+            )}
+
+            {/* ---- ASKS POSTED (SLICE 2B) ----------------------------------
+                Resting writer-asks: collateral committed to an offer that
+                nobody has filled yet. These are the writes that produced
+                "Nothing written" for every user on the modern /write path —
+                a WriterAskPosition is not a WriterPosition, and until now
+                nothing in the app read that account type at all.
+
+                READ-ONLY by ruling: no actions column. A resting ask has no
+                shares and no premium accumulator, so it has no claim/withdraw
+                lifecycle to expose — and teaching the money-moving state
+                machine a second account shape is a separate slice. The Premium
+                cell is "—" rather than 0 because for an unfilled ask there is
+                no premium yet, and a zero would read as "you earned nothing". */}
+            {askRows.length > 0 && (
+              <>
+                <tr data-testid="asks-posted-group">
+                  <td colSpan={10} className="border-t border-l-hair pt-4 pb-1">
+                    <span className="font-mono-plex text-[10px] uppercase tracking-[0.16em] text-l-muted">
+                      Asks posted · awaiting a buyer
+                    </span>
+                  </td>
+                </tr>
+                {askRows.map((a) => (
+                  <tr key={a.publicKey} data-testid="ask-row" className="border-b border-l-hair">
+                    <td className="py-[9px] font-mono-plex text-[12px] text-l-text">
+                      {a.asset}
+                      {a.strike !== null && ` ${a.strike}`}
+                      {a.side ? a.side === "call" ? "C" : "P" : ""}
+                    </td>
+                    <td className="font-mono-plex text-[11px] text-l-muted">Ask</td>
+                    <td className="font-mono-plex text-[11px] text-l-muted">American</td>
+                    <td className="font-mono-plex text-[11px] text-l-muted">
+                      {a.expiry ? expiryShort(a.expiry) : "—"}
+                    </td>
+                    <td className="font-mono-plex text-[11px] text-l-muted">Resting</td>
+                    <td className="text-right font-mono-plex text-[12px] tabular-nums text-l-text">
+                      ${a.collateral.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                    </td>
+                    <td className="text-right font-mono-plex text-[12px] tabular-nums text-l-muted">—</td>
+                    <td className="text-right font-mono-plex text-[12px] tabular-nums text-l-muted">
+                      {a.contracts}
+                    </td>
+                    <td className="text-right font-mono-plex text-[12px] tabular-nums text-l-muted">—</td>
+                    <td className="text-right font-mono-plex text-[10px] uppercase tracking-[0.12em] text-l-faint">
+                      On the book
+                    </td>
+                  </tr>
+                ))}
+              </>
             )}
           </tbody>
         </table>

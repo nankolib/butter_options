@@ -230,6 +230,14 @@ export async function enrichWithTokensXyz(
 
 const BASE58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
+/** Cache key for a query. Addresses are kept EXACT (base58 is case-sensitive);
+ *  free-text names are folded, because "Backpack" and "backpack" are the same
+ *  question. Exported for tests. */
+export function cacheKeyFor(query: string): string {
+  const q = query.trim();
+  return BASE58.test(q) ? `a:${q}` : `n:${q.toLowerCase()}`;
+}
+
 /**
  * Resolve identity for a mint address (exact) or a free-text query (best match).
  *
@@ -245,7 +253,16 @@ export async function resolveIdentity(
   const q = query.trim();
   if (!q) return { kind: "not-found" };
   const now = opts.now ?? Date.now();
-  const key = q.toLowerCase();
+  // CACHE KEY — case-folded for NAMES, exact for ADDRESSES.
+  //
+  // Base58 is case-SENSITIVE: "So111…" and "so111…" are different strings, and
+  // only one of them is a real mint. Lower-casing every key made them share one
+  // entry, so a case-wrong address could be served the identity of the correct
+  // one — an identity for an address the user never typed. (Create was never at
+  // risk: the feed always comes from the anti-spoofed catalog row, never the
+  // pasted mint. This was a display lie, not a funds bug.) Names are genuinely
+  // case-insensitive, so they keep folding.
+  const key = cacheKeyFor(q);
 
   const hit = cacheGet(key, now);
   if (hit) return hit;
@@ -274,7 +291,9 @@ export async function resolveIdentity(
   cacheSet(key, found, now);
   // An address lookup also warms the cache under the mint key, so a subsequent
   // name search that resolves to the same token is free.
-  if (!isAddress && identity.mint) cacheSet(identity.mint.toLowerCase(), found, now);
+  // Warm the mint key too, so a later address lookup for the same token is free.
+  // Uses the ADDRESS form of the key — exact, never folded.
+  if (!isAddress && identity.mint) cacheSet(cacheKeyFor(identity.mint), found, now);
   return found;
 }
 

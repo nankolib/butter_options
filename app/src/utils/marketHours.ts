@@ -158,6 +158,57 @@ function startOfDayUTC(unixSec: number): number {
 }
 
 // ----------------------------------------------------------------------------
+// FX trading week (SLICE 2B, item 8)
+// ----------------------------------------------------------------------------
+//
+// FX has no exchange session, but it DOES have a week: the market closes ~17:00
+// New York on Friday and reopens ~17:00 New York on Sunday. Between those two
+// moments there is no price to settle against.
+//
+// This was tracked as follow-up in v1 and never built, so until now an FX expiry
+// could be written for a Saturday — a contract whose settlement source is shut
+// for the entire window in which it expires. The v1 note argued the stuck-vault
+// rate was "much lower than NYSE equities"; that is true and irrelevant, because
+// the rate for a WEEKEND FX expiry specifically is 100%.
+//
+// 17:00 New York is 21:00 UTC under DST and 22:00 UTC under standard time —
+// reusing `isUSDST`, the same helper the NYSE session uses, so the two gates
+// cannot drift apart on a DST boundary.
+const FX_BOUNDARY_H_DST = 21;
+const FX_BOUNDARY_H_STD = 22;
+
+/** UTC second-of-day at which the FX week opens (Sun) and closes (Fri). */
+function fxBoundarySec(unixSec: number): number {
+  return (isUSDST(unixSec) ? FX_BOUNDARY_H_DST : FX_BOUNDARY_H_STD) * 3600;
+}
+
+/** Is this instant inside the FX trading week? Exported for tests. */
+export function isFxTradingWeek(unixSec: number): boolean {
+  const dow = new Date(unixSec * 1000).getUTCDay(); // Sun=0..Sat=6
+  const secOfDay = unixSec - startOfDayUTC(unixSec);
+  const boundary = fxBoundarySec(unixSec);
+  if (dow === 6) return false; // all of Saturday
+  if (dow === 5 && secOfDay >= boundary) return false; // Friday after the close
+  if (dow === 0 && secOfDay < boundary) return false; // Sunday before the open
+  return true;
+}
+
+/** First instant of the next FX week at-or-after `unixSec`. Walks forward a day
+ *  at a time and lands exactly on the Sunday boundary, so the answer is the open
+ *  itself rather than "some time on Sunday". */
+function nextFxWeekOpen(unixSec: number): number {
+  for (let i = 0; i <= 8; i++) {
+    const probe = unixSec + i * 86_400;
+    const dow = new Date(probe * 1000).getUTCDay();
+    if (dow !== 0) continue;
+    const open = startOfDayUTC(probe) + fxBoundarySec(probe);
+    if (open >= unixSec) return open;
+  }
+  // Unreachable for any sane input (a Sunday always occurs within 8 days).
+  return unixSec;
+}
+
+// ----------------------------------------------------------------------------
 // Public API
 // ----------------------------------------------------------------------------
 
@@ -178,6 +229,18 @@ export function isMarketHours(
   unixSec: number,
   assetClass: AssetClass,
 ): MarketHoursResult {
+  // FX (class 3): gated on the trading WEEK, not a session. Checked before the
+  // NYSE branch because FX is not in NYSE_GATED_CLASSES and would otherwise fall
+  // straight through to `ok: true`, which is exactly the hole this closes.
+  if (assetClass === ASSET_CLASS_FX) {
+    if (isFxTradingWeek(unixSec)) return { ok: true };
+    return {
+      ok: false,
+      reason: "FX market closed at this time (weekend).",
+      nextValidUnixSec: nextFxWeekOpen(unixSec),
+    };
+  }
+
   if (!NYSE_GATED_CLASSES.has(assetClass)) {
     return { ok: true };
   }
@@ -298,6 +361,26 @@ function formatDelta(fromUnixSec: number, toUnixSec: number): string {
  * is the part that tells the user how to move it.
  */
 const EXPIRY_SUBJECT = "The selected expiry is outside NYSE hours.";
+
+/**
+ * "opens 13:30 UTC Tue" — a fact, for the create surface.
+ *
+ * Item 7 exists because a closed-market create currently fails with "Verification
+ * quote unavailable — retry." That word is wrong twice over: retrying now cannot
+ * work, and the user is given no idea when it could. A market that is shut until
+ * Tuesday should say Tuesday.
+ *
+ * Deliberately short and absolute (no "in 14 hours"): this is rendered next to a
+ * disabled button that the user may look at again later, and a relative time
+ * would be stale the moment it is read.
+ */
+export function nextOpenLabel(nextValidUnixSec: number): string {
+  const d = new Date(nextValidUnixSec * 1000);
+  const hh = String(d.getUTCHours()).padStart(2, "0");
+  const mm = String(d.getUTCMinutes()).padStart(2, "0");
+  const wd = d.toLocaleDateString("en-US", { weekday: "short", timeZone: "UTC" });
+  return `opens ${hh}:${mm} UTC ${wd}`;
+}
 
 export function buildMarketClosedTooltip(
   result: Extract<MarketHoursResult, { ok: false }>,

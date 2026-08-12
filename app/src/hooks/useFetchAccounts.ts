@@ -24,12 +24,17 @@ const DISCRIMINATORS: Record<string, number[]> = {
   vaultResaleListing: [122, 137, 187, 45, 94, 125, 117, 110],
   // Phase 1 exchange book — RestingOrder
   restingOrder: [125, 151, 65, 43, 90, 207, 190, 104],
+  // Phase 3 writer-asks — the account a modern /write actually produces.
+  // SLICE 2B: absent here until now, which is why Portfolio → WRITTEN read
+  // "Nothing written" for every user on the writer-ask path.
+  writerAskPosition: [153, 60, 106, 50, 105, 8, 111, 54],
 };
 
 export type AccountName =
   | "optionsMarket" | "protocolState"
   | "sharedVault" | "writerPosition" | "vaultMint" | "epochConfig"
-  | "settlementRecord" | "vaultResaleListing" | "restingOrder";
+  | "settlementRecord" | "vaultResaleListing" | "restingOrder"
+  | "writerAskPosition";
 
 export async function safeFetchAll<T>(
   program: Program<any>,

@@ -31,6 +31,8 @@ import { TOKEN_2022_PROGRAM_ID } from "../../../utils/constants";
 import { hexFromBytes } from "../../../utils/format";
 import { buildPositions, type Position } from "../positions";
 import { buildWriterRows, type WriterRow } from "../writerRows";
+import { buildAskRows, type AskRow } from "../askRows";
+import { canonicalAsset } from "../../../utils/assetDisplay";
 import { usePortfolioActions } from "../usePortfolioActions";
 import { useWriterActions } from "../useWriterActions";
 
@@ -42,6 +44,7 @@ interface AccountWrapper {
 // Every coalesced scan refetchAll + useVaults read — invalidated before a
 // post-action refetch so none joins a pre-mutation in-flight snapshot.
 const PORTFOLIO_SCANS = [
+  "writerAskPosition",
   "optionsMarket",
   "settlementRecord",
   "vaultResaleListing",
@@ -60,6 +63,8 @@ export function usePortfolioData() {
   const [markets, setMarkets] = useState<AccountWrapper[]>([]);
   const [settlementRecords, setSettlementRecords] = useState<AccountWrapper[]>([]);
   const [listingsRaw, setListingsRaw] = useState<AccountWrapper[]>([]);
+  // SLICE 2B — the account a modern /write actually produces.
+  const [asksRaw, setAsksRaw] = useState<AccountWrapper[]>([]);
   const [heldBalances, setHeldBalances] = useState<Map<string, number>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -94,14 +99,16 @@ export function usePortfolioData() {
       if (!program) return;
       if (invalidate) invalidateAccountScans(program, PORTFOLIO_SCANS);
       try {
-        const [mkts, settles, lists] = await Promise.all([
+        const [mkts, settles, lists, asks] = await Promise.all([
           safeFetchAll(program, "optionsMarket"),
           safeFetchAll(program, "settlementRecord"),
           safeFetchAll(program, "vaultResaleListing"),
+          safeFetchAll(program, "writerAskPosition"),
         ]);
         setMarkets(mkts as AccountWrapper[]);
         setSettlementRecords(settles as AccountWrapper[]);
         setListingsRaw(lists as AccountWrapper[]);
+        setAsksRaw(asks as AccountWrapper[]);
         if (publicKey) {
           const accts = await program.provider.connection.getTokenAccountsByOwner(publicKey, {
             programId: TOKEN_2022_PROGRAM_ID,
@@ -194,6 +201,21 @@ export function usePortfolioData() {
     [myPositions, vaults, vaultMints, marketMap, getUnclaimedPremium],
   );
 
+  // SLICE 2B — resting writer-asks. READ-ONLY (see askRows.ts for why).
+  const assetByMarket = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const [pda, acct] of marketMap) {
+      const name = canonicalAsset((acct as { assetName?: string }).assetName);
+      if (name) m.set(pda, name);
+    }
+    return m;
+  }, [marketMap]);
+
+  const askRows = useMemo(
+    () => buildAskRows(asksRaw as never, vaults as never, publicKey ?? null, assetByMarket),
+    [asksRaw, vaults, publicKey, assetByMarket],
+  );
+
   return {
     connected,
     publicKey,
@@ -208,6 +230,7 @@ export function usePortfolioData() {
     vaultMints,
     positions,
     writerRows,
+    askRows,
     refetchAll,
     actions,
     writerActions,

@@ -19,6 +19,7 @@ import {
   _clearIdentityCache,
   enrichWithTokensXyz,
   fetchIconDataUri,
+  cacheKeyFor,
   mapJupiterRow,
   resolveIdentity,
   type TokenIdentity,
@@ -253,6 +254,62 @@ test("a tokens.xyz response with no boolean verdict is ignored", async () => {
   const out = await enrichWithTokensXyz(base, "k");
   assert.equal(out.verified, true);
   assert.equal(out.source, "jupiter", "no verdict → do not claim enrichment");
+});
+
+// ============================================================================
+// CACHE KEYS — base58 is case-SENSITIVE. (SLICE 2B, item 5.)
+//
+// Found during 2A's own deploy verification: the key was `q.toLowerCase()` for
+// everything, so "So111…" and "so111…" shared one entry and a case-wrong address
+// could be served the identity of the correct one — an identity for an address
+// the user never typed. Create was never at risk (the feed always comes from the
+// anti-spoofed catalog row), so this was a display lie, not a funds bug.
+// ============================================================================
+
+test("RED: two addresses differing only in case do NOT share a cache entry", async () => {
+  // FIXTURE NOTE, learned the hard way: BP's address contains "L", and lowercase
+  // "l" is EXCLUDED from the base58 alphabet — so BP.toLowerCase() is not an
+  // address at all and correctly falls to the fuzzy NAME branch. OTHER has no
+  // L/I/O, so its lowercase IS still valid base58, which is exactly the
+  // collision this fix is about.
+  reset();
+  route = (u) =>
+    u.includes("/search") ? { json: [jupRow({ id: OTHER, symbol: "ANSEM" })] } : { body: PNG };
+  const r1 = await resolveIdentity(OTHER);
+  assert.equal(r1.kind, "found");
+  assert.equal((r1 as any).identity.mint, OTHER);
+
+  // Same characters, wrong case → a DIFFERENT address. Jupiter's exact-id check
+  // rejects it, so the honest answer is a miss — never the other token's identity.
+  const r2 = await resolveIdentity(OTHER.toLowerCase());
+  assert.equal(
+    r2.kind,
+    "not-found",
+    "a case-wrong address must NOT inherit the correct address's identity",
+  );
+});
+
+test("cacheKeyFor keeps addresses exact and folds names", () => {
+  assert.notEqual(
+    cacheKeyFor(MINT),
+    cacheKeyFor(MINT.toLowerCase()),
+    "base58 is case-sensitive — these are different tokens",
+  );
+  assert.equal(cacheKeyFor("Backpack"), cacheKeyFor("backpack"), "names are case-insensitive");
+  assert.equal(cacheKeyFor("  backpack  "), cacheKeyFor("backpack"), "trimmed");
+  // Namespaced so a name can never collide with an address.
+  assert.ok(cacheKeyFor(MINT).startsWith("a:"));
+  assert.ok(cacheKeyFor("backpack").startsWith("n:"));
+});
+
+test("a name lookup warms the mint key in ADDRESS form (exact), not folded", async () => {
+  reset();
+  route = (u) => (u.includes("/search") ? { json: [jupRow()] } : { body: PNG });
+  await resolveIdentity("backpack"); // resolves to BP, warms the mint key
+  const before = calls.length;
+  const byMint = await resolveIdentity(MINT);
+  assert.equal(byMint.kind, "found");
+  assert.equal(calls.length, before, "the exact-case mint lookup is served from cache");
 });
 
 // ============================================================================

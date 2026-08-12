@@ -101,8 +101,15 @@ export const TOUR_STEPS: readonly TourStep[] = [
     id: "market",
     route: "/markets",
     anchor: "new-market-open",
-    title: "make a market",
-    body: "if the strike or expiry you want does not exist, create it. anyone can — it is permissionless.",
+    title: "list a new asset",
+    // SLICE 2B (item 10). This step used to read "if the strike or expiry you
+    // want does not exist, create it" while anchoring the New-market button —
+    // which creates an ASSET, not a strike. A user following the sentence to
+    // get a $250 SOL call was asked to name a new ticker instead. The sentence
+    // described /write; the button does something else. Now the step describes
+    // what the button actually does, and points strikes at the surface that
+    // makes them.
+    body: "this button lists an ASSET that opta does not carry yet — a whole new ticker. strikes and expiries are different: those are made on write, and any of them you want you can simply write. both are permissionless.",
     completedBy: "O3",
   },
   {

@@ -1,4 +1,5 @@
 import type { FC, ReactNode } from "react";
+import { Link } from "react-router-dom";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { calculateCallGreeks, calculatePutGreeks, getDefaultVolatility, applyVolSmile } from "../../utils/blackScholes";
 import type { UnifiedChainRow } from "../../hooks/useUnifiedChain";
@@ -97,7 +98,12 @@ export const TradeChainV2: FC<{
   if (gridRows.length === 0) {
     return (
       <div className="rounded-[10px] border border-l-hair p-12 text-center">
-        <p className="font-mono-plex text-[12px] text-l-muted">No contracts at this expiry.</p>
+        <p className="font-mono-plex text-[12px] text-l-muted">
+          No contracts at this expiry.{" "}
+          <Link to="/write" className="text-l-up-text no-underline hover:underline">
+            Write one →
+          </Link>
+        </p>
       </div>
     );
   }

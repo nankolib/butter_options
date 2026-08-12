@@ -290,7 +290,7 @@ export const TradePageV2: FC = () => {
                 2026-08-06 outage the public RPC was the one endpoint that still
                 worked. Naming the wrong component sends the reader — and us —
                 down the wrong path. State the situation, not a guess at the cause. */}
-            {chain.error ? "Can't reach the network right now — the RPC endpoint is unavailable. This is on our side, not yours; it retries automatically." : "No active markets — visit Markets to create one."}
+            {chain.error ? "Can't reach the network right now — the RPC endpoint is unavailable. This is on our side, not yours; it retries automatically." : "Nothing is written yet. Any market becomes tradeable the moment someone writes the first option."}
           </p>
           {chain.error && (
             <button

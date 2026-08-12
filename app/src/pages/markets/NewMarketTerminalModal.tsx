@@ -27,6 +27,14 @@ import { buildAssetRegistry, sbBaseTicker, type AssetRegistryEntry } from "../..
 import { getHermesBase, getSbCreateEndpoint } from "../../utils/env";
 import { getLiveness, resolveSource, type LivenessMap } from "../../utils/liveness";
 import { MARKET_SEED } from "../../utils/constants";
+import {
+  isMarketHours,
+  nextOpenLabel,
+  ASSET_CLASS_EQUITY,
+  ASSET_CLASS_ETF,
+  ASSET_CLASS_FX,
+  type AssetClass,
+} from "../../utils/marketHours";
 import { buildPostUpdateAndCreateMarketTx, submitWithFallback } from "../../utils/pythPullPost";
 import {
   submitSbCreateMarket,
@@ -59,6 +67,11 @@ const CLASS_LABEL: Record<number, string> = {
   4: "ETF",
 };
 const CLASS_ORDER = [0, 1, 2, 3, 4] as const;
+
+/** Classes with zero end-to-end proof on this deployment. Measured 2026-08-11:
+ *  FX has 2 markets and ZERO vaults ever; ETF has never had a market created at
+ *  all. Crypto, commodity and equity have all written AND sold. */
+const UNPROVEN_CLASSES = new Set<number>([3, 4]);
 
 // Fixed rent+fee estimate for one registry-only market account (8 + INIT_SPACE
 // rent + a couple of signatures). Shown once a create is derivable, else "—".
@@ -379,6 +392,30 @@ export const NewMarketTerminalModal: FC<Props> = ({ onClose, onCreated }) => {
     if (selected) setAssetName(selected.ticker);
   }, [advancedActive, pastedHex, selected, catalog]);
 
+  // ---- SLICE 2B item 7: is this asset's settlement venue open RIGHT NOW? ----
+  //
+  // A create needs a live price: the SB arm needs a fresh signed quote, the Pyth
+  // arm needs a fresh Hermes update. Neither exists while the venue is shut, so
+  // an equity create between 20:00 and 13:30 UTC cannot succeed — and until now
+  // it failed with "Verification quote unavailable — retry.", which is wrong
+  // twice: retrying cannot work, and it never said when it could.
+  //
+  // Keyed on the ACTIVE class (the Advanced paste path can pick its own), and
+  // computed for NOW rather than for an expiry — this is about whether we can
+  // read a price this second.
+  const venue = useMemo(() => {
+    const cls = activeFeed?.assetClass;
+    if (cls !== ASSET_CLASS_EQUITY && cls !== ASSET_CLASS_ETF && cls !== ASSET_CLASS_FX) {
+      return null; // crypto + commodity are never venue-gated
+    }
+    const r = isMarketHours(Math.floor(Date.now() / 1000), cls as AssetClass);
+    if (r.ok) return null;
+    return {
+      label: r.nextValidUnixSec !== undefined ? nextOpenLabel(r.nextValidUnixSec) : null,
+      reason: r.reason,
+    };
+  }, [activeFeed]);
+
   const assetNameValid = /^[A-Z0-9]{1,16}$/.test(assetName);
 
   // ---- live inline availability (debounced getAccountInfo on the market PDA) ----
@@ -439,6 +476,9 @@ export const NewMarketTerminalModal: FC<Props> = ({ onClose, onCreated }) => {
     !!anchorWallet &&
     !!activeFeed &&
     assetNameValid &&
+    // A closed venue cannot produce the price this create needs. Blocking here
+    // turns a confusing on-chain failure into a stated opening time.
+    venue === null &&
     avail.kind !== "taken-diff" &&
     avail.kind !== "live-same";
 
@@ -531,6 +571,10 @@ export const NewMarketTerminalModal: FC<Props> = ({ onClose, onCreated }) => {
       if (e instanceof SbUserRejectedError) {
         setPhase({ kind: "failed", message: "Rejected in wallet." });
       } else {
+        // NOTE: no venue-aware branch here. `canSubmit` requires `venue === null`,
+        // so a closed-venue create can no longer be SUBMITTED — the opening time
+        // is stated on the form and the button is disabled. Adding a fallback
+        // here would be unreachable code pretending to be a safety net.
         const { message } = mapSbError(e);
         setPhase({ kind: "failed", message });
       }
@@ -767,10 +811,43 @@ export const NewMarketTerminalModal: FC<Props> = ({ onClose, onCreated }) => {
                 </Section>
               )}
 
-              {/* Off-hours advisory (non-crypto, never blocks) */}
-              {activeFeed?.stale && (
+              {/* Venue closed — a FACT and a time, not "retry". This blocks
+                  Create, because a create with no live price cannot succeed. */}
+              {venue && (
+                <p
+                  data-testid="venue-closed"
+                  className="font-mono-plex text-[11px] leading-[1.6] text-l-muted"
+                >
+                  {venue.reason}{" "}
+                  {venue.label ? (
+                    <span className="text-l-text">Listing {venue.label}.</span>
+                  ) : (
+                    <span className="text-l-text">Listing resumes at the next session.</span>
+                  )}
+                </p>
+              )}
+
+              {/* Liveness advisory — only when the venue itself is open, so the
+                  two never contradict each other on the same screen. */}
+              {!venue && activeFeed?.stale && (
                 <p className="font-mono-plex text-[11px] leading-[1.6] text-l-muted">
                   Market-hours asset — pricing resumes at next open.
+                </p>
+              )}
+
+              {/* FX / ETF: honest about how far these paths are proven. Nothing
+                  is blocked — the chain accepts them and the gates are real —
+                  but no FX or ETF market has ever been written and settled
+                  end to end here, and a user betting an evening on one deserves
+                  to know that before they start rather than after. */}
+              {UNPROVEN_CLASSES.has(selectedClass ?? -1) && !classNotEnabled && (
+                <p
+                  data-testid="unproven-class"
+                  className="font-mono-plex text-[11px] leading-[1.6] text-l-muted"
+                >
+                  {selectedClass === ASSET_CLASS_FX ? "FX" : "ETF"} listing works, but no{" "}
+                  {selectedClass === ASSET_CLASS_FX ? "FX" : "ETF"} market has been taken through
+                  write and settlement yet. You'd be the first — expect rough edges.
                 </p>
               )}
             </div>

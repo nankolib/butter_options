@@ -69,6 +69,12 @@ export function buildAssetRollup(
   writerRows: WriterRow[],
   spotPrices: Record<string, number>,
   nowSeconds: number = Math.floor(Date.now() / 1000),
+  /** SLICE 2B — collateral committed to resting writer-asks, per asset.
+   *  Optional so existing call sites and tests are unchanged; when supplied it
+   *  is ADDED to the collateral column only. Nothing else in the rollup moves:
+   *  a resting ask has no P&L and no premium until it is filled, so folding it
+   *  into those would invent performance that has not happened. */
+  askCollateralByAsset?: ReadonlyMap<string, number>,
 ): AssetRollupRow[] {
   const byAsset = new Map<string, Accum>();
   const get = (asset: string): Accum => {
@@ -92,6 +98,17 @@ export function buildAssetRollup(
     if (mark != null) {
       a.includedCount += 1;
       a.pnlIncluded += premium - mark * row.optionsSold;
+    }
+  }
+
+  // SLICE 2B — resting-ask collateral. Added to the COLLATERAL column only.
+  // Deliberately after the writer loop and before the holder loop, and touching
+  // no other accumulator: an unfilled ask has produced no premium and no P&L, so
+  // crediting it with either would report performance that has not happened.
+  if (askCollateralByAsset) {
+    for (const [asset, amount] of askCollateralByAsset) {
+      if (!asset || amount <= 0) continue;
+      get(asset).collateral += amount;
     }
   }
 

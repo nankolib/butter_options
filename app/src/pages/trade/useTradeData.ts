@@ -221,6 +221,18 @@ export function useTradeData(): UseTradeData {
       const asset = mkt ? canonicalAsset(mkt.account.assetName) : null;
       if (asset) names.add(asset);
     }
+    // SLICE 2B item 9 — REGISTERED assets with no vault yet also belong here.
+    //
+    // This list used to be vault-derived only, so a market was absent from the
+    // asset dropdown until somebody wrote it. The person most likely to look for
+    // it is the person who just created it, and for them the app behaved as if
+    // their market did not exist. An asset with no supply has an empty chain,
+    // which is a true and useful thing to show — the chain's own empty state
+    // then points at writing it.
+    for (const m of markets) {
+      const asset = canonicalAsset(m.account.assetName);
+      if (asset) names.add(asset);
+    }
     return Array.from(names).sort();
   }, [vaults, markets]);
 

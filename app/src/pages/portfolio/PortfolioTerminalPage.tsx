@@ -18,6 +18,7 @@ import { useSurfaceMode } from "../../hooks/useSurfaceMode";
 import { TerminalAppBar } from "../../components/TerminalAppBar";
 import { usdcToNumber } from "../../utils/format";
 import { EXERCISE_WINDOW_SECONDS, type WriterRow, type WriterRowAction } from "./writerRows";
+import { askCollateralByAsset, askCollateralTotal } from "./askRows";
 import type { Position, PositionAction } from "./positions";
 import { usePortfolioData } from "./terminal/usePortfolioData";
 import { useClaimAll } from "./terminal/useClaimAll";
@@ -42,7 +43,7 @@ export const PortfolioTerminalPage: FC = () => {
 
   const data = usePortfolioData();
   const {
-    connected, publicKey, program, loading, positions, writerRows, vaults, vaultMints,
+    connected, publicKey, program, loading, positions, writerRows, askRows, vaults, vaultMints,
     markets, settlementRecords, spotPrices, refetchAll, actions, writerActions,
   } = data;
 
@@ -80,7 +81,11 @@ export const PortfolioTerminalPage: FC = () => {
   // ---- summary numbers (live-derived; no fabrication) ----
   const summary = useMemo(() => {
     const holdingsValue = positions.reduce((s, p) => s + p.currentValue, 0);
-    const collateral = writerRows.reduce((s, r) => s + r.collateralDeposited, 0);
+    // SLICE 2B: resting-ask collateral is money AT WORK and was missing from
+    // this figure entirely, so a writer on the modern path saw $0 deployed while
+    // holding real USDC behind an offer. Read-only aggregation — no action path.
+    const collateral =
+      writerRows.reduce((s, r) => s + r.collateralDeposited, 0) + askCollateralTotal(askRows);
     const holderClaimable = positions
       .filter((p) => p.state === "settled-itm")
       .reduce((s, p) => s + p.currentValue, 0);
@@ -95,12 +100,12 @@ export const PortfolioTerminalPage: FC = () => {
       holdingsValue, collateral, claimableNow, lockedAmount,
       lockedUnlockLabel: nextUnlock ? `unlocks ${fmtCountdown(nextUnlock, nowSecs)}` : null,
     };
-  }, [positions, writerRows, nowSecs]);
+  }, [positions, writerRows, askRows, nowSecs]);
 
   // ---- per-asset profitability rollup (live even while sections collapse) ----
   const assetRows = useMemo(
-    () => buildAssetRollup(positions, writerRows, spotPrices, nowSecs),
-    [positions, writerRows, spotPrices, nowSecs],
+    () => buildAssetRollup(positions, writerRows, spotPrices, nowSecs, askCollateralByAsset(askRows)),
+    [positions, writerRows, askRows, spotPrices, nowSecs],
   );
 
   // ---- action dispatchers (reuse the byte-identical flows) ----
@@ -173,6 +178,7 @@ export const PortfolioTerminalPage: FC = () => {
 
               <WrittenLedger
                 rows={writerRows}
+                askRows={askRows}
                 loading={loading}
                 nowSecs={nowSecs}
                 onAction={handleWriter}

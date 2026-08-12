@@ -64,8 +64,19 @@ export type MarketsSummary = {
   loaded: boolean;
 };
 
+/** A registered asset with zero vaults — real on chain, no supply yet. */
+export type AssetWithoutSupply = {
+  asset: string;
+  assetClass: number;
+  /** Market PDA, base58. */
+  market: string;
+};
+
 export type UseMarketsData = {
   rows: MarketRow[];
+  /** Registered assets nobody has written yet. Rendered as their own band —
+   *  NEVER merged into `rows`, which are vault-shaped. */
+  assetsWithoutSupply: AssetWithoutSupply[];
   summary: MarketsSummary;
   spotPrices: Record<string, number>;
   /** Sample timestamp (unix secs) per asset, only for on-chain-fallback spot. */
@@ -320,5 +331,37 @@ export function useMarketsData(): UseMarketsData {
     };
   }, [rows, vaults, loading, escrowByVault, askVaults]);
 
-  return { rows, summary, spotPrices, asOf: spotAsOf ?? {}, loading, spotLoading, spotError, refetch };
+  // ---- SLICE 2B item 9: assets that exist but have NO supply ---------------
+  //
+  // A market is registered the instant create_market lands, but every surface
+  // in this app is built from VAULTS — so a freshly created asset was invisible
+  // everywhere. The user who just made it could not find it on /markets, could
+  // not find it on /trade, and was told by /trade to "visit Markets to create
+  // one" — i.e. to create the thing they had just created.
+  //
+  // These are not vault rows and must never be faked into `rows`: they have no
+  // strike, no expiry, no OI and no TVL, and inventing zeros for those would put
+  // fictional contracts in the table. They are a separate, honest list.
+  const assetsWithoutSupply = useMemo(() => {
+    const withVaults = new Set<string>();
+    for (const v of vaults) withVaults.add((v.account.market as PublicKey).toBase58());
+    const out: { asset: string; assetClass: number; market: string }[] = [];
+    for (const [pda, info] of assetByMarket) {
+      if (!info.name || withVaults.has(pda)) continue;
+      out.push({ asset: info.name, assetClass: info.class, market: pda });
+    }
+    return out.sort((a, b) => a.asset.localeCompare(b.asset));
+  }, [assetByMarket, vaults]);
+
+  return {
+    rows,
+    summary,
+    spotPrices,
+    asOf: spotAsOf ?? {},
+    loading,
+    spotLoading,
+    spotError,
+    refetch,
+    assetsWithoutSupply,
+  };
 }

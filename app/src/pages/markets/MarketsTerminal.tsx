@@ -1,4 +1,5 @@
 import type { FC, ReactNode } from "react";
+import { Link } from "react-router-dom";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { type MarketRow, type UseMarketsData } from "./useMarketsData";
 import { PulseTiles } from "./PulseTiles";
@@ -41,7 +42,7 @@ import {
  * flex-none and the table/tiles scroll inside.
  */
 export const MarketsTerminal: FC<{ data: UseMarketsData }> = ({ data }) => {
-  const { rows, summary, asOf, loading, spotLoading, spotError } = data;
+  const { rows, summary, asOf, loading, spotLoading, spotError, assetsWithoutSupply } = data;
   // One page-wide verdict on the spot read, threaded into every cell that can
   // render an absent price. Without it "—" meant loading, failure and genuinely-
   // no-price all at once — see SpotValue.
@@ -72,6 +73,13 @@ export const MarketsTerminal: FC<{ data: UseMarketsData }> = ({ data }) => {
 
   const tiles = useMemo(() => computeTiles(rows), [rows]);
   const aggs = useMemo(() => aggregateAssets(rows), [rows]);
+  // Same class-tab filter the vault rows obey, so the band never shows an asset
+  // the current tab is excluding.
+  const unlistedInTab = useMemo(
+    () =>
+      assetsWithoutSupply.filter((a) => classToTab(a.assetClass) === tab),
+    [assetsWithoutSupply, tab],
+  );
   // Protocol strip OI counts LIVE contracts only (mandate: no settled/expired in
   // aggregates); TVL + cumulative premia are protocol-wide totals from summary.
   const liveOi = useMemo(() => rows.reduce((s, r) => (r.status === "open" ? s + r.openInterest : s), 0), [rows]);
@@ -341,6 +349,40 @@ export const MarketsTerminal: FC<{ data: UseMarketsData }> = ({ data }) => {
                     ))}
                     {!loading && assetRows.length === 0 && (
                       <div className="px-3 py-6 text-[13px] text-l-muted">No live markets in {tab}.</div>
+                    )}
+
+                    {/* SLICE 2B item 9 — registered, no supply yet.
+                        These assets exist on chain but nobody has written them,
+                        so they have no vault and therefore no row above. Before
+                        this band they were invisible on every surface, including
+                        to the person who had just created them. They are listed
+                        separately rather than as zero-filled rows because they
+                        have no strike, no expiry and no OI — inventing those
+                        would put contracts in the table that do not exist. */}
+                    {!loading && unlistedInTab.length > 0 && (
+                      <div className="border-t border-l-hair" data-testid="no-supply-band">
+                        <div className="px-3 pt-4 pb-1 font-mono-plex text-[10px] uppercase tracking-[0.16em] text-l-muted">
+                          Registered · no supply yet
+                        </div>
+                        {unlistedInTab.map((a) => (
+                          <div
+                            key={a.market}
+                            data-testid="no-supply-row"
+                            className="flex items-center gap-3 px-3 py-[9px] text-[13px]"
+                          >
+                            <span className="font-mono-plex text-l-text">{a.asset}</span>
+                            <span className="text-[12px] text-l-muted">
+                              nobody has written this yet
+                            </span>
+                            <Link
+                              to={`/write?asset=${encodeURIComponent(a.asset)}`}
+                              className="ml-auto font-mono-plex text-[11px] uppercase tracking-[0.12em] text-l-up-text no-underline hover:underline"
+                            >
+                              Write the first option →
+                            </Link>
+                          </div>
+                        ))}
+                      </div>
                     )}
                   </>
                 ) : (

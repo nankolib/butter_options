@@ -1405,7 +1405,7 @@ const SuccessMoment: FC<{
           onSubmit={doFirstWrite}
           onConnect={() => setVisible(true)}
           onSkip={() => setSkipped(true)}
-          marketPda={market?.publicKey ?? null}
+          market={market}
         />
       )}
       {writeState.kind === "done" && (
@@ -1420,7 +1420,7 @@ const SuccessMoment: FC<{
           onSubmit={doFirstWrite}
           onConnect={() => setVisible(true)}
           onSkip={() => setSkipped(true)}
-          marketPda={market?.publicKey ?? null}
+          market={market}
         />
       )}
 

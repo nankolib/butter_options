@@ -80,7 +80,11 @@ async function fetchPrices(feedIds: string[]): Promise<Map<string, number>> {
   try {
     const resp = await fetch(url, { signal: ac.signal });
     if (!resp.ok) {
-      throw new Error(`Hermes price HTTP ${resp.status}`);
+      // PROVENANCE RULE: this message reaches a toast. Users never learn which
+      // price vendor we use, and a status code tells them nothing actionable.
+      // The real status is logged for DevTools instead.
+      console.warn("[usePythPrices] price fetch HTTP", resp.status);
+      throw new Error("Price unavailable — try again.");
     }
     const json = await resp.json();
     const out = parsePriceResponse(json);
@@ -223,7 +227,7 @@ export function usePythPrices(feeds: FeedRequest[]): {
         if (!cancelled) {
           writeIntoState(fallback);
           setLoading(false);
-          setError(err?.message ?? "Hermes price fetch failed");
+          setError(err?.message ?? "Price unavailable — try again.");
           setStale(computeStaleFromIds(feedIds));
         }
       }

@@ -328,8 +328,16 @@ export async function getCatalog(
     // actual network/parse failure instead of leaving the modal hanging.
     console.error("[hermesCatalog] fetch failed (no cache):", err);
     // Provenance-generic user-facing copy (no provider name leaks into the DOM).
+    //
+    // CORRECTION 2026-08-12: the comment above was true of the sentence and
+    // FALSE of the string. `err.message` was interpolated straight in, and every
+    // message it can carry names the vendor ("Hermes catalog HTTP 503",
+    // "Hermes returned 0 usable assets after parsing"). The provenance leaked
+    // through the one hole the comment promised was closed. The underlying error
+    // is already console.error'd above for DevTools, so nothing is lost by
+    // dropping it from the copy the user reads.
     throw new Error(
-      `Asset catalog unavailable (${err?.message ?? "unknown"}). Use Advanced → paste a feed identifier.`,
+      "Asset catalog unavailable. Use Advanced → paste a feed identifier.",
     );
   }
 }

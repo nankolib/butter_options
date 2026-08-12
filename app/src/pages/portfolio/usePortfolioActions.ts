@@ -33,6 +33,17 @@ import {
   buildPostUpdateAndExerciseAmericanTx,
   submitWithFallback,
 } from "../../utils/pythPullPost";
+import {
+  assertExerciseTxShape,
+  chooseExerciseArm,
+  deserializeExerciseTx,
+  postSbExercise,
+} from "../../utils/exerciseArm";
+// isStaleSubmitError is a generic stale-tx predicate that happens to live in the
+// create module (it was written there first). Reused verbatim rather than
+// duplicated: a second copy of a retry predicate is how retry policies drift.
+import { isStaleSubmitError } from "../markets/newMarketCreate";
+import { getSbCreateEndpoint } from "../../utils/env";
 import { decodeError, isWalletReplay } from "../../utils/errorDecoder";
 import { showToast } from "../../components/Toast";
 import type { Position } from "./positions";
@@ -317,17 +328,44 @@ async function exerciseAmericanV2({
     TOKEN_2022_PROGRAM_ID,
   );
 
-  // Feed hex: prefer the joined market body (present on most held positions);
-  // fall back to a direct fetch if this position surfaced without its market.
-  let feedIdBytes: number[];
-  const mktBody = position.source.market;
-  if (mktBody?.pythFeedId) {
-    feedIdBytes = mktBody.pythFeedId as number[];
-  } else {
-    const fetched = await program.account.optionsMarket.fetch(marketPda);
-    feedIdBytes = fetched.pythFeedId as number[];
+  // ── WHICH PRICE ARM? ──────────────────────────────────────────────────────
+  // This branch is the P1 fix. Until 2026-08-12 there was none: every market
+  // took the Pyth path, so every Switchboard market sent its SB feedHash to a
+  // Pyth endpoint and got a 404 — i.e. early exercise was broken on the entire
+  // traded board and worked only on the handful of Pyth-sourced assets. See
+  // app/src/utils/exerciseArm.ts for the reproduction.
+  //
+  // Prefer the joined market body (present on most held positions); fall back to
+  // a direct fetch if this position surfaced without its market, or if the body
+  // predates the oracle_source field. chooseExerciseArm THROWS on an unreadable
+  // source rather than defaulting — there is no safe default.
+  let mktBody: any = position.source.market;
+  if (mktBody?.pythFeedId === undefined || mktBody?.oracleSource === undefined) {
+    mktBody = await program.account.optionsMarket.fetch(marketPda);
   }
-  const feedIdHex = hexFromBytes(feedIdBytes);
+  const arm = chooseExerciseArm(mktBody?.oracleSource);
+
+  if (arm === "switchboard") {
+    await exerciseAmericanSwitchboard({
+      program,
+      provider,
+      publicKey,
+      position,
+      accounts: {
+        sharedVault: vault.publicKey,
+        market: marketPda,
+        vaultMintRecord: vaultMint.publicKey,
+        optionMint,
+        holderOptionAccount,
+        vaultUsdcAccount: v.vaultUsdcAccount as PublicKey,
+        holderUsdcAccount,
+      },
+    });
+    return;
+  }
+
+  // ── PYTH ARM — unchanged below this line ──────────────────────────────────
+  const feedIdHex = hexFromBytes(mktBody.pythFeedId as number[]);
 
   // Atomic post fresh /latest PriceUpdateV2 + exercise_american + close, 1.4M CU.
   const txs = await buildPostUpdateAndExerciseAmericanTx(program, provider.wallet, {
@@ -347,6 +385,116 @@ async function exerciseAmericanV2({
   // Pyth price the tx actually posted + consumed, so the two spots diverge and
   // any $ figure here can mislead (observed ~$0.96 shown vs $1.12 paid). The
   // exact USDC intrinsic settled on-chain and is in the wallet.
+  showToast({
+    type: "success",
+    title: "Exercised early!",
+    message: `${position.contracts} contract${position.contracts === 1 ? "" : "s"} exercised · USDC sent to your wallet.`,
+    txSignature: sig,
+  });
+}
+
+/**
+ * SWITCHBOARD ARM of early exercise.
+ *
+ * Why a server round-trip instead of building it here: a Switchboard quote needs
+ * @switchboard-xyz/on-demand, and app/ carries ZERO Switchboard dependencies by
+ * a deliberate, documented bundle decision. So this mirrors sb-create-market —
+ * the crank assembles [CU, oracle-signed proof, exercise_american] and returns
+ * it UNSIGNED; the holder signs and pays. The crank key is not a signer on the
+ * result and could not be: exercise_american's only signer is `holder`.
+ *
+ * assertExerciseTxShape is the reason that is acceptable. Every account, the
+ * discriminator, the quantity, the signer set and the absence of lookup tables
+ * are checked against values derived HERE before the wallet is opened. We
+ * operate the endpoint today; the guard is what makes that irrelevant.
+ *
+ * Retry policy is lifted from the SB create arm: exactly one refetch, and ONLY
+ * on a genuine stale signal. A stale tx is rebuilt from scratch — never
+ * resubmitted, because both the blockhash and the embedded quote are dead.
+ */
+async function exerciseAmericanSwitchboard({
+  program,
+  provider,
+  publicKey,
+  position,
+  accounts,
+}: {
+  program: any;
+  provider: any;
+  publicKey: PublicKey;
+  position: Position;
+  accounts: {
+    sharedVault: PublicKey;
+    market: PublicKey;
+    vaultMintRecord: PublicKey;
+    optionMint: PublicKey;
+    holderOptionAccount: PublicKey;
+    vaultUsdcAccount: PublicKey;
+    holderUsdcAccount: PublicKey;
+  };
+}) {
+  const endpoint = getSbCreateEndpoint();
+  if (!endpoint) {
+    throw new Error("Early exercise is unavailable right now. Please try again later.");
+  }
+
+  const connection = program.provider.connection;
+  const request = {
+    holder: publicKey.toBase58(),
+    sharedVault: accounts.sharedVault.toBase58(),
+    market: accounts.market.toBase58(),
+    vaultMintRecord: accounts.vaultMintRecord.toBase58(),
+    optionMint: accounts.optionMint.toBase58(),
+    holderOptionAccount: accounts.holderOptionAccount.toBase58(),
+    vaultUsdcAccount: accounts.vaultUsdcAccount.toBase58(),
+    holderUsdcAccount: accounts.holderUsdcAccount.toBase58(),
+    quantity: position.contracts,
+  };
+  const expected = { ...request, programId: program.programId.toBase58() };
+
+  let sig = "";
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const resp = await postSbExercise(endpoint, request);
+    const tx = deserializeExerciseTx(resp.transactionBase64);
+
+    // Refuse BEFORE the wallet is opened. A shape failure is never retried:
+    // it is not staleness, it is the wrong transaction.
+    assertExerciseTxShape(tx, expected);
+
+    let signed;
+    try {
+      signed = await provider.wallet.signTransaction(tx);
+    } catch (e) {
+      if (attempt === 0 && !isWalletReplay(e) && isStaleSubmitError(e)) continue;
+      throw e;
+    }
+
+    try {
+      sig = await withResolvedOutcome(connection, async () => {
+        const s = await connection.sendRawTransaction(signed.serialize(), {
+          skipPreflight: false,
+          maxRetries: 3,
+        });
+        await connection.confirmTransaction(
+          {
+            signature: s,
+            blockhash: tx.message.recentBlockhash,
+            lastValidBlockHeight: resp.lastValidBlockHeight,
+          },
+          "confirmed",
+        );
+        return s;
+      });
+      break;
+    } catch (e) {
+      if (attempt === 0 && isStaleSubmitError(e)) continue;
+      throw e;
+    }
+  }
+
+  // No client-side payout estimate — same reason as the Pyth arm: a post-submit
+  // spot read races the price the transaction actually consumed, and any $ figure
+  // here can disagree with what landed.
   showToast({
     type: "success",
     title: "Exercised early!",

@@ -59,6 +59,12 @@ import type { Opta } from "@app/idl/opta";
 import { lookupSbFeedDatum, normSbFeedHash } from "@app/utils/sbFeedData";
 import { isSupportedSbFeed } from "./sbFeedRegistry";
 import { buildSwitchboardCreateMarketTx } from "./switchboardCreateMarket";
+import { buildSwitchboardExerciseAmericanTx } from "./switchboardExerciseAmerican";
+import {
+  resolveSbFeedForMarket,
+  validateExerciseBody,
+  type MarketOracleView,
+} from "./sbExerciseValidate";
 import { getLivenessMap } from "./livenessStore";
 import { handleTokenIdentity } from "./tokenIdentity";
 
@@ -264,6 +270,129 @@ function validate(body: any): { ok: true; value: Validated } | { ok: false; erro
   return { ok: true, value: { assetName, feedHashHex: norm, assetClass, userPk } };
 }
 
+/**
+ * POST /sb-exercise-american handler.
+ *
+ * ORDER MATTERS and is not arbitrary:
+ *   1. shape-validate the body (cheap, no I/O)
+ *   2. READ THE MARKET ON CHAIN for oracle_source + feedHash — the caller does
+ *      not get to say which feed is priced, and a Pyth market is refused here
+ *   3. only then spend a Switchboard gateway fetch
+ * Doing (3) before (2) would let an unauthenticated caller burn upstream quota
+ * on markets that were never eligible.
+ */
+async function handleSbExercise(
+  ctx: SbCreateEndpointContext,
+  sb: { qObj: Queue; crossbar: CrossbarClient },
+  cfg: EndpointConfig,
+  echoOrigin: string | null,
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+): Promise<void> {
+  let raw: string;
+  try {
+    raw = await readBody(req, MAX_BODY_BYTES);
+  } catch (e) {
+    if (e instanceof BodyTooLargeError) {
+      sendJson(res, 413, echoOrigin, { error: "request too large" });
+      return;
+    }
+    throw e; // → wrapper → 500
+  }
+
+  let parsed: any;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    sendJson(res, 400, echoOrigin, { error: "invalid JSON body" });
+    return;
+  }
+
+  const v = validateExerciseBody(parsed);
+  if (!v.ok) {
+    sendJson(res, 400, echoOrigin, { error: v.error });
+    return;
+  }
+  const p = v.value;
+
+  const loadMarket = async (m: PublicKey): Promise<MarketOracleView | null> => {
+    const acct: any = await ctx.program.account.optionsMarket.fetchNullable(m);
+    if (!acct) return null;
+    return { oracleSource: acct.oracleSource, pythFeedId: acct.pythFeedId };
+  };
+
+  const feed = await resolveSbFeedForMarket(loadMarket, p.market);
+  if (!feed.ok) {
+    // 404 for "no such market", 400 for "this market is not ours to price".
+    sendJson(res, feed.error === "market not found" ? 404 : 400, echoOrigin, {
+      error: feed.error,
+    });
+    return;
+  }
+
+  // Bounded fresh-build retry — each attempt re-fetches a fresh quote (the SB
+  // gateway is ~3/15 clean), matching the create path.
+  let build: Awaited<ReturnType<typeof buildSwitchboardExerciseAmericanTx>> | undefined;
+  let lastErr: unknown = null;
+  for (let attempt = 1; attempt <= cfg.buildAttempts; attempt++) {
+    try {
+      build = await buildSwitchboardExerciseAmericanTx(
+        ctx.program as any,
+        p.holder,
+        sb.qObj,
+        sb.crossbar,
+        {
+          feedHashHex: feed.value,
+          quantity: p.quantity,
+          sharedVault: p.sharedVault,
+          market: p.market,
+          vaultMintRecord: p.vaultMintRecord,
+          optionMint: p.optionMint,
+          holderOptionAccount: p.holderOptionAccount,
+          vaultUsdcAccount: p.vaultUsdcAccount,
+          holderUsdcAccount: p.holderUsdcAccount,
+        },
+      );
+      break;
+    } catch (e) {
+      lastErr = e;
+      ctx.log("warn", "sb-exercise build attempt failed", { attempt, err: short(e) });
+    }
+  }
+  if (!build) {
+    ctx.log("warn", "sb-exercise build exhausted", { err: short(lastErr) });
+    // User-facing copy: no vendor name (see the provenance rule).
+    sendJson(res, 502, echoOrigin, { error: "price unavailable, please retry" });
+    return;
+  }
+
+  // FRESHNESS INVARIANT — identical reasoning to the create path above: the
+  // blockhash bound (~150 slots / 60-90s) is TIGHTER than the SB quote window,
+  // so a tx that is still landable necessarily carries a still-valid quote and
+  // no separate quote deadline is needed in the response. If either bound ever
+  // moves, this must return an explicit quote deadline. Re-check both before
+  // deleting this comment.
+  const { blockhash, lastValidBlockHeight } =
+    await ctx.connection.getLatestBlockhash("confirmed");
+  const tx = new VersionedTransaction(
+    new TransactionMessage({
+      payerKey: p.holder, // the USER pays — never the crank
+      recentBlockhash: blockhash,
+      instructions: build.instructions,
+    }).compileToV0Message(),
+  );
+
+  ctx.log("info", "sb-exercise tx built", {
+    market: p.market.toBase58(),
+    holder: p.holder.toBase58(),
+    quantity: p.quantity,
+  });
+  sendJson(res, 200, echoOrigin, {
+    transactionBase64: Buffer.from(tx.serialize()).toString("base64"),
+    lastValidBlockHeight,
+  });
+}
+
 async function handleRequest(
   ctx: SbCreateEndpointContext,
   sb: { qObj: Queue; crossbar: CrossbarClient },
@@ -339,6 +468,21 @@ async function handleRequest(
       return;
     }
     await handleTokenIdentity(req, res, echoOrigin, cfg.tokensXyzApiKey, ctx.log);
+    return;
+  }
+
+  // POST /sb-exercise-american — build an UNSIGNED early-exercise tx for an
+  // SB-sourced market (the P1 fix; see crank/switchboardExerciseAmerican.ts).
+  //
+  // Same contract as /sb-create-market: stateless, fresh quote + fresh blockhash
+  // per request, returns bytes the USER signs. The crank key is not a signer on
+  // the result and could not be — exercise_american's only signer is `holder`.
+  if (req.method === "POST" && path === "/sb-exercise-american") {
+    if (!rateLimit(clientIp(req, cfg.trustProxy), Date.now())) {
+      sendJson(res, 429, echoOrigin, { error: "rate limit exceeded, try again shortly" });
+      return;
+    }
+    await handleSbExercise(ctx, sb, cfg, echoOrigin, req, res);
     return;
   }
 

@@ -96,7 +96,13 @@ async function hermesGet(feedIdHex: string, hermesBase: string): Promise<any> {
   const timer = setTimeout(() => ac.abort(), FETCH_TIMEOUT_MS);
   try {
     const resp = await fetch(url, { signal: ac.signal });
-    if (!resp.ok) throw new Error(`Hermes price HTTP ${resp.status}`);
+    if (!resp.ok) {
+      // PROVENANCE RULE: surfaced verbatim in the exercise/settle toasts. The
+      // 404 this used to print — "Hermes price HTTP 404" — was BOTH a vendor
+      // leak and a lie: the feed was fine, we were asking the wrong service.
+      console.warn("[pythPullPost] price fetch HTTP", resp.status, url);
+      throw new Error("Price unavailable — try again.");
+    }
     return await resp.json();
   } finally {
     clearTimeout(timer);
@@ -112,7 +118,8 @@ export async function fetchHermesUpdate(
   const json = await hermesGet(feedIdHex, hermesBase);
   const b64 = json?.binary?.data?.[0];
   if (typeof b64 !== "string") {
-    throw new Error("Hermes response missing binary.data[0]");
+    // Same toast path as the HTTP failure above — same rule.
+    throw new Error("Price unavailable — try again.");
   }
   return Buffer.from(b64, "base64");
 }

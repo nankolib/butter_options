@@ -34,6 +34,7 @@ import {
 import { buildFirstWritePrefill, prefillStrike } from "../../utils/firstWritePrefill";
 import { isMarketHours, nextOpenLabel, type AssetClass } from "../../utils/marketHours";
 import { VOL_ORACLE_EXPECTED_WAIT } from "../../hooks/useVolOracleStatus";
+import { useOptionPriceQuoteFreshness } from "../../hooks/useOptionPriceQuoteFreshness";
 import type { CellResult } from "../write/useWriteSubmit";
 
 const fmtUsd = (v: number, dp = 2) =>
@@ -79,7 +80,9 @@ export const FirstWritePanel: FC<{
   onSubmit: (args: FirstWriteSubmitArgs) => void;
   onConnect: () => void;
   onSkip: () => void;
-  marketPda: PublicKey | null;
+  /** The market account. Needed (not just its pubkey) because the American
+   *  quote gate below reads its feed id — see the gate comment. */
+  market: { publicKey: PublicKey; account: any } | null;
 }> = ({
   assetName,
   assetClass,
@@ -91,6 +94,7 @@ export const FirstWritePanel: FC<{
   onSubmit,
   onConnect,
   onSkip,
+  market,
 }) => {
   const prefill = useMemo(
     () => buildFirstWritePrefill({ spot, assetClass, nowMs: Date.now(), minLeadSecs }),
@@ -142,7 +146,38 @@ export const FirstWritePanel: FC<{
   }, [expiry, assetClass, assetName]);
 
   const fieldsReady = strikeNum > 0 && contracts > 0 && expiry !== null;
-  const blocked = !oracleReady || !!hoursBlock || !fieldsReady;
+
+  // ---- AMERICAN QUOTE GATE (ITEM 2) ---------------------------------------
+  // This panel ALWAYS writes American (see doFirstWrite's exerciseStyle), and
+  // every other American surface — /write's two sections and /trade's ticket —
+  // already refuses to submit against a stale on-chain quote. This one did not,
+  // which made the create flow the single American write path that could send a
+  // user to their wallet and fail there instead of before.
+  //
+  // Same hook, same verdict function, so "fresh enough to write on" keeps ONE
+  // definition across all four surfaces. `enabled` is false until the terms
+  // needed to quote exist, so a half-filled form costs no RPC.
+  const quoteEnabled = !!market && oracleReady && fieldsReady;
+  const { isFresh: quoteFresh, statusReason: quoteReason } = useOptionPriceQuoteFreshness(
+    quoteEnabled,
+    market ? { publicKey: market.publicKey, account: { pythFeedId: market.account.pythFeedId } } : null,
+    quoteEnabled && expiry !== null
+      ? {
+          strike: strikeNum,
+          expiryTs: expiry,
+          side,
+          exerciseStyle: "american" as const,
+          carryRateBps: Number(market?.account?.carryRateBps ?? 0),
+        }
+      : null,
+  );
+  const quoteBlock = useMemo(() => {
+    if (!quoteEnabled) return null; // nothing to quote yet — other gates speak first
+    if (quoteFresh) return null;
+    return quoteReason ?? "Awaiting a fresh on-chain quote for this option.";
+  }, [quoteEnabled, quoteFresh, quoteReason]);
+
+  const blocked = !oracleReady || !!hoursBlock || !fieldsReady || !!quoteBlock;
   const busy = state.kind === "submitting";
 
   // ---- done ---------------------------------------------------------------
@@ -304,6 +339,11 @@ export const FirstWritePanel: FC<{
         {connected && oracleReady && hoursBlock && (
           <span className="font-mono-plex text-[10.5px] text-l-muted" data-testid="first-write-hours">
             {hoursBlock}
+          </span>
+        )}
+        {connected && oracleReady && !hoursBlock && quoteBlock && (
+          <span className="font-mono-plex text-[10.5px] text-l-muted" data-testid="first-write-quote">
+            {quoteBlock}
           </span>
         )}
       </div>

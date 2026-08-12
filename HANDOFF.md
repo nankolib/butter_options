@@ -1,4 +1,4 @@
-# CREATE-MARKET ARC — 2026-08-11 (SLICE 1 + SLICE 2A shipped and proven; 2B in flight)
+# CREATE-MARKET ARC — 2026-08-12 (SLICE 1 + 2A + 2B + RULES v1.2 all LIVE; 2C = REQUEST LISTING)
 
 > Refreshed at the 2A close. Everything below this block predates it. Read this
 > first; the EPOCH 0 block follows.
@@ -9,7 +9,9 @@
 > |---|---|---|
 > | **1** | reactive vol-oracle seeding (`7d72d6f`) | **LIVE + PROVEN — 114 s measured on ORE** |
 > | **2A** | create-flow identity + honesty (`ca7a6a3`) | **LIVE — founder browser proof pending** |
-> | **2B** | written-position visibility + arc close-out | in flight |
+> | **2B** | written-position visibility + arc close-out (`d05bf49`) | **LIVE** |
+> | **v1.2** | O2 quest predicate, retroactive (`b4acdb8`) | **LIVE — 8 wallets recredited** |
+> | **2C** | REQUEST LISTING + indexer sink | not started |
 >
 > ## SLICE 2A — `ca7a6a3`, live on opta.fyi + crank restarted 17:10 UTC
 >
@@ -59,6 +61,34 @@
 > feed always comes from the anti-spoofed catalog row; Jupiter NAME search ranks
 > poorly ("backpack" → SKHY before BP); `TOKENS_XYZ_API_KEY` is staged locally
 > but NOT on the VPS, so enrichment is dormant. ClickUp `86eykm4ek`.
+>
+> ## RULES v1.2 — `b4acdb8`, LIVE 2026-08-12 (retroactive)
+>
+> **"First Write" (O2) required someone to BUY your option.** It credited from
+> `VaultMinted`, and in the mint-on-fill model nothing mints when you WRITE — it
+> mints when a buyer fills you. Live tape: **124,369 `OrderPosted` vs 21
+> `VaultMinted`**; 36 wallets held O1 and **2** held O2. The chain is strictly
+> sequential, so O2 also blocked O3 "Make a Market" — users who created a market
+> AND wrote an option froze one step short of the quest their own market was
+> meant to unlock.
+>
+> O2 now credits `VaultDeposited` OR `OrderPosted(kind=WriterAsk)`, and counts a
+> qualifying write **whenever it occurred** (four wallets wrote 27–35 seconds
+> before their first fill). Sequential award order is kept by clamping the award
+> to `max(O1, write)`. Dry-run against a DB copy, approved, then shipped:
+> **8 wallets, 1125 points, 525 external. O2 holders 2 → 8.** Live totals matched
+> the dry-run to the cent. `rules-v1.2-frozen`, `freeze --check` green,
+> `OPTA_INDEXER_COMMIT=b4acdb8`. ClickUp `86eyky0mp`.
+>
+> ⚠️ The amendment does MORE than add O2: it can move an existing O2 **earlier**,
+> widening every downstream `firstAtOrAfter` window. `DnExEYnZ` gained O3+O4+O6
+> while gaining no O2. That cascade is why the total was 1125 and not the 375–750
+> projected before measuring — **the dry-run is the only reason we knew.**
+>
+> **`TOKENS_XYZ_API_KEY`: staged on the VPS, auth scheme UNCONFIRMED** (tokens.xyz
+> uses Clerk sessions or hashed platform keys per their repo docs; all four
+> standard header forms 401). Enrichment is dormant by design and Jupiter is
+> primary — **revisit only if Jupiter primary ever degrades.**
 >
 > ## SLICE 1 — `7d72d6f`, and why it mattered
 >
@@ -2867,7 +2897,8 @@ reads like heavy drift. It is not:
   are correct
 
 **Future drift audits must compare EOL-normalised content**
-(`tr -d '' | sha256sum`), not `git status`. And do NOT reconcile by resetting:
+(`tr -d '
+' | sha256sum`), not `git status`. And do NOT reconcile by resetting:
 that would destroy the deployed `dist/` overlays and risk all seven live units to
 fix a cosmetic index. `freeze --check` 9/9 is the real proof the bytes are right.
 

@@ -1,4 +1,4 @@
-# CREATE-MARKET ARC — 2026-08-12 (SLICE 1 + 2A + 2B + RULES v1.2 all LIVE; 2C = REQUEST LISTING)
+# CREATE-MARKET ARC — 2026-08-12 (1 · 2A · 2B · v1.2 · 2C LIVE — arc NOT complete, SLICE 3 is the headline)
 
 > Refreshed at the 2A close. Everything below this block predates it. Read this
 > first; the EPOCH 0 block follows.
@@ -11,7 +11,8 @@
 > | **2A** | create-flow identity + honesty (`ca7a6a3`) | **LIVE — founder browser proof pending** |
 > | **2B** | written-position visibility + arc close-out (`d05bf49`) | **LIVE** |
 > | **v1.2** | O2 quest predicate, retroactive (`b4acdb8`) | **LIVE — 8 wallets recredited** |
-> | **2C** | REQUEST LISTING + indexer sink | not started |
+> | **2C** | REQUEST LISTING + signed demand sink (`c46b647`) | **LIVE — browser proof NOT yet observed** |
+> | **3** | guided first write from the success moment | **NEXT — the remaining headline** |
 >
 > ## SLICE 2A — `ca7a6a3`, live on opta.fyi + crank restarted 17:10 UTC
 >
@@ -61,6 +62,51 @@
 > feed always comes from the anti-spoofed catalog row; Jupiter NAME search ranks
 > poorly ("backpack" → SKHY before BP); `TOKENS_XYZ_API_KEY` is staged locally
 > but NOT on the VPS, so enrichment is dormant. ClickUp `86eykm4ek`.
+>
+> ## SLICE 2C — `c46b647`, LIVE 2026-08-12 (listing demand sink)
+>
+> 2A made the create modal honest; a token with no feed reads "BP · Backpack ·
+> ✓ Verified — no settlement feed yet". Honest, and still terminal. 2C is where
+> the wanting goes: a **signed** request, one row per (wallet, mint).
+>
+> **The auth change is an enum entry.** `verifySigned` is generic — shape, known
+> action, TTL, ed25519 over `canonicalMessage`, nonce INSERT as the replay check.
+> Adding `listing.request` to the union is the whole change. Dedupe is the
+> PRIMARY KEY `(wallet, mint)`, so a repeat is `INSERT OR IGNORE` → 200
+> `already-requested`, never an error. Bounds: 10/wallet/rolling-24h checked
+> AFTER signature verification; mint base58→32 bytes; symbol 1-16
+> `[A-Za-z0-9._-]`; class 0-4. **No per-mint cap — many wallets on one mint IS
+> the signal.**
+>
+> **Schema v7**, additive. `freeze --check` = `9 entries match rules-v1.2-frozen`
+> pre- and post-restart: the quest engine is provably untouched.
+>
+> ⚠️ **BROWSER PROOF NOT YET OBSERVED.** As of this writing `listing_requests`
+> has **0 rows** and 0 `listing.request` nonces burned, so no signed request has
+> reached the sink. The sink itself IS verified live: `GET …/listing/requested`
+> → 200 `{"requested":false}`, `POST` with a forged signature → 401
+> `bad_signature` writing nothing and burning no nonce. What is unproven is the
+> browser path end to end. Do not record this slice as user-proven until a row
+> exists.
+>
+> ### Founder read path — demand data is the point
+>
+> ```bash
+> ssh root@144.202.58.6 'cd /opt/opta-crank/indexer && node -e "
+> const d=new(require(\"better-sqlite3\"))(\"/opt/opta-indexer/points.db\",{readonly:true});
+> console.table(d.prepare(\`SELECT mint, symbol, COUNT(*) reqs, MAX(requested_at) newest
+>   FROM listing_requests GROUP BY mint ORDER BY reqs DESC, newest DESC\`).all());"'
+> ```
+>
+> ## ⚠️ KNOWN OPS — the points API is dead for ~3 min after an indexer restart
+>
+> The indexer boot backfill BLOCKS THE EVENT LOOP, so the API accepts
+> connections but cannot answer, and nginx gives up at 60s. Observed 2026-08-12:
+> four probes returned nginx **504**, then all four were served in one burst at
+> `16:19:46` once boot finished (13ms / 11ms / 7ms). **A 504 in the minutes after
+> a restart is this, not an outage.** Fix candidate (NOT scheduled): yield the
+> loop during backfill, or hold the listener until boot completes so nginx gets a
+> refused connection instead of a hang.
 >
 > ## RULES v1.2 — `b4acdb8`, LIVE 2026-08-12 (retroactive)
 >

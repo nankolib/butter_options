@@ -78,7 +78,7 @@
 > to `max(O1, write)`. Dry-run against a DB copy, approved, then shipped:
 > **8 wallets, 1125 points, 525 external. O2 holders 2 → 8.** Live totals matched
 > the dry-run to the cent. `rules-v1.2-frozen`, `freeze --check` green,
-> `OPTA_INDEXER_COMMIT=b4acdb8`. ClickUp `86eyky0mp`.
+> `OPTA_INDEXER_COMMIT=b4acdb8`. ClickUp `86eykx8jp`.
 >
 > ⚠️ The amendment does MORE than add O2: it can move an existing O2 **earlier**,
 > widening every downstream `firstAtOrAfter` window. `DnExEYnZ` gained O3+O4+O6

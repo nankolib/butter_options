@@ -48,9 +48,17 @@ import {
   resolveTokenIdentity,
   type TokenIdentity,
 } from "../../utils/tokenIdentity";
-import { VOL_ORACLE_EXPECTED_WAIT, VOL_ORACLE_POLL_MS } from "../../hooks/useVolOracleStatus";
+import {
+  VOL_ORACLE_EXPECTED_WAIT,
+  VOL_ORACLE_POLL_MS,
+  decodeOracleSpot,
+} from "../../hooks/useVolOracleStatus";
+import { useWriteSubmit } from "../write/useWriteSubmit";
+import { deriveEpochConfig } from "../../hooks/useAccounts";
+import { FirstWritePanel, type FirstWriteState, type FirstWriteSubmitArgs } from "./FirstWritePanel";
 import { VOL_ORACLE_SEED } from "../../utils/constants";
 import { invalidateAccountScans } from "../../hooks/useFetchAccounts";
+import { decodeError } from "../../utils/errorDecoder";
 import { parseMintAddress, resolveMintSymbol } from "../../utils/resolveMintSymbol";
 import { SolscanLink } from "../../components/SolscanLink";
 import {
@@ -151,7 +159,7 @@ type Avail =
 type Phase =
   | { kind: "form" }
   | { kind: "submitting"; label: string }
-  | { kind: "success"; sig: string; assetName: string; feedIdHex: string; oracleSource: number }
+  | { kind: "success"; sig: string; assetName: string; feedIdHex: string; oracleSource: number; assetClass: number }
   | { kind: "failed"; message: string; sig?: string };
 
 export const NewMarketTerminalModal: FC<Props> = ({ onClose, onCreated }) => {
@@ -578,6 +586,7 @@ export const NewMarketTerminalModal: FC<Props> = ({ onClose, onCreated }) => {
             assetName,
             feedIdHex: activeFeed.feedIdHex,
             oracleSource: activeFeed.oracleSource,
+            assetClass: activeFeed.assetClass,
           });
           return;
         }
@@ -637,6 +646,7 @@ export const NewMarketTerminalModal: FC<Props> = ({ onClose, onCreated }) => {
         assetName,
         feedIdHex: activeFeed.feedIdHex,
         oracleSource: activeFeed.oracleSource,
+        assetClass: activeFeed.assetClass,
       });
     } catch (e) {
       if (e instanceof SbUserRejectedError) {
@@ -689,6 +699,7 @@ export const NewMarketTerminalModal: FC<Props> = ({ onClose, onCreated }) => {
               assetName={phase.assetName}
               feedIdHex={phase.feedIdHex}
               oracleSource={phase.oracleSource}
+              assetClass={phase.assetClass}
               onClose={onClose}
             />
           ) : (
@@ -1236,14 +1247,26 @@ const SuccessMoment: FC<{
   assetName: string;
   feedIdHex: string;
   oracleSource: number;
+  assetClass: number;
   onClose: () => void;
-}> = ({ sig, assetName, feedIdHex, oracleSource, onClose }) => {
+}> = ({ sig, assetName, feedIdHex, oracleSource, assetClass, onClose }) => {
   const { program } = useProgram();
+  const { publicKey, connected } = useWallet();
+  const { setVisible } = useWalletModal();
+  const { submit: submitWrite, submitting: writeSubmitting } = useWriteSubmit();
   // SB-curated markets are born writable — their oracle predates the market.
   const [oracleReady, setOracleReady] = useState(oracleSource === 1);
+  // SLICE 3: spot comes from the SAME account read the poll already does.
+  const [spot, setSpot] = useState<number | null>(null);
+  const [market, setMarket] = useState<{ publicKey: PublicKey; account: any } | null>(null);
+  const [minLeadSecs, setMinLeadSecs] = useState(86_400);
+  const [writeState, setWriteState] = useState<FirstWriteState>({ kind: "idle" });
+  const [skipped, setSkipped] = useState(false);
 
   useEffect(() => {
-    if (oracleReady || !program || !/^[0-9a-f]{64}$/.test(feedIdHex)) return;
+    // Runs until we have BOTH readiness and spot. An SB market is born ready but
+    // still needs one read to learn its price for the prefill.
+    if ((oracleReady && spot !== null) || !program || !/^[0-9a-f]{64}$/.test(feedIdHex)) return;
     let cancelled = false;
     const [pda] = PublicKey.findProgramAddressSync(
       [Buffer.from(VOL_ORACLE_SEED), Buffer.from(feedIdHex, "hex")],
@@ -1252,7 +1275,12 @@ const SuccessMoment: FC<{
     const check = async () => {
       try {
         const info = await program.provider.connection.getAccountInfo(pda, "confirmed");
-        if (!cancelled && info && info.owner.equals(program.programId)) setOracleReady(true);
+        if (!cancelled && info && info.owner.equals(program.programId)) {
+          setOracleReady(true);
+          // Same buffer, no extra RPC — see VOL_ORACLE_SPOT_OFFSET.
+          const s = decodeOracleSpot(info.data);
+          if (s !== null) setSpot(s);
+        }
       } catch {
         /* transient — the next tick retries */
       }
@@ -1264,6 +1292,75 @@ const SuccessMoment: FC<{
       window.clearInterval(id);
     };
   }, [oracleReady, program, feedIdHex]);
+
+  // The market account useWriteSubmit needs. Fetched once — the account was
+  // created seconds ago by this very modal, so it cannot be missing.
+  useEffect(() => {
+    if (!program || market) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const [pda] = PublicKey.findProgramAddressSync(
+          [Buffer.from(MARKET_SEED), Buffer.from(assetName)],
+          program.programId,
+        );
+        const acct = await (program.account as any).optionsMarket.fetch(pda);
+        if (!cancelled) setMarket({ publicKey: pda, account: acct });
+      } catch {
+        /* leave null — the panel keeps WRITE disabled rather than guessing */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [program, market, assetName]);
+
+  // Live epoch min-lead: slots inside it are rejected on-chain (6021), and the
+  // prefill must not propose one. 1-day fallback matches useWriteController.
+  useEffect(() => {
+    if (!program) return;
+    let live = true;
+    (async () => {
+      try {
+        const [pda] = deriveEpochConfig();
+        const ec: any = await (program.account as any).epochConfig.fetch(pda);
+        if (live) setMinLeadSecs(Number(ec.minEpochDurationDays) * 86_400);
+      } catch {
+        /* keep the conservative fallback */
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [program]);
+
+  const doFirstWrite = async (a: FirstWriteSubmitArgs) => {
+    if (!market) return;
+    setWriteState({ kind: "submitting", label: "Confirm in your wallet…" });
+    try {
+      const results = await submitWrite({
+        market,
+        side: a.side,
+        exerciseStyle: "american",
+        strike: a.strike,
+        vaultType: "epoch",
+        cells: [
+          {
+            expiryTs: a.expiry,
+            contracts: a.contracts,
+            collateral: a.collateral,
+            premiumPerContract: a.premiumPerContract,
+            tenorLabels: ["First write"],
+          },
+        ],
+      });
+      const cell = results?.[0];
+      if (cell && cell.status === "landed") setWriteState({ kind: "done", cell });
+      else setWriteState({ kind: "failed", message: cell?.error ?? "Write failed." });
+    } catch (e) {
+      setWriteState({ kind: "failed", message: decodeError(e) });
+    }
+  };
 
   return (
     <div className="space-y-5 py-2" data-testid="create-success">
@@ -1291,6 +1388,41 @@ const SuccessMoment: FC<{
           </p>
         )}
       </div>
+
+      {/* SLICE 3 — the first write, inline. Renders immediately (even while a
+          Pyth market is warming, with the fields active) so the creator never
+          has to find /write and re-answer four questions. "Skip for now" falls
+          back to the untouched links below. */}
+      {!skipped && writeState.kind !== "done" && (
+        <FirstWritePanel
+          assetName={assetName}
+          assetClass={assetClass}
+          spot={spot}
+          oracleReady={oracleReady && !!market}
+          minLeadSecs={minLeadSecs}
+          connected={connected && !!publicKey}
+          state={writeSubmitting ? { kind: "submitting", label: "Confirm in your wallet…" } : writeState}
+          onSubmit={doFirstWrite}
+          onConnect={() => setVisible(true)}
+          onSkip={() => setSkipped(true)}
+          marketPda={market?.publicKey ?? null}
+        />
+      )}
+      {writeState.kind === "done" && (
+        <FirstWritePanel
+          assetName={assetName}
+          assetClass={assetClass}
+          spot={spot}
+          oracleReady
+          minLeadSecs={minLeadSecs}
+          connected
+          state={writeState}
+          onSubmit={doFirstWrite}
+          onConnect={() => setVisible(true)}
+          onSkip={() => setSkipped(true)}
+          marketPda={market?.publicKey ?? null}
+        />
+      )}
 
       <div className="flex flex-wrap items-center gap-3 pt-1">
         <Link

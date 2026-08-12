@@ -50,6 +50,39 @@ import { VOL_ORACLE_SEED } from "../utils/constants";
 //   block when the oracle was just seeded.
 // =============================================================================
 
+// ---- VolOracle byte layout (SLICE 3) ---------------------------------------
+//
+// ONE definition, exported, because two call sites now read this account: the
+// poll below (existence) and the first-write prefill (spot). A second copy of a
+// byte offset is a silent mis-read waiting to happen.
+//
+// Layout after the 8-byte discriminator, from programs/opta/src/state/vol_oracle.rs:
+//   sum_log_returns    i128        @8
+//   sum_log_returns_sq i128        @24
+//   feed_id            [u8;32]     @40
+//   samples            [i64;720]   @72     (5760 bytes)
+//   last_sample_ts     i64         @5832
+//   last_spot_price    i64         @5840   <- this one
+//   head/sample_count/bump/oracle_source   @5848..5854
+//   seed_vol           i64         @5856
+// Total 5864 (8 + 5856). Verified live on ORE 2026-08-11: $62.212987.
+
+/** Byte offset of VolOracle.last_spot_price. */
+export const VOL_ORACLE_SPOT_OFFSET = 5840;
+
+/** solmath SCALE — spot is stored as an integer at 1e12. */
+export const VOL_ORACLE_SCALE = 1e12;
+
+/** Decode spot (human USD) from a raw VolOracle account, or null when the
+ *  buffer is the wrong size or the oracle has no spot yet. */
+export function decodeOracleSpot(data: Uint8Array | Buffer): number | null {
+  if (!data || data.length < VOL_ORACLE_SPOT_OFFSET + 8) return null;
+  const buf = Buffer.from(data);
+  const raw = buf.readBigInt64LE(VOL_ORACLE_SPOT_OFFSET);
+  if (raw <= 0n) return null;
+  return Number(raw) / VOL_ORACLE_SCALE;
+}
+
 /** Poll cadence while an oracle is pending. The crank's fast-seed loop ticks
  *  every 120 s and lands a seed inside ~2 min of a market being created, so a
  *  10 s poll surfaces the flip promptly without being a busy-wait. */

@@ -53,6 +53,11 @@ import { VOL_ORACLE_SEED } from "../../utils/constants";
 import { invalidateAccountScans } from "../../hooks/useFetchAccounts";
 import { parseMintAddress, resolveMintSymbol } from "../../utils/resolveMintSymbol";
 import { SolscanLink } from "../../components/SolscanLink";
+import {
+  checkAlreadyRequested,
+  submitListingRequest,
+  type ListingOutcome,
+} from "../../utils/listingRequest";
 
 type Props = {
   onClose: () => void;
@@ -151,7 +156,7 @@ type Phase =
 
 export const NewMarketTerminalModal: FC<Props> = ({ onClose, onCreated }) => {
   const { program, provider } = useProgram();
-  const { publicKey, connected } = useWallet();
+  const { publicKey, connected, signMessage } = useWallet();
   const anchorWallet = useAnchorWallet();
   const { connection } = useConnection();
   const { setVisible } = useWalletModal();
@@ -415,6 +420,72 @@ export const NewMarketTerminalModal: FC<Props> = ({ onClose, onCreated }) => {
       reason: r.reason,
     };
   }, [activeFeed]);
+
+  // ---- SLICE 2C: listing demand for a token we cannot list ----------------
+  //
+  // The no-feed verdict is honest but terminal: the user learns the answer is
+  // no and has nowhere to put the fact that they wanted it. This is where that
+  // goes. Signed, so the demand is attributable and spam-resistant; the whole
+  // value of the table is that somebody real asked.
+  type ListingState =
+    | { kind: "idle" }
+    | { kind: "checking" }
+    | { kind: "signing" }
+    | { kind: "sending" }
+    | { kind: "done"; already: boolean }
+    | { kind: "failed"; message: string };
+  const [listing, setListing] = useState<ListingState>({ kind: "idle" });
+
+  // The token currently sitting in the no-feed verdict, if any.
+  const noFeedMint =
+    resolve.kind === "no-feed" ? resolve.identity.mint : null;
+  const noFeedIdentity = resolve.kind === "no-feed" ? resolve.identity : null;
+
+  // On verdict render, ask whether THIS wallet already requested THIS mint, so
+  // a revisit shows the recorded state instead of offering the action again.
+  useEffect(() => {
+    if (!noFeedMint || !publicKey) {
+      setListing({ kind: "idle" });
+      return;
+    }
+    let cancelled = false;
+    setListing({ kind: "checking" });
+    checkAlreadyRequested("", publicKey.toBase58(), noFeedMint)
+      .then((already) => {
+        if (cancelled) return;
+        // NULL means we could not tell — show the button. Offering an action
+        // twice is a far smaller failure than hiding one never taken.
+        setListing(already === true ? { kind: "done", already: true } : { kind: "idle" });
+      })
+      .catch(() => !cancelled && setListing({ kind: "idle" }));
+    return () => {
+      cancelled = true;
+    };
+  }, [noFeedMint, publicKey]);
+
+  const requestListing = async () => {
+    if (!noFeedIdentity || !publicKey || !signMessage) return;
+    setListing({ kind: "signing" });
+    const out: ListingOutcome = await submitListingRequest(
+      {
+        mint: noFeedIdentity.mint,
+        symbol: noFeedIdentity.symbol || "?",
+        assetClass: selectedClass ?? 0,
+      },
+      {
+        apiBase: "", // same-origin: nginx fronts the points API on opta.fyi
+        wallet: publicKey.toBase58(),
+        sign: signMessage,
+        nowUnix: Math.floor(Date.now() / 1000),
+      },
+    );
+    if (out.kind === "recorded") setListing({ kind: "done", already: false });
+    else if (out.kind === "already-requested") setListing({ kind: "done", already: true });
+    // A decline is a DECISION: back to the idle button, nothing red.
+    else if (out.kind === "declined") setListing({ kind: "idle" });
+    else if (out.kind === "rejected") setListing({ kind: "failed", message: out.reason });
+    else setListing({ kind: "failed", message: "Couldn't reach the listing service — try again." });
+  };
 
   const assetNameValid = /^[A-Z0-9]{1,16}$/.test(assetName);
 
@@ -699,7 +770,22 @@ export const NewMarketTerminalModal: FC<Props> = ({ onClose, onCreated }) => {
                   />
 
                   {/* Smart paste resolution states (crypto) */}
-                  {!!identityQuery && <ResolveRow resolve={resolve} />}
+                  {!!identityQuery && (
+                    <ResolveRow
+                      resolve={resolve}
+                      requestSlot={
+                        resolve.kind === "no-feed" ? (
+                          <ListingRequestSlot
+                            state={listing}
+                            connected={connected}
+                            canSign={!!signMessage}
+                            onRequest={requestListing}
+                            onConnect={() => setVisible(true)}
+                          />
+                        ) : null
+                      }
+                    />
+                  )}
 
                   {/* Text search results */}
                   {!looksLikeAddress && results.length > 0 && (
@@ -933,7 +1019,7 @@ const Section: FC<{ label: string; children: React.ReactNode }> = ({ label, chil
 // and deserve different words; the old single-line design could only say the
 // second one, so a verified, well-known token read as a flat refusal.
 // -----------------------------------------------------------------------------
-const ResolveRow: FC<{ resolve: Resolve }> = ({ resolve }) => {
+const ResolveRow: FC<{ resolve: Resolve; requestSlot?: React.ReactNode }> = ({ resolve, requestSlot }) => {
   if (resolve.kind === "resolving") {
     return (
       <p className="mt-2 font-mono-plex text-[12px] text-l-muted" data-testid="resolve-state" data-state="resolving">
@@ -1025,11 +1111,74 @@ const ResolveRow: FC<{ resolve: Resolve }> = ({ resolve }) => {
             Price feed live — this can be listed.
           </span>
         ) : (
-          <span className="font-mono-plex text-[11px] text-l-muted">
-            No settlement feed yet — this can't be listed.
-          </span>
+          <div>
+            <span className="font-mono-plex text-[11px] text-l-muted">
+              No settlement feed yet — this can't be listed.
+            </span>
+            {requestSlot}
+          </div>
         )}
       </div>
+    </div>
+  );
+};
+
+/**
+ * REQUEST LISTING — the only action available on a token we cannot list.
+ *
+ * A declined signature returns to the idle button with NOTHING red: the user
+ * exercised a choice, which is not a failure. Only a server refusal or an
+ * unreachable sink renders as one.
+ */
+const ListingRequestSlot: FC<{
+  state:
+    | { kind: "idle" }
+    | { kind: "checking" }
+    | { kind: "signing" }
+    | { kind: "sending" }
+    | { kind: "done"; already: boolean }
+    | { kind: "failed"; message: string };
+  connected: boolean;
+  canSign: boolean;
+  onRequest: () => void;
+  onConnect: () => void;
+}> = ({ state, connected, canSign, onRequest, onConnect }) => {
+  if (state.kind === "checking") {
+    return <div className="mt-2 font-mono-plex text-[10.5px] text-l-faint">Checking…</div>;
+  }
+  if (state.kind === "done") {
+    return (
+      <div
+        className="mt-2 font-mono-plex text-[10.5px] text-l-up-text"
+        data-testid="listing-recorded"
+        data-already={state.already}
+      >
+        ✓ {state.already ? "Already requested" : "Request recorded"} — we track demand for new listings.
+      </div>
+    );
+  }
+  const busy = state.kind === "signing" || state.kind === "sending";
+  return (
+    <div className="mt-2">
+      <button
+        type="button"
+        data-testid="request-listing"
+        disabled={busy || (connected && !canSign)}
+        onClick={connected ? onRequest : onConnect}
+        className="rounded-[5px] border border-l-hair px-[10px] py-[4px] font-mono-plex text-[10px] uppercase tracking-[0.12em] text-l-text transition-colors hover:bg-l-bg disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        {busy ? "Confirm in wallet…" : connected ? "Request listing" : "Connect wallet to request"}
+      </button>
+      {connected && !canSign && (
+        <span className="ml-2 font-mono-plex text-[10px] text-l-muted">
+          This wallet can't sign messages.
+        </span>
+      )}
+      {state.kind === "failed" && (
+        <span className="ml-2 font-mono-plex text-[10px] text-l-down" data-testid="listing-failed">
+          {state.message}
+        </span>
+      )}
     </div>
   );
 };

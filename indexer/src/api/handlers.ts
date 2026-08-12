@@ -520,3 +520,90 @@ export function postBountySubmit(deps: ApiDeps, env: SignedEnvelope): ApiRespons
     .run(id, a.wallet, kind, proof);
   return ok({ id, status: "pending" });
 }
+
+// ---------------------------------------------------------------------------
+// SLICE 2C — listing demand
+// ---------------------------------------------------------------------------
+
+/** Per-wallet rolling-24h cap. Ten is generous enough that no genuine user ever
+ *  meets it, and small enough that a scripted wallet cannot manufacture a demand
+ *  signal. Deliberately NOT a per-mint cap: many wallets asking for one mint is
+ *  exactly the signal this feature exists to collect. */
+export const LISTING_REQUEST_DAILY_CAP = 10;
+
+const SYMBOL_RE = /^[A-Za-z0-9._-]{1,16}$/;
+
+/** base58 that decodes to exactly 32 bytes — the same check verifySigned
+ *  applies to `wallet`. */
+function isMintAddress(v: string): boolean {
+  try {
+    return bs58.decode(v).length === 32;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * POST /api/points/listing/request — record that a wallet wants a token listed.
+ *
+ * Signed like every other write. `params` ({mint, symbol, assetClass}) are bound
+ * into the signed message by canonicalMessage, so a signature for one mint can
+ * never be replayed for another.
+ *
+ * Idempotent by construction: PRIMARY KEY (wallet, mint) makes the INSERT the
+ * dedupe check, and a repeat is a 200 "already-requested" rather than an error.
+ * A user re-visiting a token they already asked for has done nothing wrong.
+ *
+ * NO POINTS. This slice does not go near the quest engine.
+ */
+export function postListingRequest(deps: ApiDeps, env: SignedEnvelope): ApiResponse {
+  const a = authOrFail(deps, env, "listing.request");
+  if (isFail(a)) return a;
+
+  const p = (env.params ?? {}) as { mint?: unknown; symbol?: unknown; assetClass?: unknown };
+  const mint = String(p.mint ?? "");
+  const symbol = String(p.symbol ?? "");
+  const assetClass = Number(p.assetClass);
+
+  if (!isMintAddress(mint)) return err(400, "bad_mint");
+  if (!SYMBOL_RE.test(symbol)) return err(400, "bad_symbol");
+  if (!Number.isInteger(assetClass) || assetClass < 0 || assetClass > 4) {
+    return err(400, "bad_asset_class");
+  }
+
+  const now = deps.now();
+
+  // Cap AFTER signature verification — an unsigned caller must never be able to
+  // probe our rate limits.
+  const recent = deps.db
+    .prepare("SELECT COUNT(*) AS n FROM listing_requests WHERE wallet = ? AND requested_at > ?")
+    .get(a.wallet, now - 86_400) as { n: number };
+  if (recent.n >= LISTING_REQUEST_DAILY_CAP) {
+    return err(429, "daily_cap", { limit: LISTING_REQUEST_DAILY_CAP });
+  }
+
+  const res = deps.db
+    .prepare(
+      "INSERT OR IGNORE INTO listing_requests (wallet, mint, symbol, asset_class, requested_at, sig) VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .run(a.wallet, mint, symbol, assetClass, now, env.signature);
+
+  return ok({ status: res.changes > 0 ? "recorded" : "already-requested", mint });
+}
+
+/**
+ * GET /api/points/listing/requested?wallet=&mint= — has this wallet already
+ * asked for this mint?
+ *
+ * Unauthenticated on purpose. It discloses only whether a (wallet, mint) pair
+ * the CALLER ALREADY SUPPLIED exists, which is not a leak. The alternative —
+ * remembering locally in the browser — is strictly worse: it breaks across
+ * devices and lies after a cache clear.
+ */
+export function getListingRequested(db: DB, wallet: string, mint: string): ApiResponse {
+  if (!wallet || !mint) return err(400, "missing_params");
+  const row = db
+    .prepare("SELECT requested_at FROM listing_requests WHERE wallet = ? AND mint = ?")
+    .get(wallet, mint) as { requested_at: number } | undefined;
+  return ok({ requested: !!row, requested_at: row?.requested_at ?? null });
+}

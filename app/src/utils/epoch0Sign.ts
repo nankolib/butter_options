@@ -42,7 +42,13 @@ export function base58Encode(bytes: Uint8Array): string {
 
 export const SIGN_TTL_SECS = 240; // server allows 300; leave headroom for latency
 
-export type Epoch0Action = "referral.code" | "referral.bind" | "social.submit" | "bounty.submit";
+export type Epoch0Action =
+  | "referral.code"
+  | "referral.bind"
+  | "social.submit"
+  | "bounty.submit"
+  // SLICE 2C — listing demand. Mirrors the indexer Action union.
+  | "listing.request";
 
 /** Deterministic JSON: keys sorted at every level, no whitespace. */
 export function canonicalJson(value: unknown): string {

@@ -12,7 +12,7 @@
 //                               keyed by rules_version so old runs survive.
 // =============================================================================
 
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 export const SCHEMA_SQL = `
 -- ============ META ============
@@ -197,6 +197,27 @@ CREATE TABLE IF NOT EXISTS social_posts (
   points      REAL
 );
 CREATE INDEX IF NOT EXISTS idx_social_wallet ON social_posts(wallet, verified_at);
+
+-- SLICE 2C — listing demand. A user who pastes a token with no settlement feed
+-- can ask for it. This table IS the demand signal: which mints, how many
+-- distinct wallets, how recently.
+--
+-- PRIMARY KEY (wallet, mint) is the dedupe rule — the INSERT is the check, the
+-- same trick the nonces table uses. A repeat request is idempotent, not an error.
+--
+-- The sig column is retained deliberately: a request is a CLAIM OF DEMAND, and being
+-- able to re-verify who asked without trusting this table is worth the bytes.
+CREATE TABLE IF NOT EXISTS listing_requests (
+  wallet       TEXT    NOT NULL,
+  mint         TEXT    NOT NULL,
+  symbol       TEXT    NOT NULL,
+  asset_class  INTEGER NOT NULL,
+  requested_at INTEGER NOT NULL,
+  sig          TEXT    NOT NULL,
+  PRIMARY KEY (wallet, mint)
+);
+-- Serves the founder read path: group by mint, count distinct wallets.
+CREATE INDEX IF NOT EXISTS idx_listing_mint ON listing_requests(mint);
 
 CREATE TABLE IF NOT EXISTS bounty_submissions (
   id        TEXT PRIMARY KEY,

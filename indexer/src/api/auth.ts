@@ -32,13 +32,23 @@ import type { DB } from "../db";
 
 export const MAX_TTL_SECS = 300;
 
-export type Action = "referral.code" | "referral.bind" | "social.submit" | "bounty.submit";
+export type Action =
+  | "referral.code"
+  | "referral.bind"
+  | "social.submit"
+  | "bounty.submit"
+  // SLICE 2C. Adding an action is the ENTIRE auth change: verifySigned is
+  // generic — it binds `params` into the signed message wholesale, so a
+  // signature for one mint cannot be replayed for another, and the nonce table
+  // enforces single use regardless of action. Nothing below this line changes.
+  | "listing.request";
 
 export const ACTIONS: readonly Action[] = [
   "referral.code",
   "referral.bind",
   "social.submit",
   "bounty.submit",
+  "listing.request",
 ];
 
 export interface SignedEnvelope {

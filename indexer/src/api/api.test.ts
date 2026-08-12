@@ -13,7 +13,6 @@ import { makeWriter, openDb, type DB, type EventRow, type TxRow } from "../db";
 import { SCHEMA_VERSION } from "../schema";
 import { recompute } from "../score/recompute";
 import { DEFAULT_QUESTS, QUESTS_VERSION } from "../score/quests/evaluator";
-import { RULES_VERSION } from "../score/rules_v1";
 import { DEFAULT_RULES, RULES_VERSION } from "../score/rules_v1";
 import { MULTIPLIER_STEP, MULTIPLIER_CAP, SHIELD_STREAK_LENGTH, SHIELD_BANK_MAX } from "../score/multiplier";
 import { canonicalJson, canonicalMessage, verifySigned, type SignedEnvelope } from "./auth";
@@ -32,6 +31,9 @@ import {
   postSocialSubmit,
   type ApiDeps,
   type ApiResponse,
+  LISTING_REQUEST_DAILY_CAP,
+  getListingRequested,
+  postListingRequest,
 } from "./handlers";
 
 const NOW = 1_784_000_000;
@@ -502,4 +504,155 @@ test("/rules serves the FROZEN constants, not copies", () => {
 
   db.close();
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// ===========================================================================
+// SLICE 2C — listing requests
+// ===========================================================================
+
+const L_MINT = "BPxxfRCXkUVhig4HS1Lh7kZqV6SPJhzfEk4x6fVBjPCy";
+const L_MINT2 = "9cRCn9rGT8V2imeM2BaKs13yhMEais3ruM3rPvTGpump";
+const L_REQ = { mint: L_MINT, symbol: "BP", assetClass: 0 };
+const nRows = (db: DB, sql: string, ...a: unknown[]) =>
+  (db.prepare(sql).get(...(a as never[])) as { n: number }).n;
+
+test("listing: a signed request is recorded", () => {
+  const { db, dir } = tmpDb();
+  const r = postListingRequest(deps(db), sign(KP_A, "listing.request", L_REQ));
+  assert.equal(r.status, 200);
+  assert.equal((r.body as { status: string }).status, "recorded");
+  const row = db.prepare("SELECT * FROM listing_requests WHERE wallet = ?").get(KP_A.wallet) as {
+    mint: string; symbol: string; asset_class: number; sig: string;
+  };
+  assert.equal(row.mint, L_MINT);
+  assert.equal(row.symbol, "BP");
+  assert.equal(row.asset_class, 0);
+  assert.ok(row.sig.length > 40, "the signature is retained so demand stays re-verifiable");
+  db.close(); fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("listing: a badly-signed request is refused and writes nothing", () => {
+  const { db, dir } = tmpDb();
+  const good = sign(KP_A, "listing.request", L_REQ);
+  const forged = { ...good, signature: bs58.encode(Buffer.alloc(64, 7)) };
+  assert.equal(postListingRequest(deps(db), forged).status, 401);
+  assert.equal(nRows(db, "SELECT COUNT(*) n FROM listing_requests"), 0);
+  db.close(); fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("listing: params are BOUND to the signature — a swapped mint is refused", () => {
+  // The property that makes this safe: canonicalMessage hashes params wholesale,
+  // so a signature for BP can never be reused to request a different token.
+  const { db, dir } = tmpDb();
+  const env = sign(KP_A, "listing.request", L_REQ);
+  const swapped = { ...env, params: { ...L_REQ, mint: L_MINT2 } };
+  assert.equal(postListingRequest(deps(db), swapped).status, 401);
+  assert.equal(nRows(db, "SELECT COUNT(*) n FROM listing_requests"), 0);
+  db.close(); fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("listing: a REPLAYED nonce is refused (409)", () => {
+  const { db, dir } = tmpDb();
+  const env = sign(KP_A, "listing.request", L_REQ);
+  assert.equal(postListingRequest(deps(db), env).status, 200);
+  assert.equal(postListingRequest(deps(db), env).status, 409, "same nonce, second use");
+  db.close(); fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("listing: a repeat request is IDEMPOTENT — already-requested, not an error", () => {
+  // A user revisiting a token they already asked for has done nothing wrong.
+  const { db, dir } = tmpDb();
+  const d = deps(db, { cooldownSecs: 0 });
+  const first = postListingRequest(d, sign(KP_A, "listing.request", L_REQ));
+  assert.equal((first.body as { status: string }).status, "recorded");
+  const again = postListingRequest(d, sign(KP_A, "listing.request", L_REQ));
+  assert.equal(again.status, 200, "NOT an error");
+  assert.equal((again.body as { status: string }).status, "already-requested");
+  assert.equal(nRows(db, "SELECT COUNT(*) n FROM listing_requests"), 1, "still one row");
+  db.close(); fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("listing: the per-wallet daily cap is enforced", () => {
+  const { db, dir } = tmpDb();
+  const d = deps(db, { cooldownSecs: 0 });
+  // Distinct mints, so it is the CAP that stops us and not the dedupe rule.
+  for (let i = 0; i < LISTING_REQUEST_DAILY_CAP; i++) {
+    db.prepare(
+      "INSERT INTO listing_requests (wallet, mint, symbol, asset_class, requested_at, sig) VALUES (?,?,?,?,?,?)",
+    ).run(KP_A.wallet, "mint" + i, "X", 0, NOW - 10, "s");
+  }
+  const r = postListingRequest(d, sign(KP_A, "listing.request", L_REQ));
+  assert.equal(r.status, 429);
+  assert.equal((r.body as { error: string }).error, "daily_cap");
+  db.close(); fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("listing: the cap is a ROLLING 24h window, not a lifetime limit", () => {
+  const { db, dir } = tmpDb();
+  const d = deps(db, { cooldownSecs: 0 });
+  for (let i = 0; i < LISTING_REQUEST_DAILY_CAP; i++) {
+    db.prepare(
+      "INSERT INTO listing_requests (wallet, mint, symbol, asset_class, requested_at, sig) VALUES (?,?,?,?,?,?)",
+    ).run(KP_A.wallet, "old" + i, "X", 0, NOW - 86400 - 60, "s");
+  }
+  assert.equal(postListingRequest(d, sign(KP_A, "listing.request", L_REQ)).status, 200);
+  db.close(); fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("listing: the cap is PER WALLET — one wallet cannot exhaust another", () => {
+  const { db, dir } = tmpDb();
+  const d = deps(db, { cooldownSecs: 0 });
+  for (let i = 0; i < LISTING_REQUEST_DAILY_CAP; i++) {
+    db.prepare(
+      "INSERT INTO listing_requests (wallet, mint, symbol, asset_class, requested_at, sig) VALUES (?,?,?,?,?,?)",
+    ).run(KP_A.wallet, "mint" + i, "X", 0, NOW - 10, "s");
+  }
+  assert.equal(postListingRequest(d, sign(KP_B, "listing.request", L_REQ)).status, 200);
+  db.close(); fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("listing: malformed params are refused with distinct reasons", () => {
+  const { db, dir } = tmpDb();
+  const d = deps(db, { cooldownSecs: 0 });
+  const bad = (params: unknown, expected: string) => {
+    const r = postListingRequest(d, sign(KP_A, "listing.request", params));
+    assert.equal(r.status, 400, expected);
+    assert.equal((r.body as { error: string }).error, expected);
+  };
+  bad({ ...L_REQ, mint: "not-base58!!" }, "bad_mint");
+  bad({ ...L_REQ, mint: "abc" }, "bad_mint"); // decodes, wrong length
+  bad({ ...L_REQ, symbol: "" }, "bad_symbol");
+  bad({ ...L_REQ, symbol: "WAY-TOO-LONG-FOR-A-TICKER" }, "bad_symbol");
+  bad({ ...L_REQ, symbol: "<script>" }, "bad_symbol");
+  bad({ ...L_REQ, assetClass: 9 }, "bad_asset_class");
+  bad({ ...L_REQ, assetClass: -1 }, "bad_asset_class");
+  bad({ ...L_REQ, assetClass: 1.5 }, "bad_asset_class");
+  assert.equal(nRows(db, "SELECT COUNT(*) n FROM listing_requests"), 0);
+  db.close(); fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("listing: the requested-check reports both states and needs no auth", () => {
+  const { db, dir } = tmpDb();
+  const before = getListingRequested(db, KP_A.wallet, L_MINT);
+  assert.equal(before.status, 200);
+  assert.equal((before.body as { requested: boolean }).requested, false);
+
+  postListingRequest(deps(db), sign(KP_A, "listing.request", L_REQ));
+  const after = getListingRequested(db, KP_A.wallet, L_MINT);
+  assert.equal((after.body as { requested: boolean }).requested, true);
+  assert.ok((after.body as { requested_at: number }).requested_at > 0);
+
+  // A different wallet, or a different mint, is still false.
+  assert.equal((getListingRequested(db, KP_B.wallet, L_MINT).body as { requested: boolean }).requested, false);
+  assert.equal((getListingRequested(db, KP_A.wallet, L_MINT2).body as { requested: boolean }).requested, false);
+  assert.equal(getListingRequested(db, "", L_MINT).status, 400);
+  db.close(); fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("listing: NO points are awarded — this slice never touches the quest engine", () => {
+  const { db, dir } = tmpDb();
+  postListingRequest(deps(db), sign(KP_A, "listing.request", L_REQ));
+  assert.equal(nRows(db, "SELECT COUNT(*) n FROM quest_completions"), 0);
+  assert.equal(nRows(db, "SELECT COUNT(*) n FROM scores"), 0);
+  db.close(); fs.rmSync(dir, { recursive: true, force: true });
 });

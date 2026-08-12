@@ -28,6 +28,8 @@ import {
   postSocialSubmit,
   type ApiDeps,
   type ApiResponse,
+  getListingRequested,
+  postListingRequest,
 } from "./handlers";
 
 const MAX_BODY_BYTES = 4096;
@@ -95,6 +97,11 @@ export function createApiServer(db: DB, cfg: Config): http.Server {
         if (path === "/api/points/quests") return send(res, getQuests(db));
         if (path === "/api/points/rules") return send(res, getRules(db));
         if (path === "/api/points/stats") return send(res, getStats(db));
+        // SLICE 2C — has this wallet already requested this mint? Unauth by
+        // design: it discloses only a pair the caller already supplied.
+        if (path === "/api/points/listing/requested") {
+          return send(res, getListingRequested(db, url.searchParams.get("wallet") ?? "", url.searchParams.get("mint") ?? ""));
+        }
         if (path.startsWith("/api/points/wallet/")) {
           return send(res, getWallet(db, decodeURIComponent(path.slice("/api/points/wallet/".length))));
         }
@@ -108,6 +115,7 @@ export function createApiServer(db: DB, cfg: Config): http.Server {
           "/api/points/referral/bind": (env) => postReferralBind(deps, env),
           "/api/points/social/submit": (env) => postSocialSubmit(deps, env),
           "/api/points/bounty/submit": (env) => postBountySubmit(deps, env),
+          "/api/points/listing/request": (env) => postListingRequest(deps, env),
         };
         const handler = routes[path];
         if (!handler) return send(res, { status: 404, body: { error: "not_found" } });

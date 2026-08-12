@@ -145,6 +145,19 @@ function migrateV5toV6(db: DB): void {
   log.info("migration v5->v6 complete — wallet_points added (finalPoints is now stored, not discarded)");
 }
 
+/**
+ * v6 -> v7. ADDITIVE. Adds `listing_requests` (schema.ts has already created it
+ * by the time this runs, same as v5->v6).
+ *
+ * Nothing to backfill and nothing to lose: demand only exists from the moment
+ * users can express it. Unlike v1->v2 and v3->v4 this migration deletes NOTHING
+ * — those wiped tables to force a re-index, and this has no such reason.
+ */
+function migrateV6toV7(db: DB): void {
+  db.prepare("UPDATE meta SET value = '7' WHERE key = 'schema_version'").run();
+  log.info("migration v6->v7 complete — listing_requests added (listing demand sink)");
+}
+
 export function migrate(db: DB): void {
   let v = currentVersion(db);
   if (v === 0) {
@@ -173,6 +186,10 @@ export function migrate(db: DB): void {
   if (v === 5) {
     migrateV5toV6(db);
     v = 6;
+  }
+  if (v === 6) {
+    migrateV6toV7(db);
+    v = 7;
   }
   if (v !== SCHEMA_VERSION) {
     throw new Error(

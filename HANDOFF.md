@@ -1,4 +1,4 @@
-# CREATE-MARKET ARC — 2026-08-12 (1 · 2A · 2B · v1.2 · 2C LIVE — arc NOT complete, SLICE 3 is the headline)
+# CREATE-MARKET ARC — 2026-08-12 (1 · 2A · 2B · v1.2 · 2C · 3 ALL LIVE — next: P1 early-exercise oracle branch)
 
 > Refreshed at the 2A close. Everything below this block predates it. Read this
 > first; the EPOCH 0 block follows.
@@ -12,7 +12,8 @@
 > | **2B** | written-position visibility + arc close-out (`d05bf49`) | **LIVE** |
 > | **v1.2** | O2 quest predicate, retroactive (`b4acdb8`) | **LIVE — 8 wallets recredited** |
 > | **2C** | REQUEST LISTING + signed demand sink (`c46b647`) | **LIVE — browser proof NOT yet observed** |
-> | **3** | guided first write from the success moment | **NEXT — the remaining headline** |
+> | **3** | guided first write from the success moment (`7ca1b70`) | **LIVE — founder proof pending** |
+> | **next** | P1 early-exercise Hermes 404 on SB markets + americanQuoteBlock | **NOT STARTED** |
 >
 > ## SLICE 2A — `ca7a6a3`, live on opta.fyi + crank restarted 17:10 UTC
 >
@@ -62,6 +63,56 @@
 > feed always comes from the anti-spoofed catalog row; Jupiter NAME search ranks
 > poorly ("backpack" → SKHY before BP); `TOKENS_XYZ_API_KEY` is staged locally
 > but NOT on the VPS, so enrichment is dormant. ClickUp `86eykm4ek`.
+>
+> ## ⚠️ NEXT SESSION — P1: early exercise is broken on EVERY curated SB market
+>
+> Founder hit `Hermes price HTTP 404` exercising SOL early. Strong hypothesis,
+> NOT yet confirmed: the exercise path has only a PYTH arm, so it takes an
+> SB-sourced market's feed id (the SB feedHash, stored in the same
+> `pyth_feed_id` field by the double-duty design) to Hermes, which has never
+> heard of it. If so it breaks early exercise on all ~23 curated SB assets —
+> i.e. every crypto asset users actually trade. Recon first: find the exercise
+> instruction's oracle branch and check whether it mirrors settle_expiry's
+> source split. Rides with the americanQuoteBlock wiring below.
+>
+> ## SLICE 3 — `7ca1b70`, LIVE 2026-08-12 (guided first write)
+>
+> **The create flow ended one question short of a market.** 21 of 31 assets had
+> never traded; the only route on was /write, a four-gate form asked of someone
+> who had just been told their new market is worthless until they fill it in.
+> The success moment now prefills a legal, bot-aligned first write and submits it
+> in one approval, then shows the creator their own ask with a link to /trade.
+>
+> **No second builder:** `useWriteSubmit` called with a 1-element `cells` array —
+> its own documented degenerate case — so the identical atomic bundle and the
+> identical `withResolvedOutcome` rails. **Spot costs no extra RPC:** 2A's poll
+> already fetched the VolOracle account and now decodes `last_spot_price` from
+> the same buffer (offset exported from `useVolOracleStatus`, one definition).
+>
+> ### ⚠️ THE FINEST REPRESENTABLE STRIKE IS $0.000001
+>
+> On-chain strikes are **u64 MICRO-DOLLARS** — `create_series.rs` does
+> `strike_dollars = strike / 1_000_000`. So $0.000001 is the smallest tick, and
+> for sub-cent tokens the 3-significant-figure rung is FINER than the chain can
+> represent: a computed $0.0000232 truncates to $0.000023. **Any code that
+> proposes or displays a strike must snap through that u64 or it shows a number
+> the chain will not store.** The prefill and the writer bot both convert through
+> the same u64, so they truncate identically and their rungs still agree. Caught
+> by a golden test whose expectation was wrong, not by the code.
+>
+> **Strike helpers are a deliberate COPY** of `writer/src/ladder.ts` (CANONICAL —
+> named in the comment). The app cannot import from writer/ (the `@app/*` alias
+> runs the other way). Both copies are pinned by literal tests
+> (`writer/src/ladder.grid.test.ts` asserts the same tier boundaries) so whichever
+> side moves breaks its own suite. **Real fix filed:** move them into `app/` and
+> have the writer import them — bundle with the next deliberate writer deploy,
+> alongside the parked `EXCLUDE_CLASSES=99` sentinel drop.
+>
+> **Known gaps, ruled as follow-up:** `americanQuoteBlock` is NOT wired, so a
+> stale on-chain American quote fails at the wallet instead of pre-blocking (same
+> as /write pre-H-05 — recoverable, not fund-losing). Expiry is display-only; the
+> constrained picker is backlog polish. The panel state machine is untested
+> (.tsx, no DOM runner) — testids in place.
 >
 > ## SLICE 2C — `c46b647`, LIVE 2026-08-12 (listing demand sink)
 >

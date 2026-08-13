@@ -62,3 +62,23 @@ mobile/android/keystore.properties
 
 # Local design-review screenshot output (see app/scripts/epoch0-screenshots.mjs)
 .screenshots/
+
+# ---- compiled TypeScript artifacts (2026-08-13) ----------------------------
+# `tsc <file>` without --outDir emits JS NEXT TO the source. 424 such strays had
+# accumulated across app/, crank/, indexer/ and writer/, and they were not
+# harmless: vite resolves app/src/**/*.js ahead of the .tsx it was compiled
+# from, and a stale app/vite.config.js shadows vite.config.ts entirely. The
+# symptom is that `npm run build` succeeds once and then fails on every
+# subsequent run with "Unexpected JSX expression" or a config-load error —
+# a verification rule that silently stops verifying.
+#
+# The tsconfigs already set noEmit, so nothing SHOULD produce these; this is
+# belt-and-braces so a stray bare `tsc` invocation cannot commit its output.
+# Genuine hand-written .js (app/api/, app/scripts/) is unaffected — every path
+# below is a directory that contains only TypeScript sources.
+app/src/**/*.js
+crank/**/*.js
+!crank/deploy/**
+indexer/src/**/*.js
+writer/src/**/*.js
+app/vite.config.js

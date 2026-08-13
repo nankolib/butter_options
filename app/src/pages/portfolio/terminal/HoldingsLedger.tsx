@@ -130,6 +130,13 @@ export const HoldingsLedger: FC<{
                               onClick={() => onAction(p, act.action)}
                               busy={busy}
                               busyLabel={act.busyLabel}
+                              // Offered-but-impossible actions stay VISIBLE and
+                              // inert. Hiding the control would leave a holder
+                              // wondering where their exercise went, when the
+                              // honest answer is that it happens for them at
+                              // expiry. See earlyExerciseAvailability.
+                              disabled={!!p.blockedReason}
+                              title={p.blockedReason ?? undefined}
                             >
                               {act.verb}
                             </RowAction>
@@ -138,6 +145,14 @@ export const HoldingsLedger: FC<{
                           )}
                           <SolscanLink kind="token" id={p.id} label="option mint" />
                         </div>
+                        {p.blockedReason && (
+                          <div
+                            data-testid="action-blocked"
+                            className="mt-1 max-w-[260px] text-right font-mono-plex text-[9.5px] leading-[1.5] text-l-faint"
+                          >
+                            {p.blockedReason}
+                          </div>
+                        )}
                       </td>
                     </tr>
                   </>

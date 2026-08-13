@@ -6,6 +6,7 @@ import {
 } from "../../utils/blackScholes";
 import { usdcToNumber } from "../../utils/format";
 import { AMERICAN_ENABLED_UI } from "../../utils/constants";
+import { earlyExerciseAvailability } from "../../utils/earlyExerciseAvailability";
 
 export type PositionState =
   | "active"
@@ -53,6 +54,13 @@ export type Position = {
   side: "call" | "put";
   /** Vault exercise style — drives the EUR/AMER badge. Defaults european. */
   exerciseStyle: "european" | "american";
+  /**
+   * Set when the row's action is offered but cannot currently succeed, with the
+   * sentence to show instead. Today's only case is early exercise on a vault
+   * whose collateral has not been swept in yet — see earlyExerciseAvailability.
+   * `null` means the action is live.
+   */
+  blockedReason?: string | null;
   strike: number;
   expiry: number;
   contracts: number;
@@ -186,9 +194,20 @@ export function buildPositions(args: BuildPositionsArgs): Position[] {
     const spotNow = assetName ? spotPrices[assetName] ?? 0 : 0;
     const isItm = spotNow > 0 && (isCall ? spotNow > strike : strike > spotNow);
 
+    const derivedAction = deriveAction(
+      state, isListedForResale, exerciseStyle === "american", isItm,
+    );
+    // Offered-but-impossible actions get a reason rather than a wallet popup.
+    // Only early exercise can be in that state today.
+    const availability =
+      derivedAction === "exercise-american"
+        ? earlyExerciseAvailability(vault.account as any)
+        : { available: true as const };
+
     result.push({
       id: mintKey,
       source: { kind: "v2", vault, vaultMint, market },
+      blockedReason: availability.available ? null : availability.reason,
       vaultPda: vault.publicKey,
       asset: assetName || "?",
       side: isCall ? "call" : "put",
@@ -202,7 +221,7 @@ export function buildPositions(args: BuildPositionsArgs): Position[] {
       pnlPercent,
       state,
       isListedForResale,
-      action: deriveAction(state, isListedForResale, exerciseStyle === "american", isItm),
+      action: derivedAction,
     });
   }
 

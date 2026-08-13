@@ -15,6 +15,28 @@
 // The runtime parse retires that drift class.
 
 import idl from "../idl/opta.json";
+import {
+  ANCHOR_ERROR_BASE,
+  extractProgramErrorCode,
+  extractSimulationLogs,
+  GENERIC_FAILURE_COPY,
+  isNativeSolShortfall,
+} from "./txFailure";
+
+/**
+ * Retain what actually failed. The 2026-08-12 incident could not be diagnosed
+ * after the fact because the transaction never landed — it died in preflight, so
+ * the chain has no record — and the ONLY witness, SendTransactionError.logs, was
+ * discarded here. Console/structured only; never rendered.
+ */
+function logFailure(error: unknown, code: number): void {
+  const origin = code < ANCHOR_ERROR_BASE ? "another program in this transaction" : "opta";
+  const logs = extractSimulationLogs(error);
+  console.warn(
+    `[opta] unmapped on-chain error code ${code} (from ${origin})`,
+    { code, logs: logs ?? "(none captured)", error },
+  );
+}
 
 // FRIENDLY_OVERRIDES: keyed by VARIANT NAME (not code) so the override
 // survives any future enum reorder. Each entry exists for one of two
@@ -26,6 +48,22 @@ import idl from "../idl/opta.json";
 //        internal PDA shape rather than what the user should do.
 //   2. We have a strictly friendlier copy than the IDL's terse phrasing
 //      (ListingExhausted, NotResaleSeller).
+//   3. PROVENANCE (added 2026-08-13). The IDL msg names a price vendor or an
+//      internal oracle mechanism, and these strings reach TOASTS. 20 of the 84
+//      on-chain errors do — every Pyth*, VolOracle*, Switchboard* and Ed25519
+//      variant — because errors.rs is written for engineers reading a stack
+//      trace, which is the right audience for errors.rs and the wrong one for a
+//      toast. The hard rule is that users never learn which oracle we use.
+//
+//      This was invisible until this session: the decoder's `0x1` substring bug
+//      caught 0x17ad (SwitchboardVerifyFailed) FIRST and rendered it as
+//      "Insufficient SOL", so the vendor name never surfaced. Fixing the
+//      substring bug exposed it — a fix uncovering the thing it was accidentally
+//      hiding. Both are corrected together; shipping one without the other would
+//      trade a wrong sentence for a forbidden one.
+//
+//      Overrides are keyed by VARIANT NAME, so an IDL refresh that renumbers or
+//      rewords these cannot reintroduce the leak.
 // Any variant NOT in this map falls through to its IDL msg verbatim —
 // sane-by-default. New on-chain variants automatically get a readable
 // string with no code change required here.
@@ -38,6 +76,35 @@ const FRIENDLY_OVERRIDES: Record<string, string> = {
   InvalidListingEscrow: "Listing data mismatch — please refresh and try again.",
   ListingMismatch: "Listing data mismatch — please refresh and try again.",
   InvalidEpochExpiry: "This tenor is too soon — pick a later expiry.",
+
+  // ---- provenance overrides (reason 3) ------------------------------------
+  // Settlement-price freshness. The user's action is the same in every case:
+  // wait a moment and retry.
+  PriceUpdateBeforeExpiry: "Price data for this expiry isn't available yet — try again shortly.",
+  PriceUpdateTooFarFromExpiry: "Price data for this expiry is outside the settlement window.",
+  PriceConfidenceTooWide: "The settlement price is too uncertain right now — try again shortly.",
+  InvalidPythFeedId: "This market has no valid price feed.",
+
+  // Volatility-model state. Users know this surface as "pricing warming up".
+  VolOracleNotInitialized: "Pricing for this market is still warming up — this takes about 2 minutes.",
+  VolOracleWarmup: "Pricing for this market is still warming up.",
+  VolOracleStale: "Pricing data is stale — try again shortly.",
+  VolOraclePushTooSoon: "Pricing was updated recently — try again shortly.",
+  VolOraclePriceStale: "Price unavailable — try again.",
+  VolOracleInvalidSpot: "Price unavailable — try again.",
+  VolOracleMathError: "Pricing could not be computed for this market.",
+
+  // Pull-oracle proof path. All of these mean one thing to a user: the price
+  // attached to this transaction was not usable.
+  SwitchboardVerifyFailed: "Price unavailable — try again.",
+  SwitchboardFeedNotFound: "Price unavailable — try again.",
+  SwitchboardInsufficientSamples: "Price unavailable — try again.",
+  SwitchboardSettleWindowElapsed: "The settlement window for this expiry has passed.",
+  PriceUpdateMissing: "Price unavailable — try again.",
+  SwitchboardAccountsMissing: "Price unavailable — try again.",
+  NoEd25519Instruction: "Price unavailable — try again.",
+  InvalidSwitchboardSysvar: "Price unavailable — try again.",
+  InvalidOracleSource: "This market's price source could not be determined.",
 };
 
 // Build code→message map at module load by walking idl.errors[]. The
@@ -95,34 +162,32 @@ export function decodeError(error: any): string {
   // User rejection
   if (msg.includes("User rejected")) return "Transaction rejected in wallet.";
 
-  // Insufficient SOL
-  if (msg.includes("insufficient funds") || msg.includes("0x1")) return "Insufficient SOL for transaction fees.";
-
-  // Insufficient token balance
-  if (msg.includes("insufficient") && msg.includes("token")) return "Insufficient USDC balance. Use the faucet to get test USDC.";
-
-  // Extract Anchor custom error code
-  const codeMatch = msg.match(/custom program error: 0x([0-9a-fA-F]+)/);
-  if (codeMatch) {
-    const code = parseInt(codeMatch[1], 16);
+  // ── ON-CHAIN ERROR CODE — read as a NUMBER, before any text matching ──────
+  //
+  // ORDER IS THE FIX. This block used to sit BELOW two text tests, the first of
+  // which was `msg.includes("0x1")`. That is a substring match, and
+  // `custom program error: 0x17ad` — a stale price quote, Opta 6061 — contains
+  // it, so every stale quote told the user to top up SOL they already had.
+  // Codes are numbers; extract once, compare numerically, and let the mapped
+  // message win before any heuristic gets a turn.
+  const code = extractProgramErrorCode(msg);
+  if (code !== null) {
     if (CUSTOM_ERRORS[code]) return CUSTOM_ERRORS[code];
-    console.warn(
-      `[opta] unmapped on-chain error code ${code} — IDL may need refresh`,
-      error,
-    );
-    return `Program error ${code}`;
+
+    // Below the Anchor user-error base this did NOT come from Opta — it came
+    // from another program in the same transaction (SPL Token, a precompile).
+    // We have no mapping and no business inventing one.
+    logFailure(error, code);
+    return GENERIC_FAILURE_COPY;
   }
 
-  // Anchor error code in decimal
-  const anchorMatch = msg.match(/Error Number: (\d+)/);
-  if (anchorMatch) {
-    const code = parseInt(anchorMatch[1]);
-    if (CUSTOM_ERRORS[code]) return CUSTOM_ERRORS[code];
-    console.warn(
-      `[opta] unmapped on-chain error code ${code} — IDL may need refresh`,
-      error,
-    );
-    return `Program error ${code}`;
+  // ── NATIVE SOL vs TOKEN BALANCE ───────────────────────────────────────────
+  // These are different problems with different remedies, and the old code
+  // collapsed them: a token-program "insufficient funds" (a USDC shortfall in a
+  // vault or wallet) was reported as missing SOL.
+  if (isNativeSolShortfall(msg)) return "Insufficient SOL for transaction fees.";
+  if (msg.includes("insufficient") && msg.includes("token")) {
+    return "Insufficient USDC balance. Use the faucet to get test USDC.";
   }
 
   // Truncate long messages

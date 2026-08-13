@@ -59,7 +59,10 @@ import type { Opta } from "@app/idl/opta";
 import { lookupSbFeedDatum, normSbFeedHash } from "@app/utils/sbFeedData";
 import { isSupportedSbFeed } from "./sbFeedRegistry";
 import { buildSwitchboardCreateMarketTx } from "./switchboardCreateMarket";
-import { buildSwitchboardExerciseAmericanTx } from "./switchboardExerciseAmerican";
+import {
+  buildSwitchboardExerciseAmericanTx,
+  QUOTE_MAX_AGE_SLOTS,
+} from "./switchboardExerciseAmerican";
 import {
   resolveSbFeedForMarket,
   validateExerciseBody,
@@ -366,12 +369,23 @@ async function handleSbExercise(
     return;
   }
 
-  // FRESHNESS INVARIANT — identical reasoning to the create path above: the
-  // blockhash bound (~150 slots / 60-90s) is TIGHTER than the SB quote window,
-  // so a tx that is still landable necessarily carries a still-valid quote and
-  // no separate quote deadline is needed in the response. If either bound ever
-  // moves, this must return an explicit quote deadline. Re-check both before
-  // deleting this comment.
+  // FRESHNESS INVARIANT — INVERTED HERE, so this path does NOT get to reuse the
+  // create path's reasoning.
+  //
+  // The create endpoint argues that blockhash validity (~150 slots / 60-90 s) is
+  // TIGHTER than its quote window (300 s), so a landable tx necessarily carries a
+  // live quote and no explicit deadline is needed. That comment also states what
+  // must happen if the bounds ever invert: "the endpoint MUST also return an
+  // explicit quote deadline and the FE must gate on the tighter of the two."
+  //
+  // They HAVE inverted for early exercise. Its budget is
+  // secs_to_slots(PRICE_MAX_AGE_SECS) = 150 slots, and measured devnet slot rate
+  // is ~4.22/s (380 slots in 90 s on 2026-08-13) — so the quote is worth ~35 s of
+  // wall-clock while the blockhash survives 60-90 s. The quote now dies FIRST,
+  // which is precisely the case the invariant said was unsafe to leave implicit.
+  //
+  // So we publish it. The client gates on the tighter bound instead of spending a
+  // wallet signature on a transaction that cannot land.
   const { blockhash, lastValidBlockHeight } =
     await ctx.connection.getLatestBlockhash("confirmed");
   const tx = new VersionedTransaction(
@@ -390,6 +404,10 @@ async function handleSbExercise(
   sendJson(res, 200, echoOrigin, {
     transactionBase64: Buffer.from(tx.serialize()).toString("base64"),
     lastValidBlockHeight,
+    // Upper bound: the quote's own recent_slot is at or before quoteBuiltAtSlot,
+    // so a client that treats this as the deadline rebuilds slightly early
+    // rather than slightly late.
+    quoteExpiresAtSlot: build.quoteBuiltAtSlot + QUOTE_MAX_AGE_SLOTS,
   });
 }
 

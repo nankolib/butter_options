@@ -32,6 +32,7 @@ import {
 import {
   assertExerciseTxShape,
   chooseExerciseArm,
+  isQuoteExpired,
   deserializeExerciseTx,
   ExerciseTxShapeError,
   EXERCISE_AMERICAN_DISCRIMINATOR,
@@ -391,4 +392,57 @@ test("a non-2xx surfaces neutral copy — no vendor name reaches the user", asyn
   } catch (e: any) {
     assert.doesNotMatch(e.message, /switchboard|pyth|hermes/i, e.message);
   }
+});
+
+// ===========================================================================
+// 4. THE QUOTE DEADLINE (GATE 4) — the two bounds inverted
+// ===========================================================================
+
+test("RED: a quote past its deadline is refused BEFORE the wallet opens", () => {
+  // Measured 2026-08-13: the quote budget is 150 slots but devnet runs at
+  // ~4.22 slots/s, so it is worth ~35s — SHORTER than a blockhash (60-90s).
+  // Blockhash validity therefore no longer implies quote validity, and a slow
+  // approve hands the user a transaction that is already dead.
+  assert.equal(isQuoteExpired({ quoteExpiresAtSlot: 1000 }, 1200), true);
+});
+
+test("a fresh quote is not refused", () => {
+  assert.equal(isQuoteExpired({ quoteExpiresAtSlot: 1000 }, 800), false);
+});
+
+test("the margin rejects a quote that would expire in flight", () => {
+  // At the boundary the tx still has to reach a leader. 20 slots ~ 5s.
+  assert.equal(isQuoteExpired({ quoteExpiresAtSlot: 1000 }, 985), true);
+  assert.equal(isQuoteExpired({ quoteExpiresAtSlot: 1000 }, 979), false);
+  assert.equal(isQuoteExpired({ quoteExpiresAtSlot: 1000 }, 995, 0), false);
+});
+
+test("an endpoint that publishes no deadline keeps the old behaviour", () => {
+  // Older builds return no quoteExpiresAtSlot. Inventing a bound we cannot know
+  // would block every exercise against them.
+  assert.equal(isQuoteExpired({}, 999_999_999), false);
+  assert.equal(isQuoteExpired({ quoteExpiresAtSlot: undefined }, 1), false);
+});
+
+test("the endpoint client passes the deadline through when present", async () => {
+  const withDeadline = async () => ({
+    ok: true,
+    json: async () => ({ transactionBase64: "A", lastValidBlockHeight: 1, quoteExpiresAtSlot: 7 }),
+  });
+  const r = await postSbExercise("https://x", REQ, withDeadline as any);
+  assert.equal(r.quoteExpiresAtSlot, 7);
+
+  const without = async () => ({
+    ok: true,
+    json: async () => ({ transactionBase64: "A", lastValidBlockHeight: 1 }),
+  });
+  assert.equal((await postSbExercise("https://x", REQ, without as any)).quoteExpiresAtSlot, undefined);
+});
+
+test("a non-numeric deadline is dropped rather than trusted", async () => {
+  const bad = async () => ({
+    ok: true,
+    json: async () => ({ transactionBase64: "A", lastValidBlockHeight: 1, quoteExpiresAtSlot: "soon" }),
+  });
+  assert.equal((await postSbExercise("https://x", REQ, bad as any)).quoteExpiresAtSlot, undefined);
 });

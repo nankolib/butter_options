@@ -112,6 +112,17 @@ export class SbExerciseEndpointError extends Error {
 export interface SbExerciseResponse {
   transactionBase64: string;
   lastValidBlockHeight: number;
+  /**
+   * Slot after which the embedded price quote is too old for the chain to
+   * accept. Absent on older endpoint builds, in which case the caller falls
+   * back to blockhash validity alone (the pre-2026-08-13 behaviour).
+   *
+   * This exists because the two deadlines INVERTED: the quote budget is 150
+   * slots, worth ~35 s at the measured devnet rate of 4.22 slots/s, while a
+   * blockhash survives 60-90 s. The quote now dies first, so blockhash validity
+   * no longer implies quote validity and the tighter bound must be checked.
+   */
+  quoteExpiresAtSlot?: number;
 }
 
 export interface SbExerciseRequest {
@@ -170,6 +181,8 @@ export async function postSbExercise(
   return {
     transactionBase64: json.transactionBase64,
     lastValidBlockHeight: json.lastValidBlockHeight,
+    quoteExpiresAtSlot:
+      typeof json.quoteExpiresAtSlot === "number" ? json.quoteExpiresAtSlot : undefined,
   };
 }
 
@@ -348,6 +361,26 @@ export function assertExerciseTxShape(
   if (!ixs.some((i2) => keys[i2.programIdIndex] === ED25519_PROGRAM_ID)) {
     throw new ExerciseTxShapeError("transaction carries no price proof");
   }
+}
+
+/**
+ * Is the quote already dead (or about to be) at this slot?
+ *
+ * `margin` covers the send + land gap: a transaction accepted here still has to
+ * reach a leader, so checking against the bare deadline would approve quotes
+ * that expire in flight. 20 slots is ~5 s at the measured rate.
+ *
+ * Returns false when the endpoint published no deadline — an older build, where
+ * the caller keeps the previous blockhash-only behaviour rather than inventing
+ * a bound it cannot know.
+ */
+export function isQuoteExpired(
+  resp: Pick<SbExerciseResponse, "quoteExpiresAtSlot">,
+  currentSlot: number,
+  margin = 20,
+): boolean {
+  if (typeof resp.quoteExpiresAtSlot !== "number") return false;
+  return currentSlot + margin >= resp.quoteExpiresAtSlot;
 }
 
 /** Deserialize a base64 tx from the endpoint. Malformed bytes are a shape

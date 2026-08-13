@@ -174,7 +174,12 @@ const PositionRow: FC<{
             <button
               type="button"
               onClick={() => onAction(p, p.action)}
-              disabled={isBusy}
+              // Blocked actions stay VISIBLE but inert: hiding the control would
+              // leave a holder wondering where their exercise went, when the
+              // honest answer is that it happens for them at expiry.
+              disabled={isBusy || !!p.blockedReason}
+              title={p.blockedReason ?? undefined}
+              data-testid={p.blockedReason ? "action-blocked" : undefined}
               className={`inline-flex items-center gap-2 rounded-full border px-[14px] py-[7px] font-mono text-[10.5px] uppercase tracking-[0.18em] no-underline transition-colors duration-300 ease-opta disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap ${actionStyle(
                 p.action,
               )}`}
@@ -187,6 +192,11 @@ const PositionRow: FC<{
             </button>
           )}
         </div>
+        {p.blockedReason && (
+          <div className="mt-1.5 max-w-[280px] text-right font-mono text-[10px] leading-[1.5] text-ink-muted">
+            {p.blockedReason}
+          </div>
+        )}
       </td>
     </tr>
   );

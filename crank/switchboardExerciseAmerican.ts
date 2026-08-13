@@ -50,6 +50,28 @@ import { lookupSbFeed, buildOracleFeed, normFeedHash } from "./sbFeedRegistry";
  *  atomic post+exercise tx, which is the closest measured comparable. */
 const EXERCISE_CU_LIMIT = 1_400_000;
 
+/**
+ * The on-chain freshness budget for an early-exercise quote, in SLOTS.
+ *
+ * Mirrors `secs_to_slots(PRICE_MAX_AGE_SECS)` in
+ * programs/opta/src/utils/price_oracle.rs — PRICE_MAX_AGE_SECS is 60 and
+ * SLOTS_PER_SEC is a hardcoded 5/2, so the chain accepts 150 slots and no more.
+ *
+ * ⚠️ 150 SLOTS IS NOT 60 SECONDS. That conversion assumes 2.5 slots/sec.
+ * Measured on devnet 2026-08-13 over a 90-second window: 380 slots elapsed, a
+ * rate of 4.22 slots/sec. At that rate the budget is worth ~35 SECONDS of
+ * wall-clock, not 60 — and a wallet approval takes 15-60s. The window is
+ * therefore genuinely marginal, and the shortfall is invisible from the
+ * constant's name.
+ *
+ * Only a program upgrade can widen the budget. What this endpoint CAN do is
+ * stop pretending the deadline is unknowable: it publishes the slot at which
+ * the quote dies, so the client can act before wasting a signature. Duplicated
+ * here rather than imported because the Rust constant cannot be read from TS;
+ * if PRICE_MAX_AGE_SECS changes, this must change with it.
+ */
+export const QUOTE_MAX_AGE_SLOTS = 150;
+
 export interface SbExerciseAmericanParams {
   /** 32-byte SB feedHash, read from the MARKET account by the caller — never
    *  taken from the request body. */
@@ -68,6 +90,10 @@ export interface SbExerciseAmericanBuild {
   /** [ComputeBudget, correctedEd25519Ix(idx 1), exercise_american]. */
   instructions: TransactionInstruction[];
   ed25519Bytes: number;
+  /** Slot observed immediately BEFORE the quote was fetched. The quote's own
+   *  recent_slot is at or before this, so deadlines derived from it are an
+   *  upper bound — deliberately, so the client errs toward rebuilding early. */
+  quoteBuiltAtSlot: number;
 }
 
 /**
@@ -91,6 +117,9 @@ export async function buildSwitchboardExerciseAmericanTx(
   // walks the instructions sysvar, but the self-pack's internal offsets are
   // written for that position, so the assembled order is NOT free to change.
   const feed = buildOracleFeed(entry);
+  // Sampled BEFORE the gateway round-trip so the deadline we publish can never
+  // be later than the truth.
+  const quoteBuiltAtSlot = await program.provider.connection.getSlot("confirmed");
   const { ixs } = await buildManagedQuoteUpdateIxs(
     qObj, crossbar, feed, holder, { numSignatures: 2, instructionIdx: 1 });
   const edPid = Ed25519Program.programId.toBase58();
@@ -128,5 +157,6 @@ export async function buildSwitchboardExerciseAmericanTx(
       exerciseIx,
     ],
     ed25519Bytes: edIx.data.length,
+    quoteBuiltAtSlot,
   };
 }

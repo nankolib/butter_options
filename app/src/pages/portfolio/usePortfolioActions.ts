@@ -37,12 +37,18 @@ import {
   assertExerciseTxShape,
   chooseExerciseArm,
   deserializeExerciseTx,
+  isQuoteExpired,
   postSbExercise,
 } from "../../utils/exerciseArm";
-// isStaleSubmitError is a generic stale-tx predicate that happens to live in the
-// create module (it was written there first). Reused verbatim rather than
-// duplicated: a second copy of a retry predicate is how retry policies drift.
-import { isStaleSubmitError } from "../markets/newMarketCreate";
+// GATE 3 (2026-08-13): the exercise path uses its OWN retry predicate, not the
+// create module's. `isStaleSubmitError` retries on `custom program error: 0x3`,
+// justified there because a create transaction invokes only ComputeBudget, the
+// ed25519 precompile and Opta — so a low code cannot be a real verdict. An
+// EXERCISE transaction also invokes SPL Token and Token-2022, whose error 3 is
+// OwnerMismatch and whose error 1 is InsufficientFunds: both permanent. Reusing
+// create's fingerprint here spent a second wallet approval to fail identically,
+// which is exactly what happened on 2026-08-12. Create keeps its behaviour.
+import { isStaleQuoteFailure } from "../../utils/txFailure";
 import { getSbCreateEndpoint } from "../../utils/env";
 import { decodeError, isWalletReplay } from "../../utils/errorDecoder";
 import { showToast } from "../../components/Toast";
@@ -461,11 +467,19 @@ async function exerciseAmericanSwitchboard({
     // it is not staleness, it is the wrong transaction.
     assertExerciseTxShape(tx, expected);
 
+    // GATE 4: check the tighter of the two deadlines BEFORE opening the wallet.
+    // The price quote now expires before the blockhash does (~35 s vs 60-90 s),
+    // so a slow first attempt can hand the user a transaction that is already
+    // dead. Rebuilding costs a round-trip; the alternative costs a signature.
+    if (attempt === 0 && isQuoteExpired(resp, await connection.getSlot("confirmed"))) {
+      continue;
+    }
+
     let signed;
     try {
       signed = await provider.wallet.signTransaction(tx);
     } catch (e) {
-      if (attempt === 0 && !isWalletReplay(e) && isStaleSubmitError(e)) continue;
+      if (attempt === 0 && !isWalletReplay(e) && isStaleQuoteFailure(e)) continue;
       throw e;
     }
 
@@ -487,7 +501,7 @@ async function exerciseAmericanSwitchboard({
       });
       break;
     } catch (e) {
-      if (attempt === 0 && isStaleSubmitError(e)) continue;
+      if (attempt === 0 && isStaleQuoteFailure(e)) continue;
       throw e;
     }
   }

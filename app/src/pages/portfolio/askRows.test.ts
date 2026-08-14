@@ -38,14 +38,21 @@ const ask = (over: Record<string, unknown> = {}) =>
     },
   }) as never;
 
-const vault = () =>
+// ⚠️ optionType is an ANCHOR ENUM OBJECT — `{ call: {} }` / `{ put: {} }` —
+// NOT a number. This fixture used to say `optionType: 0`, and that is precisely
+// why the put/call bug survived a green suite: the code read the field through a
+// num() coercion that yields 0 for an enum object, so a NUMERIC fixture agreed
+// with the broken implementation. A test whose fixture is the wrong shape can
+// only ever confirm the wrong shape.
+const vault = (over: Record<string, unknown> = {}) =>
   ({
     publicKey: key(VAULT),
     account: {
       market: key(MARKET),
       strikePrice: 62_000_000, // $62
       expiry: 1_786_780_800,
-      optionType: 0, // call
+      optionType: { call: {} },
+      ...over,
     },
   }) as never;
 
@@ -103,9 +110,15 @@ test("an unknown market degrades the asset to ? without dropping the row", () =>
 // ---- shape ------------------------------------------------------------------
 
 test("puts are labelled as puts", () => {
-  const v = vault() as unknown as { account: { optionType: number } };
-  v.account.optionType = 1;
-  assert.equal(buildAskRows([ask()], [v as never], WALLET, ASSETS)[0].side, "put");
+  // CORRECTED 2026-08-14. This test used to set `optionType = 1` — a NUMBER —
+  // and passed against the broken implementation for the same reason the base
+  // fixture did: num() returned 1, and `1 === 1 ? "put" : "call"` gave "put".
+  // Anchor never returns a number here. The test asserted the right ANSWER from
+  // the wrong INPUT, so it protected nothing; the real shape is the enum object.
+  assert.equal(
+    buildAskRows([ask()], [vault({ optionType: { put: {} } })], WALLET, ASSETS)[0].side,
+    "put",
+  );
 });
 
 test("REAL BN values decode — this is the shape Anchor actually returns", () => {
@@ -172,4 +185,52 @@ test("ask collateral splits by asset for the BY ASSET column", () => {
 test("totals of an empty book are zero, not NaN", () => {
   assert.equal(askCollateralTotal([]), 0);
   assert.equal(askCollateralByAsset([]).size, 0);
+});
+
+
+// ===========================================================================
+// SIDE DECODE — against the shape Anchor actually returns
+// ===========================================================================
+
+test("RED: an Anchor enum object { put: {} } decodes to \"put\"", () => {
+  // THE BUG, measured 2026-08-14: the founder's TRUMP 1.44 PUT rendered "1.44C",
+  // and no TRUMP 1.44 CALL series exists on chain. optionType went through a
+  // num() helper (number -> itself, else .toNumber(), else 0). An enum object
+  // has no .toNumber(), so BOTH sides became 0 and `=== 1 ? "put" : "call"`
+  // could never produce "put" — every ask row was a CALL.
+  const rows = buildAskRows([ask()], [vault({ optionType: { put: {} } })], WALLET, ASSETS);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].side, "put");
+});
+
+test("{ call: {} } still decodes to \"call\"", () => {
+  assert.equal(buildAskRows([ask()], [vault()], WALLET, ASSETS)[0].side, "call");
+});
+
+test("an unknown vault yields a null side, not a confident wrong one", () => {
+  const rows = buildAskRows([ask()], [], WALLET, ASSETS);
+  assert.equal(rows[0].side, null);
+});
+
+// ===========================================================================
+// ON-BOOK LIVENESS — WriterAskPosition is NOT the book
+// ===========================================================================
+
+test("RED: a filled ask is not ON THE BOOK, though its record survives", () => {
+  // WriterAskPosition carries backer / vault / collateral_committed /
+  // contracts_written and NOTHING about status — no quantity-remaining, no
+  // lifecycle. It never closes. RestingOrder is the book and DOES close on
+  // fill. Measured: the founder's TRUMP and ORE asks were filled, expired AND
+  // settled, and still rendered "Resting · ON THE BOOK".
+  const rows = buildAskRows([ask()], [vault()], WALLET, ASSETS, new Set<string>());
+  assert.equal(rows[0].onBook, false);
+});
+
+test("an ask with a live resting order IS on the book", () => {
+  const rows = buildAskRows([ask()], [vault()], WALLET, ASSETS, new Set([VAULT]));
+  assert.equal(rows[0].onBook, true);
+});
+
+test("no liveness set supplied -> onBook null, never a false claim", () => {
+  assert.equal(buildAskRows([ask()], [vault()], WALLET, ASSETS)[0].onBook, null);
 });

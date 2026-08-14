@@ -336,7 +336,7 @@ export const AdminTools: FC<AdminToolsProps> = ({
             <div className="space-y-3 mb-5">
               <Row label="Asset">{confirmation.asset}</Row>
               <Row label="Expiry">{formatExpiry(confirmation.expiry)}</Row>
-              <Row label="Settlement price · Hermes">
+              <Row label="Settlement price">
                 {confirmation.price != null
                   ? `$${confirmation.price.toLocaleString()}`
                   : "—"}

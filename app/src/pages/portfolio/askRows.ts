@@ -43,6 +43,20 @@ export interface AskRow {
   /** Expiry unix seconds, or null. */
   expiry: number | null;
   side: "call" | "put" | null;
+  /**
+   * Is this ask ACTUALLY on the book right now?
+   *
+   * WriterAskPosition is a permanent accounting record — backer, vault,
+   * collateral_committed, contracts_written — with NO status, NO
+   * quantity-remaining and NO lifecycle. It does not close when the ask is
+   * filled. The book itself is RestingOrder, which DOES close on fill. Treating
+   * the WriterAskPosition's mere existence as "resting" is why a fully-filled,
+   * expired, settled ask still rendered as ON THE BOOK.
+   *
+   * `null` when the caller supplied no liveness set (older call sites) — render
+   * neutrally rather than asserting either way.
+   */
+  onBook: boolean | null;
   /** USDC committed to back the offer. */
   collateral: number;
   /** Contracts the ask is good for. */
@@ -96,6 +110,9 @@ export function buildAskRows(
   vaults: readonly VaultLike[],
   wallet: PublicKey | null,
   assetByMarket: ReadonlyMap<string, string>,
+  /** Vault pubkeys (base58) that still have a live RestingOrder — i.e. what is
+   *  genuinely on the book. Omit to leave `onBook` null; see the field's note. */
+  liveOrderVaults?: ReadonlySet<string>,
 ): AskRow[] {
   if (!wallet) return [];
   const walletB58 = wallet.toBase58();
@@ -112,14 +129,26 @@ export function buildAskRows(
 
     const vaultKey = a.account.vault.toBase58();
     const v = vaultByKey.get(vaultKey);
-    const optType = v ? num(v.account.optionType) : null;
+    // OptionType is an ANCHOR ENUM — `{ call: {} }` / `{ put: {} }` — not a
+    // number and not a BN. It was previously read through num(), which returns
+    // a number, else tries .toNumber(), else 0; an enum object has no
+    // .toNumber(), so BOTH sides collapsed to 0 and `=== 1 ? put : call` could
+    // never yield "put". Every ask row rendered as a CALL, including the
+    // founder's TRUMP 1.44 PUT. positions.ts:146 and writerRows.ts:204 already
+    // use the `in` idiom; this is the one place that deviated.
+    const optType = v?.account?.optionType;
+    const side: "call" | "put" | null =
+      optType && typeof optType === "object"
+        ? ("put" in (optType as Record<string, unknown>) ? "put" : "call")
+        : null;
     out.push({
       publicKey: a.publicKey.toBase58(),
       vault: vaultKey,
       asset: v ? (assetByMarket.get(v.account.market.toBase58()) ?? "?") : "?",
       strike: v ? num(v.account.strikePrice) / 1e6 : null,
       expiry: v ? num(v.account.expiry) : null,
-      side: optType === null ? null : optType === 1 ? "put" : "call",
+      side,
+      onBook: liveOrderVaults ? liveOrderVaults.has(vaultKey) : null,
       collateral: usdcToNumber(a.account.collateralCommitted as never),
       contracts,
       createdAt: num(a.account.createdAt),

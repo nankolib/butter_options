@@ -52,6 +52,7 @@ const PORTFOLIO_SCANS = [
   "writerPosition",
   "vaultMint",
   "epochConfig",
+  "restingOrder",
 ] as const;
 
 export type PortfolioData = ReturnType<typeof usePortfolioData>;
@@ -65,6 +66,10 @@ export function usePortfolioData() {
   const [listingsRaw, setListingsRaw] = useState<AccountWrapper[]>([]);
   // SLICE 2B — the account a modern /write actually produces.
   const [asksRaw, setAsksRaw] = useState<AccountWrapper[]>([]);
+  // The BOOK. WriterAskPosition is a permanent accounting record and never
+  // closes; RestingOrder is what actually rests and closes on fill. Without
+  // this, a filled ask renders as ON THE BOOK forever.
+  const [restingRaw, setRestingRaw] = useState<AccountWrapper[]>([]);
   const [heldBalances, setHeldBalances] = useState<Map<string, number>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -99,16 +104,18 @@ export function usePortfolioData() {
       if (!program) return;
       if (invalidate) invalidateAccountScans(program, PORTFOLIO_SCANS);
       try {
-        const [mkts, settles, lists, asks] = await Promise.all([
+        const [mkts, settles, lists, asks, resting] = await Promise.all([
           safeFetchAll(program, "optionsMarket"),
           safeFetchAll(program, "settlementRecord"),
           safeFetchAll(program, "vaultResaleListing"),
           safeFetchAll(program, "writerAskPosition"),
+          safeFetchAll(program, "restingOrder"),
         ]);
         setMarkets(mkts as AccountWrapper[]);
         setSettlementRecords(settles as AccountWrapper[]);
         setListingsRaw(lists as AccountWrapper[]);
         setAsksRaw(asks as AccountWrapper[]);
+        setRestingRaw(resting as AccountWrapper[]);
         if (publicKey) {
           const accts = await program.provider.connection.getTokenAccountsByOwner(publicKey, {
             programId: TOKEN_2022_PROGRAM_ID,
@@ -211,9 +218,14 @@ export function usePortfolioData() {
     return m;
   }, [marketMap]);
 
+  const liveOrderVaults = useMemo(
+    () => new Set(restingRaw.map((o) => (o.account.vault as PublicKey).toBase58())),
+    [restingRaw],
+  );
   const askRows = useMemo(
-    () => buildAskRows(asksRaw as never, vaults as never, publicKey ?? null, assetByMarket),
-    [asksRaw, vaults, publicKey, assetByMarket],
+    () => buildAskRows(
+      asksRaw as never, vaults as never, publicKey ?? null, assetByMarket, liveOrderVaults),
+    [asksRaw, vaults, publicKey, assetByMarket, liveOrderVaults],
   );
 
   return {

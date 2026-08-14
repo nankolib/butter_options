@@ -284,7 +284,10 @@ export async function fetchHistoricalHermesUpdateInWindow(
       // it to route to the rate-limit backoff path. Removing it routes to
       // "other" → wrong backoff (the data-gap recovery, which is wrong here).
       throw new Error(
-        `Hermes rate-limited, try again in a moment. [HTTP 429, expiry=${expiry}]`,
+        // PROVENANCE RULE: reaches a settle toast. The rate limit is real and
+        // the remedy ("wait a moment") is actionable; which vendor imposed it
+        // is not the user's business.
+        `Price service is rate-limited — try again in a moment. [429, expiry=${expiry}]`,
       );
     }
     if (r === "ok") {
@@ -298,7 +301,7 @@ export async function fetchHistoricalHermesUpdateInWindow(
     // it to route to the hermes-no-update backoff path. Removing it routes
     // to "other" → wrong backoff (the rate-limit recovery, which is wrong here).
     throw new Error(
-      `No Hermes price update available in the 60-second window after expiry. Try again in a few minutes — likely a temporary archive gap. [HTTP 404, expiry=${expiry}, probes=${probedStatus.size}]`,
+      `No price available in the 60-second window after expiry. Try again in a few minutes — likely a temporary gap. [404, expiry=${expiry}, probes=${probedStatus.size}]`,
     );
   }
 
@@ -311,7 +314,10 @@ export async function fetchHistoricalHermesUpdateInWindow(
       if (r === "abort-429") {
         // MUST keep "HTTP 429" substring — see note above.
         throw new Error(
-          `Hermes rate-limited, try again in a moment. [HTTP 429, expiry=${expiry}]`,
+          // PROVENANCE RULE: reaches a settle toast. The rate limit is real and
+        // the remedy ("wait a moment") is actionable; which vendor imposed it
+        // is not the user's business.
+        `Price service is rate-limited — try again in a moment. [429, expiry=${expiry}]`,
         );
       }
       if (r === "ok") {

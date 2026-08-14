@@ -306,7 +306,7 @@ export async function submitPythCreateWithRetry<T>(args: {
     }
   }
   // Unreachable: the loop returns on success or throws. Defensive only.
-  throw new Error("Pyth create: exhausted retries");
+  throw new Error("Could not create the market — please try again.");
 }
 
 /** Map an SB create failure to a clean inline toast message (title fixed to

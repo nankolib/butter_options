@@ -158,7 +158,12 @@ export const WrittenLedger: FC<{
                     <td className="font-mono-plex text-[11px] text-l-muted">
                       {a.expiry ? expiryShort(a.expiry) : "—"}
                     </td>
-                    <td className="font-mono-plex text-[11px] text-l-muted">Resting</td>
+                    <td className="font-mono-plex text-[11px] text-l-muted">
+                      {/* onBook===false means the WriterAskPosition record still
+                          exists but no RestingOrder does — filled or cancelled.
+                          null = caller supplied no liveness set; stay neutral. */}
+                      {a.onBook === false ? "Filled" : "Resting"}
+                    </td>
                     <td className="text-right font-mono-plex text-[12px] tabular-nums text-l-text">
                       ${a.collateral.toLocaleString(undefined, { maximumFractionDigits: 2 })}
                     </td>

@@ -102,6 +102,17 @@
 > - **Audit copy rules against the deployed bundle, not source.** A source grep
 >   missed a rendered JSX label and a fix wired into a component production does
 >   not render. Grep for a marker unique to the **edited component**.
+> - **Live devnet deploy facts, read off chain 2026-08-15** — programdata
+>   `4VJ45tKB5wxsKYWVU3wPYJ4QnykNMBYTXauPd4W4aYKE`, **last deploy slot
+>   `480011440`**. Quote these, not any slot found further down this file: the
+>   number still circulating in briefs, `460518532`, is the Run-6/7 arc figure
+>   from May and predates the B1/B2 book-fire deploys entirely. It was never
+>   wrong where it is written — it was read as current long after it stopped
+>   being. No further archaeology; take the chain reading.
+> - **Upgrade authority is `5YRMuuoY`, and that is enforced by the chain.** It is
+>   the WSL-only admin keypair (`/home/nanko/.config/solana/id.json`, never on
+>   the VPS), so "upgrade from WSL only" is not a convention anyone can forget
+>   past — a VPS-side upgrade cannot be signed at all.
 
 # CREATE-MARKET ARC — 2026-08-12 (1 · 2A · 2B · v1.2 · 2C · 3 ALL LIVE — next: P1 early-exercise oracle branch)
 

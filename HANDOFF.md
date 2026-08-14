@@ -1,3 +1,108 @@
+# WEEK CLOSE — 2026-08-14 (PRICING PATH + SETTLEMENT FAN-OUT · early exercise fixed, backlog drained, portfolio stopped lying)
+
+> Refreshed at the week close. Everything below this block predates it. Read
+> this first; the create-market arc block follows.
+>
+> ## What shipped this week
+>
+> | Commit | Ships | State |
+> |---|---|---|
+> | `88f005d` | SB-arm early exercise: `/sb-exercise-american` endpoint + FE tx guard | **LIVE** |
+> | `4805338` | early-exercise gating, error-copy, retry narrowing, quote deadline | **LIVE** |
+> | `8289ab6` | (f) fix — the gate had been wired into a component prod never renders | **LIVE** |
+> | `0d2ab5a` | 424 stale `tsc` artifacts removed + gitignored | **LIVE** |
+> | `f4a0a5d` | `settle_vault` fan-out for every oracle arm | **LIVE — backlog drained** |
+> | `53daa38` | askRows put/call + phantom "Resting" + last Gate 5 vendor names | **LIVE** |
+>
+> ## The through-line: four things that looked fine and were not
+>
+> **1. Early exercise was broken on the entire traded board.** `exerciseAmericanV2`
+> had no `oracle_source` branch, so it read `market.pyth_feed_id` — which on a
+> Switchboard market holds the SB *feedHash* — and sent it to Hermes, which 404s.
+> Every SB market (BTC, SOL, ETH, XRP, the memes) failed; the seven Pyth assets
+> nobody trades worked. **That inversion is why it survived: the markets that
+> worked were the ones nobody exercised.** The program had dispatched on
+> `oracle_source` since it shipped — only the client never picked an arm.
+>
+> **2. Settlement leg 2 never ran for Switchboard.** `settle_expiry` records the
+> price; `settle_vault` sweeps the writer-ask pot and makes holders claimable.
+> Leg 2 was only called from the Pyth loop, which skips SB markets outright. On
+> the 14-AUG expiry: **2/2 Pyth settled, 0/330 Switchboard**, and the
+> 3,039-vault backlog was **100% Switchboard, 0% Pyth**. It had been left to the
+> Utilities *pull* model, so holders were paid only when somebody opened a page —
+> which is how the tail reached back to 17 July. Now pushed by the crank:
+> **2,955 settled, 0 failed, 0 raced, badge 76 → 0 in 2 h 46 m for ~0.0037 SOL.**
+>
+> **3. The portfolio told two lies.** Every ask row rendered as a CALL (an Anchor
+> enum read through a numeric coercion), and filled/expired/settled asks rendered
+> as "Resting · ON THE BOOK" (`WriterAskPosition` is a permanent accounting
+> record with no status; the book is `RestingOrder`, which closes on fill).
+>
+> **4. Vendor names were reaching users** — including a rendered DOM label,
+> `<Row label="Settlement price · Hermes">`. Gate 5 closed the last four
+> user-reachable sites; `console.*` remains the one sanctioned channel.
+>
+> ## STANDING RULES ADDED THIS WEEK
+>
+> ### A green check must be proven capable of failing
+>
+> Twice this week a passing check was **vacuous** — it could not have failed:
+>
+> - **`npx tsc --noEmit -p app/tsconfig.json` checks NOTHING.** The root config is
+>   `{"files": [], "references": [...]}`, so with `-p` and no files it compiles
+>   nothing and exits 0. **The real check is `tsc -b`, which `npm run build`
+>   runs** — and it caught a real error the same minute that command reported
+>   clean.
+> - **A Helius `getHealth` probe is unauthenticated**, so it returns 200 for a
+>   revoked key. Only an authenticated call (`getBalance`) proves anything.
+>
+> Same failure both times: **a check that cannot distinguish the good state from
+> the bad one.** Before trusting any green result, ask what would make it red,
+> and confirm that path exists. If you cannot name the failing case, you have a
+> ritual, not a test. Sibling of the red-first rule — that one proves the *test*
+> can fail; this one proves the *check* can.
+>
+> ### A fixture shaped like the bug's assumption protects the bug
+>
+> `askRows` read `optionType` — an Anchor **enum object** `{call:{}}` / `{put:{}}` —
+> through a `num()` helper that returns 0 for an object, so `=== 1 ? "put" :
+> "call"` could never yield "put". A test literally named *"puts are labelled as
+> puts"* passed for years because its fixture set `optionType = 1`, **a number** —
+> a shape Anchor never returns. It asserted the right *answer* from the wrong
+> *input*, so it protected nothing.
+>
+> **Fixtures must use the shape the runtime actually produces.** Anchor enums are
+> objects, not numbers. BNs are BNs, not `{toNumber}` stubs (same lesson, caught
+> earlier in `askRows` when a stub passed because `usdcToNumber` calls `.gt()`).
+> When a bug survives a green suite, **suspect the fixture before the assertion**.
+>
+> ## Open, in priority order
+>
+> | Item | ClickUp | Note |
+> |---|---|---|
+> | Program-upgrade bundle | `86eymed8f` | `MarketCreated` emit!, per-class epoch hours, **exercise_american + pot sweep**, SBXAU repair. Admin keypair is WSL-only ⇒ founder ceremony |
+> | 17 stranded resting orders | `86eymum0r` | sweep skips `writerAsk`/`bid`/`resaleAsk`; `sweepOrdersErrors:1` **every tick** — a monitor lying about being healthy |
+> | SBXAU 100C + dead-feed family | `86eymed8m` | 7 tuples / 9 vaults, leg 1 never ran, window passed. Excluded from the badge by construction |
+> | Quote window is ~35 s, not 60 | — | `secs_to_slots` assumes 2.5 slots/sec; devnet runs **4.22**. Endpoint now publishes `quoteExpiresAtSlot`; real widening needs the program bundle |
+>
+> ## Facts worth not re-deriving
+>
+> - **`settle_vault` is permissionless** (`settle_vault.rs:235`) once a
+>   SettlementRecord exists. No admin key. The Utilities pull path is the fallback.
+> - **The badge counts `actionable` only** — `dark` tuples are excluded by
+>   construction, so its floor is **0**, not 7.
+> - **Fan-out batches are 4, not 5.** The inherited `SETTLE_VAULT_CHUNK_SIZE = 5`
+>   is safe only within one tuple; oldest-first mixes assets and 5 serialises to
+>   **1241 bytes**, over the 1232 limit. Sort on `(expiry, market)` so same-tuple
+>   vaults share accounts.
+> - **Ordering is oldest-first and stays that way.** Today's holders wait ~1 h
+>   once; current-first is how the month-old tail formed.
+> - **`FeQnyJ…` and `59SdYhcJ…` are OURS**, funded by the deployer wallet. There
+>   have been **no organic fills** on creator-seeded markets.
+> - **Audit copy rules against the deployed bundle, not source.** A source grep
+>   missed a rendered JSX label and a fix wired into a component production does
+>   not render. Grep for a marker unique to the **edited component**.
+
 # CREATE-MARKET ARC — 2026-08-12 (1 · 2A · 2B · v1.2 · 2C · 3 ALL LIVE — next: P1 early-exercise oracle branch)
 
 > Refreshed at the 2A close. Everything below this block predates it. Read this

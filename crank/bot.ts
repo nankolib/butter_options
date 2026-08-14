@@ -43,6 +43,12 @@ import {
   type SweepOptions,
 } from "./sweepExpiredOrders";
 import {
+  planSettleFanout,
+  runSettleFanout,
+  cleanAssetName,
+  FANOUT_MAX_PER_TICK,
+} from "./settleVaultFanout";
+import {
   runVolOracleCrank,
   type VolOracleCrankContext,
   type VolOracleCrankOptions,
@@ -179,6 +185,13 @@ interface ExpiryTuple {
 
 interface TickResult {
   tuplesFound: number;
+  /** Phase 1b — settle_vault fan-out (every oracle arm). */
+  fanoutEligible: number;
+  fanoutSettled: number;
+  fanoutSkippedRaced: number;
+  fanoutFailed: number;
+  fanoutTxs: number;
+  fanoutRemaining: number;
   tuplesProcessed: number;
   errors: number;
   errorsRateLimit: number;
@@ -558,6 +571,12 @@ async function tick(ctx: CrankContext): Promise<TickResult> {
 
   const result: TickResult = {
     tuplesFound: 0,
+    fanoutEligible: 0,
+    fanoutSettled: 0,
+    fanoutSkippedRaced: 0,
+    fanoutFailed: 0,
+    fanoutTxs: 0,
+    fanoutRemaining: 0,
     tuplesProcessed: 0,
     errors: 0,
     errorsRateLimit: 0,
@@ -673,6 +692,83 @@ async function tick(ctx: CrankContext): Promise<TickResult> {
       }
     }
     result.tuplesProcessed = tuples.length - result.errors;
+  }
+
+  if (shutdownRequested) {
+    return result;
+  }
+
+  // ---- Phase 1b: settle_vault FAN-OUT, for every oracle arm -------------
+  //
+  // Leg 1 (settle_expiry) records the price and needs a live oracle quote; the
+  // Pyth loop above does it for Pyth markets and the SB pass does it for
+  // Switchboard ones. Leg 2 (settle_vault) reads NO oracle and is permissionless
+  // — but until now it ran ONLY inside the Pyth loop, which skips Switchboard
+  // markets outright. Measured 2026-08-14: of the 14-AUG expiry, 2/2 Pyth vaults
+  // settled and 0/330 Switchboard ones did, and the 3,039-vault backlog was
+  // 100% Switchboard. The fan-out below closes that by asking the only question
+  // the on-chain instruction asks: does a SettlementRecord exist?
+  //
+  // ⚠️ NO ORACLE-SOURCE FILTER — see settleVaultFanout.ts. One is exactly what
+  // caused this.
+  //
+  // The Utilities pull path stays as a fallback and is untouched; this only
+  // means holders no longer have to wait for someone to open a page.
+  try {
+    const records = (await safeFetchAll<any>(
+      ctx.program,
+      "settlementRecord",
+    )) as AccountRecord[];
+    const fanPlan = planSettleFanout({
+      vaults: vaults as any,
+      markets: markets as any,
+      records: records as any,
+      nowSecs: Math.floor(Date.now() / 1000),
+      maxPerTick: FANOUT_MAX_PER_TICK,
+    });
+    result.fanoutEligible = fanPlan.eligibleTotal;
+    result.fanoutRemaining = fanPlan.eligibleTotal;
+    if (fanPlan.targets.length > 0) {
+      logInfo("settle fan-out starting", {
+        eligible: fanPlan.eligibleTotal,
+        thisTick: fanPlan.targets.length,
+        skipped: fanPlan.skipped,
+      });
+      const assetByMarket = new Map<string, string>(
+        (markets as AccountRecord[]).map((m) => [
+          m.publicKey.toBase58(),
+          cleanAssetName(m.account.assetName as any),
+        ]),
+      );
+      const rep = await runSettleFanout({
+        program: ctx.program as any,
+        connection: ctx.connection,
+        payer: (ctx.wallet as any).payer,
+        plan: fanPlan,
+        assetByMarket,
+        log: (lvl, msg, fields) =>
+          lvl === "info" ? logInfo(msg, fields) : logWarn(msg, fields),
+        shouldStop: () => shutdownRequested,
+      });
+      result.fanoutSettled = rep.settled;
+      result.fanoutSkippedRaced = rep.skippedAlreadySettled;
+      result.fanoutFailed = rep.failed;
+      result.fanoutTxs = rep.txsSent;
+      result.fanoutRemaining = rep.remaining;
+      logInfo("settle fan-out complete", {
+        settled: rep.settled,
+        skippedRaced: rep.skippedAlreadySettled,
+        failed: rep.failed,
+        txs: rep.txsSent,
+        remaining: rep.remaining,
+      });
+    }
+  } catch (e) {
+    // The fan-out must never take the tick down — settle/vol/trigger matter more.
+    result.fanoutFailed += 1;
+    logWarn("settle fan-out errored (tick continues)", {
+      err: String((e as any)?.message ?? e).slice(0, 200),
+    });
   }
 
   if (shutdownRequested) {
@@ -943,6 +1039,8 @@ async function runForever(ctx: CrankContext): Promise<void> {
       const hadWork =
         result.tuplesFound > 0 ||
         result.finalizeVaultsConsidered > 0 ||
+        result.fanoutSettled > 0 ||
+        result.fanoutEligible > 0 ||
         result.reclaimCandidates > 0;
       lastTickWasIdle = !hadWork;
       if (hadWork) {

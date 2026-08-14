@@ -11,6 +11,7 @@ import { deriveOrderPubkey } from "./orderFlows";
 import { refreshAfterMutation } from "./orderRefresh";
 import { TxOutcomeError } from "../../utils/txOutcome";
 import { planSweep, executeSweep, buildAskLevels, buildBidLevels, crossLimit, buyRoutesToPeg } from "./marketSweep";
+import type { SendPhase } from "../../utils/sendWithFreshBlockhash";
 import { calculateCallGreeks, calculatePutGreeks, getDefaultVolatility, applyVolSmile } from "../../utils/blackScholes";
 import { TOKEN_2022_PROGRAM_ID, MARKET_SEED, PROGRAM_ID, DEVNET_USDC_MINT } from "../../utils/constants";
 import {
@@ -81,6 +82,14 @@ export const OrderTicket: FC<{
   const [usdcBalance, setUsdcBalance] = useState<number | null>(null); // dollars; for the Write collateral gate
   const [status, setStatus] = useState<{ kind: "ok" | "err"; msg: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  // What the in-flight order is ACTUALLY waiting on. The button used to read
+  // "confirming on chain" from the instant of the click — through the ~1 s of
+  // account reads, through however long the wallet sits on the prompt, and
+  // before any signature existed. On a 30–50 s Phantom stall that is not a
+  // cosmetic inaccuracy: it tells the user the chain is busy when the truth is
+  // that their wallet is waiting for them. Null on the paths that do not report
+  // phases yet (post/fill/cancel via the .rpc() hooks) — those keep "Submitting…".
+  const [phase, setPhase] = useState<SendPhase | null>(null);
 
   // RFQ (quote-on-demand) state.
   const [rfq, setRfq] = useState<OptionPriceQuote | null>(null);
@@ -231,6 +240,7 @@ export const OrderTicket: FC<{
     setStatus(null);
     if (!publicKey) { setStatus({ kind: "err", msg: "Connect a wallet" }); return; }
     setBusy(true);
+    setPhase(null);
     try {
       let sig: string | null = null;
       let phRoute: string | undefined; // buy·market dispatch route for analytics
@@ -266,7 +276,7 @@ export const OrderTicket: FC<{
         const levels = buildAskLevels(orders, row.optionMint!, me, pegAsk, pegRemaining ?? 0);
         const plan = planSweep({ side: "buy", qty, levels, slippagePct });
         if (!plan.legs.length) { setStatus({ kind: "err", msg: "No fillable liquidity within slippage." }); setBusy(false); return; }
-        sig = await executeSweep(program!, ref, plan, slippagePct);
+        sig = await executeSweep(program!, ref, plan, slippagePct, undefined, setPhase);
         if (sig) {
           removed = plan.legs.filter((l) => l.order && l.qty >= l.capacity).map((l) => l.order!.pubkey);
           phRoute = plan.legs.map((l) => l.source).join("+");
@@ -281,7 +291,7 @@ export const OrderTicket: FC<{
           sig = await post.submit(ref, "bid", limitPrice, qty, nonce);
           if (sig) added = optimisticOrder("bid");
         } else {
-          const cross = await crossLimit(program!, ref, { side: "buy", qty, limitPrice, taker: me, optionMint: row.optionMint!, orders, pegAsk, pegCapacity: pegRemaining ?? 0 });
+          const cross = await crossLimit(program!, ref, { side: "buy", qty, limitPrice, taker: me, optionMint: row.optionMint!, orders, pegAsk, pegCapacity: pegRemaining ?? 0, onPhase: setPhase });
           removed = cross.removed;
           const residual = qty - cross.filledQty;
           let restErr = false;
@@ -304,7 +314,7 @@ export const OrderTicket: FC<{
         const levels = buildBidLevels(orders, row.optionMint!, me);
         const plan = planSweep({ side: "sell", qty: sellQty, levels, slippagePct });
         if (!plan.legs.length) { setStatus({ kind: "err", msg: "No resting bid within slippage." }); setBusy(false); return; }
-        sig = await executeSweep(program!, ref, plan, slippagePct);
+        sig = await executeSweep(program!, ref, plan, slippagePct, undefined, setPhase);
         if (sig) {
           removed = plan.legs.filter((l) => l.order && l.qty >= l.capacity).map((l) => l.order!.pubkey);
           phRoute = "sweepSell";
@@ -320,7 +330,7 @@ export const OrderTicket: FC<{
           sig = await post.submit(ref, "resaleAsk", limitPrice, qty, nonce);
           if (sig) added = optimisticOrder("resaleAsk");
         } else {
-          const cross = await crossLimit(program!, ref, { side: "sell", qty, limitPrice, taker: me, optionMint: row.optionMint!, orders, pegAsk: null, pegCapacity: 0 });
+          const cross = await crossLimit(program!, ref, { side: "sell", qty, limitPrice, taker: me, optionMint: row.optionMint!, orders, pegAsk: null, pegCapacity: 0, onPhase: setPhase });
           removed = cross.removed;
           const residual = qty - cross.filledQty; // held ≥ qty (sellNoBalance gate) → residual is restable
           let restErr = false;
@@ -372,15 +382,22 @@ export const OrderTicket: FC<{
       }
     } finally {
       setBusy(false);
+      setPhase(null);
     }
   }
 
   const submitting = busy || peg.submitting || post.submitting || fill.submitting || fillWA.submitting;
 
-  // Elapsed seconds in flight. A button that reads "Submitting…" unchanged for
-  // half a minute is indistinguishable from a hung one, which is how a confirm
-  // that was merely slow got read as a failure. The counter only appears once
-  // the wait is longer than a normal confirm, so the fast path stays quiet.
+  // Elapsed seconds in the CURRENT phase. A button that reads "Submitting…"
+  // unchanged for half a minute is indistinguishable from a hung one, which is
+  // how a confirm that was merely slow got read as a failure. The counter only
+  // appears once the wait is longer than a normal one, so the fast path stays
+  // quiet.
+  //
+  // `phase` is a dependency on purpose: the count restarts at every transition,
+  // so "Confirming… 8s" means eight seconds since the SEND, not eight seconds
+  // since the click. A counter that accumulated across a 40 s wallet stall would
+  // make a perfectly healthy confirm look like the slow one.
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
     if (!submitting) {
@@ -391,7 +408,7 @@ export const OrderTicket: FC<{
     setElapsed(0);
     const id = setInterval(() => setElapsed(Math.floor((Date.now() - startedAt) / 1000)), 1000);
     return () => clearInterval(id);
-  }, [submitting]);
+  }, [submitting, phase]);
   // Never emit negative-zero ("$-0.0000" → "$0.0000").
   const fmt = (n: number) => {
     let s = n.toFixed(Math.abs(n) < 100 ? 4 : 2);
@@ -573,13 +590,19 @@ export const OrderTicket: FC<{
           disabled ? "cursor-not-allowed bg-l-surface-2 text-l-muted" : "bg-l-up text-l-on-up hover:opacity-90"
         }`}>
         {!publicKey ? "Connect wallet"
-          : submitting ? (elapsed >= PENDING_HINT_S ? `Submitting… ${elapsed}s · confirming on chain` : "Submitting…")
+          : submitting ? submitLabel(phase, elapsed)
           : isWrite ? (writeGate ?? amerQuoteGate ?? `Write ${qty} · ask ${fmt(limitPrice)}`)
           : limitGate ? limitGate
           : amerQuoteGate ? amerQuoteGate
           : sellNoBalance ? "No contracts held to sell"
           : `${side === "buy" ? "Buy" : "Sell"} ${qty} · ${type === "market" ? "Market" : fmt(limitPrice)}`}
       </button>
+
+      {phase === "resigning" && (
+        <p className="mt-2 font-mono-plex text-[9.5px] text-l-muted">
+          The approval outlived its blockhash — a second wallet prompt is open. Re-sign to continue; nothing was charged.
+        </p>
+      )}
 
       {isSeries && side === "sell" && type === "limit" && (
         <p className="mt-2 font-mono-plex text-[9.5px] text-l-muted">
@@ -601,10 +624,34 @@ export const OrderTicket: FC<{
   );
 };
 
-/** Seconds in flight before the submit button starts showing its elapsed
- *  count. A healthy confirm lands inside a second, so anything past this is
- *  worth narrating rather than leaving as a static "Submitting…". */
+/** Seconds in the current phase before the submit button starts showing its
+ *  elapsed count. A healthy confirm lands inside a second, so anything past this
+ *  is worth narrating rather than leaving as a static label. */
 const PENDING_HINT_S = 5;
+
+/**
+ * What the button says while an order is in flight.
+ *
+ * One rule: never claim a step that has not happened. "Confirming" requires a
+ * signature on the network; "Submitting" requires the user to have signed. The
+ * long wait on this page is `awaiting` — the wallet holding its own prompt — and
+ * naming it is the whole point, because the user can act on "your wallet is
+ * waiting for you" and can do nothing at all about "confirming on chain".
+ */
+function submitLabel(phase: SendPhase | null, elapsed: number): string {
+  const secs = elapsed >= PENDING_HINT_S ? ` ${elapsed}s` : "";
+  switch (phase) {
+    case "preparing": return "Preparing order…";
+    case "awaiting": return `Awaiting wallet approval…${secs}`;
+    case "resigning": return "Approval expired — re-sign to continue";
+    case "submitting": return "Submitting…";
+    case "confirming": return `Confirming…${secs}`;
+    // The .rpc() paths (post / fill / cancel) do not report phases yet — see the
+    // follow-up slice. Their unchanged label keeps them honest rather than
+    // borrowing a phase they never emitted.
+    default: return "Submitting…";
+  }
+}
 
 const fmtStrike = (n: number): string => (n >= 1000 ? n.toLocaleString(undefined, { maximumFractionDigits: 0 }) : String(n));
 

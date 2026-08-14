@@ -20,6 +20,9 @@
 
 import { Program, BN } from "@coral-xyz/anchor";
 import { withResolvedOutcome } from "../../utils/txOutcome";
+import {
+  sendWithFreshBlockhash, type SendPhase, type SendableProvider,
+} from "../../utils/sendWithFreshBlockhash";
 import { Transaction, ComputeBudgetProgram, type TransactionInstruction } from "@solana/web3.js";
 import { fetchBook, invalidateBookCache, type BookOrder } from "../../utils/exchangeData";
 import {
@@ -40,11 +43,19 @@ export {
 /** Compose the plan's legs into ONE legacy tx (deduped ATA pre-ixs + a single CU
  *  limit) and send. The peg leg's max_premium is the TOTAL ceiling (qty ×
  *  per-contract), micro. `pegMaxPerContract` overrides it (marketable limit = the
- *  limit price); otherwise it's the leg price + slippage. */
+ *  limit price); otherwise it's the leg price + slippage.
+ *
+ *  Sending goes through sendWithFreshBlockhash rather than
+ *  `provider.sendAndConfirm`: Anchor's version discards `lastValidBlockHeight`
+ *  and has no answer for a blockhash that dies while the wallet holds the
+ *  prompt open, which is every slow approval on this page. `onPhase` reports
+ *  what we are actually waiting on so the button can stop saying "confirming on
+ *  chain" before a signature exists. */
 export async function executeSweep(
   program: Program<any>, ref: SeriesRef, plan: SweepPlan, slippagePct: number,
-  pegMaxPerContract?: number,
+  pegMaxPerContract?: number, onPhase?: (p: SendPhase) => void,
 ): Promise<string> {
+  onPhase?.("preparing");
   const ctx = await loadOrderCtx(program);
   const built: FillIxs[] = [];
   for (const leg of plan.legs) {
@@ -71,9 +82,16 @@ export async function executeSweep(
   }
   const fills = built.map((b) => b.fill);
   const cu = Math.min(1_400_000, 220_000 * plan.legs.length + 120_000);
-  const tx = new Transaction().add(ComputeBudgetProgram.setComputeUnitLimit({ units: cu }), ...pre, ...fills);
+  const cuIx = ComputeBudgetProgram.setComputeUnitLimit({ units: cu });
+  // A FACTORY, not a transaction: the expiry retry rebuilds these same
+  // instructions under a fresh blockhash. The instruction list is identical
+  // across both attempts — only the blockhash and the signature differ.
+  const makeTx = () => new Transaction().add(cuIx, ...pre, ...fills);
+  // withResolvedOutcome is now a backstop rather than the mechanism: the helper
+  // resolves its own confirmations into TxOutcome facts, so this only catches a
+  // timeout shape thrown from somewhere we did not anticipate.
   return await withResolvedOutcome(program.provider.connection as never, () =>
-    (program.provider as any).sendAndConfirm(tx));
+    sendWithFreshBlockhash(program.provider as unknown as SendableProvider, makeTx, { onPhase }));
 }
 
 // ---- Marketable-limit crossing (Phase 2) ------------------------------------
@@ -94,6 +112,7 @@ export async function crossLimit(
   args: {
     side: "buy" | "sell"; qty: number; limitPrice: number; taker: string;
     optionMint: string; orders: BookOrder[]; pegAsk: number | null; pegCapacity: number;
+    onPhase?: (p: SendPhase) => void;
   },
 ): Promise<CrossResult> {
   const sigs: string[] = [];
@@ -115,7 +134,7 @@ export async function crossLimit(
     const plan = planSweep({ side: args.side, qty: remaining, levels, slippagePct: 0, priceCeiling: args.limitPrice });
     if (!plan.legs.length) break;
     try {
-      const sig = await executeSweep(program, ref, plan, 0, args.limitPrice);
+      const sig = await executeSweep(program, ref, plan, 0, args.limitPrice, args.onPhase);
       sigs.push(sig);
       filled += plan.filledQty;
       remaining -= plan.filledQty;

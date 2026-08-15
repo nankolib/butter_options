@@ -1,3 +1,59 @@
+# BUY PATH — 2026-08-15 (Phantom's domain check, and a blockhash that outlived its approval · SHIPPED + VERIFIED)
+
+> Refreshed at this ship. Everything below predates it; the 2026-08-14 week
+> close follows.
+>
+> | Commit | Ships | State |
+> |---|---|---|
+> | `8e631f8` | `sendWithFreshBlockhash` + honest submit labels | **LIVE — verified in browser** |
+> | `79110cc` | canonical deploy-slot entry + chain-enforced upgrade authority | **LIVE** |
+>
+> Deployed sha `79110cc` confirmed at `/version.json`. Checkpoint `86eymzw6q`.
+>
+> ## The 30-50 s stall was never ours, and the A/B is how we know
+>
+> A market buy sat "Submitting…" for 30-50 s and then died on
+> `Transaction simulation failed: Blockhash not found`. Two bugs, one symptom.
+>
+> **The stall is Phantom's new-domain reputation check.** Same wallet, same code,
+> same devnet: the popup is **instant on localhost** and takes **~30 s on
+> opta.fyi**. The only variable is the origin. Measured separately, our three
+> pre-sign RPC calls total ~1 s (~2.5 s worst case inside the mount burst), so
+> there was never 30 s of ours to find. **Prefer this A/B to instrumenting the
+> wallet call** — it changes one variable and needs no bracket.
+>
+> **The blockhash could not be fetched any later.** Anchor's `sendAndConfirm`
+> sets `recentBlockhash` on the line before `wallet.signTransaction`, so both the
+> wallet stall and the human's reading time are already spent on the far side of
+> that fetch. Fetching later is not an available fix; signing again is. The retry
+> asks the chain whether the transaction landed **before** re-prompting — a
+> re-signed tx that also landed the first time is a duplicate position.
+>
+> ## Verification (browser, real wallet, devnet)
+>
+> Fast run: labels awaiting → submitting → confirming, filled 5/5, `5V5hcFmN…`.
+> Slow run: held ~50-60 s, counter reached 48 s, "Approval expired — re-sign to
+> continue" rendered, second popup, re-signed, filled 5/5 `33qGKzte…`. No raw
+> error text, no "Blockhash not found" flash — the >20 s block-height pre-check
+> skipped the doomed send.
+>
+> **Exactly-once, on chain.** JTO 0.593C AMER 21-Aug (`EFYDRafuwx…`): series
+> supply **5**, holder balance **5**, **one** signature on the ATA
+> (`33qGKzte…`, `FillWriterAsk`). Double-fill would read 10 and two.
+>
+> ## Open from this ship
+>
+> | Item | ClickUp | Note |
+> |---|---|---|
+> | `.rpc()` paths still unprotected | `86eymw9m1` | post/fill/fillWriterAsk/pegFill/cancel carry the identical blockhash exposure |
+> | rpc.opta.fyi is HTTP/1.1 | `86eymw9m2` | nginx 1.18, no h2 → Chrome 6-socket cap; mount burst peaked at 8, costing ~2 s. Scans are 4.9 MB |
+> | Positions row lags a slow fill | `86eymzw6u` | reconcile race (0 ms / 1300 ms), **not** a retry gap — same success branch either way |
+> | HoldingsLedger key warning | `86eymzw6x` | `.map` returns a bare `<>`; the fragment needs the key, not the inner rows |
+>
+> **Next: early-exercise pot funding, Phase 1** (greenlit, program slice —
+> `86eymed8f`). Build + suite + size delta + verify hash, then STOP for
+> greenlight before any upgrade.
+
 # WEEK CLOSE — 2026-08-14 (PRICING PATH + SETTLEMENT FAN-OUT · early exercise fixed, backlog drained, portfolio stopped lying)
 
 > Refreshed at the week close. Everything below this block predates it. Read

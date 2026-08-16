@@ -88,3 +88,6 @@ app/vite.config.js
 # edits land in the .ts and the run silently exercises the .js. The bankrun
 # suite is the primary source of truth; a shadowed helper makes it lie.
 tests/**/*.js
+
+# Local endpoint log from crank/_local_sb_endpoint.ts (dev only).
+crank/_sb_endpoint.log

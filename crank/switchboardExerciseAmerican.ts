@@ -212,6 +212,28 @@ export async function buildSwitchboardExerciseAmericanTx(
     })
     .instruction();
 
+  // NEVER SILENTLY DOWNGRADE (2026-08-16, production incident).
+  //
+  // Anchor builds an instruction's account list FROM THE IDL. If the IDL predates
+  // the pot arm, `accountsPartial({ writerAskPot, … })` drops those keys without
+  // a word and emits the legacy 14-account shape — which the program then
+  // refuses with EarlyExercisePotRequired (6084), on chain, after the user has
+  // signed. That is exactly what production served for a day: new builder code,
+  // stale `app/src/idl/opta.json`, and no signal anywhere between them.
+  //
+  // So the builder now checks its own output. If we resolved a pot, the built
+  // instruction MUST carry it. Failing loudly here costs a 500 the caller can
+  // retry; failing silently costs a wallet signature and a support thread.
+  const ACCOUNTS_VAULT_ONLY = 14;
+  if (potExists && exerciseIx.keys.length <= ACCOUNTS_VAULT_ONLY) {
+    throw new Error(
+      `pot resolved for ${params.optionMint.toBase58()} but the built instruction carries ` +
+      `${exerciseIx.keys.length} accounts (expected >${ACCOUNTS_VAULT_ONLY}). ` +
+      `The IDL in use predates the writer-ask pot arm — Anchor dropped the accounts silently. ` +
+      `Sync app/src/idl/opta.json from target/idl and restart.`,
+    );
+  }
+
   // ORDER IS LOAD-BEARING: edIx must land at ED25519_IX_INDEX, the index its
   // offsets were packed for. Adding, removing, or reordering anything ahead of
   // it requires updating that constant in the same edit.

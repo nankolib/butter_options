@@ -2916,6 +2916,81 @@
             "runtime in the SB arm, then scanned for the ed25519 ix index."
           ],
           "optional": true
+        },
+        {
+          "name": "writer_ask_pot",
+          "docs": [
+            "The series' collateral pot. Seed-derived AND field-linked, so a caller",
+            "cannot point this at another series' pot to drain it: the seeds pin it to",
+            "`option_mint`, `pot.vault` pins it to THIS vault, and `pot.usdc_account`",
+            "pins the token account below."
+          ],
+          "writable": true,
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  119,
+                  114,
+                  105,
+                  116,
+                  101,
+                  114,
+                  95,
+                  97,
+                  115,
+                  107,
+                  95,
+                  112,
+                  111,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "option_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "writer_ask_pot_usdc",
+          "docs": [
+            "The pot's USDC account — the shortfall payout source. Authority is",
+            "`protocol_state`, which is why that account is required alongside it."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "protocol_state",
+          "docs": [
+            "Signs the pot -> holder transfer. Same authority, same seeds settle_vault",
+            "uses to move this money at settlement."
+          ],
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
         }
       ],
       "args": [
@@ -7110,6 +7185,69 @@
       "args": []
     },
     {
+      "name": "synth_warm_vol_oracle",
+      "docs": [
+        "Plant warmed VolOracle state (sample_count=720, fresh last_sample_ts,",
+        "V2-reference accumulators, caller-supplied spot) so American pricing",
+        "reads Ok past warmup/stale/math gates without 168 rate-limited pushes.",
+        "Gated by `test-synth-vol`. NEVER deploy a test-synth-vol build — it",
+        "lets anyone overwrite an oracle's vol state. Test-only."
+      ],
+      "discriminator": [
+        191,
+        90,
+        138,
+        28,
+        3,
+        150,
+        141,
+        216
+      ],
+      "accounts": [
+        {
+          "name": "signer",
+          "signer": true
+        },
+        {
+          "name": "vol_oracle",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  111,
+                  108,
+                  95,
+                  111,
+                  114,
+                  97,
+                  99,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "vol_oracle"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "spot_price_scaled",
+          "type": "i64"
+        },
+        {
+          "name": "last_sample_ts",
+          "type": "i64"
+        }
+      ]
+    },
+    {
       "name": "withdraw_from_vault",
       "docs": [
         "Withdraw uncommitted collateral from a shared vault."
@@ -8569,6 +8707,16 @@
       "code": 6083,
       "name": "BidPriceBelowMin",
       "msg": "Bid price is below the sell trigger's per-contract minimum-proceeds floor"
+    },
+    {
+      "code": 6084,
+      "name": "EarlyExercisePotRequired",
+      "msg": "Early exercise needs the writer-ask pot accounts for this series"
+    },
+    {
+      "code": 6085,
+      "name": "EarlyExercisePotUnderfunded",
+      "msg": "Writer-ask pot cannot fund this early exercise"
     }
   ],
   "types": [
@@ -9860,7 +10008,15 @@
               "`migrate_shared_vault_exercise_tracking` grows them and zero-fills the",
               "trailing bytes — which deserialize as 0/0, the correct default for a",
               "vault that has had no early exercises. Same append+migrate discipline as",
-              "carry_rate_bps (Stage A) and exercise_style (Stage C Pass 1)."
+              "carry_rate_bps (Stage A) and exercise_style (Stage C Pass 1).",
+              "`early_exercise_payout` counts VAULT-funded payout only; a pot-funded",
+              "draw self-accounts via the reduced sweep. `exercise_american`'s pot leg",
+              "(2026-08-15) pays what the vault's own USDC account cannot and debits",
+              "`WriterAskPot.total_collateral` — the very counter `settle_vault` sweeps",
+              "— so those dollars are already netted by the time settlement reads this",
+              "field. Adding them here too would subtract them a second time. On a",
+              "pool-funded exercise the two are equal, so the meaning is unchanged for",
+              "every vault written before the pot leg existed."
             ],
             "type": "u64"
           },

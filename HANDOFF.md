@@ -176,10 +176,13 @@
 >   **`early_exercise_payout` $0** — the CRITICAL-01-class double-subtraction,
 >   proven absent against real state. The old build would have written $15.66
 >   there and settled to $178.68 against a $194.34 balance.
->   - **The settle-side half is still unproven.** At the 28-Aug settlement,
->     verify `collateral_remaining == the pot residual exactly` ($194.34, absent
->     further exercises). That is the other end of the same fix and the only
->     thing that closes it.
+>   - **The settle-side half is still unproven, and it is DATED: `86eyn5kx8`,
+>     due 2026-08-28 08:00 UTC.** Verify `collateral_remaining == the pot
+>     residual exactly` ($194.34 on `6tq9Ueck1F7…`, absent further exercises),
+>     with `3k5vHJLh42…` as the untouched control (pot **$752.00**, 10 contracts,
+>     `exercised_options` 0 — nothing ever landed there, so it must sweep whole
+>     and net zero). That is the other end of the same fix, it fails silently,
+>     and it is the only thing that closes this.
 >   - The landed transaction carried exactly four instructions with the price
 >     proof at index 2 — the wallet inserted nothing, first live confirmation
 >     that supplying our own priority-fee ix removes Phantom's reason to. It does
@@ -192,7 +195,9 @@
 >   past — a VPS-side upgrade cannot be signed at all.
 > - **A GREEN SUITE THAT CANNOT SEE THE DECIDING LAYER IS NOT EVIDENCE ABOUT
 >   THAT LAYER.** Three instances in one night, each of which produced a
->   confident wrong conclusion:
+>   confident wrong conclusion. Full incident chain — four exercise attempts,
+>   four distinct causes, none of them the program — on the ceremony thread
+>   `86eymed8f` and checkpoint `86eyn5hmw`:
 >   - `simulateTransaction({ sigVerify: false })` **skips precompile
 >     verification entirely**. Every `err: null` said nothing about the ed25519
 >     instruction, while real preflight rejected it.

@@ -193,6 +193,14 @@ pub struct SharedVault {
     /// trailing bytes — which deserialize as 0/0, the correct default for a
     /// vault that has had no early exercises. Same append+migrate discipline as
     /// carry_rate_bps (Stage A) and exercise_style (Stage C Pass 1).
+    /// `early_exercise_payout` counts VAULT-funded payout only; a pot-funded
+    /// draw self-accounts via the reduced sweep. `exercise_american`'s pot leg
+    /// (2026-08-15) pays what the vault's own USDC account cannot and debits
+    /// `WriterAskPot.total_collateral` — the very counter `settle_vault` sweeps
+    /// — so those dollars are already netted by the time settlement reads this
+    /// field. Adding them here too would subtract them a second time. On a
+    /// pool-funded exercise the two are equal, so the meaning is unchanged for
+    /// every vault written before the pot leg existed.
     pub exercised_options: u64,
     pub early_exercise_payout: u64,
 

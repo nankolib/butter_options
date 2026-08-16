@@ -51,7 +51,10 @@ export interface Env {
 }
 
 export function pythBody(feedHex: string, priceUsd: number, publishTime: number): Buffer {
-  const price = BigInt(priceUsd) * 100_000_000n; // expo -8
+  // Round INTO the 8-dec fixed-point rather than BigInt(priceUsd) * 1e8, which
+  // throws on any non-integer dollar figure. Identical output for every integer
+  // caller; fractional strikes/spots (e.g. the $75.20 writer-ask series) need it.
+  const price = BigInt(Math.round(priceUsd * 100_000_000)); // expo -8
   return serializePriceUpdateV2({
     feedIdHex: feedHex, price, conf: 1_000_000n, exponent: -8,
     publishTime: BigInt(Math.floor(publishTime)), prevPublishTime: BigInt(Math.floor(publishTime) - 1),
@@ -252,7 +255,17 @@ export async function exerciseFromVault(e: Env, vault: PublicKey, m: any, holder
   }).preInstructions([CU(400_000)]).signers([holder]).rpc();
 }
 
-export async function exerciseAmerican(e: Env, vault: PublicKey, m: any, holder: Keypair, holderOptAta: PublicKey, holderUsdc: PublicKey, qty: number, spotUsd: number, publishTime: number) {
+/** The writer-ask pot payout arm (2026-08-15). Pass `null` (the default) for a
+ * pool-funded exercise: all three trailing optionals go out as null and the tx is
+ * byte-identical to every exercise built before the arm existed. Pass the two pot
+ * addresses when the vault's own USDC account cannot cover the payout — the
+ * handler pairs them with protocol_state, the authority that already moves this
+ * money at settlement. */
+export async function exerciseAmerican(
+  e: Env, vault: PublicKey, m: any, holder: Keypair, holderOptAta: PublicKey, holderUsdc: PublicKey,
+  qty: number, spotUsd: number, publishTime: number,
+  pot: { writerAskPot: PublicKey; writerAskPotUsdc: PublicKey } | null = null,
+) {
   const fix = Keypair.generate().publicKey;
   injectPythFixture(e.h.context, fix, pythBody(e.feedHex, spotUsd, publishTime));
   await e.opta.methods.exerciseAmerican(new BN(qty)).accountsStrict({
@@ -261,6 +274,11 @@ export async function exerciseAmerican(e: Env, vault: PublicKey, m: any, holder:
     holderUsdcAccount: holderUsdc, token2022Program: TOKEN_2022_PROGRAM_ID, tokenProgram: TOKEN_PROGRAM_ID,
     // Stage 3: trailing Switchboard read-arm optionals — null on the Pyth path.
     sbQueue: null, sbSlothashes: null, sbInstructions: null,
+    // Writer-ask pot arm — anchor 0.32.1 does not auto-null unprovided optionals
+    // under accountsStrict, so all three are always named.
+    writerAskPot: pot ? pot.writerAskPot : null,
+    writerAskPotUsdc: pot ? pot.writerAskPotUsdc : null,
+    protocolState: pot ? e.protocolState : null,
   }).preInstructions([CU(400_000)]).signers([holder]).rpc();
 }
 

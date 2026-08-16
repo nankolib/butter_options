@@ -74,6 +74,7 @@ describe("bankrun: Stage 3 wiring 1a-i — exercise_american oracle_source routi
       optionMint: m.optionMint, holderOptionAccount: buyerOptionAta, vaultUsdcAccount: deriveVaultUsdc(vault),
       holderUsdcAccount: buyerUsdc, token2022Program: TOKEN_2022_PROGRAM_ID, tokenProgram: TOKEN_PROGRAM_ID,
       sbQueue: null, sbSlothashes: null, sbInstructions: null,
+      writerAskPot: null, writerAskPotUsdc: null, protocolState: null, // pool-funded → pot arm null
     }).instruction();
 
     console.log(`    [byte-identical] new-IDL ix.keys.length = ${fullIx.keys.length} (11 named + any SB sentinels)`);
@@ -108,6 +109,7 @@ describe("bankrun: Stage 3 wiring 1a-i — exercise_american oracle_source routi
         vaultUsdcAccount: deriveVaultUsdc(vault), holderUsdcAccount: buyerUsdc,
         token2022Program: TOKEN_2022_PROGRAM_ID, tokenProgram: TOKEN_PROGRAM_ID,
         sbQueue: null, sbSlothashes: null, sbInstructions: null, // SB market but none provided
+        writerAskPot: null, writerAskPotUsdc: null, protocolState: null,
       }).preInstructions([CU(400_000)]).signers([buyer]).rpc();
     } catch (ex: any) { err = String(ex); }
     console.log(`    (2a) ${err.slice(0, 120)}`);
@@ -127,6 +129,7 @@ describe("bankrun: Stage 3 wiring 1a-i — exercise_american oracle_source routi
         vaultUsdcAccount: deriveVaultUsdc(vault), holderUsdcAccount: buyerUsdc,
         token2022Program: TOKEN_2022_PROGRAM_ID, tokenProgram: TOKEN_PROGRAM_ID,
         sbQueue: dummyQueue, sbSlothashes: SYSVAR_SLOT_HASHES_PUBKEY, sbInstructions: SYSVAR_INSTRUCTIONS_PUBKEY,
+        writerAskPot: null, writerAskPotUsdc: null, protocolState: null,
       }).preInstructions([CU(400_000)]).signers([buyer]).rpc(); // no ed25519 preIx
     } catch (ex: any) { err = String(ex); }
     console.log(`    (2b) ${err.slice(0, 120)}`);
@@ -155,6 +158,7 @@ describe("bankrun: Stage 3 wiring 1a-i — exercise_american oracle_source routi
         vaultUsdcAccount: deriveVaultUsdc(vault), holderUsdcAccount: buyerUsdc,
         token2022Program: TOKEN_2022_PROGRAM_ID, tokenProgram: TOKEN_PROGRAM_ID,
         sbQueue: dummyQueue, sbSlothashes: SYSVAR_SLOT_HASHES_PUBKEY, sbInstructions: SYSVAR_INSTRUCTIONS_PUBKEY,
+        writerAskPot: null, writerAskPotUsdc: null, protocolState: null,
       }).preInstructions([CU(400_000), edIx]).signers([buyer]).rpc();
     } catch (ex: any) { err = String(ex); }
     console.log(`    (2c) ${err.slice(0, 200)}`);

@@ -117,10 +117,22 @@ pub fn handle_withdraw_from_vault(
         // committed term therefore cancels exactly (folded ≡ this expression), and
         // the pot's settle-sweep (Slice D1) reimburses the per-exercise freeing —
         // so this OLD gate IS the correct merged-solvency bound under normal
-        // settlement. TRIPWIRE: if cpt-uniformity ever breaks (variable cpt per
-        // series) that identity fails and this gate would under-reserve —
-        // tests/bankrun/withdraw-from-vault-gate-correctness.test.ts asserts it and
-        // fails loudly. The void path (pot never swept) is reconciled in D3, here.
+        // settlement.
+        //
+        // 2026-08-15 — the relation weakened from ≡ to ≥, in the SAFE direction.
+        // The pot leg in `exercise_american` debits the pot by the payout (≤ cpt
+        // per contract, by the capped-intrinsic cap) while retiring a whole
+        // contract, so after a pot-funded draw
+        //   pot.total_collateral ≥ cpt × pot.total_contracts
+        // and consequently `folded ≥ OLD`. OLD is therefore the TIGHTER of the
+        // two bounds: it reserves at least as much as the merged view demands,
+        // never less, so leaving this gate as-is cannot under-reserve. Equality
+        // still holds for every vault that has taken no pot-funded exercise.
+        // TRIPWIRE: if cpt-uniformity ever breaks (variable cpt per series) the
+        // INEQUALITY flips and this gate would under-reserve —
+        // tests/bankrun/withdraw-from-vault-gate-correctness.test.ts asserts the
+        // direction and fails loudly. The void path (pot never swept) is
+        // reconciled in D3, here.
         let vault_free = vault_free_collateral(
             vault.total_collateral,
             vault.early_exercise_payout,

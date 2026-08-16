@@ -217,11 +217,28 @@ export const EXERCISE_ACCOUNT_INDEX = Object.freeze({
   sbQueue: 11,
   sbSlothashes: 12,
   sbInstructions: 13,
+  // Writer-ask pot payout arm (2026-08-15). Appended AFTER sb_*, so indices 0-13
+  // are unchanged and the 14-account shape keeps validating exactly as before.
+  writerAskPot: 14,
+  writerAskPotUsdc: 15,
+  protocolState: 16,
 });
+
+/** The two legal account counts. 14 = vault-funded (trailing optionals omitted,
+ *  byte-identical to every exercise built before 2026-08-15); 17 = the pot arm
+ *  is carried. Anything else is not this instruction. */
+export const EXERCISE_ACCOUNTS_VAULT_ONLY = 14;
+export const EXERCISE_ACCOUNTS_WITH_POT = 17;
 
 export interface ExpectedExercise extends SbExerciseRequest {
   /** Our Opta program id — not the endpoint's claim about it. */
   programId: string;
+  /** Locally-derived pot arm. Supply these whenever the series is (or may be)
+   *  writer-ask funded; without them a 17-account response cannot be checked and
+   *  is therefore refused rather than trusted. */
+  writerAskPot?: string;
+  writerAskPotUsdc?: string;
+  protocolState?: string;
 }
 
 /** Raised when a server-built tx is not the transaction we asked for. */
@@ -259,6 +276,49 @@ function u64le(bytes: Uint8Array, offset: number): bigint {
  *    sentinel (Anchor encodes an absent optional as the program id) — an SB
  *    exercise carrying a Pyth account is not the tx we asked for.
  */
+/** u16::MAX in an ed25519 offset's instruction-index field means "this
+ *  instruction" — position-independent, and what a correct packer emits. */
+const ED25519_SELF_INDEX = 0xffff;
+
+/**
+ * Walk the ed25519 precompile payload and confirm every reference it makes
+ * lands inside the instruction it names. Mirrors the runtime's own bounds check.
+ *
+ * Layout (solana ed25519_instruction.rs): u8 num_signatures, u8 padding, then
+ * num_signatures x 14-byte offset structs of u16 LE:
+ *   signature_offset, signature_instruction_index,
+ *   public_key_offset, public_key_instruction_index,
+ *   message_data_offset, message_data_size, message_instruction_index
+ */
+export function assertPriceProofResolves(
+  ixs: { programIdIndex: number; data: Uint8Array }[],
+  edIdx: number,
+): void {
+  const self = Buffer.from(ixs[edIdx].data);
+  if (self.length < 2) throw new ExerciseTxShapeError("price proof is malformed");
+  const n = self.readUInt8(0);
+  if (n === 0) throw new ExerciseTxShapeError("price proof carries no signatures");
+  if (self.length < 2 + n * 14) throw new ExerciseTxShapeError("price proof is truncated");
+
+  for (let i = 0; i < n; i++) {
+    const b = 2 + i * 14;
+    const refs: Array<[string, number, number, number]> = [
+      ["signature", self.readUInt16LE(b + 2), self.readUInt16LE(b + 0), 64],
+      ["public key", self.readUInt16LE(b + 6), self.readUInt16LE(b + 4), 32],
+      ["message", self.readUInt16LE(b + 12), self.readUInt16LE(b + 8), self.readUInt16LE(b + 10)],
+    ];
+    for (const [label, ixIndex, off, size] of refs) {
+      const target =
+        ixIndex === ED25519_SELF_INDEX ? self : (ixs[ixIndex] ? Buffer.from(ixs[ixIndex].data) : null);
+      if (!target || off + size > target.length) {
+        throw new ExerciseTxShapeError(
+          `price proof ${label} reference is out of bounds (instruction ${ixIndex}, offset ${off}, size ${size})`,
+        );
+      }
+    }
+  }
+}
+
 export function assertExerciseTxShape(
   tx: VersionedTransaction,
   expected: ExpectedExercise,
@@ -318,11 +378,16 @@ export function assertExerciseTxShape(
   }
 
   const acc = ix.accountKeyIndexes;
-  if (acc.length !== 14) {
+  if (
+    acc.length !== EXERCISE_ACCOUNTS_VAULT_ONLY &&
+    acc.length !== EXERCISE_ACCOUNTS_WITH_POT
+  ) {
     throw new ExerciseTxShapeError(
-      `instruction has ${acc.length} accounts, expected 14`,
+      `instruction has ${acc.length} accounts, expected ` +
+        `${EXERCISE_ACCOUNTS_VAULT_ONLY} or ${EXERCISE_ACCOUNTS_WITH_POT}`,
     );
   }
+  const carriesPot = acc.length === EXERCISE_ACCOUNTS_WITH_POT;
   const at = (i: number) => keys[acc[i]];
   const I = EXERCISE_ACCOUNT_INDEX;
 
@@ -358,8 +423,63 @@ export function assertExerciseTxShape(
 
   // The oracle's signature-verify ix must be present; without it the on-chain
   // proof cannot be read at all.
-  if (!ixs.some((i2) => keys[i2.programIdIndex] === ED25519_PROGRAM_ID)) {
+  const edIdx = ixs.findIndex((i2) => keys[i2.programIdIndex] === ED25519_PROGRAM_ID);
+  if (edIdx < 0) {
     throw new ExerciseTxShapeError("transaction carries no price proof");
+  }
+
+  // The price proof must RESOLVE — its internal offsets are references, and a
+  // reference that lands outside the instruction it names is rejected by the
+  // ed25519 precompile (InvalidDataOffsets) at preflight, after the user has
+  // already signed. Validating it here turns that into a refusal before the
+  // wallet opens.
+  //
+  // HONEST LIMIT: this sees the PRE-WALLET transaction. A wallet that inserts an
+  // instruction after this point shifts every index and invalidates a payload
+  // that passed here — the 2026-08-16 incident, where Phantom's priority-fee ix
+  // moved the proof from index 1 to 2 while its offsets still named 1.
+  //
+  // NOTHING IN THIS FILE CAN COVER THAT, and neither can the packer. The obvious
+  // remedy — pack u16::MAX ("this instruction"), which the ed25519 precompile
+  // accepts — was tried and is REJECTED on chain: the Switchboard crate our
+  // program calls re-reads the ix through the instructions sysvar and asserts
+  // the field equals that ix's own concrete index, panicking otherwise
+  // ("Signature instruction index 65535 does not match current instruction
+  // index 1"). The payload is position-DEPENDENT by construction.
+  //
+  // The live mitigation is to remove the wallet's REASON to insert (the endpoint
+  // now supplies both compute-budget instructions itself). The structural fix —
+  // endpoint returns instructions, the FE assembles and computes the ed25519
+  // index last, after anything it will add — is tracked on 86eymw9m1.
+  //
+  // What this check DOES catch is a builder-side regression that ships an index
+  // which is wrong for the transaction as built.
+  assertPriceProofResolves(ixs, edIdx);
+
+  // Pot arm. Checked ONLY when carried, so the vault-funded shape is validated
+  // exactly as it was before this arm existed. When it IS carried, every one of
+  // the three must match an address this client derived — a server that can
+  // choose the pot could drain another series', and `protocol_state` is the
+  // authority that signs that transfer.
+  if (carriesPot) {
+    const potChecks: Array<[number, string | undefined, string]> = [
+      [I.writerAskPot, expected.writerAskPot, "collateral pot"],
+      [I.writerAskPotUsdc, expected.writerAskPotUsdc, "collateral pot account"],
+      [I.protocolState, expected.protocolState, "protocol state"],
+    ];
+    for (const [idx, want, label] of potChecks) {
+      if (!want) {
+        // We were handed a pot arm we have no local expectation for, so we
+        // cannot check it. Refusing is the only honest response — "looks
+        // plausible" is not verification.
+        throw new ExerciseTxShapeError(
+          `transaction carries a ${label} this client did not derive`,
+        );
+      }
+      if (at(idx) !== want) {
+        throw new ExerciseTxShapeError(`${label} does not match this series`);
+      }
+    }
   }
 }
 

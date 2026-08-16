@@ -817,6 +817,11 @@ pub fn handle_execute_trigger(ctx: Context<ExecuteTrigger>) -> Result<()> {
                 owner,
                 fire_qty,
                 ema, // SAME EMA the comparator fired on
+                // No pot leg. A trigger fires against pooled vault collateral;
+                // this instruction carries no pot accounts, so a writer-ask-only
+                // series reverts EarlyExercisePotRequired rather than paying out
+                // of an account it never validated.
+                None,
             )?;
 
             // PARTIAL-FIRE: decrement remaining; close only when fully filled.

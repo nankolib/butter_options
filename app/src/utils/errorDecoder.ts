@@ -30,7 +30,7 @@ import {
  * discarded here. Console/structured only; never rendered.
  */
 function logFailure(error: unknown, code: number): void {
-  const origin = code < ANCHOR_ERROR_BASE ? "another program in this transaction" : "opta";
+  const origin = code < ANCHOR_ERROR_BASE ? "not an Anchor user error — provenance unknown" : "opta";
   const logs = extractSimulationLogs(error);
   console.warn(
     `[opta] unmapped on-chain error code ${code} (from ${origin})`,
@@ -140,8 +140,39 @@ export function isWalletReplay(error: any): boolean {
   return msg.includes("already been processed") || msg.includes("already confirmed");
 }
 
-export function decodeError(error: any): string {
+/**
+ * ed25519 precompile failures, by code. Solana reports these as low `custom
+ * program error` values, sharing a numeric range with SPL Token — so they are
+ * only claimed when the caller confirms the transaction carried a price proof.
+ *
+ * Copy INSTRUCTS rather than promising a retry: after the 2026-08-16
+ * SELF-offset fix nothing in this path auto-retries a precompile failure, and a
+ * message that says "retrying" when nothing retries is a lie the user waits on.
+ * No oracle vendor is named — "price proof" is the user-facing term.
+ */
+export const ED25519_PRECOMPILE_COPY: Record<number, string> = {
+  0: "The price proof on this transaction was rejected. Reload the page and try again.",
+  1: "The price proof on this transaction was rejected. Reload the page and try again.",
+  2: "The price proof could not be verified. Reload the page and try again.",
+  // InvalidDataOffsets. In practice this means the transaction gained an
+  // instruction between build and signing — a wallet attaching its own
+  // priority-fee instruction shifts every index, and the price proof's internal
+  // references are position-dependent (they cannot be made otherwise; the
+  // on-chain verifier requires a concrete index). Nothing here auto-retries, and
+  // a plain retry reproduces it, so the copy names the lever the user actually
+  // has: their wallet's custom-fee setting.
+  3: "Your wallet changed this transaction after it was prepared, which invalidated its price proof. Turn off your wallet's custom priority-fee setting and try again.",
+  4: "The price proof was malformed. Reload the page and try again.",
+};
+
+export function decodeError(
+  error: any,
+  /** Set when the transaction carried an ed25519 price proof (the early-exercise
+   *  arm). Without it, a low code is ambiguous and stays unmapped. */
+  opts?: { hasPriceProof?: boolean },
+): string {
   if (!error) return "Unknown error";
+  const hasPriceProof = opts?.hasPriceProof === true;
   const msg = error?.message || error?.toString() || "";
 
   // Wallet-replay artifact — wallet's optimistic resimulate against
@@ -174,9 +205,21 @@ export function decodeError(error: any): string {
   if (code !== null) {
     if (CUSTOM_ERRORS[code]) return CUSTOM_ERRORS[code];
 
-    // Below the Anchor user-error base this did NOT come from Opta — it came
-    // from another program in the same transaction (SPL Token, a precompile).
-    // We have no mapping and no business inventing one.
+    // ── ed25519 PRECOMPILE (2026-08-16) ──────────────────────────────────────
+    // A transaction carrying a Switchboard price proof has an ed25519 precompile
+    // instruction, and its failures arrive as low custom codes 0-4 — the same
+    // numeric space as SPL Token's errors, which is why they read as anonymous.
+    // Only claim these when the transaction actually contains such a proof;
+    // otherwise code 3 is far more likely to be SPL Token OwnerMismatch.
+    if (hasPriceProof && code >= 0 && code <= 4) {
+      logFailure(error, code);
+      return ED25519_PRECOMPILE_COPY[code];
+    }
+
+    // Below the Anchor user-error base this did NOT come from Opta. It came from
+    // SOME other program in the same transaction — SPL Token, a precompile, the
+    // loader. `code < 6000` establishes "not an Anchor user error" and NOTHING
+    // about provenance, so this says so rather than naming a culprit.
     logFailure(error, code);
     return GENERIC_FAILURE_COPY;
   }

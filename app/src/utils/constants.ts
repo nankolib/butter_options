@@ -105,6 +105,15 @@ export const VAULT_RESALE_ESCROW_SEED = "vault_resale_escrow";
 export const RESTING_ORDER_SEED = "resting_order";
 export const RESTING_ORDER_ESCROW_SEED = "resting_order_escrow";
 
+// MUST match WRITER_ASK_POT_SEED / WRITER_ASK_POT_USDC_SEED in
+// programs/opta/src/state/*.rs. Both are keyed by the CANONICAL series mint —
+// never by vault — because a writer-ask may only rest on a canonical mint
+// (post_order.rs D2.5), which makes one-pot-per-series a hard invariant.
+//   [WRITER_ASK_POT_SEED, option_mint]      -> the pot record (counters)
+//   [WRITER_ASK_POT_USDC_SEED, option_mint] -> its USDC account (authority = protocol_state)
+export const WRITER_ASK_POT_SEED = "writer_ask_pot";
+export const WRITER_ASK_POT_USDC_SEED = "writer_ask_pot_usdc";
+
 // === Exchange Series mint PDA layout (Phase 2 Pass A — D5) ===
 // The canonical per-spec series mint reuses VAULT_OPTION_MINT_SEED but with a
 // SPEC-ONLY seed layout (no writer, no timestamp) — distinct from the legacy
@@ -246,5 +255,22 @@ export function deriveHookStatePda(mint: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("hook-state"), mint.toBuffer()],
     TRANSFER_HOOK_PROGRAM_ID,
+  );
+}
+
+// Writer-ask pot PDA helpers. Keyed by the canonical series mint (see the seed
+// constants above), so a caller holding only a position's option_mint can reach
+// the pot backing it without touching the vault.
+export function deriveWriterAskPotPda(optionMint: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(WRITER_ASK_POT_SEED), optionMint.toBuffer()],
+    PROGRAM_ID,
+  );
+}
+
+export function deriveWriterAskPotUsdcPda(optionMint: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(WRITER_ASK_POT_USDC_SEED), optionMint.toBuffer()],
+    PROGRAM_ID,
   );
 }

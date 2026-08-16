@@ -6,7 +6,10 @@ import {
 } from "../../utils/blackScholes";
 import { usdcToNumber } from "../../utils/format";
 import { AMERICAN_ENABLED_UI } from "../../utils/constants";
-import { earlyExerciseAvailability } from "../../utils/earlyExerciseAvailability";
+import {
+  earlyExerciseAvailability,
+  type PotFundingView,
+} from "../../utils/earlyExerciseAvailability";
 
 export type PositionState =
   | "active"
@@ -115,6 +118,21 @@ type BuildPositionsArgs = {
    * during Stage Secondary 7.2 wiring; Slice B threads the real fetch in.
    */
   listings?: ResaleListingAccount[];
+  /**
+   * Writer-ask collateral pots, keyed by CANONICAL series mint (base58).
+   *
+   * Load-bearing for the early-exercise gate, not cosmetic. On a series whose
+   * collateral came from writer asks the vault's own USDC account is $0 and all
+   * the money sits in the pot, so a row judged on vault fields alone looks
+   * unfunded and renders the "cannot exercise yet" copy over a fully funded
+   * position. earlyExerciseAvailability distinguishes "pot is empty" from "pot
+   * was never looked up" and stays conservative on the latter — so omitting this
+   * map is indistinguishable from a genuinely unfunded series. Pass it.
+   *
+   * Optional only so a caller mid-wiring still compiles; every real call site
+   * supplies it.
+   */
+  potByMint?: Map<string, PotFundingView>;
 };
 
 /**
@@ -125,7 +143,7 @@ type BuildPositionsArgs = {
  * and state-machine derivation in one place.
  */
 export function buildPositions(args: BuildPositionsArgs): Position[] {
-  const { v2Held, spotPrices, metadataSymbolByMint, listings = [] } = args;
+  const { v2Held, spotPrices, metadataSymbolByMint, listings = [], potByMint } = args;
   const now = Math.floor(Date.now() / 1000);
   const result: Position[] = [];
 
@@ -199,9 +217,16 @@ export function buildPositions(args: BuildPositionsArgs): Position[] {
     );
     // Offered-but-impossible actions get a reason rather than a wallet popup.
     // Only early exercise can be in that state today.
+    // The pot is the SECOND funding source and must be passed explicitly — an
+    // omitted pot means "not looked up", not "no pot", and the gate then blocks
+    // a funded position. `?? null` is deliberate: a loader that supplied the map
+    // but found no pot for this mint is a real negative, not an unknown.
     const availability =
       derivedAction === "exercise-american"
-        ? earlyExerciseAvailability(vault.account as any)
+        ? earlyExerciseAvailability(
+            vault.account as any,
+            potByMint ? potByMint.get(mintKey) ?? null : undefined,
+          )
         : { available: true as const };
 
     result.push({

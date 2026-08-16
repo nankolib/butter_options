@@ -211,6 +211,8 @@ describe("bankrun Pass-2 money-logic (Stage G)", function () {
       optionMint: m.optionMint, holderOptionAccount: buyerOptionAta, vaultUsdcAccount: vaultUsdc,
       holderUsdcAccount: buyerUsdc, token2022Program: TOKEN_2022_PROGRAM_ID, tokenProgram: TOKEN_PROGRAM_ID,
       sbQueue: null, sbSlothashes: null, sbInstructions: null,
+      // Pool-funded exercise → the writer-ask pot arm stays null.
+      writerAskPot: null, writerAskPotUsdc: null, protocolState: null,
     }).preInstructions([CU_400]).signers([buyer]).rpc();
 
     let v: any = await opta.account.sharedVault.fetch(vault);
@@ -327,6 +329,8 @@ describe("bankrun Pass-2 money-logic (Stage G)", function () {
       optionMint: m.optionMint, holderOptionAccount: buyerOptionAta, vaultUsdcAccount: vaultUsdc,
       holderUsdcAccount: buyerUsdc, token2022Program: TOKEN_2022_PROGRAM_ID, tokenProgram: TOKEN_PROGRAM_ID,
       sbQueue: null, sbSlothashes: null, sbInstructions: null,
+      // Pool-funded exercise → the writer-ask pot arm stays null.
+      writerAskPot: null, writerAskPotUsdc: null, protocolState: null,
     });
 
     // Stale: publish_time = now − 120s (> 60) → PriceTooOld.

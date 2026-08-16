@@ -2922,6 +2922,81 @@ export type Opta = {
             "runtime in the SB arm, then scanned for the ed25519 ix index."
           ],
           "optional": true
+        },
+        {
+          "name": "writerAskPot",
+          "docs": [
+            "The series' collateral pot. Seed-derived AND field-linked, so a caller",
+            "cannot point this at another series' pot to drain it: the seeds pin it to",
+            "`option_mint`, `pot.vault` pins it to THIS vault, and `pot.usdc_account`",
+            "pins the token account below."
+          ],
+          "writable": true,
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  119,
+                  114,
+                  105,
+                  116,
+                  101,
+                  114,
+                  95,
+                  97,
+                  115,
+                  107,
+                  95,
+                  112,
+                  111,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "optionMint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "writerAskPotUsdc",
+          "docs": [
+            "The pot's USDC account — the shortfall payout source. Authority is",
+            "`protocol_state`, which is why that account is required alongside it."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "protocolState",
+          "docs": [
+            "Signs the pot -> holder transfer. Same authority, same seeds settle_vault",
+            "uses to move this money at settlement."
+          ],
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
         }
       ],
       "args": [
@@ -8575,6 +8650,16 @@ export type Opta = {
       "code": 6083,
       "name": "bidPriceBelowMin",
       "msg": "Bid price is below the sell trigger's per-contract minimum-proceeds floor"
+    },
+    {
+      "code": 6084,
+      "name": "earlyExercisePotRequired",
+      "msg": "Early exercise needs the writer-ask pot accounts for this series"
+    },
+    {
+      "code": 6085,
+      "name": "earlyExercisePotUnderfunded",
+      "msg": "Writer-ask pot cannot fund this early exercise"
     }
   ],
   "types": [
@@ -9866,7 +9951,15 @@ export type Opta = {
               "`migrate_shared_vault_exercise_tracking` grows them and zero-fills the",
               "trailing bytes — which deserialize as 0/0, the correct default for a",
               "vault that has had no early exercises. Same append+migrate discipline as",
-              "carry_rate_bps (Stage A) and exercise_style (Stage C Pass 1)."
+              "carry_rate_bps (Stage A) and exercise_style (Stage C Pass 1).",
+              "`early_exercise_payout` counts VAULT-funded payout only; a pot-funded",
+              "draw self-accounts via the reduced sweep. `exercise_american`'s pot leg",
+              "(2026-08-15) pays what the vault's own USDC account cannot and debits",
+              "`WriterAskPot.total_collateral` — the very counter `settle_vault` sweeps",
+              "— so those dollars are already netted by the time settlement reads this",
+              "field. Adding them here too would subtract them a second time. On a",
+              "pool-funded exercise the two are equal, so the meaning is unchanged for",
+              "every vault written before the pot leg existed."
             ],
             "type": "u64"
           },

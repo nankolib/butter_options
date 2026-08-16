@@ -494,4 +494,19 @@ pub enum OptaError {
     // (mirrors AskPriceExceedsMax / 6080 on the buy side). Append-only — 6083.
     #[msg("Bid price is below the sell trigger's per-contract minimum-proceeds floor")]
     BidPriceBelowMin,
+
+    // Early exercise needed more than the vault's own USDC account holds and the
+    // writer-ask pot accounts were not supplied. On a series funded entirely by
+    // writer asks the vault account is empty by construction, so this is the
+    // normal "client did not pass the optionals" case, not a shortfall.
+    // Append-only — error code 6084.
+    #[msg("Early exercise needs the writer-ask pot accounts for this series")]
+    EarlyExercisePotRequired,
+
+    // The pot cannot cover the shortfall. Unreachable by construction — intrinsic
+    // is capped at collateral_per_contract and the pot holds cpt x contracts — so
+    // this firing means an invariant broke, and reverting is the only safe answer.
+    // Append-only — error code 6085.
+    #[msg("Writer-ask pot cannot fund this early exercise")]
+    EarlyExercisePotUnderfunded,
 }

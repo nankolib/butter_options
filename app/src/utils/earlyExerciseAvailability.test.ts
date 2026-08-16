@@ -96,3 +96,40 @@ test("the copy states the consequence and leaks no mechanics", () => {
   assert.match(c, /expiry/i);
   assert.match(c, /automatic/i);
 });
+
+// ---- Pot funding (2026-08-15) ----------------------------------------------
+// exercise_american now draws its shortfall from the writer-ask pot, so a funded
+// pot is a third funding source and the gate must stop hiding the action.
+
+test("a pot-funded series is now AVAILABLE — the 22-vault case", () => {
+  // Measured on devnet 2026-08-15: SOL 75.2C AMER 28-Aug held $0 in the vault
+  // account and $752.00 in the pot. Before the program fix this was correctly
+  // blocked; after it, blocking would be the lie.
+  const vault = { totalCollateral: bn(0), writerAskCollateralSwept: bn(0), isSettled: false };
+  assert.equal(earlyExerciseAvailability(vault, { totalCollateral: bn(752_000_000) }).available, true);
+});
+
+test("an EMPTY pot still blocks — the copy is for genuinely unfunded vaults", () => {
+  const vault = { totalCollateral: bn(0), writerAskCollateralSwept: bn(0), isSettled: false };
+  const r = earlyExerciseAvailability(vault, { totalCollateral: bn(0) });
+  assert.equal(r.available, false);
+  assert.equal(r.available === false && r.reason, EARLY_EXERCISE_UNFUNDED_COPY);
+});
+
+test("an UNREAD pot is not an empty pot", () => {
+  // Omitting the argument means "not looked up". It must not read as $0 and it
+  // must not silently open the gate either — the vault fields still decide.
+  const unfunded = { totalCollateral: bn(0), writerAskCollateralSwept: bn(0), isSettled: false };
+  assert.equal(earlyExerciseAvailability(unfunded).available, false);
+  assert.equal(earlyExerciseAvailability(unfunded, null).available, false);
+  assert.equal(earlyExerciseAvailability(unfunded, undefined).available, false);
+
+  const pooled = { totalCollateral: bn(500_000), writerAskCollateralSwept: bn(0), isSettled: false };
+  assert.equal(earlyExerciseAvailability(pooled).available, true);
+});
+
+test("a MIXED vault (pool + pot) is available on either source alone", () => {
+  const mixed = { totalCollateral: bn(100_000), writerAskCollateralSwept: bn(0), isSettled: false };
+  assert.equal(earlyExerciseAvailability(mixed, { totalCollateral: bn(752_000_000) }).available, true);
+  assert.equal(earlyExerciseAvailability(mixed, { totalCollateral: bn(0) }).available, true);
+});

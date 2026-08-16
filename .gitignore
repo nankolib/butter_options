@@ -82,3 +82,9 @@ crank/**/*.js
 indexer/src/**/*.js
 writer/src/**/*.js
 app/vite.config.js
+# tests/ joined the list on 2026-08-15 after 70 strays reappeared there. Node
+# resolves ./helpers to helpers.js before ts-node's .ts hook ever runs, so a
+# stale compiled helper shadows the source the suite is supposed to be testing —
+# edits land in the .ts and the run silently exercises the .js. The bankrun
+# suite is the primary source of truth; a shadowed helper makes it lie.
+tests/**/*.js

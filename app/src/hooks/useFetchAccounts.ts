@@ -28,13 +28,18 @@ const DISCRIMINATORS: Record<string, number[]> = {
   // SLICE 2B: absent here until now, which is why Portfolio → WRITTEN read
   // "Nothing written" for every user on the writer-ask path.
   writerAskPosition: [153, 60, 106, 50, 105, 8, 111, 54],
+  // Phase 3 writer-asks — the per-series COLLATERAL pot. Absent here until
+  // 2026-08-15, which is why the early-exercise gate rendered the unfunded copy
+  // on every writer-ask series: the loader had no way to look a pot up, so
+  // earlyExerciseAvailability was called without one and stayed conservative.
+  writerAskPot: [144, 146, 126, 56, 17, 59, 177, 215],
 };
 
 export type AccountName =
   | "optionsMarket" | "protocolState"
   | "sharedVault" | "writerPosition" | "vaultMint" | "epochConfig"
   | "settlementRecord" | "vaultResaleListing" | "restingOrder"
-  | "writerAskPosition";
+  | "writerAskPosition" | "writerAskPot";
 
 export async function safeFetchAll<T>(
   program: Program<any>,

@@ -30,6 +30,7 @@ import { useTokenMetadata } from "../../../hooks/useTokenMetadata";
 import { TOKEN_2022_PROGRAM_ID } from "../../../utils/constants";
 import { hexFromBytes } from "../../../utils/format";
 import { buildPositions, type Position } from "../positions";
+import type { PotFundingView } from "../../../utils/earlyExerciseAvailability";
 import { buildWriterRows, type WriterRow } from "../writerRows";
 import { buildAskRows, type AskRow } from "../askRows";
 import { canonicalAsset } from "../../../utils/assetDisplay";
@@ -53,6 +54,7 @@ const PORTFOLIO_SCANS = [
   "vaultMint",
   "epochConfig",
   "restingOrder",
+  "writerAskPot",
 ] as const;
 
 export type PortfolioData = ReturnType<typeof usePortfolioData>;
@@ -70,6 +72,7 @@ export function usePortfolioData() {
   // closes; RestingOrder is what actually rests and closes on fill. Without
   // this, a filled ask renders as ON THE BOOK forever.
   const [restingRaw, setRestingRaw] = useState<AccountWrapper[]>([]);
+  const [potsRaw, setPotsRaw] = useState<AccountWrapper[]>([]);
   const [heldBalances, setHeldBalances] = useState<Map<string, number>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -104,18 +107,22 @@ export function usePortfolioData() {
       if (!program) return;
       if (invalidate) invalidateAccountScans(program, PORTFOLIO_SCANS);
       try {
-        const [mkts, settles, lists, asks, resting] = await Promise.all([
+        const [mkts, settles, lists, asks, resting, pots] = await Promise.all([
           safeFetchAll(program, "optionsMarket"),
           safeFetchAll(program, "settlementRecord"),
           safeFetchAll(program, "vaultResaleListing"),
           safeFetchAll(program, "writerAskPosition"),
           safeFetchAll(program, "restingOrder"),
+          // Writer-ask collateral pots — the early-exercise gate cannot judge a
+          // writer-ask series without them (vault_usdc is $0 there by design).
+          safeFetchAll(program, "writerAskPot"),
         ]);
         setMarkets(mkts as AccountWrapper[]);
         setSettlementRecords(settles as AccountWrapper[]);
         setListingsRaw(lists as AccountWrapper[]);
         setAsksRaw(asks as AccountWrapper[]);
         setRestingRaw(resting as AccountWrapper[]);
+        setPotsRaw(pots as AccountWrapper[]);
         if (publicKey) {
           const accts = await program.provider.connection.getTokenAccountsByOwner(publicKey, {
             programId: TOKEN_2022_PROGRAM_ID,
@@ -199,9 +206,21 @@ export function usePortfolioData() {
     return found;
   }, [vaultMints, vaults, marketMap, heldBalances, connected, publicKey, myListings]);
 
+  // option_mint base58 -> pot. Keyed by mint, matching the pot PDA seed, so a
+  // position row looks its own funding up directly.
+  const potByMint = useMemo(() => {
+    const m = new Map<string, PotFundingView>();
+    for (const p of potsRaw) {
+      m.set((p.account.optionMint as PublicKey).toBase58(), {
+        totalCollateral: p.account.totalCollateral,
+      });
+    }
+    return m;
+  }, [potsRaw]);
+
   const positions = useMemo(
-    () => buildPositions({ v2Held, spotPrices, metadataSymbolByMint, listings: myListings }),
-    [v2Held, spotPrices, metadataSymbolByMint, myListings],
+    () => buildPositions({ v2Held, spotPrices, metadataSymbolByMint, listings: myListings, potByMint }),
+    [v2Held, spotPrices, metadataSymbolByMint, myListings, potByMint],
   );
   const writerRows = useMemo(
     () => buildWriterRows({ myPositions, vaults, vaultMints, marketMap, getUnclaimedPremium }),

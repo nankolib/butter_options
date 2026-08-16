@@ -35,6 +35,12 @@ export interface VaultFundingView {
   isSettled?: boolean;
 }
 
+/** The series' writer-ask pot, when one has been read. `null`/absent means "not
+ *  looked up", NOT "empty" — the distinction decides whether we may gate. */
+export interface PotFundingView {
+  totalCollateral: { toString(): string } | number | null | undefined;
+}
+
 function asNumber(v: VaultFundingView["totalCollateral"]): number {
   if (v === null || v === undefined) return 0;
   if (typeof v === "number") return Number.isFinite(v) ? v : 0;
@@ -68,13 +74,21 @@ export const EARLY_EXERCISE_UNFUNDED_COPY =
  */
 export function earlyExerciseAvailability(
   vault: VaultFundingView | null | undefined,
+  /** The series' writer-ask pot, if it was read. Omit when unknown — an omitted
+   *  pot is treated as "not looked up", and the gate stays conservative. */
+  pot?: PotFundingView | null,
 ): EarlyExerciseAvailability {
   if (!vault) return { available: true };
   if (vault.isSettled) return { available: true }; // post-settlement path, not ours
 
   const pooled = asNumber(vault.totalCollateral);
   const swept = asNumber(vault.writerAskCollateralSwept);
-  if (pooled > 0 || swept > 0) return { available: true };
+  // The pot became spendable pre-settlement when exercise_american learned to
+  // draw its shortfall from it (2026-08-15). Before that this was the whole
+  // reason the gate existed; now a funded pot is simply a third funding source,
+  // and continuing to hide the action would be the lie.
+  const potted = asNumber(pot?.totalCollateral);
+  if (pooled > 0 || swept > 0 || potted > 0) return { available: true };
 
   return { available: false, reason: EARLY_EXERCISE_UNFUNDED_COPY };
 }

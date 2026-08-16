@@ -223,6 +223,8 @@ describe("zzz-exercise-american (Stage F)", function () {
       .exerciseAmerican(qty)
       .accounts({
             sbQueue: null, sbSlothashes: null, sbInstructions: null,
+            // Pool-funded exercise → the writer-ask pot arm stays null.
+            writerAskPot: null, writerAskPotUsdc: null, protocolState: null,
         holder: h.buyer.kp.publicKey,
         sharedVault: h.vault,
         market: marketPda,

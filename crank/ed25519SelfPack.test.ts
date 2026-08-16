@@ -106,6 +106,10 @@ test("offset structs follow correct 2-sig geometry (sig0@30/pk0@94, sig1@126/pk1
   const o0 = off(0);
   const o1 = off(1);
   // sorted by oracleIdx asc -> oracle_idx 2 first, then 8
+  // The three *_instruction_index fields are the CONCRETE ix index (1), not
+  // u16::MAX. A SELF pack was tried on 2026-08-16 and is rejected on chain by the
+  // Switchboard crate ("Signature instruction index 65535 does not match current
+  // instruction index 1"), so this literal is load-bearing, not incidental.
   assert.deepEqual(o0, { signatureOffset: 30, signatureInstructionIndex: 1, publicKeyOffset: 94, publicKeyInstructionIndex: 1, messageDataOffset: 222, messageDataSize: 81, messageInstructionIndex: 1 });
   assert.deepEqual(o1, { signatureOffset: 126, signatureInstructionIndex: 1, publicKeyOffset: 190, publicKeyInstructionIndex: 1, messageDataOffset: 222, messageDataSize: 81, messageInstructionIndex: 1 });
 });

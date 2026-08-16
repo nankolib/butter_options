@@ -21,8 +21,11 @@ import { useProgram } from "../../hooks/useProgram";
 import {
   TOKEN_2022_PROGRAM_ID,
   TRANSFER_HOOK_PROGRAM_ID,
+  PROTOCOL_SEED,
   deriveExtraAccountMetaListPda,
   deriveHookStatePda,
+  deriveWriterAskPotPda,
+  deriveWriterAskPotUsdcPda,
 } from "../../utils/constants";
 import { usdcToNumber, hexFromBytes } from "../../utils/format";
 import {
@@ -123,7 +126,9 @@ export function usePortfolioActions(onSuccess: () => void): PortfolioActions {
         await exerciseAmericanV2({ program, provider, publicKey, position: p });
         onSuccess();
       } catch (err: any) {
-        const msg = decodeError(err);
+        // The early-exercise transaction always carries an ed25519 price proof,
+        // so low custom codes may be read as precompile errors here.
+        const msg = decodeError(err, { hasPriceProof: true });
         if (isWalletReplay(err)) {
           showToast({
             type: "success",
@@ -456,13 +461,33 @@ async function exerciseAmericanSwitchboard({
     holderUsdcAccount: accounts.holderUsdcAccount.toBase58(),
     quantity: position.contracts,
   };
-  const expected = { ...request, programId: program.programId.toBase58() };
+  // The three pot-arm accounts are DERIVED HERE, never sent in the request and
+  // never taken from the response. The endpoint derives its own copy the same
+  // way; the guard then refuses unless the two agree. That is the whole point —
+  // a server that could name the pot could name ANOTHER series' pot and have
+  // protocol_state sign the transfer out of it.
+  //
+  // Omitting these is not a soft failure: assertExerciseTxShape refuses any
+  // carried pot it has no local expectation for, so a pot-funded series cannot
+  // be exercised at all until this is supplied.
+  const [writerAskPotPda] = deriveWriterAskPotPda(accounts.optionMint);
+  const [writerAskPotUsdcPda] = deriveWriterAskPotUsdcPda(accounts.optionMint);
+  const [potProtocolStatePda] = PublicKey.findProgramAddressSync(
+    [Buffer.from(PROTOCOL_SEED)],
+    program.programId,
+  );
+  const expected = {
+    ...request,
+    programId: program.programId.toBase58(),
+    writerAskPot: writerAskPotPda.toBase58(),
+    writerAskPotUsdc: writerAskPotUsdcPda.toBase58(),
+    protocolState: potProtocolStatePda.toBase58(),
+  };
 
   let sig = "";
   for (let attempt = 0; attempt < 2; attempt++) {
     const resp = await postSbExercise(endpoint, request);
     const tx = deserializeExerciseTx(resp.transactionBase64);
-
     // Refuse BEFORE the wallet is opened. A shape failure is never retried:
     // it is not staleness, it is the wrong transaction.
     assertExerciseTxShape(tx, expected);
@@ -482,7 +507,6 @@ async function exerciseAmericanSwitchboard({
       if (attempt === 0 && !isWalletReplay(e) && isStaleQuoteFailure(e)) continue;
       throw e;
     }
-
     try {
       sig = await withResolvedOutcome(connection, async () => {
         const s = await connection.sendRawTransaction(signed.serialize(), {

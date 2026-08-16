@@ -36,6 +36,7 @@ import {
   deserializeExerciseTx,
   ExerciseTxShapeError,
   EXERCISE_AMERICAN_DISCRIMINATOR,
+  EXERCISE_ACCOUNT_INDEX,
   ORACLE_SOURCE_PYTH,
   ORACLE_SOURCE_SWITCHBOARD,
   postSbExercise,
@@ -97,6 +98,11 @@ const holderOptionAccount = Keypair.generate().publicKey;
 const vaultUsdcAccount = Keypair.generate().publicKey;
 const holderUsdcAccount = Keypair.generate().publicKey;
 const sbQueue = Keypair.generate().publicKey;
+// Writer-ask pot arm (2026-08-15). Seed-derived in prod; opaque keys here — the
+// guard compares against what the CLIENT derived, never against a shape rule.
+const writerAskPot = Keypair.generate().publicKey;
+const writerAskPotUsdc = Keypair.generate().publicKey;
+const protocolState = Keypair.generate().publicKey;
 
 const EXPECTED: ExpectedExercise = {
   programId: PROGRAM.toBase58(),
@@ -119,11 +125,35 @@ function exerciseData(quantity: number | bigint): Buffer {
 }
 
 /** A fake ed25519 quote ix — the guard only cares that the program is invoked. */
-function fakeEd25519Ix(): TransactionInstruction {
+/**
+ * A price proof with REAL geometry: 1 signature, SELF-referential instruction
+ * indices (u16::MAX), sig@16, pubkey@80, message@112 len 81 — the same layout
+ * crank/ed25519SelfPack.ts emits for n=1.
+ *
+ * It used to be `Buffer.alloc(16)`, which decodes as num_signatures=0. That was
+ * fine while the guard only checked the ix was PRESENT, but the guard now walks
+ * the payload's offsets (2026-08-16), and a stub that isn't a payload fails it
+ * before any account assertion runs. A fixture that cannot survive the real
+ * check is a fixture that stops testing what it claims to.
+ */
+function fakeEd25519Ix(opts: { instructionIndex?: number } = {}): TransactionInstruction {
+  const SELF = 0xffff;
+  const idx = opts.instructionIndex ?? SELF;
+  const MSG_LEN = 81;
+  const data = Buffer.alloc(112 + MSG_LEN);
+  data.writeUInt8(1, 0);              // num_signatures
+  data.writeUInt8(0, 1);              // padding
+  data.writeUInt16LE(16, 2);          // signature_offset
+  data.writeUInt16LE(idx, 4);         // signature_instruction_index
+  data.writeUInt16LE(80, 6);          // public_key_offset
+  data.writeUInt16LE(idx, 8);         // public_key_instruction_index
+  data.writeUInt16LE(112, 10);        // message_data_offset
+  data.writeUInt16LE(MSG_LEN, 12);    // message_data_size
+  data.writeUInt16LE(idx, 14);        // message_instruction_index
   return new TransactionInstruction({
     programId: Ed25519Program.programId,
     keys: [],
-    data: Buffer.alloc(16),
+    data,
   });
 }
 
@@ -135,6 +165,9 @@ interface Opts {
   payer?: PublicKey;
   discriminator?: Buffer;
   accountCount?: number;
+  /** Force an absolute instruction index into the price proof's offsets, to
+   *  reproduce the pre-2026-08-16 packing the guard must now reject. */
+  ed25519InstructionIndex?: number;
 }
 
 /** Build the tx shape the endpoint returns, with surgical overrides. */
@@ -154,6 +187,9 @@ function buildTx(opts: Opts = {}): VersionedTransaction {
     sbQueue,
     sbSlothashes: SLOTHASHES,
     sbInstructions: IX_SYSVAR,
+    writerAskPot,
+    writerAskPotUsdc,
+    protocolState,
     ...(opts.accounts ?? {}),
   } as Record<string, PublicKey>;
 
@@ -161,6 +197,7 @@ function buildTx(opts: Opts = {}): VersionedTransaction {
     "holder", "sharedVault", "market", "priceUpdate", "vaultMintRecord",
     "optionMint", "holderOptionAccount", "vaultUsdcAccount", "holderUsdcAccount",
     "token2022Program", "tokenProgram", "sbQueue", "sbSlothashes", "sbInstructions",
+    "writerAskPot", "writerAskPotUsdc", "protocolState",
   ].slice(0, opts.accountCount ?? 14);
 
   const data = opts.discriminator
@@ -180,7 +217,7 @@ function buildTx(opts: Opts = {}): VersionedTransaction {
   const ixs: TransactionInstruction[] = [
     ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
   ];
-  if (!opts.omitEd25519) ixs.push(fakeEd25519Ix());
+  if (!opts.omitEd25519) ixs.push(fakeEd25519Ix({ instructionIndex: opts.ed25519InstructionIndex }));
   ixs.push(exerciseIx);
   if (opts.extraIx) ixs.push(opts.extraIx);
 
@@ -445,4 +482,81 @@ test("a non-numeric deadline is dropped rather than trusted", async () => {
     json: async () => ({ transactionBase64: "A", lastValidBlockHeight: 1, quoteExpiresAtSlot: "soon" }),
   });
   assert.equal((await postSbExercise("https://x", REQ, bad as any)).quoteExpiresAtSlot, undefined);
+});
+
+// ---- Writer-ask pot arm (2026-08-15): the dual shape ------------------------
+// 14 accounts = vault-funded, trailing optionals omitted. 17 = the pot arm is
+// carried. Both are legal; indices 0-13 are identical in each.
+
+const EXPECTED_POT: ExpectedExercise = {
+  ...EXPECTED,
+  writerAskPot: writerAskPot.toBase58(),
+  writerAskPotUsdc: writerAskPotUsdc.toBase58(),
+  protocolState: protocolState.toBase58(),
+};
+
+test("GREEN: the 14-account vault-funded shape still passes untouched", () => {
+  // The regression that matters: adding an arm must not invalidate every
+  // exercise built before it existed.
+  assertExerciseTxShape(buildTx(), EXPECTED);
+  assertExerciseTxShape(buildTx(), EXPECTED_POT);
+});
+
+test("GREEN: the 17-account pot shape passes when every address matches", () => {
+  assertExerciseTxShape(buildTx({ accountCount: 17 }), EXPECTED_POT);
+});
+
+test("REFUSES: a pot arm this client never derived", () => {
+  // No local expectation means no way to check it. "Looks plausible" is not
+  // verification, and the pot leg is signed by protocol_state.
+  assert.throws(
+    () => assertExerciseTxShape(buildTx({ accountCount: 17 }), EXPECTED),
+    /did not derive/,
+  );
+});
+
+test("REFUSES: another series' collateral pot", () => {
+  const tx = buildTx({ accountCount: 17, accounts: { writerAskPot: Keypair.generate().publicKey } });
+  assert.throws(() => assertExerciseTxShape(tx, EXPECTED_POT), /collateral pot does not match/);
+});
+
+test("REFUSES: the pot payout account swapped", () => {
+  const tx = buildTx({ accountCount: 17, accounts: { writerAskPotUsdc: Keypair.generate().publicKey } });
+  assert.throws(() => assertExerciseTxShape(tx, EXPECTED_POT), /collateral pot account does not match/);
+});
+
+test("REFUSES: a substituted protocol_state — the account that SIGNS the pot leg", () => {
+  const tx = buildTx({ accountCount: 17, accounts: { protocolState: Keypair.generate().publicKey } });
+  assert.throws(() => assertExerciseTxShape(tx, EXPECTED_POT), /protocol state does not match/);
+});
+
+test("REFUSES: a half-supplied pot arm (15 or 16 accounts)", () => {
+  for (const n of [15, 16]) {
+    assert.throws(
+      () => assertExerciseTxShape(buildTx({ accountCount: n }), EXPECTED_POT),
+      new RegExp(`${n} accounts, expected 14 or 17`),
+    );
+  }
+});
+
+test("indices 0-13 are unchanged by the arm — the legacy map still reads true", () => {
+  const I = EXERCISE_ACCOUNT_INDEX;
+  assert.equal(I.holder, 0);
+  assert.equal(I.sbInstructions, 13);
+  assert.equal(I.writerAskPot, 14);
+  assert.equal(I.writerAskPotUsdc, 15);
+  assert.equal(I.protocolState, 16);
+});
+
+test("REFUSES: a price proof whose offsets point outside the instruction they name", () => {
+  // instruction_index 0 is the ComputeBudget ix (a few bytes) — it cannot hold a
+  // 64-byte signature at offset 16. This is the builder-side regression the guard
+  // exists to catch: absolute indices shipping again instead of SELF.
+  const tx = buildTx({ accountCount: 17, ed25519InstructionIndex: 0 });
+  assert.throws(() => assertExerciseTxShape(tx, EXPECTED_POT), /out of bounds/);
+});
+
+test("GREEN: a SELF-referential price proof passes regardless of its position", () => {
+  const tx = buildTx({ accountCount: 17 });
+  assert.doesNotThrow(() => assertExerciseTxShape(tx, EXPECTED_POT));
 });

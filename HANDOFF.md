@@ -158,17 +158,72 @@
 > - **Audit copy rules against the deployed bundle, not source.** A source grep
 >   missed a rendered JSX label and a fix wired into a component production does
 >   not render. Grep for a marker unique to the **edited component**.
-> - **Live devnet deploy facts, read off chain 2026-08-15** — programdata
+> - **Live devnet deploy facts, read off chain 2026-08-15 (refreshed at the
+>   early-exercise pot-accounting ship)** — programdata
 >   `4VJ45tKB5wxsKYWVU3wPYJ4QnykNMBYTXauPd4W4aYKE`, **last deploy slot
->   `480011440`**. Quote these, not any slot found further down this file: the
->   number still circulating in briefs, `460518532`, is the Run-6/7 arc figure
->   from May and predates the B1/B2 book-fire deploys entirely. It was never
->   wrong where it is written — it was read as current long after it stopped
->   being. No further archaeology; take the chain reading.
+>   `484127462`**, artifact sha256 `0b44404c…ab6e9a81` (feature-free, 1,670,920 B),
+>   upgrade tx `euVYTP7BgAPF…`. Verified by slice-hash: the programdata's first
+>   1,670,920 bytes hash byte-exact to the local artifact and the remaining
+>   5,384 are all zero. **This line is REFRESHED in place, never appended to** —
+>   the previous value `480011440` is now history, as `460518532` (the Run-6/7
+>   May figure) was before it. Quote this, not any slot found further down the
+>   file. Every one of those numbers was correct where it was written and wrong
+>   the moment it was read as current. Take the chain reading.
 > - **Upgrade authority is `5YRMuuoY`, and that is enforced by the chain.** It is
 >   the WSL-only admin keypair (`/home/nanko/.config/solana/id.json`, never on
 >   the VPS), so "upgrade from WSL only" is not a convention anyone can forget
 >   past — a VPS-side upgrade cannot be signed at all.
+> - **A GREEN SUITE THAT CANNOT SEE THE DECIDING LAYER IS NOT EVIDENCE ABOUT
+>   THAT LAYER.** Three instances in one night, each of which produced a
+>   confident wrong conclusion:
+>   - `simulateTransaction({ sigVerify: false })` **skips precompile
+>     verification entirely**. Every `err: null` said nothing about the ed25519
+>     instruction, while real preflight rejected it.
+>   - `simulateTransaction({ replaceRecentBlockhash: true })` **substitutes a
+>     fresh blockhash**, so it structurally cannot reproduce a blockhash-expiry
+>     failure. "The sim passes" was never evidence the blockhash was fine.
+>   - **Offline geometry checks are not the on-chain crate.** A 12/12 suite
+>     proved ed25519 offsets resolve in bounds and the precompile accepts
+>     `u16::MAX`. The Switchboard crate the program calls re-reads the ix through
+>     the instructions sysvar and REJECTS `u16::MAX`, panicking
+>     (`ix_sysvar.rs:100` — "Signature instruction index 65535 does not match
+>     current instruction index 1"). The suite was green and the fix was dead.
+>   Before trusting a pass, name the layer that decides and ask whether the check
+>   exercised it.
+> - **AN A/B PROVES NOTHING UNTIL BOTH ARMS ARE PROVEN TO DIFFER.** An A/B of
+>   absolute-vs-SELF ed25519 packing returned identical failures, which was read
+>   as "my change is not the cause" — sending the session into a phantom
+>   upstream-oracle hunt. The env var that selected the arm was set on the
+>   ENDPOINT process, but the probe built the transaction IN-PROCESS and never
+>   called the endpoint. Both arms ran the same code. **Log the discriminating
+>   variable from INSIDE each arm** (here: the packed `instruction_index`) and
+>   assert the arms differ before interpreting the result. Never assume an env
+>   var reached the process that does the work.
+> - **CHECK THE MARKER STRING BEFORE REPORTING A ZERO.** `grep -c
+>   "sb-oracle.*(pushed|success)"` returned 0 and was reported as an oracle
+>   outage. The crank's actual success marker is `sb-oracle push sent`; SB was
+>   healthy the whole time at **exactly 10 pushes/hour**, every hour. The ~95%
+>   `quote fetch/pack failed` lines are the normal re-fetch loop, not an
+>   incident. A zero from a grep is a claim about the pattern first and the
+>   world second.
+> - **BOTH local dev servers must be started DETACHED-PERSISTENT, or an agent
+>   session teardown kills them.** There are two — vite on `:5173` and the
+>   `/sb-exercise-american` endpoint on `:8788` — and every teardown so far has
+>   killed whichever one was left as a normal background job, each time
+>   presenting as a mystery FE failure rather than as "the server is gone".
+>   - `:5173` — start **Windows-native**, not WSL. Windows owns `localhost:5173`,
+>     so a WSL vite bound to the same port in its own netns is simply unreachable
+>     from the browser (and from `curl`) while looking perfectly healthy in `ss`.
+>     WSL vite also dies on a missing rolldown native binding. Use
+>     `Start-Process node "<app>\node_modules\vite\bin\vite.js" --host 0.0.0.0
+>     -WindowStyle Hidden -RedirectStandardOutput/Error`.
+>   - `:8788` — start under `setsid nohup … & disown` from WSL so it becomes its
+>     own session leader. Verify with `ps -o sid=`: the endpoint's SID must
+>     DIFFER from the launching shell's, or SIGHUP still reaches it.
+>   - Verify by **fetching a module from the running server**, never by reading
+>     the file off disk — `curl :5173/src/<path>` and grep for a marker from the
+>     change. Disk-reads have twice reported a fix as live that the browser was
+>     not being served.
 
 # CREATE-MARKET ARC — 2026-08-12 (1 · 2A · 2B · v1.2 · 2C · 3 ALL LIVE — next: P1 early-exercise oracle branch)
 

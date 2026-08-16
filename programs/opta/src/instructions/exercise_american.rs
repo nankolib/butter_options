@@ -15,7 +15,9 @@
 //      (the (f) lock: CALL/PUT capped at 1× collateral). require!(i > 0).
 //   4. Burn N tokens — HOLDER signs (same as exercise_from_vault, NOT delegate).
 //   5. Transfer P USDC vault → holder, vault PDA signs via vault_namespace_seed.
-//   6. vault.exercised_options += N; vault.early_exercise_payout += P.
+//   6. vault.exercised_options += N; vault.early_exercise_payout += the
+//      VAULT-funded share of P (see the pot leg below — a pot-funded dollar
+//      accounts for itself through the reduced settle sweep).
 //
 // Deliberately does NOT mutate total_collateral / total_options_sold /
 // collateral_remaining — Stage G's settlement math consumes the two counters
@@ -185,6 +187,27 @@ pub fn handle_exercise_american(
     // with the protocol-delegate burn (pda_bump=Some) + owner payout. The gates
     // above are kept verbatim (the core re-checks them harmlessly) so the revert
     // order vs. the pyth read is unchanged from the pre-extraction handler.
+    // Assemble the pot leg only when all three optionals came in. A partial set
+    // is a caller error, not a half-usable source — refuse it rather than
+    // silently falling back to a vault account we may already know is empty.
+    let pot_usdc_ai = ctx.accounts.writer_ask_pot_usdc.as_ref().map(|a| a.to_account_info());
+    let protocol_ai = ctx.accounts.protocol_state.as_ref().map(|a| a.to_account_info());
+    let protocol_bump = ctx.accounts.protocol_state.as_ref().map(|a| a.bump);
+    let pot_leg = match (
+        ctx.accounts.writer_ask_pot.as_mut(),
+        pot_usdc_ai.as_ref(),
+        protocol_ai.as_ref(),
+        protocol_bump,
+    ) {
+        (Some(pot), Some(pot_usdc), Some(protocol_state), Some(bump)) => Some(PotLeg {
+            pot,
+            pot_usdc,
+            protocol_state,
+            protocol_bump: bump,
+        }),
+        _ => None,
+    };
+
     american_exercise_core(
         &mut ctx.accounts.shared_vault,
         &ctx.accounts.option_mint.to_account_info(),
@@ -198,9 +221,23 @@ pub fn handle_exercise_american(
         ctx.accounts.holder.key(),
         quantity,
         spot_6dec,
+        pot_leg,
     )?;
 
     Ok(())
+}
+
+/// The writer-ask pot, as a payout source of last resort.
+///
+/// Borrowed rather than owned so the caller keeps its `ctx.accounts` intact, and
+/// `protocol_bump` is passed explicitly so the core never re-derives a PDA it was
+/// handed. Present only when the caller supplied the three trailing optionals;
+/// `execute_trigger` passes `None` (its fires are pool-backed by construction).
+pub struct PotLeg<'a, 'info> {
+    pub pot: &'a mut Account<'info, WriterAskPot>,
+    pub pot_usdc: &'a AccountInfo<'info>,
+    pub protocol_state: &'a AccountInfo<'info>,
+    pub protocol_bump: u8,
 }
 
 // =============================================================================
@@ -230,6 +267,26 @@ pub fn handle_exercise_american(
 // HANDLER responsibility (its source is a stored, possibly-stale/hostile
 // address); exercise_american's source is constraint-pinned to the signer so it
 // needs none. The core only enforces balance >= quantity (revert-on-short).
+///
+/// ── THE SECOND FUNDING SOURCE (2026-08-15) ──────────────────────────────────
+/// `pot_leg` exists because the vault's own USDC account is EMPTY on a series
+/// whose collateral came from writer asks. `fill_writer_ask` routes that money
+/// into a per-series pot (`["writer_ask_pot_usdc", option_mint]`, authority =
+/// `protocol_state`) and only `settle_vault` sweeps it into the vault — which
+/// happens strictly AFTER expiry, i.e. after early exercise is possible at all.
+/// Measured 2026-08-15: all 22 live SOL American CALL vaults for the 28-Aug
+/// expiry held $0 in the vault account with the collateral sitting in pots, so
+/// early exercise was impossible on 100% of them.
+///
+/// The pot leg pays the SHORTFALL only, after the vault account is drained
+/// first, and it signs as `protocol_state` — the same authority, with the same
+/// seeds, that `settle_vault` already uses to move this exact money. Nothing
+/// new is authorised; a second caller reaches an existing authority.
+///
+/// `writer_ask_collateral_swept` is deliberately NOT touched here: it is
+/// settlement's record of what the sweep moved, and pre-settlement it must stay
+/// zero. The pot's own counters absorb the draw instead, which keeps
+/// `settle_vault`'s `pot_bal >= swept` invariant exact.
 #[allow(clippy::too_many_arguments)]
 pub fn american_exercise_core<'info>(
     shared_vault: &mut Account<'info, SharedVault>,
@@ -244,6 +301,7 @@ pub fn american_exercise_core<'info>(
     paid_to: Pubkey,
     quantity: u64,
     spot_6dec: u64,
+    mut pot_leg: Option<PotLeg<'_, 'info>>,
 ) -> Result<u64> {
     // Snapshot vault fields (read through the &mut).
     let exercise_style = shared_vault.exercise_style;
@@ -321,18 +379,103 @@ pub fn american_exercise_core<'info>(
     ];
     let signer_seeds = &[vault_seeds];
 
-    let transfer_ctx = CpiContext::new_with_signer(
-        token_program.clone(),
-        Transfer {
-            from: vault_usdc_account.clone(),
-            to: payout_destination.clone(),
-            authority: shared_vault.to_account_info(),
-        },
-        signer_seeds,
-    );
-    token::transfer(transfer_ctx, total_payout)?;
+    // Vault first, pot for whatever the vault cannot cover. A pool-funded series
+    // takes the first branch alone and is byte-identical to the pre-2026-08-15
+    // behaviour; a writer-ask series has an empty vault account and takes the
+    // second alone; a mixed vault takes both.
+    let vault_balance = {
+        let data = vault_usdc_account.try_borrow_data()?;
+        require!(data.len() >= 72, OptaError::MathOverflow);
+        u64::from_le_bytes(
+            data[64..72]
+                .try_into()
+                .map_err(|_| OptaError::MathOverflow)?,
+        )
+    };
+    let from_vault = total_payout.min(vault_balance);
+    let shortfall = total_payout.saturating_sub(from_vault);
+
+    if from_vault > 0 {
+        let transfer_ctx = CpiContext::new_with_signer(
+            token_program.clone(),
+            Transfer {
+                from: vault_usdc_account.clone(),
+                to: payout_destination.clone(),
+                authority: shared_vault.to_account_info(),
+            },
+            signer_seeds,
+        );
+        token::transfer(transfer_ctx, from_vault)?;
+    }
+
+    if shortfall > 0 {
+        let leg = pot_leg
+            .as_mut()
+            .ok_or(error!(OptaError::EarlyExercisePotRequired))?;
+
+        // Belt and braces. The cap makes this unreachable — intrinsic per
+        // contract is capped at collateral_per_token and the pot holds
+        // collateral_per_token x contracts — but an assertion that never fires
+        // costs nothing, and the alternative to reverting on a broken invariant
+        // is paying out money the pot does not have.
+        let pot_balance = {
+            let data = leg.pot_usdc.try_borrow_data()?;
+            require!(data.len() >= 72, OptaError::MathOverflow);
+            u64::from_le_bytes(
+                data[64..72]
+                    .try_into()
+                    .map_err(|_| OptaError::MathOverflow)?,
+            )
+        };
+        require!(
+            pot_balance >= shortfall,
+            OptaError::EarlyExercisePotUnderfunded
+        );
+        require!(
+            leg.pot.total_collateral >= shortfall,
+            OptaError::EarlyExercisePotUnderfunded
+        );
+
+        // protocol_state signs, exactly as settle_vault.rs does for this account.
+        let protocol_seeds: &[&[u8]] = &[PROTOCOL_SEED, &[leg.protocol_bump]];
+        token::transfer(
+            CpiContext::new_with_signer(
+                token_program.clone(),
+                Transfer {
+                    from: leg.pot_usdc.clone(),
+                    to: payout_destination.clone(),
+                    authority: leg.protocol_state.clone(),
+                },
+                &[protocol_seeds],
+            ),
+            shortfall,
+        )?;
+
+        // Keep the pot's record in step with its token account, or settle_vault's
+        // `pot_bal >= swept` check would sweep against a stale figure.
+        leg.pot.total_collateral = leg
+            .pot
+            .total_collateral
+            .checked_sub(shortfall)
+            .ok_or(OptaError::MathOverflow)?;
+        // Contracts the pot no longer backs. `saturating_sub` because a MIXED
+        // vault can burn contracts the pot never wrote (peg-minted ones), and
+        // per-contract funding attribution is not tracked. The money invariant
+        // above is the exact one; this counter is bookkeeping.
+        leg.pot.total_contracts = leg.pot.total_contracts.saturating_sub(quantity);
+    }
 
     // ----- Accounting: increment the two Stage F counters ONLY --------------
+    //
+    // `early_exercise_payout` accrues `from_vault`, NOT `total_payout`. It exists
+    // for one consumer: settle_vault subtracts it from the writer-claimable pool
+    // because those dollars left the vault before settlement could count them.
+    // Dollars paid by the pot leg never were in that pool, and they have already
+    // self-accounted — the leg debits `pot.total_collateral`, which is the exact
+    // figure settle_vault later sweeps. Charging them here as well removes the
+    // same money twice: CRITICAL-01's double-deduction, in a new place. A
+    // pool-funded exercise has `shortfall == 0` ⇒ `from_vault == total_payout`
+    // ⇒ this line is byte-identical to the pre-pot-leg behaviour.
     let vault_key = shared_vault.key();
     shared_vault.exercised_options = shared_vault
         .exercised_options
@@ -340,7 +483,7 @@ pub fn american_exercise_core<'info>(
         .ok_or(OptaError::MathOverflow)?;
     shared_vault.early_exercise_payout = shared_vault
         .early_exercise_payout
-        .checked_add(total_payout)
+        .checked_add(from_vault)
         .ok_or(OptaError::MathOverflow)?;
 
     emit!(VaultExercised {
@@ -435,4 +578,38 @@ pub struct ExerciseAmerican<'info> {
     /// CHECK: Instructions sysvar. Address-checked == sysvar::instructions::ID at
     /// runtime in the SB arm, then scanned for the ed25519 ix index.
     pub sb_instructions: Option<UncheckedAccount<'info>>,
+
+    // --- Writer-ask pot payout arm (2026-08-15). TRAILING optionals, appended
+    // AFTER the sb_* set so no existing account moves: a pool-funded exercise
+    // omits all three and its transaction is byte-identical to before. Required
+    // only when the vault's own USDC account cannot cover the payout, which is
+    // every series funded by writer asks. ---
+    /// The series' collateral pot. Seed-derived AND field-linked, so a caller
+    /// cannot point this at another series' pot to drain it: the seeds pin it to
+    /// `option_mint`, `pot.vault` pins it to THIS vault, and `pot.usdc_account`
+    /// pins the token account below.
+    #[account(
+        mut,
+        seeds = [WRITER_ASK_POT_SEED, option_mint.key().as_ref()],
+        bump = writer_ask_pot.bump,
+        constraint = writer_ask_pot.vault == shared_vault.key() @ OptaError::InvalidVaultMint,
+        constraint = writer_ask_pot.option_mint == option_mint.key() @ OptaError::InvalidVaultMint,
+    )]
+    pub writer_ask_pot: Option<Box<Account<'info, WriterAskPot>>>,
+
+    /// The pot's USDC account — the shortfall payout source. Authority is
+    /// `protocol_state`, which is why that account is required alongside it.
+    #[account(
+        mut,
+        constraint = writer_ask_pot_usdc.mint == shared_vault.collateral_mint,
+    )]
+    pub writer_ask_pot_usdc: Option<Box<Account<'info, TokenAccount>>>,
+
+    /// Signs the pot -> holder transfer. Same authority, same seeds settle_vault
+    /// uses to move this money at settlement.
+    #[account(
+        seeds = [PROTOCOL_SEED],
+        bump = protocol_state.bump,
+    )]
+    pub protocol_state: Option<Box<Account<'info, ProtocolState>>>,
 }

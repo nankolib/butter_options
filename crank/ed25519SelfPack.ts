@@ -89,12 +89,35 @@ export interface DecodedEd25519 {
  *
  * Every offset struct's *_instruction_index = `instructionIdx` (the concrete tx
  * position of THIS ed25519 ix), and message_data_offset is shared across structs.
- * The trailing oracle_indexes/slot/version/"SBOD" mirror the SDK's intended
- * format so the on-chain quote program reads them at the expected positions.
+ *
+ * THE INDEX MUST BE CONCRETE — u16::MAX IS NOT AN OPTION (tested 2026-08-16).
+ * Solana's ed25519 precompile accepts u16::MAX as "this instruction", so a
+ * SELF-referential pack verifies fine at the precompile layer. The Switchboard
+ * on-demand crate that our program calls does NOT: it re-reads the ed25519 ix
+ * through the instructions sysvar and asserts the field equals the ix's own
+ * index, aborting the transaction otherwise:
+ *
+ *   panicked at src/sysvar/ix_sysvar.rs:100:13:
+ *   Signature instruction index 65535 does not match current instruction index 1
+ *
+ * A SELF pack is therefore green in every offline geometry check and in the
+ * precompile, and dead on chain. Do not "fix" position-dependence here; see the
+ * header of switchboardExerciseAmerican.ts for what the wallet-shift problem
+ * actually requires.
  *
  * Triples are sorted by oracleIdx ascending (queue order — required for the
  * on-chain oracle_keys match), matching the SDK's own sort.
  */
+/**
+ * u16::MAX means "the instruction being verified" to Solana's ed25519
+ * PRECOMPILE. Exported for decoders and tests only.
+ *
+ * DO NOT PACK THIS. It is position-independent at the precompile and REJECTED by
+ * the Switchboard crate our program calls, which asserts the field equals the
+ * ed25519 ix's own index and panics otherwise. Verified on chain 2026-08-16.
+ */
+export const SELF_INSTRUCTION_INDEX = 0xffff;
+
 export function packEd25519Ix(
   triplesIn: Ed25519Triple[],
   instructionIdx: number,
@@ -107,6 +130,7 @@ export function packEd25519Ix(
   if (!Number.isFinite(instructionIdx) || instructionIdx < 0) {
     throw new Error("packEd25519Ix: instructionIdx must be a non-negative finite number");
   }
+
 
   // Normalize to Buffers, validate, sort by oracleIdx ascending.
   const triples = triplesIn

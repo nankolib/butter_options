@@ -25,6 +25,7 @@ import { ResaleModal } from "./ResaleModal";
 import { SettleExpiriesSection } from "./SettleExpiriesSection";
 import { MigrateFeedSection } from "./MigrateFeedSection";
 import { buildPositions, type Position, type PositionAction } from "./positions";
+import type { PotFundingView } from "../../utils/earlyExerciseAvailability";
 import {
   buildWriterRows,
   type WriterRow,
@@ -87,6 +88,9 @@ const PortfolioPageLegacy: FC = () => {
   const [listingsRaw, setListingsRaw] = useState<
     { publicKey: PublicKey; account: any }[]
   >([]);
+  const [potsRaw, setPotsRaw] = useState<
+    { publicKey: PublicKey; account: any }[]
+  >([]);
   const [denomination, setDenomination] = useState<Denomination>("USDC");
   const [resaleTarget, setResaleTarget] = useState<Position | null>(null);
 
@@ -117,16 +121,19 @@ const PortfolioPageLegacy: FC = () => {
   const refetchAll = useCallback(async () => {
     if (!program) return;
     try {
-      const [mkts, settles, lists] = await Promise.all([
+      const [mkts, settles, lists, pots] = await Promise.all([
         safeFetchAll(program, "optionsMarket"),
         safeFetchAll(program, "settlementRecord"),
         safeFetchAll(program, "vaultResaleListing"),
+        // Writer-ask collateral pots — the early-exercise gate needs them.
+        safeFetchAll(program, "writerAskPot"),
       ]);
       setMarkets(mkts as MarketAccount[]);
       setSettlementRecords(
         settles as { publicKey: PublicKey; account: any }[],
       );
       setListingsRaw(lists as { publicKey: PublicKey; account: any }[]);
+      setPotsRaw(pots as { publicKey: PublicKey; account: any }[]);
       if (publicKey) {
         const accts = await program.provider.connection.getTokenAccountsByOwner(publicKey, {
           programId: TOKEN_2022_PROGRAM_ID,
@@ -234,6 +241,17 @@ const PortfolioPageLegacy: FC = () => {
     return found;
   }, [vaultMints, vaults, marketMap, heldBalances, connected, publicKey, myListings]);
 
+  // option_mint base58 -> pot, keyed to match the pot PDA seed.
+  const potByMint = useMemo(() => {
+    const m = new Map<string, PotFundingView>();
+    for (const p of potsRaw) {
+      m.set((p.account.optionMint as PublicKey).toBase58(), {
+        totalCollateral: p.account.totalCollateral,
+      });
+    }
+    return m;
+  }, [potsRaw]);
+
   const positions = useMemo(
     () =>
       buildPositions({
@@ -241,8 +259,9 @@ const PortfolioPageLegacy: FC = () => {
         spotPrices,
         metadataSymbolByMint,
         listings: myListings,
+        potByMint,
       }),
-    [v2Held, spotPrices, metadataSymbolByMint, myListings],
+    [v2Held, spotPrices, metadataSymbolByMint, myListings, potByMint],
   );
 
   // Writer rows derived from useVaults().myPositions, joined to vaults +

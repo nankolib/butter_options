@@ -3,13 +3,21 @@
 // =============================================================================
 // D2b was DROPPED: the BREAK-2 "fold" is a no-op because every writer-ask
 // contract is backed by the same cpt as a pool contract, so
-//   pot.total_collateral ≡ cpt × pot.total_contracts (uniform cpt per series)
-// ⇒ folding the pot into net AND committed cancels ⇒ folded ≡ OLD, and OLD is
+//   pot.total_collateral ≥ cpt × pot.total_contracts (uniform cpt per series)
+// ⇒ folding the pot into net AND committed cancels ⇒ folded ≥ OLD, and OLD is
 // already the correct merged-solvency bound (the pot's D1 settle-sweep reimburses
 // the per-exercise freeing). This test PROVES it on real on-chain state across
 // {no-pot, with-pot, with-pot-after-writer-ask-early-exercise}. It is a TRIPWIRE:
-// if cpt-uniformity ever breaks (variable cpt), the identity fails here and
+// if cpt-uniformity ever breaks (variable cpt), the DIRECTION flips here and
 // withdraw_from_vault's American gate must be revisited.
+//
+// 2026-08-15 — both relations relaxed from ≡ to ≥, in the safe direction. The
+// pot leg in exercise_american debits the pot by the payout (capped at cpt) while
+// retiring a whole contract, so a pot-funded vault ends up with the pot holding
+// AT LEAST cpt × contracts, and folded ≥ OLD. OLD is thus the tighter bound and
+// can only over-reserve. Equality still holds wherever no pot-funded draw has
+// happened, which is every case in this file; the pot-funded arithmetic itself is
+// pinned by writer-ask-settle.test.ts tests 7-10.
 // =============================================================================
 
 import { PublicKey, Keypair, SystemProgram, SYSVAR_RENT_PUBKEY, Transaction } from "@solana/web3.js";
@@ -76,14 +84,21 @@ describe("withdraw_from_vault gate correctness (Phase 3 Slice D2b tripwire)", fu
     if (potMint) {
       const pa: any = await potAcc(potPdas(potMint).pot);
       potColl = bnOf(pa.totalCollateral); potContracts = bnOf(pa.totalContracts);
-      // ROOT INVARIANT (the tripwire): pot.total_collateral == cpt × pot.total_contracts.
-      assert.equal(potColl.toString(), cpt.mul(potContracts).toString(),
-        "pot.total_collateral == cpt × pot.total_contracts (cpt-uniformity)");
+      // ROOT INVARIANT (the tripwire): pot.total_collateral ≥ cpt × pot.total_contracts.
+      // Equality is the cpt-uniformity case. A POT-FUNDED early exercise
+      // (2026-08-15) retires a whole contract while debiting only the payout —
+      // capped at cpt — so the pot can end up over-collateralised relative to the
+      // contracts it still backs. That is the safe side; the direction is what
+      // this asserts. If variable cpt ever inverts it, this fires.
+      assert.isTrue(potColl.gte(cpt.mul(potContracts)),
+        `pot.total_collateral (${potColl}) >= cpt × pot.total_contracts (${cpt.mul(potContracts)})`);
     }
-    assert.equal(
-      oldFree(tc, early, tm, ex, cpt).toString(),
-      foldedFree(tc, early, tm, ex, cpt, potColl, potContracts).toString(),
-      "OLD gate == merged-folded gate (the fold is a no-op)");
+    const oldF = oldFree(tc, early, tm, ex, cpt);
+    const foldedF = foldedFree(tc, early, tm, ex, cpt, potColl, potContracts);
+    // OLD ≤ folded ⇒ the OLD gate is the tighter bound, so leaving withdraw_from_vault's
+    // American gate on the OLD expression can only over-reserve, never under-reserve.
+    assert.isTrue(foldedF.gte(oldF),
+      `merged-folded gate (${foldedF}) >= OLD gate (${oldF}) — OLD never under-reserves`);
   }
 
   before(async () => {
@@ -145,17 +160,17 @@ describe("withdraw_from_vault gate correctness (Phase 3 Slice D2b tripwire)", fu
     await assertGateIdentity(cv.vault, null); // no pot
   });
 
-  it("2 — with-pot: OLD == folded AND pot.total_collateral == cpt × pot.total_contracts", async () => {
+  it("2 — with-pot: folded >= OLD AND pot.total_collateral >= cpt × pot.total_contracts", async () => {
     await assertGateIdentity(vault, mc.optionMint);
   });
 
-  it("3 — with-pot AFTER a writer-ask early-exercise: identity still holds (the case D-recon thought broke)", async () => {
+  it("3 — with-pot AFTER a POOL-funded writer-ask early-exercise: direction still holds (the case D-recon thought broke)", async () => {
     const takerOpt = getAssociatedTokenAddressSync(mc.optionMint, taker.publicKey, false, TOKEN_2022_PROGRAM_ID);
     const takerUsdc = await usdcAta(e, taker.publicKey);
     const now = await getClockUnix(e.h.context);
     await exerciseAmerican(e, vault, mc, taker, takerOpt, takerUsdc, 3, 15, now); // 3 writer-ask early-exercises (canonical mint), spot $15
     const va: any = await vAcc(vault);
     assert.isTrue(bnOf(va.exercisedOptions).gten(3), "exercised_options bumped by the writer-ask early-exercise (merged counter)");
-    await assertGateIdentity(vault, mc.optionMint); // OLD == folded still holds
+    await assertGateIdentity(vault, mc.optionMint); // folded >= OLD still holds
   });
 });

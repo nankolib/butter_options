@@ -169,6 +169,23 @@
 >   May figure) was before it. Quote this, not any slot found further down the
 >   file. Every one of those numbers was correct where it was written and wrong
 >   the moment it was read as current. Take the chain reading.
+> - **The early-exercise pot fix is BURN-VERIFIED on chain, not just in
+>   bankrun.** Devnet sig `QrxjCyjr…3SQR4B`, slot `484431036`, SOL 70C AMER
+>   28-Aug: pot **$210.00 → $194.34** (−$15.66 exactly), contracts 3 → 0, supply
+>   3 → 0, `exercised_options` 0 → 3, `vault_usdc` untouched at $0, and
+>   **`early_exercise_payout` $0** — the CRITICAL-01-class double-subtraction,
+>   proven absent against real state. The old build would have written $15.66
+>   there and settled to $178.68 against a $194.34 balance.
+>   - **The settle-side half is still unproven.** At the 28-Aug settlement,
+>     verify `collateral_remaining == the pot residual exactly` ($194.34, absent
+>     further exercises). That is the other end of the same fix and the only
+>     thing that closes it.
+>   - The landed transaction carried exactly four instructions with the price
+>     proof at index 2 — the wallet inserted nothing, first live confirmation
+>     that supplying our own priority-fee ix removes Phantom's reason to. It does
+>     not remove the ability; residual risk is asserted in
+>     `crank/ed25519SelfPack.mutation.test.ts` and the structural fix is
+>     `86eymw9m1`.
 > - **Upgrade authority is `5YRMuuoY`, and that is enforced by the chain.** It is
 >   the WSL-only admin keypair (`/home/nanko/.config/solana/id.json`, never on
 >   the VPS), so "upgrade from WSL only" is not a convention anyone can forget

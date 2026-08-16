@@ -387,9 +387,20 @@ export function assertExerciseTxShape(
         `${EXERCISE_ACCOUNTS_VAULT_ONLY} or ${EXERCISE_ACCOUNTS_WITH_POT}`,
     );
   }
-  const carriesPot = acc.length === EXERCISE_ACCOUNTS_WITH_POT;
   const at = (i: number) => keys[acc[i]];
   const I = EXERCISE_ACCOUNT_INDEX;
+
+  // A 17-account instruction does NOT imply a pot is carried (2026-08-16).
+  // Anchor encodes a null optional as the PROGRAM ID sentinel and still occupies
+  // the slot, so once the IDL declares the pot arm, EVERY exercise is 17
+  // accounts — pool-funded ones carry three sentinels. Keying `carriesPot` on
+  // the count alone made the guard demand pot expectations for a pool-funded
+  // transaction and refuse it with "collateral pot does not match this series",
+  // which would have blocked every pool-funded early exercise. Read the SLOT,
+  // not the length. (14 remains legal: an endpoint built against an IDL that
+  // predates the arm omits the trailing optionals entirely.)
+  const carriesPot =
+    acc.length === EXERCISE_ACCOUNTS_WITH_POT && at(I.writerAskPot) !== expected.programId;
 
   const mustMatch: Array<[number, string, string]> = [
     [I.holder, expected.holder, "holder"],

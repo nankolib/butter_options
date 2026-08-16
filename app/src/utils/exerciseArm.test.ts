@@ -560,3 +560,19 @@ test("GREEN: a SELF-referential price proof passes regardless of its position", 
   const tx = buildTx({ accountCount: 17 });
   assert.doesNotThrow(() => assertExerciseTxShape(tx, EXPECTED_POT));
 });
+
+test("GREEN: 17 accounts with NULL pot sentinels is a pool-funded exercise, not a pot arm", () => {
+  // Anchor writes the program id into an unused optional's slot. Before
+  // 2026-08-16 the guard read length alone, so this shape demanded pot
+  // expectations and refused a legitimate pool-funded exercise.
+  const tx = buildTx({
+    accountCount: 17,
+    accounts: { writerAskPot: PROGRAM, writerAskPotUsdc: PROGRAM, protocolState: PROGRAM },
+  });
+  assert.doesNotThrow(() => assertExerciseTxShape(tx, EXPECTED));
+});
+
+test("REFUSES: a REAL pot at the slot still requires a matching local derivation", () => {
+  const tx = buildTx({ accountCount: 17 });
+  assert.throws(() => assertExerciseTxShape(tx, EXPECTED), /did not derive/);
+});

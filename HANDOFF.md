@@ -189,6 +189,23 @@
 >     not remove the ability; residual risk is asserted in
 >     `crank/ed25519SelfPack.mutation.test.ts` and the structural fix is
 >     `86eymw9m1`.
+>   - **CLOSED ON PRODUCTION TOO.** opta.fyi, sig `3szPJ94EnSQf…ARD9ic`, slot
+>     `484516467`: SOL $68 CALL, pot **$136.00 → $121.36** (−$14.64), contracts
+>     2 → 0, supply 2 → 0, `exercised_options` 2, `vault_usdc` $0,
+>     **`early_exercise_payout` $0**, and the same 4-instruction shape with the
+>     proof at index 2. Devnet-tooling and production surfaces now both witnessed.
+>   - **Production nearly stayed broken for a reason unrelated to the program.**
+>     opta.fyi served the legacy 14-account transaction for a day because the VPS
+>     held an `app/src/idl/opta.json` predating the pot arm — **Anchor builds
+>     account lists from the IDL and drops undeclared keys silently**. The code
+>     was new; the data driving it was stale. The builder now refuses to emit a
+>     downgraded instruction (`c024c4c`), and the crank's full deploy set —
+>     source, BOTH IDLs, env, restart-the-owning-unit, verify-from-outside — is
+>     written down on `86eyn5kxa`. Fixing that IDL then exposed a second defect:
+>     Anchor pads unused optionals with a program-id sentinel, so every exercise
+>     became 17 accounts and the FE guard's length-based `carriesPot` would have
+>     refused pool-funded exercises (`33d4080`). **A 17-account instruction is
+>     not proof of a pot; read the slot.**
 > - **Upgrade authority is `5YRMuuoY`, and that is enforced by the chain.** It is
 >   the WSL-only admin keypair (`/home/nanko/.config/solana/id.json`, never on
 >   the VPS), so "upgrade from WSL only" is not a convention anyone can forget

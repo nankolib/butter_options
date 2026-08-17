@@ -3942,3 +3942,176 @@ Fixing the IPv6 failures removes the trigger and the log spam together, which is
 better than lowering `error_log` severity and going blind to real upstream errors.
 Not done here: out of the greenlit scope, and key rotation has a blast radius
 across all seven consumers.
+
+---
+
+# Key rotation: the leak class, and the ceremony as executed (2026-08-17)
+
+Ticket 86eynebyz, opened off the tail of 86eyn66b4. The key was disclosed in nginx
+error.log; it is now revoked and replaced. Old `95d8cf1d9618` (prefix 3c17) is dead,
+new `992b02b042e6` (prefix af07) is live on all ten targets.
+
+## THE FINDING THAT MATTERS MOST — the diet alone will not prevent recurrence
+
+The founder confirmed from the dashboard: **bud-fox runs from this same Helius
+account. One shared 10M Developer pool. Cycle resets on the 24th.**
+
+Opta's own measured burn is ~133k credits/day, so ~4M over a cycle — comfortably
+inside 10M on its own. The pool still exhausted on 2026-08-16. **bud-fox is
+therefore the probable dominant consumer, and it was never measured.**
+
+Its key is live on mainnet (verified: getBalance 200, slot 439864768). Nothing in
+the 86eyn66b4 diet touches it. **Next arc should measure bud-fox's burn before
+assuming the credit problem is solved** — D1 and D4 cut Opta's share, which may be
+the minority share.
+
+Correction to the earlier inventory: bud-fox's key was recorded as `45fd925c6c2f`
+throughout 86eyn66b4. That was wrong — it is the hash of a PLACEHOLDER in a
+commented example on line 17 of `/opt/bud-fox-agent/.env`, picked up because the
+extraction took the first `api-key=` match in the file. The real key is on line 19,
+prefix `a786`, fingerprint **`c82b5b3dbb35`**. Any future audit should skip comment
+lines before hashing.
+
+## The leak CLASS, and why the symptom fix was not enough
+
+nginx logs the **upstream URL** on connect failures, and the key was injected into
+the query string. Every unreachable-upstream event wrote it to error.log in
+plaintext. 6,863 lines across live and rotated logs.
+
+Root cause of the failures: the upstream publishes AAAA records; this box has **zero
+global IPv6 addresses and no default IPv6 route**. Roughly half of upstream
+connections tried an unreachable v6 address, failed, logged, then fell back to v4.
+
+Two fixes, and the order they were tried matters:
+
+1. **`/etc/gai.conf` precedence — tried first, DID NOT WORK.** It reorders
+   getaddrinfo results, but nginx retains every resolved address and round-robins
+   across families, so ordering is irrelevant. Measured 2 fresh failures within 5
+   minutes of applying it.
+2. **`resolver 127.0.0.53 ipv6=off` — works**, but nginx 1.18 only honours the
+   resolver when `proxy_pass` contains a VARIABLE; a literal hostname is resolved
+   once at config load and bypasses it entirely. Hence `set $opta_upstream`.
+   Measured after: 12 consecutive requests, zero new connect failures.
+
+3. **Auth moved off the URL entirely** — `proxy_set_header x-api-key` with
+   `set $args ""`. This is the class fix: a header is not logged by default, so even
+   a future connect failure logs a clean line.
+
+Header auth is **undocumented**. It was established empirically, and the first
+attempt was VACUOUS: it used getHealth, every variant "passed", and so did the
+no-key control. Redone with getBalance:
+
+    x-api-key: <key>             200 numeric balance   works
+    Authorization: Bearer <key>  200 numeric balance   works
+    api-key: <key>               401 -32401            ignored
+    Authorization: <key>         401 -32401            ignored
+    no key (control)             401 -32401            control holds
+
+Because it is undocumented, treat it as revocable: if the upstream stops honouring
+it, requests 401 and the alarm raises KEY_INVALID within one probe cycle. Rollback
+is one line back to `set $args "api-key=<KEY>"`.
+
+Red-first proof lives at `deploy/nginx/redfirst-leak-test.sh`: two loopback
+locations proxy to a blackholed IP with a FAKE sentinel key, one injecting via URL
+and one via header. The URL one leaks the sentinel into error.log; the header one
+does not. It scrubs its own sentinel afterwards. **The point is that it proves the
+test can detect the leak it checks for** — a leak test that only ever passes is
+worthless.
+
+## The rotation ceremony as executed
+
+**One paste, not ten.** `cat > FILE` was rejected: most targets are multi-variable
+files, so it would have wiped `NTFY_TOPIC` from rpc-alarm.env and the rest of the
+crank config. Instead the founder pasted once into `/root/.opta-rpc-helius.new` and
+`deploy/rotate-propagate.sh` substituted exact bytes across all targets.
+
+Proven before touching the real key: run against tmpfs copies with a sentinel, then
+substitute the sentinel back and require byte-identical files. 9/9, and
+rpc-alarm.env kept both variables. In production every file length was unchanged
+(414→414, 4627→4627).
+
+Guardrails that abort before any write: empty paste, identical to old, under 20
+bytes, or embedded whitespace. A malformed key propagated to nine files and then
+revoked would strand the platform.
+
+**Restart order** (smallest blast radius first), each proved by a real
+service-emitted RPC read plus zero -32401:
+
+    opta-indexer   4 reads     opta-writer  720 reads    opta-taker   14 reads
+    opta-trigger   9 reads     opta-crank    64 reads
+
+**crossbar needed `docker compose up -d --force-recreate`, not a restart.** The key
+is interpolated by compose and baked into the container's config.v2.json, so a
+restart reuses the OLD env: crossbar would have kept working right up until
+revocation and then died silently. It is the TradFi settlement path and Switchboard
+has no archive, so that would have meant permanently missed settlement windows.
+Container replaced ab82f3b11b78 → a69cc479d533, env fingerprint verified, and a real
+feed resolution returned 0.16947 matching its pre-recreate baseline.
+
+**Revocation proof was auth-gated with controls**, because a 401 alone could be an
+outage:
+
+    old key 3c17  getBalance -> 401 -32401 "Invalid API key"    dead
+    new key af07  getBalance -> 200 numeric balance             control holds
+    old key 3c17  getHealth  -> 200 {"result":"ok"}             getHealth is blind
+    alarm on the revoked key -> KEY_INVALID                     classifier correct
+
+That third line is the empirical case for the getHealth ban, measured against a
+genuinely dead key rather than argued.
+
+## Purge
+
+6,417 plaintext occurrences → **0**. 451 more went with the old crossbar container.
+Final sweep of /etc /opt /root /home /srv /usr/local /var: **zero plaintext files**.
+WSL: zero, including git history. New key confirmed present only in its keyfiles.
+
+**Accepted residue, deliberately not purged:** one journald file still contains the
+revoked key. journald is a binary store and vacuuming it would destroy the audit
+trail of this rotation plus the crank measurements 86eyn66b4 depends on. The key is
+revoked, so the residue is inert. `journalctl --rotate` was run so nothing further
+accumulates. containerd's meta.db turned out already clean.
+
+## Three self-inflicted lessons worth keeping
+
+1. **sudo records full command lines.** curl's argv was handled correctly via
+   `--config`, but an alarm test passed the URL as
+   `sudo -u opta env OPTA_ALARM_RPC_URL=https://...?api-key=<KEY>`, which wrote the
+   key into `/var/log/auth.log` and journald. A pre-existing instance from Aug 12
+   (`PWD=/opt/opta-crank/indexer`) was found alongside it, so this is a repeated
+   habit, not a one-off. **Pass secrets to sudo via a file or systemd-run, never on
+   the command line.** Both scrubbed; the new key never went near a command line
+   (verified 0 in auth.log, nginx error.log, journald, root history).
+
+2. **`sha256sum < file` includes the trailing newline** left by pressing Enter
+   before Ctrl-D, so the founder's fingerprint (d1a5830d7cc7, 37 bytes) and the key
+   material's (992b02b042e6, 36 bytes) differ by one byte for the same key. Compute
+   both before concluding a key is wrong.
+
+3. **Backticks inside a double-quoted `git commit -m` are command-substituted.**
+   Commit 3c858fa lost two fragments this way — the sudo example and
+   `sha256sum < file` — leaving two sentences truncated. Already pushed, so not
+   rewritten. Use `git commit -F <file>` for anything containing backticks.
+
+Also: a circular check to avoid repeating. The Stage A WSL sweep grepped the WSL
+keyfile for its own contents, so its "1 hit" was tautological and proved nothing
+about whether the box key was present. Redone properly against the box key: zero.
+That circularity is how the WSL machine's **third key** went unnoticed.
+
+## Still open
+
+1. **Measure bud-fox's credit burn.** It shares the 10M pool, resets the 24th, and
+   is the probable cause of the exhaustion. The 86eyn66b4 diet does not touch it.
+2. **A third key existed on the WSL dev machine**, fingerprint `709c6e47b244` —
+   neither the box key nor the new one. It was overwritten during propagation before
+   its prefix was recorded, so it cannot be identified from here. The dashboard shows
+   5 keys total; if one matches nothing on the keep-list and is not the Phoenix
+   bot's, that is likely it, and it may still be live.
+3. **The Phoenix bot's key(s)** were never inventoried.
+4. **D1 second half** — the unmarkable-vault re-scan, ~2,832 scans/day
+   (~28,320 credits). `sweepEmptyScan` is false in 2,831 of 6,219 sweep passes
+   because those vaults hold resting orders, so they are never marked and re-scan
+   every tick forever. Fixing it means changing the **marking predicate**, which is
+   what dated verification 86eyn5kx8 covers. **Gated on 2026-08-28.**
+5. **D2 getProgramAccountsV2** still held pending per-page pricing.
+6. Two gordon-gekko env files were left 644 → now 640; two more real .env files
+   under gordon-gekko remain world-readable and are out of arc.

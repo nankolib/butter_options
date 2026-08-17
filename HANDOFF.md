@@ -250,6 +250,11 @@
 >   `/sb-exercise-american` endpoint on `:8788` — and every teardown so far has
 >   killed whichever one was left as a normal background job, each time
 >   presenting as a mystery FE failure rather than as "the server is gone".
+>   - **Both of these are LOCAL DEV servers, on the dev machine, not on the VPS.**
+>     Verified 2026-08-17 (86eyn5kxa): nothing listens on `:8788` on
+>     bud-fox-agent, and no unit or source file there references it. The VPS
+>     listeners are the indexer on `:8791` and quotes on `:8090`. Do not go
+>     looking for `:8788` on the box and conclude a service died.
 >   - `:5173` — start **Windows-native**, not WSL. Windows owns `localhost:5173`,
 >     so a WSL vite bound to the same port in its own netns is simply unreachable
 >     from the browser (and from `curl`) while looking perfectly healthy in `ss`.
@@ -4115,3 +4120,157 @@ That circularity is how the WSL machine's **third key** went unnoticed.
 5. **D2 getProgramAccountsV2** still held pending per-page pricing.
 6. Two gordon-gekko env files were left 644 → now 640; two more real .env files
    under gordon-gekko remain world-readable and are out of arc.
+
+---
+
+# VPS drift: the box was current by hand, and stale by git (2026-08-17)
+
+Ticket 86eyn5kxa. Opened on the premise that a stale crank was building 14-account
+legacy txs on pot-bearing paths. **That exposure did not exist.** The slice's real
+value turned out to be drift-detection repair, one genuinely stale settlement
+-adjacent file, and a measured correction to what the pot guard actually protects.
+
+## The premise, tested
+
+The crank loads `../app/src/idl/opta.json` (bot.ts:92). Before any change, that
+file was already byte-identical to origin/main and declared the pot arm at the
+right slots:
+
+    settle_vault       10 accts   pot at [6] [7]
+    execute_trigger    32 accts   pot at [25] [26]
+    exercise_american  17 accts   pot at [14] [15]
+
+Zero tracked IDL differed from origin. 48h of journal (4,679,217 lines): zero
+`writer_ask_pot`, zero `AccountNotEnoughKeys`, zero downgrade, no account-shape
+failures. There was nothing to fix on the funds path.
+
+## What WAS wrong: drift detection, not drift
+
+`HEAD` was `d1d0471`, **136 commits behind** origin/main, 0 ahead — but the working
+tree had been kept current by **file copy**. So `git status` showed 139 "modified"
+files that were in fact byte-identical to origin, and the two files that were
+genuinely stale did not show up at all, because they matched the stale HEAD.
+
+That is the whole failure mode: **currency by hand plus a stale HEAD makes
+`git status` lie in both directions.** It reports false positives for copied files
+and false negatives for missed ones.
+
+True divergence was only 18 runtime paths:
+
+  - 12 probe/test files present upstream, missing on disk (non-runtime)
+  - 3 untracked on disk but byte-identical to origin (`finalizeCache.ts`,
+    `volOracleFastSeed.ts`, `_rpc_burn_report.mjs`) — zero loss, but they would
+    have blocked a merge
+  - `ed25519SelfPack.ts` + its test — **upstream-newer, never received**. This was
+    the one real staleness: origin exports `SELF_INSTRUCTION_INDEX = 0xffff` with a
+    warning that a SELF pack is "green offline, dead on chain", and the box had
+    neither. It is imported by `switchboardQuotePost.ts`, so settlement-adjacent.
+  - `triggerCrank.ts` — the only genuine local edit, and it was a **deletion** of
+    the 9-line COST NOTE that origin has (the one documenting that this helper
+    issued 5,720 gPA/day, 98.6% of all gPA traffic, and exhausted the key on
+    2026-08-06). Aligning restored it.
+
+Across all three divergent files: 2 insertions, 39 deletions, every changed line a
+comment except the one exported constant. **Nothing unique existed on the box.**
+
+## Reconciliation
+
+`git fetch` + `git reset --hard origin/main`, run as `opta`.
+
+**It failed the first time**, and the failure was the point: `fatal: cannot create
+directory at 'deploy/crank': Permission denied`. `deploy/` was root:root, and
+**154 paths inside an opta-owned repo were root-owned** — residue of past root-run
+file-copy deploys. Running git as root would have "worked" and left more root-owned
+objects, which is the same class of problem as the root-owned `.git` objects
+repaired in August. `.git` itself was clean (0 non-opta), so that repair held.
+
+Fixed by chowning the 154 paths to `opta:opta`, then the reset completed.
+
+After: `HEAD == origin/main == edb310c`, behind 0 / ahead 0, tracked modifications
+0, diff vs origin 0 paths, untracked collisions 0. All three IDLs identical to
+origin. COST NOTE restored, `SELF_INSTRUCTION_INDEX` present, `finalizeCache.ts` now
+tracked, `deploy/` files materialised.
+
+Untouched and verified: `.env` (untracked + gitignored, key fingerprint still
+`992b02b042e6`), `secrets/`, `node_modules`, `/opt/opta-*/` data dirs, and
+`/var/lib/opta-crank/` — all outside the repo or ignored.
+
+## Restart chain
+
+indexer → writer → taker → trigger → crank. Auth errors **0 everywhere**, counted
+with a negative control that proves the matcher can match a real `-32401`.
+
+**D1 cache warm-loaded: `finalize cache loaded … entries: 3388`** — not a cold
+rebuild, so the ~34k credits/day of re-scanning was not re-paid.
+
+The indexer initially reported "no RPC read" — that was a **bad assertion, not a
+sick service**. It spends ~3 minutes in startup (shadow render, backfill) before
+`entering live tail`, so a 150s window misses it. Real ticks followed at 16:38:21
+and 16:39:23 (`txsSeen 65/68, fetchFailures 0`), DB advancing at 462MB, listening on
+`:8791`. If a service looks silent, check its startup phase before its health.
+
+## THE FINDING WORTH KEEPING: what the pot guard actually protects
+
+The red-first proof was written against the wrong mechanism first, and the wrong
+version is the more useful result.
+
+**`accountsStrict` does NOT protect against a stale IDL.** Measured: with pot
+accounts stripped from the IDL, `settleVault().accountsStrict({...})` did not throw
+— it silently built an **8-account** instruction instead of 10, dropping both pot
+keys. `accountsStrict` only enforces that you supply everything the IDL *declares*;
+keys the IDL does not know about are discarded without a word. **The original
+premise of this ticket is correct at the mechanism level.**
+
+The real guard is `crank/switchboardExerciseAmerican.ts:228`:
+
+    const ACCOUNTS_VAULT_ONLY = 14;
+    if (potExists && exerciseIx.keys.length <= ACCOUNTS_VAULT_ONLY) throw ...
+
+It is **count-based**, gated on the pot existing on chain, and lives on the
+**exercise** path only. Its own comment records the incident it was written for:
+"new builder code, stale app/src/idl/opta.json, and no signal anywhere between
+them."
+
+Proof, 8/8:
+
+    GREEN  current IDL: exercise_american 17 accts, pot [14]/[15], guard does not fire
+    RED    faithful legacy IDL (pot arm = THREE accounts: pot, pot_usdc,
+           protocol_state) -> exactly 14 accounts -> guard FIRES
+    BLIND  stripping only the two pot-named accounts leaves 15, which is ABOVE the
+           <=14 threshold, so a PARTIAL IDL regression slips through
+    GAP    settle_vault has NO equivalent guard: a stale IDL downgrades it 10 -> 8
+           accounts silently, with no client-side signal
+
+Two things follow, neither fixed in this slice:
+
+1. **`settle_vault` is unguarded.** It is a funds path. The exercise path got a
+   guard because it burned us; settle never did, so it never got one.
+2. **The guard catches the full legacy shape, not every regression.** A partial IDL
+   drift lands between 15 and 16 accounts and passes.
+
+## Standing rules this slice earned
+
+- **The box converges to origin by git, never by file copy.** Hand-copied currency
+  with a stale HEAD is exactly what blinded drift detection for 136 commits, and it
+  hid a real stale file (`ed25519SelfPack.ts`) behind 139 false positives.
+- **Run git on the box as `opta`, never root.** Root hides the permission errors
+  that reveal root-owned residue, and creates more of it.
+- **`:8788` and `:5173` are LOCAL DEV servers, not VPS services.** Corrected inline
+  above. On the box the listeners are indexer `:8791` and quotes `:8090`.
+
+## Deployment model, for the record
+
+One shared clone at `/opt/opta-crank` (opta:opta, branch `main`). `/opt/opta-trigger`,
+`-indexer`, `-writer`, `-taker` are **data-only** dirs (DBs, secrets, `.env`); all
+their code lives in subdirs of the crank clone. **Services cannot be updated
+independently** — any pull moves crank, writer, taker and indexer together. Plan
+co-restarts accordingly.
+
+## Still open
+
+- `settle_vault` has no downgrade guard (above).
+- The exercise guard's blind spot for partial IDL regressions (above).
+- D1 second half: ~2,832 scans/day (~28,320 credits), needs the marking predicate
+  changed, gated on 86eyn5kx8 (2026-08-28).
+- Measure bud-fox's credit burn — it shares the 10M pool that resets on the 24th and
+  is the probable cause of the Aug-16 exhaustion.

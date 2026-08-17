@@ -3635,3 +3635,281 @@ rule; a git commit is not a substitute.**
 - Stale IDL refresh at writer/indexer/taker/app (15-field `TriggerOrder`, drop the
   `synth_warm_vol_oracle` testing artifact). Harmless today; one commit.
 - NYSE holiday table beyond 2026 + make exhaustion fail loud.
+
+---
+
+# RPC credit exhaustion: the diet and the alarm (2026-08-17)
+
+Ticket 86eyn66b4 (P1). Prod RPC died **2026-08-16 15:44:28 UTC** from credit
+exhaustion, not a revoked key, and nothing reported it. 5,543 proxied requests
+returned 429 to real clients before a human noticed.
+
+Shipped: D1 (crank scan diet) + the alarm + a journald watcher + D4 (proxy
+micro-cache). D2 held, D3/D5/D6 deferred.
+
+## Consumer inventory — 7 direct key-holders, all sharing ONE key
+
+Verified by SHA-256 fingerprint of the key value (`95d8cf1d9618`), never by
+reading it. All seven match `/root/.opta-rpc-helius`.
+
+| Consumer | Host | Calls | Cadence |
+|---|---|---|---|
+| `opta-crank` | VPS `User=opta` | **gPA on Token-2022, one per VaultMint** | 300s |
+| `opta-taker` | VPS `User=opta` | gPA `restingOrder` x1/tick | 60s |
+| `opta-writer` | VPS `User=opta` | gPA x3/tick | 300s |
+| `opta-trigger` | VPS **`User=root`** | gPA + oracle reads | 300s |
+| `opta-indexer` | VPS `User=opta` | getSignaturesForAddress, getTransaction, gPA | 60s |
+| `crossbar` | VPS **Docker, no systemd unit** | Switchboard feed resolution | unmeasured |
+| `nginx rpc.opta.fyi` | VPS | injects the key, fronts FE + mobile | on demand |
+
+Behind nginx (never see the key): the web FE — the live bundle hits **only**
+`https://rpc.opta.fyi/devnet` — and the Seeker mobile app (`okhttp/4.9.2`).
+
+Ruled out with evidence: `opta-quotes` (no RPC in env), `opta-tweet` (zero RPC
+refs in dist or env), `opta-airdrop` (uses `api.devnet.solana.com`; "Helius"
+appears only in comments).
+
+Two things worth remembering about this inventory:
+
+- The nginx key lives at `/etc/nginx/sites-available/rpc.opta.fyi` — **no `.conf`
+  suffix**. A scan for `*.conf` misses it entirely and reports the proxy as
+  keyless, which is exactly what happened on the first pass here.
+- **`bud-fox-agent` holds a DIFFERENT key (`45fd925c6c2f`) on mainnet.** Different
+  key does not mean different billing pool: two keys can sit under one account and
+  share credits. **Still unresolved — only the dashboard can settle it, and if it
+  is shared it remains a live suspect for the Aug 16 cause.**
+
+## Credit weight, measured Aug 15 (gPA = 10 credits, standard = 1)
+
+| Consumer | gPA/day | Credits/day | Basis |
+|---|---|---|---|
+| `opta-crank` | **6,215** | **62,150** | measured, summed `gpaCalls` |
+| `opta-taker` | 1,304 | 13,040 | measured `armed-tick` count |
+| `opta-writer` | 864 | 8,640 | derived, 288 ticks x 3 |
+| `opta-indexer` | <=184 | <=1,840 | measured tick count |
+| nginx proxy | 101 | 1,010 | measured, >=100KB responses |
+| `opta-trigger` / `crossbar` | unmeasured | unknown | — |
+
+Plus the proxy's 1-credit traffic: **46,275 requests on Aug 14**, of which
+**45,825 came from a single IP** at ~32 req/min — the mobile app.
+
+**The plan tier and true total are still unknown** (dashboard-only), so no
+headroom percentage is claimed anywhere in this arc. The measured ~133k/day peak
+does not obviously exhaust a 10M Developer plan, so either the plan is smaller,
+the cycle is not calendar-aligned, or unmeasured per-tick 1-credit calls dominate.
+
+## D1 — the cache that forgot everything on restart
+
+`fullyFinalized` was `new Set<string>()`. A vault must be fully scanned before it
+can enter the set, so **every process lifetime re-paid a 10-credit gPA for every
+settled vault**. 6,215 scans on Aug 15 and `txSent=0` for the entire day.
+
+Forensics split the waste in two. **Only the first half is fixed:**
+
+| Cause | Mechanism | Cost/day |
+|---|---|---|
+| Restart amnesia | in-memory Set, 2 crank PIDs on Aug 15 | ~3,388 scans, ~33,880 credits — **FIXED** |
+| Unmarkable vaults | `ordersTotal>0` in **2,831 of 6,219** sweep passes, so `sweepEmptyScan` never true, so never marked, so re-scanned every tick forever | ~2,832 scans, ~28,320 credits — **DEFERRED** |
+
+The deferred half needs the **marking predicate** changed, which is what dated
+verification 86eyn5kx8 (2026-08-28) covers. Left alone deliberately.
+
+**Measured before/after, same 10-minute post-restart window:**
+
+| Window | gPA / 10 min | Credits |
+|---|---|---|
+| Cold, no persisted cache | 1,025 | 10,250 |
+| Warm, 1,376 entries loaded from disk | **454** | **4,540** |
+
+**55.7% reduction on a PARTIAL cache** (1,376 of ~3,400 vaults). The saving grows
+with coverage; at full coverage a restart approaches zero re-scan cost.
+
+### The guard, and why it is not optional
+
+The in-memory Set had an accidental safety property: a wrong entry evaporated on
+the next restart. Persisting it makes a wrong entry permanent, and a wrongly
+suppressed vault means somebody never gets paid. So membership is **not** authority
+— every suppression is re-authorised against live state:
+
+- unsettled vault → always scan (it can still gain collateral before expiry)
+- `collateral_remaining > 0` → always scan, unconditionally
+- entry older than 7 days → always scan (restores the self-healing)
+- future-dated or malformed → always scan (corrupt input is not a fresh entry)
+
+Every uncertain case costs one scan. Scanning needlessly wastes 10 credits;
+skipping wrongly withholds money.
+
+### The dated-verification constraint was built on a wrong premise
+
+The three vaults named in 86eyn5kx8 were resolved on-chain **before** writing the
+test. Measured state:
+
+    6tq9Ueck1F7d9y1n3v9c6NbU5mhxTXshHKkR8y6YZ83V
+    9CzbiMiiuvXd6UpBabbifnQLJiQ3jJGkBasCGX5YyCgt
+    3k5vHJLh42syDK9hhbwF3PMRHn3TvMgzWCPkYL5mceAV
+    all three: is_settled=false, collateral_remaining=0, expiry=1787904000 = 2026-08-28
+
+They are **unsettled and expire on the verification date**, and the sweep gates on
+`isSettled` first — so they are **not in scope today, under the old code or the
+new**. An assertion that they "remain in scope" would have been red against both
+and could not have distinguished the gate: a green check incapable of failing.
+
+The test asserts something strictly stronger instead — the gate refuses to
+suppress them in **every state they can legally reach**: unsettled now, and
+settled-and-payable after Aug 28.
+
+Production evidence: none of the three appear in the live cache file (1,775
+entries at time of writing).
+
+### Red-first, staged so the reds are real
+
+1. Test written first → `MODULE_NOT_FOUND` (runner works, module absent).
+2. A **naive persist-only** implementation — literally what "just make the Set
+   durable" produces — **fails 5 tests**, including all three protected vaults and
+   the payable-vault case. This is the proof the tests can catch a dropped payable
+   vault.
+3. Guarded implementation → **10/10 green**.
+
+### Two traps found by looking rather than reasoning
+
+- **`EROFS: read-only file system`.** The unit runs `ProtectSystem=strict` with
+  `ReadWritePaths=/opt/opta-crank`, so `/var/lib` is read-only. Every flush failed
+  and persistence achieved nothing, while the crank kept running because a flush
+  failure is logged and never fatal. Fixed by a **drop-in** adding
+  `StateDirectory=opta-crank` (revertible by deleting one file). Do not "simplify"
+  this away.
+- **Flush cadence.** Flushing only at the end of the sweep loses every mark to a
+  restart inside the ~1-hour cold sweep — the exact bug being fixed. Now flushes
+  every 200 marks.
+
+## The alarm
+
+`getBalance`, never `getHealth`, and this is now **measured**: against a completely
+fake api-key the upstream answers `getHealth` with `HTTP 200 {"result":"ok"}`. A
+getHealth probe is green while the key is dead.
+
+| State | Signature (all captured live 2026-08-17) |
+|---|---|
+| `OK` | 200, curl exit 0, numeric `result.value` |
+| `CREDITS_EXHAUSTED` | 429 **AND** body carries `-32429` / "max usage reached" |
+| `RATE_LIMITED` | 429 **WITHOUT** `-32429` → transient, logged, never paged |
+| `KEY_INVALID` | 401 **AND** body carries `-32401` |
+| `NETWORK` | curl exit != 0 (6 dns, 7 refused, 28 timeout) |
+
+**The 429 split is the point.** The client libraries print a bare "Server responded
+with 429 Too Many Requests" for ordinary throttling, so status alone cannot
+separate a spike from real exhaustion — only the JSON body can. `-32429` occurred
+385 times during the incident with nothing competing.
+
+**No usage API exists.** Only an undocumented `helius usage --json` CLI referenced
+in an agent-instructions page; no HTTP credits endpoint is documented. So the alarm
+is reactive, and a **journald watcher** (2-min timer, zero credits) compensates by
+reading what consumers actually experienced and tripping before the 5-min probe.
+
+The watcher needs `SupplementaryGroups=systemd-journal`. Verified negative control:
+a bare `opta` user gets *"No journal files were opened due to insufficient
+permissions"* — without the group it would report `CLEAR` forever.
+
+**Red-first proof: 11/11**, run as the same user systemd uses. KEY_INVALID x3 off a
+corrupted key **copy** (real keyfile untouched), NETWORK x2, CREDITS_EXHAUSTED by
+replaying the exact Aug 16 bytes from a local server (real curl path, real
+classifier, no test-only branch), RATE_LIMITED proving no false page, DEGRADED on a
+200 with no balance, green via systemd, and the watcher **red on the real incident
+window — 139 hits (taker 117, trigger 22)**.
+
+Secret handling: systemd reads `EnvironmentFile` as root **before** dropping to
+`User=opta`, so the process gets the URL while `opta` cannot read the keyfile. Key
+never in argv. Verified **0 occurrences** of the key value in both journals, syslog
+and the installed scripts. Alerts say "upstream RPC" — the vendor name appears in
+no emitted string.
+
+Channel: **ntfy.sh**, because the box had **nothing** — no mail agent, no webhook
+env, no `OnFailure` handler anywhere; only `curl`, `jq`, `logger`. Backed by
+`logger -p daemon.err`. Topic is a 40-hex-char random string held only in
+`/etc/opta/rpc-alarm.env` (root:root 0600) — **it is a bearer secret; anyone with
+it can read the alerts.**
+
+Cadence 5 min = 288 credits/day, ~0.2% of the burn.
+
+## D4 — proxy micro-cache
+
+Allowlist is `getProgramAccounts` + `getAccountInfo` only, 2s TTL.
+`getSignatureStatuses` and `getLatestBlockhash` are denied explicitly: a stale
+signature status breaks the buy-path exactly-once guard, a stale blockhash makes
+transactions that fail or replay.
+
+**Four traps, all found empirically:**
+
+1. **Batching.** JSON-RPC allows batches. `[getAccountInfo, sendTransaction]`
+   contains an allowlisted name, and a method-name regex alone would cache the
+   whole thing, write included. **Top-level arrays are refused outright.**
+2. **nginx always keeps GET/HEAD cacheable** once `proxy_cache` is on —
+   `proxy_cache_methods` cannot remove them. This location also carries
+   **WebSocket upgrades**, so a non-empty `Upgrade` header must bypass or
+   subscriptions get answered from cache.
+3. **Cloudflare `set-cookie: __cf_bm`** on every upstream response. nginx refuses
+   to store any response carrying `Set-Cookie` — this is why the first cut gave
+   MISS/MISS forever. Needs `proxy_ignore_headers Set-Cookie` (to store) **and**
+   `proxy_hide_header Set-Cookie` (so a cached entry cannot replay one client's
+   cookie to another). **Ignoring without hiding is a cross-client cookie leak.**
+4. **`$request_body` is empty when the body spools to a temp file**, which would
+   key an entry on nothing. Hence the bigger body buffer and a combining map that
+   **defaults to "do not cache"**, so an unparsed body goes through live.
+
+`proxy_cache_lock` collapses concurrent identical requests — the Trade page's four
+simultaneous scans were previously four separate 10-credit calls.
+
+**Red-first: 11/11, stable over three runs.** Nine are negative cases. The
+cacheable assertion checks the **concurrent** path as well as sequential, because a
+HIT is only possible inside the 2s window and a cold multi-MB transfer can miss it
+— an earlier version flaked for exactly that reason.
+
+## Deferred, with numbers
+
+- **D2 `getProgramAccountsV2`** — HELD pending dashboard pricing. Verified working
+  on this endpoint: max page limit **10,000**, returns `paginationKey`+`count`,
+  full 10,937-account walk = **2 pages**. If it really is 1 credit/page that is
+  **2 vs 10 credits per scan**; if it is 10/page it is a net loss. **Do not migrate
+  on the strength of secondary sources.**
+- **D1 second half** — the unmarkable-vault re-scan, ~2,832 scans/day
+  (~28,320 credits). Needs the marking predicate changed; gated on 86eyn5kx8.
+- **D3 `dataSlice` on the holder scan** — bytes only, not credits (5.93MB → 2.50MB
+  measured). **Trap:** the loop reads only `owner` (32..64) and `amount` (64..72),
+  so `dataSlice:{offset:32,length:40}` works, but the
+  `data.length < TOKEN_AMOUNT_OFFSET + 8` guard and **both offset constants must be
+  rebased** or every holder is silently filtered out — a fund-affecting silent
+  failure. Needs a test that fails if the offsets are wrong.
+- **D5 mobile poll intervals** — the APK bakes its endpoint and can never be
+  updated in place, so **D4 is the only lever for installs already out there**.
+- **D6 public-devnet offload** — modest, correctness risk, lowest priority.
+
+## Facts worth not rediscovering
+
+- The live scan is **5,934,502 bytes / 10,937 accounts**, not the 4.9MB in ticket
+  86eymw9m2. It grew.
+- nginx is **1.18.0** with **no `proxy_cache` anywhere** before this arc.
+- `tsconfig.typecheck.json` includes **only `tests/**/*.ts`** — it does **not**
+  cover `crank/`, so `npm test`'s typecheck stays green no matter what breaks
+  there. Use `tsc -p crank/tsconfig.json`. A pre-commit hook does type-check
+  `crank/` and caught nothing here because the code was already clean.
+- The crank sets **`transpileOnly: true`**, so ts-node does **not** typecheck at
+  boot. Local tsc is the only real gate before a restart.
+- SSH to the box is **root-only** (`opta` is `/usr/sbin/nologin`). Root is the only
+  transport; use `sudo -u opta` for anything touching opta-owned state.
+- `/root/.opta-rpc-helius` holds a **bare 36-char key**, not a URL. Consumers build
+  the URL themselves.
+- `crossbar` runs as a **Docker container with no systemd unit**, so journald never
+  sees it and `systemctl` reports it inactive. It restarted 9 times on Aug 17 and
+  floods exchange-ticker errors — separate concern, untouched.
+
+## Nanko's outstanding items (this arc)
+
+1. **Dashboard, two answers needed** — the plan tier + cycle dates, and whether
+   **`bud-fox-agent`'s mainnet key shares this billing pool**. The second is still
+   a live suspect for the Aug 16 cause and no amount of local measurement can
+   settle it.
+2. **Confirm the ntfy test alert arrived** (id `Z2uSDMILIPjI`, HTTP 200 from the
+   server). Delivery to the phone was never confirmed by me — only that ntfy
+   accepted it.
+3. **V2 pricing** before D2 moves.
+4. **Aug 28 (86eyn5kx8)** — the deferred D1 half and D3 both wait on it.

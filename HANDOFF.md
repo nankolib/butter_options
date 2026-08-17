@@ -3913,3 +3913,32 @@ HIT is only possible inside the 2s window and a cold multi-MB transfer can miss 
    accepted it.
 3. **V2 pricing** before D2 moves.
 4. **Aug 28 (86eyn5kx8)** — the deferred D1 half and D3 both wait on it.
+
+## Found while leak-checking: the key is in nginx error.log (pre-existing)
+
+Not introduced by this arc, and worth acting on separately.
+
+nginx logs the **upstream** URL on connection failures, and that URL is where the
+api-key gets injected. Every IPv6 connect failure therefore writes the key to
+`error.log` in plaintext:
+
+    connect() to [2606:4700:440d::6812:24a9]:443 failed (101: Unknown error)
+    while connecting to upstream, ... upstream: "https://[...]:443/?api-key=<KEY>"
+
+Scale, measured 2026-08-17: 30 lines in the live `error.log`, and thousands across
+rotated logs (`error.log.3.gz` alone has 1,892; `.5.gz` 1,002; `.6.gz` 878).
+Dates confirm it long predates this work, and none of the lines mention the cache.
+
+Two consequences:
+
+1. **The key has been sitting in plaintext on disk across many log rotations.**
+   If logs are ever shipped, backed up or read by anyone, treat it as disclosed.
+   Rotating it means updating all 7 consumers at once — see the key-rotation
+   lesson about enumerating every consumer first, crossbar being the easy miss.
+2. The IPv6 attempts are also **failing every time and then falling back**, so
+   there is wasted latency on the proxy path independent of the leak.
+
+Fixing the IPv6 failures removes the trigger and the log spam together, which is
+better than lowering `error_log` severity and going blind to real upstream errors.
+Not done here: out of the greenlit scope, and key rotation has a blast radius
+across all seven consumers.

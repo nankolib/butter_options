@@ -34,6 +34,15 @@ import {
   type AutoFinalizeOptions,
   type AtaBudget,
 } from "./autoFinalize";
+import { PersistentFinalizeCache } from "./finalizeCache";
+
+/**
+ * Persist the finalize cache every N marks during a sweep. A cold sweep covers
+ * thousands of vaults over roughly an hour, so waiting for the end of the loop
+ * would leave a long window in which a restart loses every mark. 200 keeps the
+ * write volume trivial (one small rename per ~200 vaults) while capping the loss.
+ */
+const FINALIZE_CACHE_FLUSH_EVERY = 200;
 import {
   runAutoCancelListings,
   type AutoCancelOptions,
@@ -151,7 +160,11 @@ interface CrankContext {
   finalizeOptions: AutoFinalizeOptions;
   maxAtasPerTick: number;
   staleS: number;
-  fullyFinalized: Set<string>;
+  // Disk-backed since D1 (ticket 86eyn66b4): an in-memory Set was rebuilt from
+  // nothing on every restart, re-paying a 10-credit gPA per settled vault per
+  // process lifetime. Suppression is re-authorised against live state on every
+  // read — see finalizeCache.ts.
+  fullyFinalized: PersistentFinalizeCache;
   // Auto-cancel wiring (Step 6 — V2 secondary listing)
   autoCancelOptions: AutoCancelOptions;
   // Sweep-expired-orders wiring (Phase 1 exchange book)
@@ -525,7 +538,14 @@ async function bootstrapContext(): Promise<CrankContext> {
     finalizeOptions,
     maxAtasPerTick: env.maxAtasPerTick,
     staleS: env.staleS,
-    fullyFinalized: new Set<string>(),
+    fullyFinalized: PersistentFinalizeCache.load(
+      process.env.OPTA_FINALIZE_CACHE_PATH ||
+        "/var/lib/opta-crank/fully-finalized.json",
+      (level, msg, extra) => {
+        if (level === "warn") logWarn(msg, extra as Record<string, unknown>);
+        else logInfo(msg, extra as Record<string, unknown>);
+      },
+    ),
     autoCancelOptions,
     sweepOptions,
     lowBalanceWarnSol: env.lowBalanceWarnSol,
@@ -793,13 +813,27 @@ async function tick(ctx: CrankContext): Promise<TickResult> {
   const ataBudget: AtaBudget = { remaining: ctx.maxAtasPerTick };
 
   const nowSec = Math.floor(Date.now() / 1000);
+  let marksSinceFlush = 0;
 
   for (const v of refreshedVaults) {
     if (shutdownRequested) break;
     if (!v.account.isSettled) continue;
 
     const vaultKey = v.publicKey.toBase58();
-    if (ctx.fullyFinalized.has(vaultKey)) {
+    // Membership alone is NOT authority to skip. maySuppress re-checks the live
+    // account: an unsettled vault, or any vault still holding collateral, is
+    // always re-scanned no matter what the cache says. Entries also expire, so a
+    // wrong one self-heals instead of withholding somebody's money forever.
+    const collateralRemaining = BigInt(
+      (v.account.collateralRemaining ?? 0).toString(),
+    );
+    if (
+      ctx.fullyFinalized.maySuppress(
+        vaultKey,
+        { isSettled: v.account.isSettled === true, collateralRemaining },
+        nowSec,
+      )
+    ) {
       result.finalizeVaultsCachedDone += 1;
       continue;
     }
@@ -948,12 +982,31 @@ async function tick(ctx: CrankContext): Promise<TickResult> {
       !holderProgressed &&
       !writerProgressed
     ) {
-      ctx.fullyFinalized.add(vaultKey);
-      logInfo("vault marked fully finalized (process-lifetime cache)", {
+      ctx.fullyFinalized.add(vaultKey, nowSec);
+      marksSinceFlush += 1;
+      logInfo("vault marked fully finalized (persisted cache)", {
         vault: vaultKey,
       });
+      // Flush mid-sweep, not just at the end. A cold sweep walks thousands of
+      // vaults and takes the better part of an hour; if the only flush were at
+      // the end, a restart inside that window would persist nothing and we would
+      // re-pay the whole scan — precisely the bug this cache exists to fix.
+      if (marksSinceFlush >= FINALIZE_CACHE_FLUSH_EVERY) {
+        ctx.fullyFinalized.flush();
+        marksSinceFlush = 0;
+      }
     }
   }
+
+  // Persist once per sweep rather than per vault: one rename beats 3,400, and a
+  // crash mid-sweep costs only the marks from this tick (re-earned next tick).
+  const cachePruned = ctx.fullyFinalized.prune(nowSec);
+  ctx.fullyFinalized.flush();
+  logInfo("finalize cache persisted", {
+    entries: ctx.fullyFinalized.size(),
+    pruned: cachePruned,
+    cachedDoneThisTick: result.finalizeVaultsCachedDone,
+  });
 
   // ---- Phase 3: dead-feed reclaim (opt-in; moves money) -----------------
   // OFF unless OPTA_RECLAIM_CRANK_ENABLED. Reuses refreshedVaults + markets

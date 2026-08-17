@@ -3,3 +3,13 @@
 # core.autocrlf=true on Windows can't re-trip the handoff byte-identity gate.
 app/src/idl/*.json -text
 mobile/src/idl/*.json -text
+
+# Everything under deploy/ is executed or parsed by Linux (bash, systemd, nginx).
+# These blobs are LF today and were verified byte-clean when committed; this is a
+# guard, not a repair. core.autocrlf=true is set globally on the Windows checkout,
+# and a single CR in a shebang makes a script unrunnable, so pin the tree to LF
+# rather than rely on the default staying favourable.
+deploy/**/*.sh      text eol=lf
+deploy/**/*.conf    text eol=lf
+deploy/**/*.service text eol=lf
+deploy/**/*.timer   text eol=lf

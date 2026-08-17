@@ -1,0 +1,16 @@
+[Unit]
+Description=Run the Opta upstream-RPC alarm every 5 minutes
+# Ticket 86eyn66b4. Cadence costs 288 probes/day = 288 credits/day, ~0.2% of the
+# measured daily burn — cheap enough that a tighter interval is not worth it, and
+# loose enough that it cannot itself contribute to exhaustion.
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+# Catch up after a reboot so a box that came back mid-incident still reports.
+Persistent=true
+Unit=opta-rpc-alarm.service
+
+[Install]
+WantedBy=timers.target

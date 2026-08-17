@@ -1,0 +1,38 @@
+[Unit]
+# Opta upstream-RPC alarm — ticket 86eyn66b4.
+# Fires on credit exhaustion / auth failure / unreachable upstream. See
+# rpc-alarm.sh for the measured state signatures and why getHealth is banned.
+Description=Opta upstream-RPC alarm (credit exhaustion / auth / reachability)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+# Least privilege. systemd (root) reads EnvironmentFile BEFORE dropping to this
+# user, so the api-key-bearing URL reaches the process environment while staying
+# unreadable by `opta` on disk (the file is root:root 0600).
+User=opta
+Group=opta
+
+EnvironmentFile=/etc/opta/rpc-alarm.env
+
+# systemd creates/chowns /var/lib/opta-rpc-alarm to User= on each start, so the
+# state file needs no manual mkdir or chown.
+StateDirectory=opta-rpc-alarm
+Environment=OPTA_ALARM_STATE_FILE=/var/lib/opta-rpc-alarm/last_state
+
+ExecStart=/opt/opta-rpc-alarm/rpc-alarm.sh
+
+# A failing probe is the alarm doing its job; do not let systemd escalate it into
+# a restart loop that would multiply the alert volume.
+Restart=no
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/opta-rpc-alarm
+
+[Install]
+WantedBy=multi-user.target

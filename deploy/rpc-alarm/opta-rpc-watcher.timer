@@ -1,0 +1,14 @@
+[Unit]
+Description=Run the Opta upstream-RPC exhaustion watcher every 2 minutes
+# Ticket 86eyn66b4. Reads journals only — costs zero RPC credits, so it can run
+# more often than the 5-minute authenticated probe.
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=2min
+AccuracySec=15s
+Persistent=true
+Unit=opta-rpc-watcher.service
+
+[Install]
+WantedBy=timers.target

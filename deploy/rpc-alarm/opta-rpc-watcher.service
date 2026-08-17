@@ -1,0 +1,39 @@
+[Unit]
+# Opta upstream-RPC exhaustion watcher — ticket 86eyn66b4.
+# Reads what the real consumers experienced, so it trips before the 5-minute
+# probe would. See rpc-exhaustion-watcher.sh for the -32429 signature.
+Description=Opta upstream-RPC exhaustion watcher (reads consumer journals)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+User=opta
+Group=opta
+# REQUIRED: a plain user cannot read other units' journals, so without this the
+# watcher would scan an empty journal, find nothing, and report CLEAR forever —
+# a green check incapable of going red. Granted per-process rather than by
+# changing opta's persistent group membership.
+SupplementaryGroups=systemd-journal
+
+EnvironmentFile=/etc/opta/rpc-alarm.env
+
+StateDirectory=opta-rpc-alarm
+Environment=OPTA_WATCH_MARKER=/var/lib/opta-rpc-alarm/last_exhaustion_alert
+
+ExecStart=/opt/opta-rpc-alarm/rpc-exhaustion-watcher.sh
+
+# Exit 1 means "exhaustion detected" — that is a successful detection, not a
+# service fault, so do not restart or escalate.
+Restart=no
+SuccessExitStatus=0 1
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/opta-rpc-alarm
+
+[Install]
+WantedBy=multi-user.target

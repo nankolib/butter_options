@@ -24,6 +24,9 @@ import {
   OptionPriceQuoteFailure, type OptionPriceQuote,
 } from "../../utils/optionPriceQuote";
 import type { UnifiedChainRow } from "../../hooks/useUnifiedChain";
+import {
+  alreadyMetLegs, alreadyMetMessage, isEffectivelyWorthless, spotAnchoredPlaceholder,
+} from "../../utils/triggerGuards";
 
 // Quote-on-demand short-TTL cache, keyed by series mint (premium is per-contract,
 // size-independent). Browsing the chain never touches this — only the RFQ button.
@@ -102,6 +105,11 @@ export const OrderTicket: FC<{
   // first-class, and nothing forces a take-profit to get a stop.
   const [tpPrice, setTpPrice] = useState<number>(0);
   const [slPrice, setSlPrice] = useState<number>(0);
+  // Explicit acknowledgement that a leg would fire on the keeper's next tick.
+  // Reset whenever a price changes, so a confirmation can never carry over to a
+  // different number than the one it was given for.
+  const [confirmImmediate, setConfirmImmediate] = useState(false);
+  useEffect(() => { setConfirmImmediate(false); }, [tpPrice, slPrice]);
   /** Per-contract MINIMUM PROCEEDS the book must beat. 0 is legal on chain and
    *  means BOOK INELIGIBLE (6082), so it is surfaced rather than defaulted. */
   const [sellFloor, setSellFloor] = useState<number>(0);
@@ -264,6 +272,13 @@ export const OrderTicket: FC<{
   const tpEst = tpPrice > 0 ? estAt(tpPrice) : null;
   const slEst = slPrice > 0 ? estAt(slPrice) : null;
 
+  // A trigger whose condition is ALREADY TRUE is valid on chain but is almost
+  // never the intention: the keeper fires on its next tick and market-exits the
+  // position the user thought they were protecting. See utils/triggerGuards.ts.
+  const immediateLegs = type === "tpsl" ? alreadyMetLegs({ tpPrice, slPrice, spot }) : [];
+  const immediateWarning = alreadyMetMessage(immediateLegs, spot);
+  const immediateBlocks = immediateLegs.length > 0 && !confirmImmediate;
+
   // Pre-fill the limit price with the cheap mark when switching to Limit.
   useEffect(() => {
     if (type === "limit" && limitPrice === 0 && mark?.premium) setLimitPrice(Number(mark.premium.toFixed(4)));
@@ -314,6 +329,12 @@ export const OrderTicket: FC<{
         }
         if (qty > (held ?? 0)) {
           setStatus({ kind: "err", msg: `You hold ${held ?? 0} contract(s)` });
+          setBusy(false); return;
+        }
+        // Belt to the button's braces: an already-true trigger must not be armed
+        // without the user having said so on purpose.
+        if (immediateLegs.length > 0 && !confirmImmediate) {
+          setStatus({ kind: "err", msg: immediateWarning });
           setBusy(false); return;
         }
         const usdc6 = (n: number) => new BN(Math.round(n * 1_000_000));
@@ -543,7 +564,7 @@ export const OrderTicket: FC<{
   // No peg-capacity button gate: the multi-level sweep routes a Buy·Market past
   // an exhausted peg to resting asks and reports an honest partial fill, so a
   // low peg no longer blocks the order.
-  const disabled = submitting || sellNoBalance || !publicKey || (isWrite && !!writeGate) || !!limitGate || !!amerQuoteGate;
+  const disabled = submitting || sellNoBalance || !publicKey || (isWrite && !!writeGate) || !!limitGate || !!amerQuoteGate || immediateBlocks;
 
   return (
     <div className={docked ? "text-l-text" : "rounded-[10px] border border-l-hair bg-l-surface p-4 text-l-text"}>
@@ -625,35 +646,45 @@ export const OrderTicket: FC<{
             </span>
           </div>
 
-          <Field label={`Take profit — ${row.asset} at or above`}>
+          {/* Spot is shown INSIDE the label. The walkthrough entry of 0.02 on a
+              $0.5588 underlying happened because nothing on screen anchored
+              these fields to the underlying's scale — the label said "JTO" and
+              the user supplied a premium. */}
+          <Field label={`Take profit — ${row.asset} at or above${spot != null ? ` · spot $${spot.toFixed(4)}` : ""}`}>
             <NumericField
               value={tpPrice}
               min={0}
               fallback={0}
-              placeholder="leave empty to skip"
+              placeholder={spotAnchoredPlaceholder("tp", spot)}
               onChange={setTpPrice}
               className="w-full bg-transparent font-mono-plex text-[13px] tabular-nums text-l-text outline-none"
             />
           </Field>
           {tpEst != null && (
-            <p className="-mt-2 mb-2 font-mono-plex text-[9.5px] text-l-muted">
+            <p className={`-mt-2 mb-2 font-mono-plex text-[9.5px] ${isEffectivelyWorthless(tpEst) ? "text-l-down" : "text-l-muted"}`}>
               Est. value if hit today ≈ {fmt(tpEst)}
+              {/* A bare "$0.0000" looks like a broken calculation. It is not —
+                  the contract really would be worth nothing if the underlying
+                  only reached that price — so say WHY and let the number read
+                  as the warning it is. */}
+              {isEffectivelyWorthless(tpEst) && " — worthless at that underlying price"}
             </p>
           )}
 
-          <Field label={`Stop loss — ${row.asset} at or below`}>
+          <Field label={`Stop loss — ${row.asset} at or below${spot != null ? ` · spot $${spot.toFixed(4)}` : ""}`}>
             <NumericField
               value={slPrice}
               min={0}
               fallback={0}
-              placeholder="leave empty to skip"
+              placeholder={spotAnchoredPlaceholder("sl", spot)}
               onChange={setSlPrice}
               className="w-full bg-transparent font-mono-plex text-[13px] tabular-nums text-l-text outline-none"
             />
           </Field>
           {slEst != null && (
-            <p className="-mt-2 mb-2 font-mono-plex text-[9.5px] text-l-muted">
+            <p className={`-mt-2 mb-2 font-mono-plex text-[9.5px] ${isEffectivelyWorthless(slEst) ? "text-l-down" : "text-l-muted"}`}>
               Est. value if hit today ≈ {fmt(slEst)}
+              {isEffectivelyWorthless(slEst) && " — worthless at that underlying price"}
             </p>
           )}
 
@@ -667,6 +698,30 @@ export const OrderTicket: FC<{
               className="w-full bg-transparent font-mono-plex text-[13px] tabular-nums text-l-text outline-none"
             />
           </Field>
+
+          {/* ALREADY-MET GUARD. On chain this order is perfectly legal, so
+              nothing downstream will stop it: the keeper simply fires on its
+              next tick and market-exits the position. The only place this can
+              be caught is here, against the user's intention. */}
+          {immediateLegs.length > 0 && (
+            <div className="mb-2 rounded-[6px] border border-l-down/50 bg-l-down/10 p-2">
+              <p className="font-mono-plex text-[9.5px] leading-[1.5] text-l-down">
+                {immediateWarning} It would be filled at the next keeper tick, exiting
+                this position now — not protecting it.
+              </p>
+              <label className="mt-2 flex cursor-pointer items-start gap-2">
+                <input
+                  type="checkbox"
+                  checked={confirmImmediate}
+                  onChange={(e) => setConfirmImmediate(e.target.checked)}
+                  className="mt-[2px]"
+                />
+                <span className="font-mono-plex text-[9.5px] leading-[1.5] text-l-muted">
+                  I want this to fire immediately
+                </span>
+              </label>
+            </div>
+          )}
 
           <p className="mt-1 font-mono-plex text-[9.5px] leading-[1.5] text-l-faint">
             Estimates hold today&rsquo;s volatility and time-to-expiry fixed and shrink as
@@ -773,6 +828,12 @@ export const OrderTicket: FC<{
           : limitGate ? limitGate
           : amerQuoteGate ? amerQuoteGate
           : sellNoBalance ? "No contracts held to sell"
+          // TP/SL places ORDERS, it does not sell anything now. The generic
+          // label fell through to fmt(limitPrice) — unused in this mode — and
+          // rendered "Sell 3 · $0.0000", which reads as a zero-dollar market
+          // sell. No price belongs on this button: the exit price is whatever
+          // the book pays when the trigger eventually fires.
+          : type === "tpsl" ? (immediateBlocks ? "Confirm immediate fire to continue" : `Arm exits · ${qty}`)
           : `${side === "buy" ? "Buy" : "Sell"} ${qty} · ${type === "market" ? "Market" : fmt(limitPrice)}`}
       </button>
 

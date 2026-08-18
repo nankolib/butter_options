@@ -54,6 +54,7 @@ pub fn handle_place_trigger(
     quantity: u64,
     max_premium: u64,
     nonce: u64,
+    tape: TapeSource,
 ) -> Result<()> {
     let clock = Clock::get()?;
 
@@ -219,6 +220,18 @@ pub fn handle_place_trigger(
     order.bump = ctx.bumps.trigger_order;
     // OCO is wired in B3; placements are standalone until then.
     order.oco_link = None;
+
+    // Contract tape is priced by `price_american`, the only on-chain pricer, so
+    // a Contract-tape trigger on a European series could never be re-checked at
+    // fire time. Reject it HERE rather than at fire: a placement that can never
+    // legally fire is a trap that looks armed to the owner.
+    if tape == TapeSource::Contract {
+        require!(
+            ctx.accounts.shared_vault.exercise_style == ExerciseStyle::American,
+            OptaError::ContractTapeRequiresAmerican
+        );
+    }
+    order.tape = tape;
 
     emit!(TriggerPlaced {
         trigger_order: order.key(),

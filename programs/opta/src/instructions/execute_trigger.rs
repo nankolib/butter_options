@@ -31,10 +31,25 @@
 // deploys — no dark buffer.
 //
 // ⚠️ COMPUTE BUDGET: the BUY path (post_update_atomic + EMA re-check + vol_oracle
-// + full peg set + BS-2002) is the heaviest tx in the protocol (~250-280K CU for
-// the pricing kernel alone). The instruction can't set its own budget — CALLERS
-// MUST prepend ComputeBudgetProgram.setComputeUnitLimit(~400_000). The P2 keeper
-// does this.
+// + full peg set + BS-2002) is the heaviest tx in the protocol. The instruction
+// can't set its own budget — CALLERS MUST prepend
+// ComputeBudgetProgram.setComputeUnitLimit. Keepers request 700_000 (raised from
+// 400_000 in 2A to cover a contract-tape fire under the pessimistic reading
+// below).
+//
+// MEASURED 2026-08-18 (devnet simulation of get_option_price, which calls the
+// SAME price_american helper, on live American series at ~10 DTE):
+//     BTC 24,492 · JTO 38,038 · XRP 40,035 · FARTCOIN 40,786 CU
+// So the American pricing kernel is ~25-41K CU, not the "~250-280K for the
+// pricing kernel alone" this comment used to claim. That older figure is either
+// the whole BUY path (post_update_atomic dominates it) or simply stale; it was
+// never the cost of the pricing call. Both readings clear the 1.4M ceiling —
+// 441K measured (68.5% margin), 680K pessimistic (51.4%) — which is why the
+// contract-tape branch was allowed to ship rather than being stubbed out.
+//
+// Method note, because the first two attempts produced confident wrong numbers:
+// synthetic strikes bail out early (6012) and measure nothing, and the enum
+// filter must match the RUNTIME shape, which is PascalCase ({"American":{}}).
 //
 // FIRE-TIME RE-VERIFICATION (SELL): the cores TRUST their token-account params.
 // Because the SELL burn source is a STORED address (possibly stale or hostile),
@@ -57,6 +72,7 @@ use crate::instructions::exercise_american::{
     american_exercise_core, MAX_CONF_BPS, PRICE_MAX_AGE_SECS,
 };
 use crate::instructions::fill_vault_peg::vault_peg_fill_core;
+use crate::utils::american_pricing::quote::{price_american, AmericanQuoteInputs};
 use crate::instructions::fill_writer_ask::writer_ask_fill_core;
 use crate::instructions::fill_order::{bid_fill_core, resale_ask_fill_core};
 use crate::feature_flags::BOOK_TRIGGERS_ENABLED;
@@ -158,14 +174,64 @@ pub fn handle_execute_trigger(ctx: Context<ExecuteTrigger>) -> Result<()> {
         _ => return Err(error!(OptaError::InvalidOracleSource)),
     };
 
-    // 3. Re-check the stored comparator against the live EMA.
+    // 3. Re-check the stored comparator against the tape THE ORDER SELECTED.
+    //
+    //    `ema` above is still the underlying, and is still what the SELL
+    //    intrinsic uses — only the comparator input is switched here. Keeping
+    //    them separate matters: a contract-tape trigger must fire on the option's
+    //    own mark while still settling its payout against the underlying.
+    //
+    //    Contract tape is recomputed ON CHAIN through the same `price_american`
+    //    the vault peg and `get_option_price` use. It is never supplied by the
+    //    keeper: execute_trigger's entire security property is that it re-checks
+    //    the condition itself, and a caller-asserted mark would hand the fire
+    //    decision back to the caller.
+    //
+    //    MEASURED COST (2026-08-18, devnet simulation of get_option_price on live
+    //    American series at ~10 DTE): 24,492 CU (BTC) to 40,786 CU (FARTCOIN),
+    //    median 40,035. The older "~250-280K CU for the pricing kernel alone"
+    //    note further up this file is either whole-BUY-path (post_update_atomic
+    //    dominates) or stale — it is NOT the cost of this call. Even at that
+    //    pessimistic figure the worst case is ~680K against the 1.4M ceiling.
+    //    Keepers request 700K.
+    //
+    //    A cold or stale VolOracle reverts here (6044 warmup / 6045 stale) rather
+    //    than firing on a guessed mark. For TradFi series that is the practical
+    //    effect of market hours: no samples overnight, so the oracle goes stale
+    //    and contract-tape triggers simply do not fire until it refreshes.
     let threshold = ctx.accounts.trigger_order.threshold_usdc;
+    let tape_price = match ctx.accounts.trigger_order.tape {
+        TapeSource::Underlying => ema,
+        TapeSource::Contract => {
+            let vault = &ctx.accounts.shared_vault;
+            // Belt-and-braces: placement already rejects European contract-tape
+            // orders (6086). This re-check costs nothing and means a hand-written
+            // or migrated order cannot reach `price_american` on a style it
+            // cannot price.
+            require!(
+                vault.exercise_style == ExerciseStyle::American,
+                OptaError::ContractTapeRequiresAmerican
+            );
+            let oracle = ctx.accounts.vol_oracle.load()?;
+            let quote = price_american(
+                &*oracle,
+                clock.unix_timestamp,
+                AmericanQuoteInputs {
+                    strike: vault.strike_price,
+                    expiry_ts: vault.expiry,
+                    option_type: vault.option_type,
+                    carry_rate_bps: vault.carry_rate_bps,
+                },
+            )?;
+            quote.premium_per_contract
+        }
+    };
     match ctx.accounts.trigger_order.comparator {
         Comparator::LessOrEqual => {
-            require!(ema <= threshold, OptaError::TriggerConditionNotMet)
+            require!(tape_price <= threshold, OptaError::TriggerConditionNotMet)
         }
         Comparator::GreaterOrEqual => {
-            require!(ema >= threshold, OptaError::TriggerConditionNotMet)
+            require!(tape_price >= threshold, OptaError::TriggerConditionNotMet)
         }
     }
 
@@ -173,6 +239,12 @@ pub fn handle_execute_trigger(ctx: Context<ExecuteTrigger>) -> Result<()> {
     let kind = ctx.accounts.trigger_order.kind;
     let owner = ctx.accounts.trigger_order.owner;
     let order_key = ctx.accounts.trigger_order.key();
+    // Read the OCO link BEFORE dispatch: a full fill closes `trigger_order`, and
+    // the sibling still has to be settled after that.
+    let oco_link = ctx.accounts.trigger_order.oco_link;
+    // Set at every site that actually fires; 0 means nothing fired, so the
+    // sibling must not move.
+    let mut oco_fired: u64 = 0;
 
     match kind {
         // ---------------------------------------------------------------------
@@ -423,6 +495,7 @@ pub fn handle_execute_trigger(ctx: Context<ExecuteTrigger>) -> Result<()> {
                 )?;
             }
 
+            oco_fired = fire_qty;
             emit!(TriggerExecuted {
                 trigger_order: order_key,
                 owner,
@@ -522,6 +595,7 @@ pub fn handle_execute_trigger(ctx: Context<ExecuteTrigger>) -> Result<()> {
                 &ctx.accounts.owner_wallet.to_account_info(),
             )?;
 
+            oco_fired = quantity; // peg full-fill path fires the whole order
             emit!(TriggerExecuted {
                 trigger_order: order_key,
                 owner,
@@ -750,6 +824,7 @@ pub fn handle_execute_trigger(ctx: Context<ExecuteTrigger>) -> Result<()> {
                 )?;
             }
 
+            oco_fired = fire_qty;
             emit!(TriggerExecuted {
                 trigger_order: order_key,
                 owner,
@@ -840,6 +915,7 @@ pub fn handle_execute_trigger(ctx: Context<ExecuteTrigger>) -> Result<()> {
                 )?;
             }
 
+            oco_fired = fire_qty;
             emit!(TriggerExecuted {
                 trigger_order: order_key,
                 owner,
@@ -851,6 +927,34 @@ pub fn handle_execute_trigger(ctx: Context<ExecuteTrigger>) -> Result<()> {
                 ts: clock.unix_timestamp,
             });
           }
+        }
+    }
+
+    // ---- B3: OCO — the sibling leg moves in the SAME transaction ----------
+    //
+    // Keeper-enforced OCO was rejected outright: two ticks, or one tick
+    // evaluating both legs against the same tape, can fire both and hand the
+    // owner a double exit on a funds path. The only way a single atomic fire
+    // cannot gap through both legs is to move the sibling here.
+    //
+    // The link must be MUTUAL and same-owner. Without the back-link check a
+    // caller could point `oco_peer` at any stranger's trigger and decrement it.
+    if oco_fired > 0 {
+        if let Some(link) = oco_link {
+            let peer = ctx
+                .accounts
+                .oco_peer
+                .as_mut()
+                .ok_or(error!(OptaError::OcoPeerRequired))?;
+            require_keys_eq!(peer.key(), link, OptaError::OcoPeerMismatch);
+            require!(
+                peer.oco_link == Some(order_key),
+                OptaError::OcoPeerMismatch
+            );
+            require_keys_eq!(peer.owner, owner, OptaError::OcoPeerMismatch);
+            // saturating: a fire larger than the sibling's remaining size zeroes
+            // it rather than wrapping. A zero-quantity trigger cannot fire.
+            peer.quantity = peer.quantity.saturating_sub(oco_fired);
         }
     }
 
@@ -1113,4 +1217,15 @@ pub struct ExecuteTrigger<'info> {
     /// accounts, which `Account<TokenAccount>` rejects.
     #[account(mut)]
     pub book_maker_option: Option<UncheckedAccount<'info>>,
+
+    // --- B3 OCO slot ([32]) ------------------------------------------------
+    /// The paired TriggerOrder when this one carries an `oco_link`, else None.
+    ///
+    /// APPENDED, deliberately: every existing account keeps its index, so the
+    /// pot stays at [25]/[26] and the book optionals stay at [21]-[31]. The slot
+    /// guards are still re-derived against the rebuilt IDL rather than assumed —
+    /// an append that silently did not hold would be exactly the class of bug
+    /// those guards exist for.
+    #[account(mut)]
+    pub oco_peer: Option<Account<'info, TriggerOrder>>,
 }

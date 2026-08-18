@@ -19,7 +19,12 @@ import * as anchor from "@coral-xyz/anchor";
 
 import { assertPotSlots, PotSlotGuardError, POT_SLOTS } from "./potSlotGuard";
 
-const IDL_PATH = path.resolve(__dirname, "../app/src/idl/opta.json");
+// Defaults to the IDL the crank actually loads. OPTA_IDL_PATH points it at a
+// CANDIDATE build (target/idl/opta.json) so the slots can be re-derived against a
+// program upgrade BEFORE that IDL is synced into app/ — which is the only moment
+// the check is still cheap to act on.
+const IDL_PATH =
+  process.env.OPTA_IDL_PATH ?? path.resolve(__dirname, "../app/src/idl/opta.json");
 const IDL = JSON.parse(fs.readFileSync(IDL_PATH, "utf8"));
 
 // Never contacted: instruction assembly is offline.

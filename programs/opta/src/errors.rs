@@ -509,4 +509,26 @@ pub enum OptaError {
     // Append-only — error code 6085.
     #[msg("Writer-ask pot cannot fund this early exercise")]
     EarlyExercisePotUnderfunded,
+
+    // ---- 2A: contract tape + OCO (append-only) ----------------------------
+    // Contract tape is re-checked with `price_american`, the only on-chain
+    // pricer, which is American-only. Rejected at PLACEMENT, not at fire: an
+    // order that can never legally fire looks armed to its owner.
+    // Append-only — error code 6086.
+    #[msg("Contract-tape triggers require an American series")]
+    ContractTapeRequiresAmerican,
+
+    // The trigger carries an oco_link but the paired TriggerOrder account was
+    // not supplied. Firing without it would leave the sibling leg armed, which
+    // is the double-exit this design exists to prevent, so it reverts.
+    // Append-only — error code 6087.
+    #[msg("Trigger has an OCO link but the paired trigger account was not supplied")]
+    OcoPeerRequired,
+
+    // The supplied peer is not the linked one, or does not link back, or belongs
+    // to another owner. A mismatched peer would let a caller decrement an
+    // unrelated stranger's trigger, so the link must be mutual and owner-equal.
+    // Append-only — error code 6088.
+    #[msg("OCO peer does not match this trigger's link, or the link is not mutual")]
+    OcoPeerMismatch,
 }

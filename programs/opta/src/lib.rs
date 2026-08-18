@@ -456,9 +456,10 @@ pub mod opta {
         quantity: u64,
         max_premium: u64,
         nonce: u64,
+        tape: TapeSource,
     ) -> Result<()> {
         instructions::place_trigger::handle_place_trigger(
-            ctx, kind, comparator, threshold_usdc, quantity, max_premium, nonce,
+            ctx, kind, comparator, threshold_usdc, quantity, max_premium, nonce, tape,
         )
     }
 

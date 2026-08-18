@@ -93,6 +93,49 @@ impl Comparator {
     }
 }
 
+/// WHICH TAPE the comparator is evaluated against.
+///
+/// **Variant order is load-bearing** (Underlying = 0, Contract = 1). Underlying
+/// is variant 0 so it is the zero-byte default: any future account read that
+/// encounters a zeroed byte here resolves to the safe, v1 behaviour.
+///
+/// Added while the layout is migration-free (0 live TriggerOrders) — the same
+/// window `oco_link` used. That window closes the moment the first order is
+/// placed, which is why this lands before FE placement rather than after.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace, Debug)]
+pub enum TapeSource {
+    /// The underlying's oracle EMA — Pyth or Switchboard per the market's
+    /// `oracle_source`. This is what v1 always used and remains the default.
+    Underlying,
+    /// The option's OWN mark, recomputed on chain at fire time through the same
+    /// `price_american` helper `get_option_price` and the vault peg use.
+    ///
+    /// Deliberately NOT keeper-supplied. A keeper-asserted contract price would
+    /// make the fire condition unverifiable, and `execute_trigger`'s whole
+    /// security property is that it re-checks the condition itself rather than
+    /// trusting the caller.
+    ///
+    /// AMERICAN ONLY: `price_american` is the only on-chain pricer, so a
+    /// Contract-tape trigger on a European series is rejected at placement.
+    Contract,
+}
+
+impl TapeSource {
+    /// Stable u8 encoding for events (Underlying = 0, Contract = 1).
+    pub fn as_u8(self) -> u8 {
+        match self {
+            TapeSource::Underlying => 0,
+            TapeSource::Contract => 1,
+        }
+    }
+}
+
+impl Default for TapeSource {
+    fn default() -> Self {
+        TapeSource::Underlying
+    }
+}
+
 #[account]
 #[derive(InitSpace)]
 pub struct TriggerOrder {
@@ -166,6 +209,12 @@ pub struct TriggerOrder {
     /// can never gap through both legs. A partial fire decrements both; only a
     /// fill that zeros a leg closes it (and its paired leg).
     pub oco_link: Option<Pubkey>,
+
+    /// Which tape `comparator`/`threshold_usdc` are evaluated against.
+    /// Appended in the same migration-free window as `oco_link`; adds 1 byte
+    /// to INIT_SPACE (237 → 238). Underlying is variant 0, so the zero byte is
+    /// the safe default.
+    pub tape: TapeSource,
 }
 
 /// Seed prefix for TriggerOrder PDAs: ["trigger_order", owner, option_mint, nonce_le].
@@ -208,10 +257,12 @@ mod tests {
     }
 
     // Pins the InitSpace-computed size so an accidental field add/reorder is a
-    // loud test failure. B0 added `oco_link: Option<Pubkey>` = 1 + 32 = 33 bytes:
-    // 204 → 237 (8-disc-excluded body; full account = 8 + 237 = 245).
+    // loud test failure.
+    //   B0  `oco_link: Option<Pubkey>` = 1 + 32 = 33 bytes: 204 → 237
+    //   2A  `tape: TapeSource`         = 1 byte           : 237 → 238
+    // (8-disc-excluded body; full account = 8 + 238 = 246.)
     #[test]
-    fn trigger_order_init_space_is_237() {
-        assert_eq!(TriggerOrder::INIT_SPACE, 237);
+    fn trigger_order_init_space_is_238() {
+        assert_eq!(TriggerOrder::INIT_SPACE, 238);
     }
 }

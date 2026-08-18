@@ -56,6 +56,7 @@ import {
   DEFAULT_BACKOFF_BASE_MS, DEFAULT_BACKOFF_CEILING_MS,
 } from "./hermesBackoff";
 import { SPL_SYSVAR_SLOT_HASHES_ID, SPL_SYSVAR_INSTRUCTIONS_ID } from "@switchboard-xyz/on-demand";
+import { assertPotSlots, POT_SLOTS } from "./potSlotGuard";
 
 // ---- Trigger PDA seeds (constants.ts is FE-stale — define crank-local; these
 //      MUST match programs/opta/src/state/trigger_order.rs) -------------------
@@ -886,7 +887,37 @@ export async function loadTriggerAlt(
 export async function buildExecuteTriggerIx(
   program: anchor.Program<any>, accounts: Record<string, PublicKey | null>,
 ): Promise<TransactionInstruction> {
-  return program.methods.executeTrigger().accountsStrict(accounts).instruction();
+  const ix = await program.methods.executeTrigger().accountsStrict(accounts).instruction();
+
+  // Slot-content guard, added 2026-08-17. Only meaningful on a book fire that
+  // actually resolved a pot — on the vault-peg route and on sells these are null
+  // by design, and Anchor writes the program id into the slot for an absent
+  // optional account, which is correct and must not be flagged.
+  //
+  // Why slots and not a count: measured 2026-08-17, `accountsStrict` silently
+  // drops accounts an outdated IDL does not declare, and the count guard this
+  // replaces elsewhere missed a partial IDL regression that left the length in
+  // an acceptable range. execute_trigger is 32 accounts with the pot at
+  // [25]/[26]; if either has shifted, the positional layout no longer matches
+  // execute_trigger.rs and the fire must not be sent.
+  const pot = accounts.writerAskPot ?? null;
+  const potUsdc = accounts.writerAskPotUsdc ?? null;
+  if (pot && potUsdc) {
+    assertPotSlots(
+      ix,
+      [
+        { slot: POT_SLOTS.execute_trigger.pot, expected: pot, name: "writer_ask_pot" },
+        {
+          slot: POT_SLOTS.execute_trigger.potUsdc,
+          expected: potUsdc,
+          name: "writer_ask_pot_usdc",
+        },
+      ],
+      { instruction: "execute_trigger" },
+    );
+  }
+
+  return ix;
 }
 
 /**

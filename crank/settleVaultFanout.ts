@@ -216,6 +216,7 @@ import {
   type TransactionInstruction, type Keypair,
 } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { assertPotSlots, POT_SLOTS } from "./potSlotGuard";
 
 const PROTOCOL_SEED = "protocol_v2";
 const VAULT_OPTION_MINT_SEED = "vault_option_mint";
@@ -271,7 +272,7 @@ async function buildSettleVaultIx(
   const [writerAskPotUsdc] = PublicKey.findProgramAddressSync(
     [Buffer.from(WRITER_ASK_POT_USDC_SEED), optionMint.toBuffer()], program.programId);
 
-  return program.methods
+  const ix = await program.methods
     .settleVault()
     .accountsStrict({
       authority,
@@ -286,6 +287,27 @@ async function buildSettleVaultIx(
       tokenProgram: TOKEN_PROGRAM_ID,
     })
     .instruction();
+
+  // This path was UNGUARDED until 2026-08-17. accountsStrict does not protect it:
+  // measured that day, a stale IDL made this exact call emit 8 accounts instead of
+  // 10, dropping both pot keys without a word. On chain it would be rejected
+  // (require_keys_eq against the mint-derived PDA, and NotEnoughAccountKeys before
+  // that), so the money was never at risk — but the failure arrived after the fee,
+  // as an opaque revert in a batch of vaults, instead of here with a cause.
+  assertPotSlots(
+    ix,
+    [
+      { slot: POT_SLOTS.settle_vault.pot, expected: writerAskPot, name: "writer_ask_pot" },
+      {
+        slot: POT_SLOTS.settle_vault.potUsdc,
+        expected: writerAskPotUsdc,
+        name: "writer_ask_pot_usdc",
+      },
+    ],
+    { instruction: "settle_vault", optionMint },
+  );
+
+  return ix;
 }
 
 async function sendBatch(

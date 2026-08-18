@@ -46,6 +46,7 @@ import {
 
 import { buildManagedQuoteUpdateIxs } from "./switchboardQuotePost";
 import { lookupSbFeed, buildOracleFeed, normFeedHash } from "./sbFeedRegistry";
+import { assertPotSlots, POT_SLOTS } from "./potSlotGuard";
 
 /** Token-2022 burn + SB verify + USDC payout. Same bump as the Pyth arm's
  *  atomic post+exercise tx, which is the closest measured comparable. */
@@ -224,13 +225,29 @@ export async function buildSwitchboardExerciseAmericanTx(
   // So the builder now checks its own output. If we resolved a pot, the built
   // instruction MUST carry it. Failing loudly here costs a 500 the caller can
   // retry; failing silently costs a wallet signature and a support thread.
-  const ACCOUNTS_VAULT_ONLY = 14;
-  if (potExists && exerciseIx.keys.length <= ACCOUNTS_VAULT_ONLY) {
-    throw new Error(
-      `pot resolved for ${params.optionMint.toBase58()} but the built instruction carries ` +
-      `${exerciseIx.keys.length} accounts (expected >${ACCOUNTS_VAULT_ONLY}). ` +
-      `The IDL in use predates the writer-ask pot arm — Anchor dropped the accounts silently. ` +
-      `Sync app/src/idl/opta.json from target/idl and restart.`,
+  // Upgraded from a COUNT check to a SLOT check on 2026-08-17. The count version
+  // read `keys.length <= 14` and caught only the full legacy shape. Measured that
+  // day: the pot arm here is THREE accounts (writer_ask_pot, writer_ask_pot_usdc,
+  // protocol_state), 14 -> 17, so an IDL that dropped just the two pot-named
+  // accounts produced 15 — above the threshold, straight through the guard, with
+  // no pot on a payout path. A slot check cannot be fooled by a length that
+  // happens to land in range.
+  if (potExists) {
+    assertPotSlots(
+      exerciseIx,
+      [
+        {
+          slot: POT_SLOTS.exercise_american.pot,
+          expected: writerAskPot,
+          name: "writer_ask_pot",
+        },
+        {
+          slot: POT_SLOTS.exercise_american.potUsdc,
+          expected: writerAskPotUsdc,
+          name: "writer_ask_pot_usdc",
+        },
+      ],
+      { instruction: "exercise_american", optionMint: params.optionMint },
     );
   }
 

@@ -1,0 +1,14 @@
+[Unit]
+Description=Check the Opta keeper wallet balance every 15 minutes
+# A balance falls slowly (0.0009 SOL per fire), so 15 min is ample and keeps the
+# RPC cost at 96 reads/day.
+
+[Timer]
+OnBootSec=4min
+OnUnitActiveSec=15min
+AccuracySec=60s
+Persistent=true
+Unit=opta-keeper-wallet.service
+
+[Install]
+WantedBy=timers.target

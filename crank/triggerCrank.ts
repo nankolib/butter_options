@@ -57,6 +57,7 @@ import {
 } from "./hermesBackoff";
 import { SPL_SYSVAR_SLOT_HASHES_ID, SPL_SYSVAR_INSTRUCTIONS_ID } from "@switchboard-xyz/on-demand";
 import { assertPotSlots, POT_SLOTS } from "./potSlotGuard";
+import { AccountCache, ACCOUNT_CACHE_TTL_MS } from "./accountCache";
 
 // ---- Trigger PDA seeds (constants.ts is FE-stale — define crank-local; these
 //      MUST match programs/opta/src/state/trigger_order.rs) -------------------
@@ -100,7 +101,12 @@ export const HOOK_PROGRAM_ID = new PublicKey("83EW6a9o9P5CmGUkQKvVZvsz6v6Dgztiw5
 export const DEFAULT_TRIGGER_TICK_MS = 300_000; // 5min — see TRIGGER-UI-REVERT above
 export const DEFAULT_FIRE_MARGIN_BPS = 50; // 0.50% — headroom over measured SOL spot↔EMA gap (calm p90 ~16bps, move-peak ~33bps; P3.4 characterization)
 export const DEFAULT_FEED_STALE_SECS = 120; // a Hermes price older than this = stale
-export const EXECUTE_CU_LIMIT = 400_000; // BUY+BS-2002 path; the keeper IS the caller
+// Raised 400_000 -> 700_000 at 2A. A contract-tape fire adds one American pricing
+// kernel on legs that do not already pay for one; measured 2026-08-18 at 24.5-41K
+// CU, so ~441K worst case. 700K also covers the pessimistic reading of the older
+// (and now corrected) ~280K kernel note, at ~680K. Still 50% under the 1.4M
+// ceiling, and a devnet CU reservation is free.
+export const EXECUTE_CU_LIMIT = 700_000; // BUY+BS-2002+contract-tape; keeper IS the caller
 
 // ---- Phase A: Switchboard arm ---------------------------------------------
 // The on-chain execute_trigger ALREADY routes by market.oracle_source (a Pyth
@@ -415,8 +421,12 @@ export function buildHermesMultiUrl(base: string, feedHexes: string[]): string {
 
 export interface TickDeps {
   fetchTriggerOrders: () => Promise<{ publicKey: PublicKey; account: any }[]>;
-  fetchMarkets: () => Promise<{ publicKey: PublicKey; account: any }[]>;
-  fetchVaults: () => Promise<{ publicKey: PublicKey; account: any }[]>;
+  /** `required` is the set of keys this tick KNOWS it needs (every live order's
+   *  market / vault). The cached implementation refreshes on a miss, so a new
+   *  market is picked up on the first tick an order references it regardless of
+   *  TTL. Optional so uncached test doubles need no change. */
+  fetchMarkets: (required?: Iterable<string>) => Promise<{ publicKey: PublicKey; account: any }[]>;
+  fetchVaults: (required?: Iterable<string>) => Promise<{ publicKey: PublicKey; account: any }[]>;
   readPrices: (feedHexes: string[]) => Promise<Map<string, SpotEntry>>;
   /** Switchboard WATCH tape (Crossbar simulate). Optional so existing callers
    *  and the Pyth-only tests need no change; absent ⇒ no SB spots. */
@@ -1049,7 +1059,16 @@ export async function tickOnce(
     return report;
   }
 
-  const [markets, vaults] = await Promise.all([deps.fetchMarkets(), deps.fetchVaults()]);
+  // Tell the cache what this tick actually needs. Any market or vault an order
+  // references but the cache has not seen forces one refresh, so a brand-new
+  // market enters evaluation on the FIRST tick an order points at it — the TTL
+  // only bounds staleness of already-known accounts, it never hides a new one.
+  const needMarkets = new Set(orders.map((o) => o.account.market.toBase58()));
+  const needVaults = new Set(orders.map((o) => o.account.vault.toBase58()));
+  const [markets, vaults] = await Promise.all([
+    deps.fetchMarkets(needMarkets),
+    deps.fetchVaults(needVaults),
+  ]);
   // Stage 3 guard: exclude Switchboard-sourced markets from the Hermes feed set
   // and collect their pubkeys so the loop skips their orders (see helper).
   const { marketRec, marketFeed, sbMarkets } = buildTriggerMarketMaps(markets);
@@ -1222,10 +1241,16 @@ export async function readPricesBatched(
 function realDeps(
   ctx: TriggerCrankContext, program: anchor.Program<any>, cfg: TickConfig,
 ): TickDeps {
+  // Held ACROSS ticks: this is the whole point. Constructed once per keeper
+  // process, so a quiet board costs 1 gPA/tick (the orders scan) instead of 3.
+  const marketCache = new AccountCache(
+    () => fetchAllDecoded(program, FETCHABLE.optionsMarket), ACCOUNT_CACHE_TTL_MS, "markets");
+  const vaultCache = new AccountCache(
+    () => fetchAllDecoded(program, FETCHABLE.sharedVault), ACCOUNT_CACHE_TTL_MS, "vaults");
   return {
     fetchTriggerOrders: () => fetchAllDecoded(program, FETCHABLE.triggerOrder),
-    fetchMarkets: () => fetchAllDecoded(program, FETCHABLE.optionsMarket),
-    fetchVaults: () => fetchAllDecoded(program, FETCHABLE.sharedVault),
+    fetchMarkets: (req) => marketCache.get(req),
+    fetchVaults: (req) => vaultCache.get(req),
     readPrices: (feeds) => readPricesBatched(feeds, ctx.hermesBase),
     readSbPrices: TRIGGER_SB_ENABLED
       ? async (feeds) => {

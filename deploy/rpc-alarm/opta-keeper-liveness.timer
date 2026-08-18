@@ -1,0 +1,15 @@
+[Unit]
+Description=Check the Opta trigger keeper is completing ticks, every 5 minutes
+# Tick is 300s and the staleness limit is 780s (two missed ticks plus slack), so a
+# 5-minute check detects a stopped keeper within ~13 minutes worst case.
+# journald only — zero RPC credits.
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Persistent=true
+Unit=opta-keeper-liveness.service
+
+[Install]
+WantedBy=timers.target

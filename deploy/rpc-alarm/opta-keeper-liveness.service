@@ -1,0 +1,30 @@
+[Unit]
+# Keeper liveness monitor — 2B item 3. HARD GATE for 2C.
+# Asserts the trigger tick is COMPLETING, not merely that the unit is active.
+Description=Opta keeper liveness monitor (trigger tick completion)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=opta
+Group=opta
+# REQUIRED: a plain user cannot read another unit's journal, so without this the
+# monitor scans an empty log, finds no ticks, and would page constantly — or, if
+# the logic were inverted, report healthy forever. Verified 2026-08-17: bare opta
+# gets "No journal files were opened due to insufficient permissions".
+SupplementaryGroups=systemd-journal
+EnvironmentFile=/etc/opta/rpc-alarm.env
+StateDirectory=opta-rpc-alarm
+ExecStart=/opt/opta-rpc-alarm/keeper-liveness-monitor.sh
+Restart=no
+# Exit 1 means "keeper is not ticking" — a successful detection.
+SuccessExitStatus=0 1
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/opta-rpc-alarm
+
+[Install]
+WantedBy=multi-user.target

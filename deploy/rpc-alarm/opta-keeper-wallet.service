@@ -1,0 +1,27 @@
+[Unit]
+# Keeper wallet low-balance alarm — 2B item 4. HARD GATE for 2C.
+# execute_trigger is keeper-paid, so an empty keeper stops firing stop-losses
+# while every service still reports healthy.
+Description=Opta keeper wallet low-balance alarm
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=opta
+Group=opta
+EnvironmentFile=/etc/opta/rpc-alarm.env
+StateDirectory=opta-rpc-alarm
+Environment=OPTA_KEEPER_STATE=/var/lib/opta-rpc-alarm/keeper_balance_state
+ExecStart=/opt/opta-rpc-alarm/keeper-wallet-alarm.sh
+Restart=no
+# Exit 1 means "balance is low" — a successful detection, not a service fault.
+SuccessExitStatus=0 1
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/opta-rpc-alarm
+
+[Install]
+WantedBy=multi-user.target

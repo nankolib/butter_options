@@ -91,11 +91,60 @@ export type SbResolve = {
  * @param proxyFetch   (base, hex) → spot or null. Injected fetch+parse.
  * @param onChainDecode (hexes)    → Map<hex, {spot, asOf}>. Injected RPC+decode.
  */
+/**
+ * Run an async map with a bounded number in flight, preserving input order.
+ *
+ * WHY THIS EXISTS (measured, 2026-08-18)
+ *
+ *   The proxy pass used to be `feeds.map(...)` inside a Promise.all — 46 fetches
+ *   released at once. A browser opens ~6 connections per host, so requests 7..46
+ *   sat in the queue and spent their 4s abort budget WAITING FOR A SOCKET rather
+ *   than waiting for the proxy. The measurement is unambiguous: a cluster of
+ *   calls all completing at 4,312-4,313ms, which is the AbortController firing,
+ *   not a slow server.
+ *
+ *   So the eager fan-out did not just fail to be faster, it converted most of
+ *   the proxy pass into guaranteed timeouts and pushed those feeds onto the
+ *   on-chain fallback. Bounding concurrency to roughly what the transport can
+ *   actually carry means each request gets its full budget spent on the request.
+ */
+export async function mapWithLimit<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i]);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker),
+  );
+  return out;
+}
+
+/** Matches the browser's per-host connection budget. Higher just rebuilds the
+ *  queue inside the browser, where we cannot see it or bound its wait. */
+export const PROXY_CONCURRENCY = 6;
+
+export interface ResolveOpts {
+  /** Tickers to resolve FIRST. The asset actually on screen should not wait
+   *  behind 45 boards the user is not looking at. */
+  priority?: readonly string[];
+  concurrency?: number;
+}
+
 export async function resolveSbSpots(
   feeds: SbFeed[],
   base: string | null,
   proxyFetch: (base: string, hex: string) => Promise<number | null>,
   onChainDecode: (hexes: string[]) => Promise<Map<string, { spot: number; asOf: number }>>,
+  opts: ResolveOpts = {},
 ): Promise<SbResolve> {
   const prices: Record<string, number> = {};
   const asOf: Record<string, number> = {};
@@ -105,8 +154,16 @@ export async function resolveSbSpots(
   //    on-chain fallback below.
   const needOnChain: SbFeed[] = [];
   if (base) {
-    const settled = await Promise.all(
-      feeds.map(async (f) => ({ f, spot: await proxyFetch(base, f.feedIdHex) })),
+    // Priority feeds first, then the rest — same set, useful order. Sorting is
+    // stable, so feeds keep their relative order within each group.
+    const pri = new Set(opts.priority ?? []);
+    const ordered = pri.size
+      ? [...feeds].sort((a, b) => Number(pri.has(b.ticker)) - Number(pri.has(a.ticker)))
+      : feeds;
+    const settled = await mapWithLimit(
+      ordered,
+      opts.concurrency ?? PROXY_CONCURRENCY,
+      async (f) => ({ f, spot: await proxyFetch(base, f.feedIdHex) }),
     );
     for (const { f, spot } of settled) {
       if (spot != null) prices[f.ticker] = spot;

@@ -78,7 +78,12 @@ export const TradeChainV2: FC<{
   atmStrike: number | null;
   focused: FocusedContract | null;
   onSelect: (c: FocusedContract) => void;
-}> = ({ rows, spot, atmStrike, focused, onSelect }) => {
+  /** Still fetching. Without this the chain cannot tell "nothing here" from
+   *  "nothing YET", and it renders the empty state during a load — measured at
+   *  up to 18s on a cold /trade, which reads as a broken page rather than a slow
+   *  one. Optional so existing call sites keep compiling; the page passes it. */
+  loading?: boolean;
+}> = ({ rows, spot, atmStrike, focused, onSelect, loading = false }) => {
   const gridRows = useMemo<GridRow[]>(() => {
     const byStrike = new Map<number, GridRow>();
     for (const r of rows) {
@@ -94,6 +99,26 @@ export const TradeChainV2: FC<{
   // prices from HERE, not the staler useUnifiedChain snapshot, so they always
   // match the book panel and update the instant an order posts/cancels.
   const { byOptionMint } = useBook();
+
+  // EMPTY vs NOT-YET-LOADED. These are different facts and must look different:
+  // telling someone there are no contracts, while the contracts are still on the
+  // wire, is the single thing that made a slow page feel like a broken one.
+  if (gridRows.length === 0 && loading) {
+    return (
+      <div data-testid="chain-skeleton" className="rounded-[10px] border border-l-hair p-4">
+        <p className="mb-3 text-center font-mono-plex text-[10.5px] uppercase tracking-[0.16em] text-l-muted">
+          Loading contracts…
+        </p>
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div key={i} className="mb-2 flex items-center gap-2">
+            <div className="h-[22px] flex-1 animate-pulse rounded bg-l-hair/40" />
+            <div className="h-[22px] w-[64px] animate-pulse rounded bg-l-hair/60" />
+            <div className="h-[22px] flex-1 animate-pulse rounded bg-l-hair/40" />
+          </div>
+        ))}
+      </div>
+    );
+  }
 
   if (gridRows.length === 0) {
     return (

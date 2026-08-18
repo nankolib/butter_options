@@ -8,6 +8,9 @@
 import { PublicKey } from "@solana/web3.js";
 import { Program } from "@coral-xyz/anchor";
 import { coalescedProgramAccounts, invalidateProgramAccounts } from "../utils/programAccounts";
+import {
+  claimRevalidation, invalidateScanCache, lookupScan, releaseRevalidation, storeScan,
+} from "../utils/accountScanCache";
 
 // Account discriminators from the current IDL
 const DISCRIMINATORS: Record<string, number[]> = {
@@ -48,6 +51,45 @@ export async function safeFetchAll<T>(
   const discriminator = DISCRIMINATORS[accountName];
   if (!discriminator) throw new Error(`Unknown account: ${accountName}`);
 
+  const programId = program.programId.toBase58();
+
+  // Cacheable types are served with NO network call inside FRESH_MS — that is
+  // what removes the repeat scan waves measured at 3.1s / 6.0s / 7.1s. Book and
+  // position types never get here: isCacheableScan is an opt-in allowlist, so
+  // they fall straight through to a fresh scan every time.
+  const cached = lookupScan<T>(programId, accountName);
+  if (cached.hit) {
+    if (cached.stale && claimRevalidation(programId, accountName)) {
+      // Refresh BEHIND the render, deliberately not awaited — the caller already
+      // holds usable data, and blocking on this would defeat the cache entirely.
+      void fetchAndDecodeScan<T>(program, accountName, discriminator)
+        .then((rows) => storeScan(programId, accountName, rows))
+        .catch(() => {
+          // A failed background refresh leaves the existing entry alone: it gets
+          // retried on the next read, or aged out by MAX_STALE_MS. Throwing here
+          // would surface as an unhandled rejection with no caller to catch it.
+        })
+        .finally(() => releaseRevalidation(programId, accountName));
+    }
+    return cached.rows;
+  }
+
+  const rows = await fetchAndDecodeScan<T>(program, accountName, discriminator);
+  storeScan(programId, accountName, rows);
+  return rows;
+}
+
+/**
+ * The scan itself, plus the decode/validation rules. Split out of safeFetchAll so
+ * the background revalidation above runs the identical path — a second, subtly
+ * different decoder is exactly how a cache starts serving a different shape than
+ * the fresh path.
+ */
+async function fetchAndDecodeScan<T>(
+  program: Program<any>,
+  accountName: AccountName,
+  discriminator: number[],
+): Promise<{ publicKey: PublicKey; account: T }[]> {
   const connection = program.provider.connection;
 
   // Fetch all accounts owned by our program with matching discriminator.
@@ -111,6 +153,11 @@ export function invalidateAccountScans(
   for (const name of accountNames) {
     const disc = DISCRIMINATORS[name];
     if (disc) invalidateProgramAccounts(program.programId, disc);
+    // The cached snapshot must die with the in-flight one. Dropping only the
+    // in-flight scan would leave a cached pre-mutation entry to be served for up
+    // to MAX_STALE_MS — the stale-UI-after-cancel bug this primitive was written
+    // to fix, with a far longer window.
+    invalidateScanCache(program.programId.toBase58(), name);
   }
 }
 

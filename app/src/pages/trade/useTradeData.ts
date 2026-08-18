@@ -329,7 +329,11 @@ export function useTradeData(): UseTradeData {
     }
     return out;
   }, [vaults, markets]);
-  const { prices: spotPrices, stale, asOf: spotAsOfMap } = useSpotPrices(feeds);
+  // The board on screen resolves FIRST. Without this its spot sat behind ~45
+  // other feeds in the queue and routinely hit the 4s abort, so the one price
+  // the user is actually looking at was the last to arrive.
+  const spotPriority = useMemo(() => (selectedAsset ? [selectedAsset] : []), [selectedAsset]);
+  const { prices: spotPrices, stale, asOf: spotAsOfMap } = useSpotPrices(feeds, spotPriority);
 
   const spot = selectedAsset ? spotPrices[selectedAsset] ?? null : null;
   const spotAsOf = selectedAsset ? spotAsOfMap?.[selectedAsset] ?? null : null;

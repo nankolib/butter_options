@@ -81,7 +81,55 @@ async function fetchProxySpot(base: string, feedIdHex: string): Promise<number |
   }
 }
 
-export function useSpotPrices(entries: SpotRequest[]): SpotPricesResult {
+/**
+ * Short-TTL cache + single-flight around the spot proxy.
+ *
+ * Two separate wastes, both measured on a cold /trade:
+ *   - the same feed is requested by more than one mounted component at once, and
+ *   - a remount re-requests a price fetched moments ago.
+ * Neither survives a few seconds of memory.
+ *
+ * DISPLAY PATH ONLY. Spot here feeds the chain, the spot marker and estimates —
+ * never an instruction argument (those are quantity / max premium / limit price,
+ * all user input). Any tx-affecting resolution reads fresh and does not come
+ * through here; a stale mark is a cosmetic annoyance, a stale tx input is money.
+ * The TTL is deliberately far below REFRESH_INTERVAL_MS so the 30s refresh still
+ * does real work rather than re-reading its own cache.
+ */
+const SPOT_TTL_MS = 5_000;
+const spotCache = new Map<string, { value: number | null; at: number }>();
+const spotInflight = new Map<string, Promise<number | null>>();
+
+async function cachedProxySpot(base: string, feedIdHex: string): Promise<number | null> {
+  const now = Date.now();
+  const hit = spotCache.get(feedIdHex);
+  // A negative age means the clock moved backwards; treat it as a miss rather
+  // than trusting an entry that could otherwise look fresh indefinitely.
+  if (hit && now - hit.at >= 0 && now - hit.at < SPOT_TTL_MS) return hit.value;
+
+  const flying = spotInflight.get(feedIdHex);
+  if (flying) return flying;
+
+  const p = fetchProxySpot(base, feedIdHex)
+    .then((value) => {
+      // Cache misses too: a feed the proxy cannot serve should not be retried by
+      // every other caller in the same burst, which is what turned one dead feed
+      // into dozens of 4s timeouts.
+      spotCache.set(feedIdHex, { value, at: Date.now() });
+      return value;
+    })
+    .finally(() => {
+      if (spotInflight.get(feedIdHex) === p) spotInflight.delete(feedIdHex);
+    });
+  spotInflight.set(feedIdHex, p);
+  return p;
+}
+
+export function useSpotPrices(
+  entries: SpotRequest[],
+  /** Tickers to resolve first — normally the asset currently on screen. */
+  priority: readonly string[] = [],
+): SpotPricesResult {
   // ---- Split by source. Both branches run every render (hooks rules). --------
   const { pythFeeds, sbFeeds } = useMemo(() => {
     return splitBySource(entries);
@@ -100,6 +148,10 @@ export function useSpotPrices(entries: SpotRequest[]): SpotPricesResult {
     () => sbFeeds.map((f) => `${f.ticker}:${f.feedIdHex}`).sort().join(","),
     [sbFeeds],
   );
+
+  // Stable string so a freshly-allocated priority array each render does not
+  // restart the fetch loop.
+  const priorityKey = useMemo(() => priority.join(","), [priority.join(",")]);
 
   const [sbPrices, setSbPrices] = useState<Record<string, number>>({});
   const [sbAsOf, setSbAsOf] = useState<Record<string, number>>({});
@@ -139,8 +191,9 @@ export function useSpotPrices(entries: SpotRequest[]): SpotPricesResult {
       const { prices, asOf, error } = await resolveSbSpots(
         sbFeeds,
         getXbarBase(),
-        fetchProxySpot,
+        cachedProxySpot,
         onChainDecode,
+        { priority: priorityKey ? priorityKey.split(",") : [] },
       );
       if (!cancelled) {
         setSbPrices(prices);
@@ -158,7 +211,7 @@ export function useSpotPrices(entries: SpotRequest[]): SpotPricesResult {
     };
     // sbKey is the membership fingerprint; connection/programId are stable refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sbKey, connection, programId?.toBase58()]);
+  }, [sbKey, priorityKey, connection, programId?.toBase58()]);
 
   // ---- Merge. Pyth-only inputs return byte-identically. ----------------------
   return useMemo(() => {

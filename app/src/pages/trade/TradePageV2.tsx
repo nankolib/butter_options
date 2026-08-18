@@ -46,6 +46,26 @@ type Persona = "pro" | "simple";
 
 const day = (ts: number) => Math.floor(ts / 86_400);
 
+/**
+ * Preferred landing boards, in order. These are the consistently liquid ones —
+ * a first-time visitor should see quotes, not an empty grid. Only used when
+ * there is no deep link and no remembered asset, and only if the asset actually
+ * has a board in the current chain.
+ */
+const LIQUID_DEFAULT_ASSETS = ["JTO", "BTC", "SOL"] as const;
+
+const LAST_ASSET_KEY = "opta:trade:lastAsset";
+
+/** localStorage is unavailable in some privacy modes; never let that throw and
+ *  take the page down with it — a forgotten default is not worth a crash. */
+function readLastAsset(): string | null {
+  try { return window.localStorage.getItem(LAST_ASSET_KEY); } catch { return null; }
+}
+
+function writeLastAsset(asset: string): void {
+  try { window.localStorage.setItem(LAST_ASSET_KEY, asset); } catch { /* ignore */ }
+}
+
 export const TradePageV2: FC = () => {
   const { mode, toggle } = useSurfaceMode("dark");
   const td = useTradeData();
@@ -133,8 +153,16 @@ export const TradePageV2: FC = () => {
     return [...byDay.values()].sort((a, b) => a - b);
   }, [chain.rows, td.selectedAsset]);
 
-  // Default asset once the chain has assets: honor a deep-link ?asset, else the
-  // highest-OI asset. One-shot; the shell owns the default (td no longer resets).
+  // Default asset once the chain has assets. Precedence, most explicit first:
+  //   1. ?asset deep link  — someone asked for it by name
+  //   2. last viewed       — what this user was doing last
+  //   3. a LIQUID default  — a board with quotes on it
+  //   4. highest OI        — the previous behaviour, as a floor
+  //
+  // Ranking by OI alone put whichever board happened to lead on screen first,
+  // and landing on a thin one looks identical to a broken page: empty grid, no
+  // quotes, nothing to click. Steps 2 and 3 exist so the first thing a visitor
+  // sees is a board with contracts on it.
   const assetDefaulted = useRef(false);
   useEffect(() => {
     if (assetDefaulted.current || !chainAssets.length) return;
@@ -144,11 +172,27 @@ export const TradePageV2: FC = () => {
     // partial/early set can't lock a low-breadth asset (the FARTCOIN default bug).
     // A deep-link asset applies immediately (it's an explicit choice, no ranking).
     if (!canUseUrl && chain.loading) return;
-    const want = canUseUrl ? urlAsset : chainAssets[0];
+
+    let want: string | undefined;
+    if (canUseUrl) {
+      want = urlAsset;
+    } else {
+      // Only honour a remembered asset that still has a board today.
+      const remembered = readLastAsset();
+      want =
+        (remembered && chainAssets.includes(remembered) ? remembered : undefined) ??
+        LIQUID_DEFAULT_ASSETS.find((a) => chainAssets.includes(a)) ??
+        chainAssets[0];
+    }
     if (want && want !== td.selectedAsset) td.setSelectedAsset(want);
     assetDefaulted.current = true;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chainAssets, chain.loading]);
+
+  // Remember the asset actually being viewed, for next visit.
+  useEffect(() => {
+    if (td.selectedAsset) writeLastAsset(td.selectedAsset);
+  }, [td.selectedAsset]);
 
   // Keep a valid expiry for the selected asset: honor ?expiry once, else the
   // nearest. Re-runs when the asset (hence its expiry set) changes.
@@ -336,6 +380,7 @@ export const TradePageV2: FC = () => {
               {view === "grid" ? (
                 <TradeChainV2
                   rows={visibleRows}
+                  loading={chain.loading}
                   spot={td.spot}
                   atmStrike={td.atmStrike}
                   focused={focused}

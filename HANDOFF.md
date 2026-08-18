@@ -1,3 +1,123 @@
+# FE UX + /trade LOAD — 2026-08-18 (walkthrough fixes SHIPPED · exchange spec COMPLETE, founder-verified)
+
+> Written for a reader with ZERO session memory. Everything below is current as
+> of this block; older sections remain valid history.
+>
+> | Commit | Ships | State |
+> |---|---|---|
+> | `40b638e` | numeric fields store the string, parse on the way out | **LIVE** |
+> | `d1bf01e` | SWR scan cache + bounded spot fan-out + loading skeleton | **LIVE** |
+> | `15690cc` | PostHog init off the first-paint path | **LIVE** |
+> | `c48ff14` `682f1a2` | TP/SL ticket: label, spot anchoring, already-met guard | **LIVE** |
+> | `ac92397` | armed exits were rendered by nobody on the shipped page | **LIVE** |
+> | `39bb781` | floor-asymmetry copy + armed exits in the trade dock | **LIVE** |
+>
+> Checkpoints `86eynwhmf` (2C paused) · `86eynwhmg` (WS1/WS2) · `86eynwhmk`
+> (walkthrough fixes).
+>
+> ## EXCHANGE SPEC — COMPLETE, founder-verified
+>
+> The CLOB arc is closed: post -> fill -> settle, writer asks, triggers with
+> keeper execution, and OCO pairing are all live and exercised by a human on
+> devnet, not only by tests. What remains against the spec is scheduling, not
+> construction.
+>
+> ## The class of bug that keeps shipping: a component nobody mounts
+>
+> **Second occurrence.** `PortfolioPage` is a flag switch, `PORTFOLIO_TERMINAL_UI`
+> has been true since the terminal rewrite, and `<ArmedTriggersSection />` was
+> mounted ONLY by the legacy branch. A TP/SL pair confirmed on chain rendered
+> nothing: no rows, no OCO badge, nothing to cancel. Its strings were not even in
+> the bundle, the dead branch being folded out at build time.
+>
+> Component correct. Hook correct. Chain data correct and decodable. Every unit
+> test would have passed. **The only broken thing was that nothing rendered it.**
+>
+> **STANDING RULE.** Any new user-facing surface ships with BOTH:
+>   1. a wiring test asserting the mount on the branch the flag actually selects
+>      (and failing loudly if the flag flips), and
+>   2. a live-bundle presence check — grep the DEPLOYED chunk for a string only
+>      that surface produces.
+>
+> "The component exists" is not "the component shipped". The bundle check is what
+> actually caught this one; the wiring test alone would not have.
+> See `crank/portfolioWiring.test.ts`.
+>
+> ## Diagnosis discipline that paid, twice
+>
+> Two confident premises died on contact and both would have cost a night:
+>
+> - **"The armed exits are stuck in tonight's SWR cache."** They are not.
+>   `useTriggers` uses its own raw `getProgramAccounts` with a memcmp on owner and
+>   never calls `safeFetchAll`; `triggerOrder` is not in `DISCRIMINATORS`, so the
+>   cache cannot hold it. Replaying the hook's exact `.all()` against devnet
+>   returned both legs, correctly decoded and mutually OCO-linked.
+> - **"The repeat gPA scans are a missing dedup."** They are not.
+>   `coalescedProgramAccounts` already merges simultaneous scans and the trace
+>   shows it working — each wave is one call per type. The repeats arrive in
+>   WAVES seconds apart, where nothing is in flight to join.
+>
+> Also: an early measurement reported "never interactive, 494 requests, serial
+> waterfall confirmed". All three were artefacts of waiting on `table tbody tr`
+> when the live chain is a CSS grid of divs. **The harness sat spinning for 180 s
+> and everything it counted in that window was noise.** Fix the instrument before
+> believing the number.
+>
+> ## /trade load — TARGETS MISSED, and that makes the indexer a blocker
+>
+>       cold           21.20s -> 14.18-14.54s   (-33%)
+>       warm (reload)  12.54s -> 11.59-12.83s   (flat)
+>       bytes (reload) 13.19MB -> 7.99MB        (-39%)
+>       spot /simulate 46 calls ALL aborting at 4,312ms
+>                      -> 44 calls, 0 aborts, median 701ms
+>
+> Targets were cold single-digit and warm <2 s. Neither met.
+>
+> The spot fetches were never slow — they were **timing out**. Released at once
+> through a ~6-connection browser cap, requests 7..46 spent their entire 4 s
+> `AbortController` budget queued for a socket and then aborted, pushing those
+> feeds onto the on-chain fallback. Bounded concurrency (6) + priority for the
+> on-screen asset took aborts to zero.
+>
+> What remains is transfer-bound, not count-bound: single 2.78 MB and 1.92 MB gPA
+> responses at 5.5-8 s each, over http/1.1 (verified with Chrome's DevTools
+> protocol — `rpc.opta.fyi` serves http/1.1 for 54 requests while third parties
+> negotiate h2; curl locally lacks h2 and cannot answer this).
+>
+> **By the standing criterion — targets hit means optimization, missed means
+> blocker — the INDEXER READ-PATH is a go-public BLOCKER.**
+>
+> ## Two measured facts worth not re-deriving
+>
+> **`dataSlice` on the vault scan is worth ~3%, not the reduction assumed.** The
+> trade path reads `exercisedOptions` (ends at byte 249) and
+> `writerAskCollateralSwept` (ends at 268) of a 276-byte account, so a prefix
+> slice saves 8 bytes — against hand-rolled decoders on a struct with known size
+> drift (260 -> 268 -> 276), where a silent mis-slice renders an empty chain.
+>
+> **Keeper cache, armed window 16:18:51Z-16:44:02Z:**
+>
+>       markets  size 461   hits 9  refreshes 1  ageRefreshes 1  missRefreshes 0
+>       vaults   size 4649  hits 9  refreshes 1  ageRefreshes 1  missRefreshes 0
+>
+> 9 hits to 1 refresh — 90% of logical reads served from memory, one cold-start
+> scan for the cache's whole life. Each `vaults` hit avoided a ~2.8 MB scan.
+>
+> ## FLOOR ASYMMETRY — copy fixed, program question OPEN
+>
+> `execute_trigger` enforces `max_premium` as a per-contract minimum **only on
+> the book sell path**. The take-profit's vault fallback
+> (`american_exercise_core`) has no floor check, so a TP can exercise regardless
+> of the floor. A floor of 0 therefore leaves a stop-loss unable to execute at
+> all (it has no other route) while a TP can still exercise if in the money.
+>
+> Copy now scopes itself ("book sales only"). **Whether the floor SHOULD bind the
+> vault path is queued for the NEXT UPGRADE BUNDLE for a ruling** — the label
+> says "minimum proceeds" and one of the two paths ignores it. Not its own
+> ceremony.
+
+---
+
 # BUY PATH — 2026-08-15 (Phantom's domain check, and a blockhash that outlived its approval · SHIPPED + VERIFIED)
 
 > Refreshed at this ship. Everything below predates it; the 2026-08-14 week

@@ -1,4 +1,8 @@
 import "./polyfills";
+// Side-effect import: installs the indexer read path when VITE_CHAIN_READPATH=1.
+// FE ONLY — this module carries `import.meta` and must never reach the crank's
+// import graph (see utils/indexerRegistry.ts).
+import "./utils/chainReadPath";
 
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";

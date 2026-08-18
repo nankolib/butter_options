@@ -11,6 +11,7 @@ import { coalescedProgramAccounts, invalidateProgramAccounts } from "../utils/pr
 import {
   claimRevalidation, invalidateScanCache, lookupScan, releaseRevalidation, storeScan,
 } from "../utils/accountScanCache";
+import { getIndexerReader } from "../utils/indexerRegistry";
 
 // Account discriminators from the current IDL
 const DISCRIMINATORS: Record<string, number[]> = {
@@ -52,6 +53,28 @@ export async function safeFetchAll<T>(
   if (!discriminator) throw new Error(`Unknown account: ${accountName}`);
 
   const programId = program.programId.toBase58();
+
+  // INDEXER READ PATH. Structural types can be served pre-decoded over HTTP
+  // instead of pulling ~5.4MB of raw accounts through getProgramAccounts. It is
+  // an ACCELERATOR, never a dependency: fetchFromIndexer returns null for any
+  // reason at all — flag off, unreachable, stale, wrong shape — and the code
+  // below then does exactly what it did before. Degraded costs the user the old
+  // load time; it must never cost them the page.
+  // The reader is REGISTERED by the FE at startup and is absent in the crank,
+  // which therefore reads chain directly — correct, since a keeper deciding
+  // whether to fire must never act on an index. See utils/indexerRegistry.ts for
+  // why this is not a plain import.
+  const indexer = getIndexerReader();
+  if (indexer) {
+    const viaIndexer = (await indexer(accountName)) as
+      | { rows: { publicKey: PublicKey; account: T }[]; slot: number; ageSec: number }
+      | null;
+    if (viaIndexer) {
+      // Cache it like any other read so repeat waves inside FRESH_MS are free.
+      storeScan(programId, accountName, viaIndexer.rows);
+      return viaIndexer.rows;
+    }
+  }
 
   // Cacheable types are served with NO network call inside FRESH_MS — that is
   // what removes the repeat scan waves measured at 3.1s / 6.0s / 7.1s. Book and

@@ -6,6 +6,8 @@ import { useTradeDockData } from "./useTradeDockData";
 import type { ActivityEvent } from "./tradeHistory";
 import type { Position } from "../portfolio/positions";
 import type { WriterRow } from "../portfolio/writerRows";
+import { Link } from "react-router-dom";
+import { useTriggers, type ArmedTrigger } from "../../hooks/useTriggers";
 
 /**
  * TradeDock — the full-width, collapsible bottom dock (design lock 2026-07-09).
@@ -101,7 +103,21 @@ export const TradeDock: FC<{ onFocusMint?: (mint: string) => void }> = ({ onFocu
 };
 
 // ---- Positions ------------------------------------------------------------
+/** Armed exits, keyed by the option mint they protect. */
+const exitLine = (t: ArmedTrigger): string => {
+  const leg = t.leg === "tp" ? "TP" : "SL";
+  const cmp = t.comparator === "ge" ? "≥" : "≤";
+  return `${leg} ${cmp} ${t.threshold}`;
+};
+
 const PositionsTab: FC<{ holder: Position[]; writer: WriterRow[]; loading: boolean; onFocusMint?: (m: string) => void }> = ({ holder, writer, loading, onFocusMint }) => {
+  // DISCOVERABILITY (founder walkthrough, 2026-08-18): armed exits were surfaced
+  // only in Portfolio, but the founder looked for them HERE — next to the
+  // position they protect, on the page where they were armed. Where someone
+  // looks for their own data is data, not a preference.
+  const { allTriggers } = useTriggers();
+  const exitsFor = (mint: string) => allTriggers.filter((t) => t.optionMint === mint);
+
   if (loading && holder.length === 0 && writer.length === 0) return <SkeletonRows />;
   if (holder.length === 0 && writer.length === 0) {
     return <Empty>No open positions. Buy or write a contract to open one.</Empty>;
@@ -111,16 +127,42 @@ const PositionsTab: FC<{ holder: Position[]; writer: WriterRow[]; loading: boole
       <Row header cols="minmax(140px,1.4fr) 80px 80px 100px 90px 28px">
         <HCell>Contract</HCell><HCell>Role</HCell><HCell right>Size</HCell><HCell right>Value</HCell><HCell>State</HCell><HCell></HCell>
       </Row>
-      {holder.map((p) => (
-        <Row key={p.id} cols="minmax(140px,1.4fr) 80px 80px 100px 90px 28px" onClick={onFocusMint ? () => onFocusMint(p.id) : undefined}>
-          <Contract asset={p.asset} strike={p.strike} side={p.side} />
-          <Cell><span style={{ color: "var(--color-l-up)" }}>Long</span></Cell>
-          <Cell right>{p.contracts.toLocaleString()}</Cell>
-          <Cell right>{fmt(p.currentValue)}</Cell>
-          <Cell muted>{stateLabel(p.state)}</Cell>
-          <Cell><SolscanLink kind="token" id={p.id} label="option mint" /></Cell>
-        </Row>
-      ))}
+      {holder.map((p) => {
+        const exits = exitsFor(p.id);
+        return (
+          <div key={p.id}>
+            <Row cols="minmax(140px,1.4fr) 80px 80px 100px 90px 28px" onClick={onFocusMint ? () => onFocusMint(p.id) : undefined}>
+              <Contract asset={p.asset} strike={p.strike} side={p.side} />
+              <Cell><span style={{ color: "var(--color-l-up)" }}>Long</span></Cell>
+              <Cell right>{p.contracts.toLocaleString()}</Cell>
+              <Cell right>{fmt(p.currentValue)}</Cell>
+              <Cell muted>{stateLabel(p.state)}</Cell>
+              <Cell><SolscanLink kind="token" id={p.id} label="option mint" /></Cell>
+            </Row>
+            {exits.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2 border-b border-l-hair px-3 py-1.5">
+                <span className="font-mono-plex text-[9px] uppercase tracking-[0.16em] text-l-muted">
+                  Armed exits
+                </span>
+                {exits.map((t) => (
+                  <span
+                    key={t.pubkey}
+                    className="rounded-[4px] border border-l-hair px-1.5 py-[1px] font-mono-plex text-[9.5px] tabular-nums text-l-text"
+                  >
+                    {exitLine(t)}
+                    {/* An OCO pair is one decision, not two orders. Saying so here
+                        stops a user cancelling one leg believing the other stands. */}
+                    {t.ocoLink && <span className="ml-1 text-l-faint">OCO</span>}
+                  </span>
+                ))}
+                <Link to="/portfolio" className="font-mono-plex text-[9.5px] text-l-up-text no-underline hover:underline">
+                  manage &rarr;
+                </Link>
+              </div>
+            )}
+          </div>
+        );
+      })}
       {writer.map((w) => (
         <Row key={w.id} cols="minmax(140px,1.4fr) 80px 80px 100px 90px 28px">
           <Contract asset={w.asset} strike={w.strike} side={w.side} />

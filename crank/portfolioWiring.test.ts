@@ -70,3 +70,39 @@ test("the empty state is not silent", () => {
   assert.doesNotMatch(section, /if \(triggers\.length === 0\) return null;/,
     "a silent empty state hides this exact class of failure -- say 'no armed exits'");
 });
+
+// ---------------------------------------------------------------------------
+// STANDING RULE (adopted 2026-08-18, after the SECOND dead-branch mount):
+// any new user-facing surface ships with BOTH a wiring test on the
+// flag-selected branch AND a live-bundle presence check. "The component
+// exists" is not "the component shipped" — the armed-exits section was
+// correct, tested, mounted by nobody, and folded out of the bundle entirely.
+// ---------------------------------------------------------------------------
+
+test("armed exits are surfaced in the TRADE dock, not only in Portfolio", () => {
+  // The founder looked for them here, next to the position they protect, on the
+  // page where they were armed. Where someone looks for their own data is data.
+  const dock = read("pages/trade/TradeDock.tsx");
+  assert.match(dock, /useTriggers/, "the dock must read the armed set");
+  assert.match(dock, /Armed exits/, "the dock must label them");
+  assert.match(dock, /to="\/portfolio"/, "there must be a route to manage/cancel them");
+});
+
+test("an OCO pair is marked as such wherever it is shown", () => {
+  // Cancelling one leg of a pair while believing the other still stands is the
+  // failure this badge exists to prevent.
+  const dock = read("pages/trade/TradeDock.tsx");
+  assert.match(dock, /ocoLink && /, "a linked leg must be visibly marked OCO");
+});
+
+test("the sell-floor copy does not promise more than the floor delivers", () => {
+  // FLOOR ASYMMETRY: execute_trigger enforces max_premium as a minimum only on
+  // the BOOK path. The take-profit's vault fallback (american_exercise_core) has
+  // no floor check, so an unqualified "minimum proceeds" was a promise one of
+  // the two execution paths does not keep.
+  const ticket = read("pages/trade/OrderTicket.tsx");
+  assert.match(ticket, /book sales only/,
+    "the floor label must scope itself to the path that actually enforces it");
+  assert.match(ticket, /can still exercise/,
+    "the copy must say a take-profit can exercise regardless of the floor");
+});

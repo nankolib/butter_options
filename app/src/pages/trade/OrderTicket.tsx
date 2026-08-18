@@ -693,12 +693,21 @@ export const OrderTicket: FC<{
             </p>
           )}
 
-          <Field label="Minimum proceeds per contract">
+          {/* FLOOR ASYMMETRY (found 2026-08-18). This floor is enforced on the
+              BOOK sell path only — execute_trigger re-reads max_premium as a
+              per-contract minimum and rejects a bid below it. The take-profit's
+              VAULT fallback (american_exercise_core) has no floor check at all,
+              so a TP can still exercise regardless of what is set here. The
+              label said "minimum proceeds" without qualification, which promised
+              more than one of the two paths delivers. Whether the floor SHOULD
+              bind the vault path is a program-level question, queued for the next
+              upgrade bundle. */}
+          <Field label="Minimum proceeds per contract — book sales only">
             <NumericField
               value={sellFloor}
               min={0}
               fallback={0}
-              placeholder="0 = will not sell into the book"
+              placeholder="0 = no book sale (a take-profit can still exercise)"
               onChange={setSellFloor}
               className="w-full bg-transparent font-mono-plex text-[13px] tabular-nums text-l-text outline-none"
             />
@@ -732,7 +741,11 @@ export const OrderTicket: FC<{
             Estimates hold today&rsquo;s volatility and time-to-expiry fixed and shrink as
             expiry approaches. They are not the fill — the exit is whatever the book pays.
             {sellFloor <= 0 && (
-              <> <span className="text-l-muted">A floor of 0 means these will not sell into the book.</span></>
+              <> <span className="text-l-muted">
+                A floor of 0 blocks any BOOK sale. A stop-loss then cannot execute at
+                all — it has no other route. A take-profit can still exercise against
+                the vault if the contract is in the money, which ignores this floor.
+              </span></>
             )}
           </p>
 

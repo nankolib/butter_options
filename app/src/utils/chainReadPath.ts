@@ -113,7 +113,35 @@ export interface IndexerResult<T> {
  * Returning null rather than throwing is deliberate: a degraded read path must
  * cost the user the old load time, never the page.
  */
+/**
+ * In-flight dedup, keyed by exactly what is being fetched.
+ *
+ * MEASURED: without this, a cold /trade fetched /api/chain/vaults THREE times
+ * (3.74MB each) and /series three times, because several hooks call safeFetchAll
+ * concurrently and none of them had stored a result yet. coalescedProgramAccounts
+ * already solves this for the chain path; bypassing it for the indexer meant
+ * re-introducing the identical burst, and the read path briefly cost MORE bytes
+ * than the scans it replaced.
+ */
+const inflight = new Map<string, Promise<IndexerResult<unknown> | null>>();
+
 export async function fetchFromIndexer<T>(
+  name: AccountName,
+  params?: { market?: string },
+): Promise<IndexerResult<T> | null> {
+  if (!servedByIndexer(name)) return null;
+  const key = `${name}:${params?.market ?? ""}`;
+  const existing = inflight.get(key);
+  if (existing) return existing as Promise<IndexerResult<T> | null>;
+  const p = fetchFromIndexerUncoalesced<T>(name, params);
+  inflight.set(key, p as Promise<IndexerResult<unknown> | null>);
+  // Clear on settle so the NEXT read is fresh rather than joining a stale
+  // snapshot — same reasoning as the chain-side coalescer.
+  void p.finally(() => { if (inflight.get(key) === (p as never)) inflight.delete(key); });
+  return p;
+}
+
+async function fetchFromIndexerUncoalesced<T>(
   name: AccountName,
   params?: { market?: string },
 ): Promise<IndexerResult<T> | null> {

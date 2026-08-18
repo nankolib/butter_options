@@ -1085,6 +1085,15 @@ export type Opta = {
         {
           "name": "tokenProgram",
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "ocoPeer",
+          "docs": [
+            "The paired trigger, when this one is half of an OCO couple. APPENDED, so",
+            "every existing account keeps its index and unpaired callers pass None."
+          ],
+          "writable": true,
+          "optional": true
         }
       ],
       "args": []
@@ -2788,6 +2797,20 @@ export type Opta = {
             "layout BEFORE the transfer (the fill_order.rs C-1 guard, applied to the",
             "trigger path). A typed constraint is not usable: these are Token-2022",
             "accounts, which `Account<TokenAccount>` rejects."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "ocoPeer",
+          "docs": [
+            "The paired TriggerOrder when this one carries an `oco_link`, else None.",
+            "",
+            "APPENDED, deliberately: every existing account keeps its index, so the",
+            "pot stays at [25]/[26] and the book optionals stay at [21]-[31]. The slot",
+            "guards are still re-derived against the rebuilt IDL rather than assumed —",
+            "an append that silently did not hold would be exactly the class of bug",
+            "those guards exist for."
           ],
           "writable": true,
           "optional": true
@@ -4556,6 +4579,49 @@ export type Opta = {
       ]
     },
     {
+      "name": "linkOco",
+      "docs": [
+        "Stage a durable trigger order. NOT flag-gated (a user can stage/cancel",
+        "anytime; only the Pass-1 execute path checks AMERICAN_ENABLED).",
+        "StopEntryBuy escrows `max_premium × quantity` USDC + pre-creates the",
+        "owner's destination option ATA; TakeProfitSell escrows nothing and",
+        "sanity-checks the declared source ATA holds ≥ quantity. Spec v1 §placement.",
+        "B3: mutually pair two of the caller's triggers so a fire on one",
+        "decrements the other in the SAME transaction. Without this, `oco_link`",
+        "could never be set and the OCO enforcement in execute_trigger was",
+        "unreachable."
+      ],
+      "discriminator": [
+        200,
+        39,
+        69,
+        71,
+        190,
+        183,
+        100,
+        129
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "docs": [
+            "Must own BOTH legs. Pairing is a position-level decision, so it is the",
+            "owner's to make and nobody else's."
+          ],
+          "signer": true
+        },
+        {
+          "name": "triggerA",
+          "writable": true
+        },
+        {
+          "name": "triggerB",
+          "writable": true
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "listV2ForResale",
       "docs": [
         "V2 secondary listing — list option tokens for resale.",
@@ -5633,13 +5699,6 @@ export type Opta = {
     },
     {
       "name": "placeTrigger",
-      "docs": [
-        "Stage a durable trigger order. NOT flag-gated (a user can stage/cancel",
-        "anytime; only the Pass-1 execute path checks AMERICAN_ENABLED).",
-        "StopEntryBuy escrows `max_premium × quantity` USDC + pre-creates the",
-        "owner's destination option ATA; TakeProfitSell escrows nothing and",
-        "sanity-checks the declared source ATA holds ≥ quantity. Spec v1 §placement."
-      ],
       "discriminator": [
         219,
         75,
@@ -5875,6 +5934,14 @@ export type Opta = {
         {
           "name": "nonce",
           "type": "u64"
+        },
+        {
+          "name": "tape",
+          "type": {
+            "defined": {
+              "name": "tapeSource"
+            }
+          }
         }
       ]
     },
@@ -8660,6 +8727,31 @@ export type Opta = {
       "code": 6085,
       "name": "earlyExercisePotUnderfunded",
       "msg": "Writer-ask pot cannot fund this early exercise"
+    },
+    {
+      "code": 6086,
+      "name": "contractTapeRequiresAmerican",
+      "msg": "Contract-tape triggers require an American series"
+    },
+    {
+      "code": 6087,
+      "name": "ocoPeerRequired",
+      "msg": "Trigger has an OCO link but the paired trigger account was not supplied"
+    },
+    {
+      "code": 6088,
+      "name": "ocoPeerMismatch",
+      "msg": "OCO peer does not match this trigger's link, or the link is not mutual"
+    },
+    {
+      "code": 6089,
+      "name": "ocoAlreadyLinked",
+      "msg": "Trigger is already part of an OCO pair"
+    },
+    {
+      "code": 6090,
+      "name": "ocoSeriesMismatch",
+      "msg": "OCO legs must be on the same option series"
     }
   ],
   "types": [
@@ -10048,6 +10140,31 @@ export type Opta = {
       }
     },
     {
+      "name": "tapeSource",
+      "docs": [
+        "WHICH TAPE the comparator is evaluated against.",
+        "",
+        "**Variant order is load-bearing** (Underlying = 0, Contract = 1). Underlying",
+        "is variant 0 so it is the zero-byte default: any future account read that",
+        "encounters a zeroed byte here resolves to the safe, v1 behaviour.",
+        "",
+        "Added while the layout is migration-free (0 live TriggerOrders) — the same",
+        "window `oco_link` used. That window closes the moment the first order is",
+        "placed, which is why this lands before FE placement rather than after."
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "underlying"
+          },
+          {
+            "name": "contract"
+          }
+        ]
+      }
+    },
+    {
       "name": "triggerCancelled",
       "type": {
         "kind": "struct",
@@ -10287,6 +10404,20 @@ export type Opta = {
             ],
             "type": {
               "option": "pubkey"
+            }
+          },
+          {
+            "name": "tape",
+            "docs": [
+              "Which tape `comparator`/`threshold_usdc` are evaluated against.",
+              "Appended in the same migration-free window as `oco_link`; adds 1 byte",
+              "to INIT_SPACE (237 → 238). Underlying is variant 0, so the zero byte is",
+              "the safe default."
+            ],
+            "type": {
+              "defined": {
+                "name": "tapeSource"
+              }
             }
           }
         ]

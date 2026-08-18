@@ -1079,6 +1079,15 @@
         {
           "name": "token_program",
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "oco_peer",
+          "docs": [
+            "The paired trigger, when this one is half of an OCO couple. APPENDED, so",
+            "every existing account keeps its index and unpaired callers pass None."
+          ],
+          "writable": true,
+          "optional": true
         }
       ],
       "args": []
@@ -2711,6 +2720,94 @@
             "runtime in the SB arm, then scanned for the ed25519 ix index."
           ],
           "optional": true
+        },
+        {
+          "name": "book_order",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "book_maker",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "book_escrow",
+          "docs": [
+            "Holds the maker's USDC (WriterAsk collateral / Bid funds) or option tokens (ResaleAsk)."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "book_maker_usdc",
+          "docs": [
+            "Maker's USDC (premium recipient on a BUY); owner==book_order.owner checked",
+            "in-handler. None on a sell — proceeds go to owner_usdc_account instead."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "writer_ask_pot",
+          "docs": [
+            "Per-series WriterAskPot (must pre-exist); PDA [writer_ask_pot, option_mint] checked in-handler."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "writer_ask_pot_usdc",
+          "docs": [
+            "Per-series pot USDC (must pre-exist); PDA [writer_ask_pot_usdc, option_mint] checked in-handler."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "writer_ask_position",
+          "docs": [
+            "Per-(series, writer) WriterAskPosition (must pre-exist); PDA checked in-handler."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "book_hook_metas",
+          "optional": true
+        },
+        {
+          "name": "book_hook_program",
+          "optional": true
+        },
+        {
+          "name": "book_hook_state",
+          "optional": true
+        },
+        {
+          "name": "book_maker_option",
+          "docs": [
+            "Runtime-pinned to (book_order.owner, option_mint) from the raw Token-2022",
+            "layout BEFORE the transfer (the fill_order.rs C-1 guard, applied to the",
+            "trigger path). A typed constraint is not usable: these are Token-2022",
+            "accounts, which `Account<TokenAccount>` rejects."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "oco_peer",
+          "docs": [
+            "The paired TriggerOrder when this one carries an `oco_link`, else None.",
+            "",
+            "APPENDED, deliberately: every existing account keeps its index, so the",
+            "pot stays at [25]/[26] and the book optionals stay at [21]-[31]. The slot",
+            "guards are still re-derived against the rebuilt IDL rather than assumed —",
+            "an append that silently did not hold would be exactly the class of bug",
+            "those guards exist for."
+          ],
+          "writable": true,
+          "optional": true
         }
       ],
       "args": []
@@ -2842,6 +2939,81 @@
             "runtime in the SB arm, then scanned for the ed25519 ix index."
           ],
           "optional": true
+        },
+        {
+          "name": "writer_ask_pot",
+          "docs": [
+            "The series' collateral pot. Seed-derived AND field-linked, so a caller",
+            "cannot point this at another series' pot to drain it: the seeds pin it to",
+            "`option_mint`, `pot.vault` pins it to THIS vault, and `pot.usdc_account`",
+            "pins the token account below."
+          ],
+          "writable": true,
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  119,
+                  114,
+                  105,
+                  116,
+                  101,
+                  114,
+                  95,
+                  97,
+                  115,
+                  107,
+                  95,
+                  112,
+                  111,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "option_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "writer_ask_pot_usdc",
+          "docs": [
+            "The pot's USDC account — the shortfall payout source. Authority is",
+            "`protocol_state`, which is why that account is required alongside it."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "protocol_state",
+          "docs": [
+            "Signs the pot -> holder transfer. Same authority, same seeds settle_vault",
+            "uses to move this money at settlement."
+          ],
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
         }
       ],
       "args": [
@@ -4401,6 +4573,49 @@
       ]
     },
     {
+      "name": "link_oco",
+      "docs": [
+        "Stage a durable trigger order. NOT flag-gated (a user can stage/cancel",
+        "anytime; only the Pass-1 execute path checks AMERICAN_ENABLED).",
+        "StopEntryBuy escrows `max_premium × quantity` USDC + pre-creates the",
+        "owner's destination option ATA; TakeProfitSell escrows nothing and",
+        "sanity-checks the declared source ATA holds ≥ quantity. Spec v1 §placement.",
+        "B3: mutually pair two of the caller's triggers so a fire on one",
+        "decrements the other in the SAME transaction. Without this, `oco_link`",
+        "could never be set and the OCO enforcement in execute_trigger was",
+        "unreachable."
+      ],
+      "discriminator": [
+        200,
+        39,
+        69,
+        71,
+        190,
+        183,
+        100,
+        129
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "docs": [
+            "Must own BOTH legs. Pairing is a position-level decision, so it is the",
+            "owner's to make and nobody else's."
+          ],
+          "signer": true
+        },
+        {
+          "name": "trigger_a",
+          "writable": true
+        },
+        {
+          "name": "trigger_b",
+          "writable": true
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "list_v2_for_resale",
       "docs": [
         "V2 secondary listing — list option tokens for resale.",
@@ -5478,13 +5693,6 @@
     },
     {
       "name": "place_trigger",
-      "docs": [
-        "Stage a durable trigger order. NOT flag-gated (a user can stage/cancel",
-        "anytime; only the Pass-1 execute path checks AMERICAN_ENABLED).",
-        "StopEntryBuy escrows `max_premium × quantity` USDC + pre-creates the",
-        "owner's destination option ATA; TakeProfitSell escrows nothing and",
-        "sanity-checks the declared source ATA holds ≥ quantity. Spec v1 §placement."
-      ],
       "discriminator": [
         219,
         75,
@@ -5720,6 +5928,14 @@
         {
           "name": "nonce",
           "type": "u64"
+        },
+        {
+          "name": "tape",
+          "type": {
+            "defined": {
+              "name": "TapeSource"
+            }
+          }
         }
       ]
     },
@@ -7034,69 +7250,6 @@
         }
       ],
       "args": []
-    },
-    {
-      "name": "synth_warm_vol_oracle",
-      "docs": [
-        "Plant warmed VolOracle state (sample_count=720, fresh last_sample_ts,",
-        "V2-reference accumulators, caller-supplied spot) so American pricing",
-        "reads Ok past warmup/stale/math gates without 168 rate-limited pushes.",
-        "Gated by `test-synth-vol`. NEVER deploy a test-synth-vol build — it",
-        "lets anyone overwrite an oracle's vol state. Test-only."
-      ],
-      "discriminator": [
-        191,
-        90,
-        138,
-        28,
-        3,
-        150,
-        141,
-        216
-      ],
-      "accounts": [
-        {
-          "name": "signer",
-          "signer": true
-        },
-        {
-          "name": "vol_oracle",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  118,
-                  111,
-                  108,
-                  95,
-                  111,
-                  114,
-                  97,
-                  99,
-                  108,
-                  101
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "vol_oracle"
-              }
-            ]
-          }
-        }
-      ],
-      "args": [
-        {
-          "name": "spot_price_scaled",
-          "type": "i64"
-        },
-        {
-          "name": "last_sample_ts",
-          "type": "i64"
-        }
-      ]
     },
     {
       "name": "withdraw_from_vault",
@@ -8533,6 +8686,66 @@
       "code": 6078,
       "name": "SeedVolOutOfBounds",
       "msg": "seed_vol out of bounds — must be 0 (no seed) or within [MIN_SEED_VOL, MAX_SEED_VOL]"
+    },
+    {
+      "code": 6079,
+      "name": "StopLossSellDark",
+      "msg": "StopLossSell trigger is not yet enabled (dark until the book sell path lands in B2)"
+    },
+    {
+      "code": 6080,
+      "name": "AskPriceExceedsMax",
+      "msg": "Ask price exceeds the trigger's per-contract max_premium ceiling"
+    },
+    {
+      "code": 6081,
+      "name": "NotABid",
+      "msg": "Sell-leg book fire requires a Bid resting order"
+    },
+    {
+      "code": 6082,
+      "name": "SellFloorRequired",
+      "msg": "Sell trigger has no minimum-proceeds floor (max_premium == 0) — book fire refused"
+    },
+    {
+      "code": 6083,
+      "name": "BidPriceBelowMin",
+      "msg": "Bid price is below the sell trigger's per-contract minimum-proceeds floor"
+    },
+    {
+      "code": 6084,
+      "name": "EarlyExercisePotRequired",
+      "msg": "Early exercise needs the writer-ask pot accounts for this series"
+    },
+    {
+      "code": 6085,
+      "name": "EarlyExercisePotUnderfunded",
+      "msg": "Writer-ask pot cannot fund this early exercise"
+    },
+    {
+      "code": 6086,
+      "name": "ContractTapeRequiresAmerican",
+      "msg": "Contract-tape triggers require an American series"
+    },
+    {
+      "code": 6087,
+      "name": "OcoPeerRequired",
+      "msg": "Trigger has an OCO link but the paired trigger account was not supplied"
+    },
+    {
+      "code": 6088,
+      "name": "OcoPeerMismatch",
+      "msg": "OCO peer does not match this trigger's link, or the link is not mutual"
+    },
+    {
+      "code": 6089,
+      "name": "OcoAlreadyLinked",
+      "msg": "Trigger is already part of an OCO pair"
+    },
+    {
+      "code": 6090,
+      "name": "OcoSeriesMismatch",
+      "msg": "OCO legs must be on the same option series"
     }
   ],
   "types": [
@@ -9824,7 +10037,15 @@
               "`migrate_shared_vault_exercise_tracking` grows them and zero-fills the",
               "trailing bytes — which deserialize as 0/0, the correct default for a",
               "vault that has had no early exercises. Same append+migrate discipline as",
-              "carry_rate_bps (Stage A) and exercise_style (Stage C Pass 1)."
+              "carry_rate_bps (Stage A) and exercise_style (Stage C Pass 1).",
+              "`early_exercise_payout` counts VAULT-funded payout only; a pot-funded",
+              "draw self-accounts via the reduced sweep. `exercise_american`'s pot leg",
+              "(2026-08-15) pays what the vault's own USDC account cannot and debits",
+              "`WriterAskPot.total_collateral` — the very counter `settle_vault` sweeps",
+              "— so those dollars are already netted by the time settlement reads this",
+              "field. Adding them here too would subtract them a second time. On a",
+              "pool-funded exercise the two are equal, so the meaning is unchanged for",
+              "every vault written before the pot leg existed."
             ],
             "type": "u64"
           },
@@ -9913,6 +10134,31 @@
       }
     },
     {
+      "name": "TapeSource",
+      "docs": [
+        "WHICH TAPE the comparator is evaluated against.",
+        "",
+        "**Variant order is load-bearing** (Underlying = 0, Contract = 1). Underlying",
+        "is variant 0 so it is the zero-byte default: any future account read that",
+        "encounters a zeroed byte here resolves to the safe, v1 behaviour.",
+        "",
+        "Added while the layout is migration-free (0 live TriggerOrders) — the same",
+        "window `oco_link` used. That window closes the moment the first order is",
+        "placed, which is why this lands before FE placement rather than after."
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Underlying"
+          },
+          {
+            "name": "Contract"
+          }
+        ]
+      }
+    },
+    {
       "name": "TriggerCancelled",
       "type": {
         "kind": "struct",
@@ -9979,17 +10225,19 @@
     {
       "name": "TriggerKind",
       "docs": [
-        "What the trigger does when it fires. v1 routes BOTH through the vault as the",
-        "always-on counterparty (never the book, which has no guaranteed liquidity):",
+        "What the trigger does when it fires.",
         "",
         "**Variant order is load-bearing** — the Borsh discriminator is a single byte",
-        "encoding the variant index (StopEntryBuy = 0, TakeProfitSell = 1). Append",
-        "new variants only; never reorder.",
+        "encoding the variant index (StopEntryBuy = 0, TakeProfitSell = 1,",
+        "StopLossSell = 2). Append new variants only; never reorder.",
         "",
-        "NOTE: exactly two variants. There is NO StopLossSell — a true stop-loss must",
-        "sell an OTM long, which the vault cannot buy back (it only pays capped",
-        "intrinsic, and exercise reverts OTM). Real stop-loss needs the book path and",
-        "is deferred to a later phase."
+        "Phase B routes fires through the BOOK (per-ask WriterAsk escrows + Bids),",
+        "where the live liquidity now sits — the pooled-vault peg/exercise paths are",
+        "structurally dead (≈zero pooled collateral board-wide). StopLossSell is the",
+        "variant added here (B0): a true stop-loss sells an OTM long, which the vault",
+        "cannot buy back (exercise reverts OTM), so it can ONLY route to the book bid",
+        "side. It is appended now (migration-free: 0 live TriggerOrders) and stays",
+        "DARK until B2 wires the sell path to `bid_fill_core`."
       ],
       "type": {
         "kind": "enum",
@@ -9999,6 +10247,9 @@
           },
           {
             "name": "TakeProfitSell"
+          },
+          {
+            "name": "StopLossSell"
           }
         ]
       }
@@ -10081,7 +10332,16 @@
               "BUY: PER-CONTRACT escrow ceiling (USDC 6-dec). The escrowed figure is",
               "`max_premium * quantity`. ⚠️ UNITS: this is PER-CONTRACT; fill_vault_peg's",
               "own `max_premium` arg (P1) is a fee-inclusive TOTAL — do not conflate.",
-              "SELL: stored as 0 (no escrow)."
+              "SELL (B2): the mirrored constraint — the PER-CONTRACT MINIMUM-PROCEEDS",
+              "FLOOR a book bid must beat before `execute_trigger` will sell into it.",
+              "Same field, same units, opposite direction (buy = ceiling on what the",
+              "owner pays; sell = floor on what the owner accepts). A sell still escrows",
+              "nothing. 0 is legal and means BOOK INELIGIBLE — the book arm refuses it",
+              "with `SellFloorRequired` (6082), so every pre-B2 sell (all stored 0) keeps",
+              "exactly its old behaviour: TakeProfitSell falls back to the vault exercise",
+              "path, StopLossSell stays unfireable. This field is the owner's ONLY",
+              "defence on the sell side, because `execute_trigger` is permissionless and",
+              "the fire-time caller therefore cannot be trusted to supply a price bound."
             ],
             "type": "u64"
           },
@@ -10121,6 +10381,38 @@
               "PDA bump seed."
             ],
             "type": "u8"
+          },
+          {
+            "name": "oco_link",
+            "docs": [
+              "OCO (one-cancels-other) link → the paired trigger's PDA, or None for a",
+              "standalone trigger. Appended in B0 while the layout is migration-free",
+              "(0 live TriggerOrders); wired in B3. `Option<Pubkey>` adds 1 + 32 = 33",
+              "bytes to INIT_SPACE (204 → 237).",
+              "",
+              "B3 SEMANTICS (noted now, implemented in B3): when a trigger fires,",
+              "execute_trigger MUST also decrement the linked leg's `quantity` by the",
+              "fired amount in the SAME tx and close it at 0 — so a single atomic fire",
+              "can never gap through both legs. A partial fire decrements both; only a",
+              "fill that zeros a leg closes it (and its paired leg)."
+            ],
+            "type": {
+              "option": "pubkey"
+            }
+          },
+          {
+            "name": "tape",
+            "docs": [
+              "Which tape `comparator`/`threshold_usdc` are evaluated against.",
+              "Appended in the same migration-free window as `oco_link`; adds 1 byte",
+              "to INIT_SPACE (237 → 238). Underlying is variant 0, so the zero byte is",
+              "the safe default."
+            ],
+            "type": {
+              "defined": {
+                "name": "TapeSource"
+              }
+            }
           }
         ]
       }

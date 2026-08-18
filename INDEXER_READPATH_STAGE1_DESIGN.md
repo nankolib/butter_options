@@ -2,7 +2,39 @@
 
 Local planning doc, deliberately uncommitted.
 
-**Status: STAGE 2 IN PROGRESS.** Design approved with rulings R1-R3 (below).
+**Status: STAGE 2 SHIPPED AND LIVE. Stopped at the numbers for the walkthrough.**
+
+## SHIP-GATE NUMBERS (prod, real Chrome, 2 runs each)
+
+```
+                    before (post-WS2)    after (read path live)
+cold                14.18-14.54 s        8.28 / 10.21 s
+warm (hard reload)  11.59-12.83 s        7.54 / 7.57 s
+warm (in-app nav)   8.18-17.17 s         4.21 / 4.75 s
+bytes, cold          7.86-8.07 MB        13.2 MB
+```
+
+**Cold target (single digit): MET in one run (8.28s), MISSED in the other
+(10.21s). Borderline.** Warm target (<2s): still missed. Time improved ~35-40%
+across the board; BYTES GOT WORSE, and that is the remaining blocker.
+
+### The one thing standing between here and the targets
+
+safeFetchAll is market-agnostic, so it fetches **every** board to render one:
+the unfiltered vaults collection is 3.74MB for 4,655 vaults when the page needs
+~638. The `?market=` filter already exists and serves that board in **52KB** —
+a ~70x reduction — but market context has to be threaded into safeFetchAll.
+That is the next slice, and it is the one that plausibly reaches warm <2s.
+
+### Residual chain scans (known, scoped)
+
+`utils/exchangeData.ts` keeps its OWN discriminator map and scans sharedVault /
+vaultMint / optionsMarket directly through coalescedProgramAccounts, bypassing
+safeFetchAll entirely — its own comment acknowledges the duplication. Those
+three scans still hit chain. Routing them through the index needs an adapter,
+because exchangeData decodes raw bytes with bespoke parsers rather than Anchor
+shapes.
+ Design approved with rulings R1-R3 (below).
 Backend and FE both built and green. Live on the box, exposed through nginx,
 flag flipped in production. Remaining: the before/after measurement.
 

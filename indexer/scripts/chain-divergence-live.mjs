@@ -25,10 +25,16 @@ const {
 const RPC_URL = process.env.OPTA_RPC_URL || "https://rpc.opta.fyi/devnet";
 const PROGRAM = "CtzJ4MJYX6BFvF4g67i5C24tQuwRn6ddKkaE5L84z9Cq";
 
-const dir = fs.mkdtempSync(path.join(os.tmpdir(), "opta-chain-live-"));
-const db = openDb(path.join(dir, "live.db"));
+// OPTA_DB_PATH checks an EXISTING database (the live one on the box) instead of
+// scanning into a throwaway. Without it this harness only ever validates a scan
+// it just performed itself, which is not what is being served to users.
+const existing = process.env.OPTA_DB_PATH;
+const dir = existing ? null : fs.mkdtempSync(path.join(os.tmpdir(), "opta-chain-live-"));
+const db = openDb(existing ?? path.join(dir, "live.db"));
+if (existing) console.log("checking LIVE database " + existing);
 const rpc = new RpcClient(RPC_URL);
 
+if (!existing) {
 console.log(`scanning ${RPC_URL} ...`);
 const t0 = Date.now();
 const res = await refreshChain(db, rpc, PROGRAM);
@@ -38,6 +44,8 @@ for (const r of res) {
 }
 
 console.log("\nrunning divergence check against chain ...");
+}
+
 const reports = await checkDivergence(db, rpc, PROGRAM);
 for (const r of reports) {
   console.log(`  ${r.kind.padEnd(14)} checked ${String(r.checked).padStart(5)}  comparable ${String(r.comparable).padStart(5)}  changed ${String(r.changed).padStart(3)}  missing ${r.missing}  orphaned ${r.orphaned}  DIVERGENT ${r.divergent}`);
@@ -65,5 +73,5 @@ const meta = getChainMeta(db, { programId: PROGRAM, deploySlot: null });
 console.log(`\n/meta healthy=${meta.body.healthy} oldestAgeSec=${meta.body.oldestAgeSec} lineage=${meta.body.lineage.key}`);
 
 console.log(`\n${clean ? "DIVERGENCE CLEAN" : "DIVERGENT — DO NOT CUT OVER"}`);
-fs.rmSync(dir, { recursive: true, force: true });
+if (dir) fs.rmSync(dir, { recursive: true, force: true });
 process.exit(clean ? 0 : 1);

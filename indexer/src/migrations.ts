@@ -158,6 +158,19 @@ function migrateV6toV7(db: DB): void {
   log.info("migration v6->v7 complete — listing_requests added (listing demand sink)");
 }
 
+/**
+ * v7 -> v8. ADDITIVE. Adds the chain read-path REFLECTION tables (schema.ts has
+ * already created them by the time this runs).
+ *
+ * Deletes nothing. These tables are a reflection of current on-chain state,
+ * rebuildable from a single scan, so there is no history to preserve and no
+ * re-index to force — the opposite of the v1->v2 and v3->v4 tape rebuilds.
+ */
+function migrateV7toV8(db: DB): void {
+  db.prepare("UPDATE meta SET value = '8' WHERE key = 'schema_version'").run();
+  log.info("migration v7->v8 complete — chain read-path reflection tables added");
+}
+
 export function migrate(db: DB): void {
   let v = currentVersion(db);
   if (v === 0) {
@@ -190,6 +203,10 @@ export function migrate(db: DB): void {
   if (v === 6) {
     migrateV6toV7(db);
     v = 7;
+  }
+  if (v === 7) {
+    migrateV7toV8(db);
+    v = 8;
   }
   if (v !== SCHEMA_VERSION) {
     throw new Error(

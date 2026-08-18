@@ -32,7 +32,52 @@ import {
   postListingRequest,
 } from "./handlers";
 
+import {
+  getChainEpochs, getChainMarkets, getChainMeta, getChainSeries, getChainVaults,
+} from "../chain/handlers";
+
 const MAX_BODY_BYTES = 4096;
+
+/**
+ * Origins allowed to read the chain endpoints from a browser.
+ *
+ * The data is public on chain, so this is not a confidentiality boundary — it
+ * keeps the surface named and reviewable rather than opening `*` and forgetting
+ * about it. Node probes have no origin and are unaffected, which is exactly why
+ * a cross-origin claim has to be checked in a real browser and not with curl.
+ */
+const CHAIN_CORS_ORIGINS = new Set([
+  "https://opta.fyi",
+  "https://www.opta.fyi",
+  "http://localhost:5173",
+  "http://localhost:4173",
+]);
+
+function corsHeadersFor(origin: string | undefined): Record<string, string> {
+  if (!origin || !CHAIN_CORS_ORIGINS.has(origin)) return {};
+  return {
+    "access-control-allow-origin": origin,
+    "vary": "origin",
+  };
+}
+
+/**
+ * Chain reads are cacheable; the points endpoints are not, which is why they do
+ * not share `send`. `max-age` is deliberately BELOW the refresh cadence so an
+ * intermediary can absorb a burst without ever serving data older than the
+ * server's own staleness threshold — the response carries its slot regardless,
+ * so a client can always tell.
+ */
+function sendChain(res: http.ServerResponse, r: ApiResponse, origin: string | undefined): void {
+  const payload = JSON.stringify(r.body);
+  res.writeHead(r.status, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "public, max-age=10",
+    "content-length": Buffer.byteLength(payload),
+    ...corsHeadersFor(origin),
+  });
+  res.end(payload);
+}
 
 function send(res: http.ServerResponse, r: ApiResponse): void {
   const payload = JSON.stringify(r.body);
@@ -85,12 +130,38 @@ export function createApiServer(db: DB, cfg: Config): http.Server {
 
     try {
       if (req.method === "OPTIONS") {
-        res.writeHead(204).end();
+        // Preflight for the chain reads. Points endpoints are same-origin and
+        // unaffected by the extra headers.
+        res.writeHead(204, {
+          ...corsHeadersFor(req.headers.origin),
+          "access-control-allow-methods": "GET, OPTIONS",
+          "access-control-allow-headers": "content-type",
+          "access-control-max-age": "86400",
+        }).end();
         return;
       }
 
       // ---- reads --------------------------------------------------------
       if (req.method === "GET") {
+        // ---- chain read path (v8) ---------------------------------------
+        // READ-ONLY. Structural account state only — never the book, positions
+        // or balances. Every response carries the slot it was built at.
+        if (path.startsWith("/api/chain/")) {
+          const origin = req.headers.origin;
+          const q = url.searchParams;
+          if (path === "/api/chain/vaults")  return sendChain(res, getChainVaults(db, q), origin);
+          if (path === "/api/chain/series")  return sendChain(res, getChainSeries(db, q), origin);
+          if (path === "/api/chain/markets") return sendChain(res, getChainMarkets(db, q), origin);
+          if (path === "/api/chain/epochs")  return sendChain(res, getChainEpochs(db, q), origin);
+          if (path === "/api/chain/meta") {
+            return sendChain(res, getChainMeta(db, {
+              programId: cfg.programId,
+              deploySlot: cfg.chainDeploySlot ?? null,
+            }), origin);
+          }
+          return sendChain(res, { status: 404, body: { error: "not_found" } }, origin);
+        }
+
         if (path === "/api/points/leaderboard") {
           return send(res, getLeaderboard(db, url.searchParams.get("board") ?? "profit", Number(url.searchParams.get("limit") ?? 50)));
         }

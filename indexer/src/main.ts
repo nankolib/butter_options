@@ -40,6 +40,7 @@ import { Poller } from "./tape/poller";
 import { RpcClient } from "./tape/rpc";
 import { CapitalPoller, emptyCapitalStats } from "./tape/capitalPoller";
 import { refreshMarkets } from "./tape/marketsRefresh";
+import { refreshChain } from "./chain/refresh";
 import { TokenAccountResolver } from "./tape/tokenAccounts";
 import { recompute } from "./score/recompute";
 import { FROZEN, assertFrozenWeights } from "./score/frozenGate";
@@ -201,6 +202,7 @@ async function main(): Promise<void> {
   let lastShadow = Date.now();
   let lastCapital = Date.now();
   let lastMarkets = Date.now();
+  let lastChain = 0;
 
   // ---- Live tail -----------------------------------------------------------
   log.info("entering live tail", { tickMs: cfg.tickMs });
@@ -225,6 +227,18 @@ async function main(): Promise<void> {
         log.error("markets refresh failed", { err: (e as Error).message });
       }
       lastMarkets = Date.now();
+    }
+
+    // Chain read-path reflection. Runs whether or not the FE is reading from it
+    // (SHADOW first): the divergence harness needs live data to compare, and a
+    // cutover onto a cold table would serve an empty board.
+    if (Date.now() - lastChain >= cfg.chainRefreshMs) {
+      try {
+        await refreshChain(db, rpc, cfg.programId);
+      } catch (e) {
+        log.error("chain refresh failed", { err: (e as Error).message });
+      }
+      lastChain = Date.now();
     }
 
     if (Date.now() - lastShadow >= cfg.shadowMs) {

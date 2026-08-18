@@ -42,6 +42,15 @@ export interface Config {
   /** External-flow / markets refresh interval (ms). */
   capitalTickMs: number;
   marketsRefreshMs: number;
+  /** Chain read-path scan cadence. R1: 30s — vault state feeds peg quotes, and
+   *  60s lets a displayed quote drift too far. */
+  chainRefreshMs: number;
+  /** Program deploy slot, used as the FE cache-busting lineage key. An upgrade
+   *  can change an account layout, so a cached decode from the previous layout
+   *  is garbage rather than merely stale. */
+  chainDeploySlot: number | null;
+  /** Read path off by default: it ships SHADOW and is flipped deliberately. */
+  chainReadPathEnabled: boolean;
 
   // ---- Phase 2b: API -----------------------------------------------------
   apiEnabled: boolean;
@@ -101,6 +110,10 @@ export function loadConfig(): Config {
     ataMax: num("OPTA_INDEXER_ATA_MAX", 500),
     capitalTickMs: num("OPTA_INDEXER_CAPITAL_TICK_MS", 600_000),
     marketsRefreshMs: num("OPTA_INDEXER_MARKETS_MS", 1_800_000),
+    chainRefreshMs: num("OPTA_CHAIN_REFRESH_MS", 30_000),
+    chainDeploySlot: process.env.OPTA_CHAIN_DEPLOY_SLOT
+      ? Number(process.env.OPTA_CHAIN_DEPLOY_SLOT) : null,
+    chainReadPathEnabled: process.env.OPTA_CHAIN_READPATH === "1",
 
     apiEnabled: (process.env.OPTA_INDEXER_API_ENABLED ?? "1") !== "0",
     apiHost: process.env.OPTA_INDEXER_API_HOST?.trim() || "127.0.0.1",

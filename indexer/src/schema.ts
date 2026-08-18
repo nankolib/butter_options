@@ -12,7 +12,7 @@
 //                               keyed by rules_version so old runs survive.
 // =============================================================================
 
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 export const SCHEMA_SQL = `
 -- ============ META ============
@@ -297,4 +297,120 @@ CREATE TABLE IF NOT EXISTS wallet_points (
 );
 
 CREATE INDEX IF NOT EXISTS idx_wp_final ON wallet_points(final_points DESC);
+
+-- ============ CHAIN READ-PATH (v8) ============
+-- A fourth layer, distinct from TAPE/PROJECTION/SCORE: a REFLECTION of current
+-- on-chain account state, rebuildable at will and never a source of truth.
+--
+-- SCOPE IS A HARD LINE. Only structural types live here — what CAN be traded.
+-- The book and anything position- or balance-shaped (RestingOrder,
+-- WriterAskPosition, WriterAskPot, VaultResaleListing, WriterPosition,
+-- SettlementRecord) are deliberately absent and must stay absent: a stale
+-- series list is a few seconds out of date, a stale book shows a filled order
+-- as live and someone trades against something already gone.
+--
+-- FULL STRUCT, NOT DISPLAY FIELDS. The trade path reads exercised_options
+-- (ends at byte 249) and writer_ask_collateral_swept (ends at 268) of a
+-- 276-byte SharedVault, so a "just what the chain view shows" schema would fail
+-- as a missing field rendering as a plausible wrong number.
+--
+-- raw_b64 is kept alongside the decoded columns: re-decoding stored bytes after
+-- a layout change is cheap, whereas re-scanning 4,655 accounts is exactly the
+-- cost this table exists to remove.
+
+CREATE TABLE IF NOT EXISTS chain_shared_vaults (
+  pubkey                       TEXT PRIMARY KEY,
+  market                       TEXT NOT NULL,
+  option_type                  INTEGER NOT NULL,
+  strike_price                 TEXT NOT NULL,
+  expiry                       TEXT NOT NULL,
+  vault_type                   INTEGER NOT NULL,
+  total_collateral             TEXT NOT NULL,
+  total_shares                 TEXT NOT NULL,
+  vault_usdc_account           TEXT NOT NULL,
+  collateral_mint              TEXT NOT NULL,
+  total_options_minted         TEXT NOT NULL,
+  total_options_sold           TEXT NOT NULL,
+  net_premium_collected        TEXT NOT NULL,
+  premium_per_share_cumulative TEXT NOT NULL,
+  is_settled                   INTEGER NOT NULL,
+  settlement_price             TEXT NOT NULL,
+  collateral_remaining         TEXT NOT NULL,
+  creator                      TEXT NOT NULL,
+  created_at                   TEXT NOT NULL,
+  bump                         INTEGER NOT NULL,
+  carry_rate_bps               INTEGER NOT NULL,
+  exercise_style               INTEGER NOT NULL,
+  exercised_options            TEXT NOT NULL,
+  early_exercise_payout        TEXT NOT NULL,
+  spread_bps                   INTEGER NOT NULL,
+  voided                       INTEGER NOT NULL,
+  writer_ask_collateral_swept  TEXT NOT NULL,
+  writer_ask_equiv_shares      TEXT NOT NULL,
+  raw_b64                      TEXT NOT NULL,
+  layout_len                   INTEGER NOT NULL,
+  slot                         INTEGER NOT NULL,
+  refreshed_at                 INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_csv_market ON chain_shared_vaults(market);
+CREATE INDEX IF NOT EXISTS idx_csv_expiry ON chain_shared_vaults(expiry);
+
+CREATE TABLE IF NOT EXISTS chain_vault_mints (
+  pubkey               TEXT PRIMARY KEY,
+  vault                TEXT NOT NULL,
+  writer               TEXT NOT NULL,
+  option_mint          TEXT NOT NULL,
+  premium_per_contract TEXT NOT NULL,
+  quantity_minted      TEXT NOT NULL,
+  quantity_sold        TEXT NOT NULL,
+  created_at           TEXT NOT NULL,
+  bump                 INTEGER NOT NULL,
+  raw_b64              TEXT NOT NULL,
+  layout_len           INTEGER NOT NULL,
+  slot                 INTEGER NOT NULL,
+  refreshed_at         INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cvm_vault ON chain_vault_mints(vault);
+CREATE INDEX IF NOT EXISTS idx_cvm_mint  ON chain_vault_mints(option_mint);
+
+CREATE TABLE IF NOT EXISTS chain_options_markets (
+  pubkey        TEXT PRIMARY KEY,
+  asset_name    TEXT NOT NULL,
+  pyth_feed_id  TEXT NOT NULL,
+  asset_class   INTEGER NOT NULL,
+  bump          INTEGER NOT NULL,
+  oracle_source INTEGER NOT NULL,
+  raw_b64       TEXT NOT NULL,
+  layout_len    INTEGER NOT NULL,
+  slot          INTEGER NOT NULL,
+  refreshed_at  INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS chain_epoch_configs (
+  pubkey                  TEXT PRIMARY KEY,
+  authority               TEXT NOT NULL,
+  weekly_expiry_day       INTEGER NOT NULL,
+  weekly_expiry_hour      INTEGER NOT NULL,
+  monthly_enabled         INTEGER NOT NULL,
+  min_epoch_duration_days INTEGER NOT NULL,
+  bump                    INTEGER NOT NULL,
+  raw_b64                 TEXT NOT NULL,
+  layout_len              INTEGER NOT NULL,
+  slot                    INTEGER NOT NULL,
+  refreshed_at            INTEGER NOT NULL
+);
+
+-- One row per account kind. The rejected column is the NEVER SILENT counter:
+-- layouts that share a discriminator but decode as garbage are refused, and the
+-- count is surfaced through /api/chain/meta rather than swallowed.
+CREATE TABLE IF NOT EXISTS chain_refresh_meta (
+  kind          TEXT PRIMARY KEY,
+  slot          INTEGER NOT NULL,
+  refreshed_at  INTEGER NOT NULL,
+  fetched       INTEGER NOT NULL,
+  stored        INTEGER NOT NULL,
+  rejected      INTEGER NOT NULL,
+  rejected_json TEXT NOT NULL,
+  last_error    TEXT
+);
 `;

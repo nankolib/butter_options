@@ -4,6 +4,7 @@ import { useProgram } from "../../hooks/useProgram";
 import { fetchContractFills, type ContractFill } from "../../utils/chartData";
 import { calculateCallPremium, calculatePutPremium, getDefaultVolatility, applyVolSmile } from "../../utils/blackScholes";
 import { TradingViewWidget, tvSymbol } from "./TradingViewWidget";
+import { useTriggers } from "../../hooks/useTriggers";
 import type { UnifiedChainRow } from "../../hooks/useUnifiedChain";
 
 // ============================================================================
@@ -67,6 +68,11 @@ export const PriceChart: FC<{ row: UnifiedChainRow | null; spot: number | null }
 
   const [fills, setFills] = useState<ContractFill[]>([]);
   const [fillsLoading, setFillsLoading] = useState(false);
+
+  // Armed exits for THIS series, for the readout strip.
+  const { triggers } = useTriggers(row?.optionMint ?? null);
+  const tpLevel = triggers.find((t) => t.leg === "tp")?.threshold ?? null;
+  const slLevel = triggers.find((t) => t.leg === "sl")?.threshold ?? null;
 
   // Cheap BS mark + breakeven (carry r=0), for the readouts.
   const { mark, breakeven } = useMemo(() => {
@@ -141,6 +147,14 @@ export const PriceChart: FC<{ row: UnifiedChainRow | null; spot: number | null }
             strike <span className="text-l-text">${row.strike}</span>
             {breakeven != null && <> · BE <span className="text-l-text">{fmt(breakeven)}</span></>}
             {spot != null && <> · spot <span className="text-l-text">{fmt(spot)}</span></>}
+            {/* Armed exits join strike/BE/spot HERE rather than as chart lines.
+                The underlying chart is a third-party embed we cannot draw on, and
+                an overlay beside it could not read the embed's price axis — it
+                would look aligned and be wrong, which is worse than no line at
+                all. Recorded as a spec deviation: chart-lines
+                satisfied-by-substitute. */}
+            {tpLevel != null && <> · TP <span className="text-l-text">{fmt(tpLevel)}</span></>}
+            {slLevel != null && <> · SL <span className="text-l-text">{fmt(slLevel)}</span></>}
           </span>
         </div>
       </div>

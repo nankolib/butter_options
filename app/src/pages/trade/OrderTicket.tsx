@@ -1,7 +1,8 @@
 import type { FC, ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
-import { PublicKey } from "@solana/web3.js";
+import { PublicKey, Transaction, ComputeBudgetProgram } from "@solana/web3.js";
+import { BN } from "@coral-xyz/anchor";
 import posthog from "posthog-js";
 import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { useProgram } from "../../hooks/useProgram";
@@ -12,6 +13,9 @@ import { refreshAfterMutation } from "./orderRefresh";
 import { TxOutcomeError } from "../../utils/txOutcome";
 import { planSweep, executeSweep, buildAskLevels, buildBidLevels, crossLimit, buyRoutesToPeg } from "./marketSweep";
 import type { SendPhase } from "../../utils/sendWithFreshBlockhash";
+import { sendWithFreshBlockhash, type SendableProvider } from "../../utils/sendWithFreshBlockhash";
+import { calculateCallPremium, calculatePutPremium } from "../../utils/blackScholes";
+import { buildTriggerPlacement, type TriggerLeg } from "../../utils/triggerBundle";
 import { calculateCallGreeks, calculatePutGreeks, getDefaultVolatility, applyVolSmile } from "../../utils/blackScholes";
 import { TOKEN_2022_PROGRAM_ID, MARKET_SEED, PROGRAM_ID, DEVNET_USDC_MINT } from "../../utils/constants";
 import {
@@ -93,6 +97,14 @@ export const OrderTicket: FC<{
 
   // RFQ (quote-on-demand) state.
   const [rfq, setRfq] = useState<OptionPriceQuote | null>(null);
+  // TP/SL (Phase 4). Either field may be left empty — a single leg is
+  // first-class, and nothing forces a take-profit to get a stop.
+  const [tpPrice, setTpPrice] = useState<number>(0);
+  const [slPrice, setSlPrice] = useState<number>(0);
+  /** Per-contract MINIMUM PROCEEDS the book must beat. 0 is legal on chain and
+   *  means BOOK INELIGIBLE (6082), so it is surfaced rather than defaulted. */
+  const [sellFloor, setSellFloor] = useState<number>(0);
+  const [vaultMarket, setVaultMarket] = useState<string | null>(null);
   const [rfqLoading, setRfqLoading] = useState(false);
   const [rfqError, setRfqError] = useState<OptionPriceQuoteFailure | null>(null);
   // BUG-1: contracts the vault can still mint-on-fill. Null until the focused
@@ -189,6 +201,7 @@ export const OrderTicket: FC<{
       if (!program || !isSeries) { if (live) setPegRemaining(null); return; }
       try {
         const v: any = await program.account.sharedVault.fetch(new PublicKey(row.vault));
+        if (live) setVaultMarket((v.market as PublicKey).toBase58()); // needed by place_trigger
         const cpt = v.strikePrice.toNumber(); // collateral_per_token = strike
         const net = v.totalCollateral.toNumber() - (v.earlyExercisePayout?.toNumber?.() ?? 0);
         const liveContracts = v.totalOptionsMinted.toNumber() - (v.exercisedOptions?.toNumber?.() ?? 0);
@@ -229,6 +242,27 @@ export const OrderTicket: FC<{
   const lambda = mark && mark.premium > 0 ? (mark.delta * (spot ?? 0)) / mark.premium : null;
   const thetaPerDay = mark?.theta ?? null;
 
+  // TP/SL is an EXIT for a position you already hold, so it is offered only when
+  // there is something to exit. Underlying tape only in v1.
+  const canTpSl = isSeries && (held ?? 0) > 0 && !!row.optionMint && !!vaultMarket;
+
+  /** What the contract is worth IF the underlying reaches `atSpot` today.
+   *  An ESTIMATE: it holds volatility fixed, assumes the trigger fires now (the
+   *  figure decays as time-to-expiry shrinks), and is not the fill — execution
+   *  goes through the book at whatever price is there. */
+  const estAt = (atSpot: number): number | null => {
+    if (!(atSpot > 0) || days <= 0) return null;
+    // Volatility is left to the pricer's per-asset default (same source the
+    // ticket's own mark uses), so the estimate and the λ/θ readouts stay
+    // coherent rather than being two different models on one screen.
+    const px = row.optionType === "call"
+      ? calculateCallPremium(atSpot, row.strike, days, undefined, 0, undefined, row.asset)
+      : calculatePutPremium(atSpot, row.strike, days, undefined, 0, undefined, row.asset);
+    return px > 0 ? px * qty : null;
+  };
+  const tpEst = tpPrice > 0 ? estAt(tpPrice) : null;
+  const slEst = slPrice > 0 ? estAt(slPrice) : null;
+
   // Pre-fill the limit price with the cheap mark when switching to Limit.
   useEffect(() => {
     if (type === "limit" && limitPrice === 0 && mark?.premium) setLimitPrice(Number(mark.premium.toFixed(4)));
@@ -266,7 +300,61 @@ export const OrderTicket: FC<{
         setStatus({ kind: "err", msg: "Legacy listings are managed in Portfolio." });
         setBusy(false); return;
       }
-      if (side === "write") {
+      if (type === "tpsl") {
+        // Placement is one transaction whether it is a pair or a single leg.
+        // Sent through sendWithFreshBlockhash like every other path here — no
+        // bare .rpc() is introduced (86eymw9m1 is about the existing ones).
+        if (!program || !vaultMarket || !row.optionMint) {
+          setStatus({ kind: "err", msg: "Series not ready" }); setBusy(false); return;
+        }
+        if (tpPrice <= 0 && slPrice <= 0) {
+          setStatus({ kind: "err", msg: "Set a take-profit, a stop-loss, or both" });
+          setBusy(false); return;
+        }
+        if (qty > (held ?? 0)) {
+          setStatus({ kind: "err", msg: `You hold ${held ?? 0} contract(s)` });
+          setBusy(false); return;
+        }
+        const usdc6 = (n: number) => new BN(Math.round(n * 1_000_000));
+        const mkLeg = (
+          kind: TriggerLeg["kind"], cmp: TriggerLeg["comparator"], px: number, n: number,
+        ): TriggerLeg => ({
+          kind, comparator: cmp,
+          thresholdUsdc: usdc6(px), quantity: new BN(qty),
+          minProceedsUsdc: usdc6(sellFloor), nonce: new BN(n),
+        });
+        const bundle = await buildTriggerPlacement(
+          {
+            program, owner: publicKey,
+            market: new PublicKey(vaultMarket),
+            sharedVault: new PublicKey(row.vault),
+            optionMint: new PublicKey(row.optionMint),
+            usdcMint: DEVNET_USDC_MINT,
+          },
+          {
+            takeProfit: tpPrice > 0 ? mkLeg("takeProfitSell", "ge", tpPrice, nonce) : null,
+            // +1 so a pair never shares a nonce: same nonce would derive the SAME
+            // PDA and the "pair" would really be one order.
+            stopLoss: slPrice > 0 ? mkLeg("stopLossSell", "le", slPrice, nonce + 1) : null,
+          },
+        );
+        sig = await sendWithFreshBlockhash(
+          program.provider as unknown as SendableProvider,
+          () => {
+            const tx = new Transaction();
+            tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }));
+            bundle.instructions.forEach((i) => tx.add(i));
+            return tx;
+          },
+          { onPhase: setPhase },
+        );
+        setStatus({
+          kind: "ok",
+          msg: bundle.linked
+            ? "TP/SL pair armed — one fires, the other is cancelled"
+            : `${tpPrice > 0 ? "Take-profit" : "Stop-loss"} armed`,
+        });
+      } else if (side === "write") {
         // Write = mint-on-fill sell side: post a WriterAsk (escrows strike×qty USDC).
         sig = await post.submit(ref, "writerAsk", limitPrice, qty, nonce);
         if (sig) added = optimisticOrder("writerAsk");
@@ -485,7 +573,9 @@ export const OrderTicket: FC<{
       {!isWrite && (<>
         <div className="my-3 flex gap-px overflow-hidden rounded-[6px] border border-l-hair bg-l-hair">
           {(["market", "limit", "stop", "tpsl"] as OrderType[]).map((t) => {
-            const live = LIVE_TYPES.includes(t);
+            // TP/SL is live once there is a position to exit. `stop` (StopEntryBuy)
+            // stays gated: it is an ENTRY order and belongs to a later slice.
+            const live = LIVE_TYPES.includes(t) || (t === "tpsl" && canTpSl);
             const label = t === "tpsl" ? "TP/SL" : t[0].toUpperCase() + t.slice(1);
             return (
               <button
@@ -493,7 +583,9 @@ export const OrderTicket: FC<{
                 type="button"
                 disabled={!live}
                 onClick={() => live && setType(t)}
-                title={live ? "" : "Phase 4 keeper triggers — coming soon"}
+                title={live ? "" : t === "tpsl"
+                  ? "TP/SL exits a position — you hold none of this contract yet"
+                  : "Stop entry orders are a later slice"}
                 className={`flex-1 px-2 py-2 font-mono-plex text-[10.5px] uppercase tracking-[0.14em] transition-colors ${
                   !live ? "cursor-not-allowed bg-l-surface text-l-faint"
                     : type === t ? "bg-l-surface-2 text-l-text" : "bg-l-surface text-l-muted hover:text-l-text"
@@ -504,12 +596,91 @@ export const OrderTicket: FC<{
             );
           })}
         </div>
-        {/* Honest inline state for the gated trigger tabs (Phase 4 placement is a
-            follow-up slice: StopEntryBuy / TakeProfitSell taxonomy). */}
+        {/* Honest inline state. TP/SL is live; Stop (StopEntryBuy) is a later slice. */}
         <p className="-mt-1 mb-3 font-mono-plex text-[9.5px] text-l-muted">
-          Stop · TP/SL — keeper triggers live on-chain; placement UI coming soon.
+          {type === "tpsl"
+            ? "Exits are watched by the keeper and fire on the underlying."
+            : canTpSl
+              ? "TP/SL is available for this position. Stop entry is a later slice."
+              : "Stop · TP/SL — TP/SL needs a position in this contract to exit."}
         </p>
       </>)}
+
+
+      {/* ── TP/SL pair form ──────────────────────────────────────────────
+          Either field may be left EMPTY: that leg is simply not placed. A
+          protective stop on its own is a legitimate order, so nothing here
+          forces a take-profit to get a stop. Both filled ⇒ one atomic
+          transaction that places both and links them (OCO), so a half-pair
+          cannot exist. */}
+      {type === "tpsl" && (
+        <div className="mb-3 rounded-[6px] border border-l-hair bg-l-surface p-3">
+          <div className="mb-2 flex items-baseline justify-between">
+            <span className="font-mono-plex text-[9px] uppercase tracking-[0.2em] text-l-muted">
+              Exit triggers
+            </span>
+            <span className="font-mono-plex text-[9.5px] text-l-faint">
+              on {row.asset} · underlying
+            </span>
+          </div>
+
+          <Field label={`Take profit — ${row.asset} at or above`}>
+            <input
+              type="number" inputMode="decimal" min={0} step="any"
+              value={tpPrice || ""} placeholder="leave empty to skip"
+              onChange={(e) => setTpPrice(Number(e.target.value) || 0)}
+              className="w-full bg-transparent font-mono-plex text-[13px] tabular-nums text-l-text outline-none"
+            />
+          </Field>
+          {tpEst != null && (
+            <p className="-mt-2 mb-2 font-mono-plex text-[9.5px] text-l-muted">
+              Est. value if hit today ≈ {fmt(tpEst)}
+            </p>
+          )}
+
+          <Field label={`Stop loss — ${row.asset} at or below`}>
+            <input
+              type="number" inputMode="decimal" min={0} step="any"
+              value={slPrice || ""} placeholder="leave empty to skip"
+              onChange={(e) => setSlPrice(Number(e.target.value) || 0)}
+              className="w-full bg-transparent font-mono-plex text-[13px] tabular-nums text-l-text outline-none"
+            />
+          </Field>
+          {slEst != null && (
+            <p className="-mt-2 mb-2 font-mono-plex text-[9.5px] text-l-muted">
+              Est. value if hit today ≈ {fmt(slEst)}
+            </p>
+          )}
+
+          <Field label="Minimum proceeds per contract">
+            <input
+              type="number" inputMode="decimal" min={0} step="any"
+              value={sellFloor || ""} placeholder="0 = will not sell into the book"
+              onChange={(e) => setSellFloor(Number(e.target.value) || 0)}
+              className="w-full bg-transparent font-mono-plex text-[13px] tabular-nums text-l-text outline-none"
+            />
+          </Field>
+
+          <p className="mt-1 font-mono-plex text-[9.5px] leading-[1.5] text-l-faint">
+            Estimates hold today&rsquo;s volatility and time-to-expiry fixed and shrink as
+            expiry approaches. They are not the fill — the exit is whatever the book pays.
+            {sellFloor <= 0 && (
+              <> <span className="text-l-muted">A floor of 0 means these will not sell into the book.</span></>
+            )}
+          </p>
+
+          {/* Contract-tape affordance — DISABLED in v1. The branch is live on
+              chain but stays unreachable until one contract-tape fire is
+              verified. Copy names no vendor and never says "market closed":
+              what actually gates it is pricing-data freshness. */}
+          <div className="mt-3 flex items-center gap-2 opacity-50">
+            <input type="checkbox" disabled className="cursor-not-allowed" />
+            <span className="font-mono-plex text-[9.5px] text-l-muted">
+              Trigger on contract price instead — unavailable while pricing data is warming
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Qty + price */}
       <Field label="Quantity">

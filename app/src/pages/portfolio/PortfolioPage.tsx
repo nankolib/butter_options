@@ -19,6 +19,7 @@ import { StatementHeader, type Denomination } from "./StatementHeader";
 import { SummaryBand, type SummaryCell } from "./SummaryBand";
 import { WriterSummaryBand } from "./WriterSummaryBand";
 import { OpenPositionsSection } from "./OpenPositionsSection";
+import { ArmedTriggersSection } from "./ArmedTriggersSection";
 import { WrittenPositionsSection } from "./WrittenPositionsSection";
 import { ClosedPositionsSection } from "./ClosedPositionsSection";
 import { ResaleModal } from "./ResaleModal";
@@ -469,6 +470,9 @@ const PortfolioPageLegacy: FC = () => {
               onAction={handleAction}
               busyId={actions.busyId}
             />
+            {/* Armed TP/SL exits sit directly under the positions they protect —
+                a stop is only meaningful next to the thing it is guarding. */}
+            <ArmedTriggersSection />
             <WrittenPositionsSection
               rows={writerRows}
               onAction={handleWriterAction}

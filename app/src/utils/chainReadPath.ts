@@ -62,8 +62,20 @@ export function servedByIndexer(name: AccountName): boolean {
  */
 const MAX_AGE_SEC = 90;
 
-/** One slow endpoint must not hold the page hostage — it falls back instead. */
-const FETCH_TIMEOUT_MS = 4_000;
+/**
+ * One slow endpoint must not hold the page hostage — it falls back instead.
+ *
+ * MEASURED: 4s was too tight. The unfiltered vaults collection is 3.74MB and
+ * takes ~3.5s, so the abort fired mid-flight, threw away a response that was
+ * nearly complete, and sent the page to a full getProgramAccounts scan — the
+ * expensive thing this exists to avoid. A timeout shorter than the work is not
+ * a safety valve, it is a guaranteed fallback.
+ *
+ * The real fix is to stop fetching every board to render one (the ?market=
+ * filter takes JTO from 3.74MB to 52KB), which needs market context threaded
+ * into safeFetchAll. Until then the budget matches the actual payload.
+ */
+const FETCH_TIMEOUT_MS = 10_000;
 
 export interface ChainEnvelope<T> {
   slot: number;

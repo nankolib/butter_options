@@ -286,7 +286,7 @@ test("classifySellRoute: a crossing bid routes to the book for BOTH sell kinds",
 // → the on-chain arm reads book_order == None → vault peg. If a future edit drops
 // those nulls, this test fails BEFORE the change reaches the VPS (where it would
 // otherwise crash the keeper on every fire).
-test("assembleExecuteAccounts (peg): executeTrigger ix builds with all 32 accounts vs new IDL", async () => {
+test("assembleExecuteAccounts (peg): executeTrigger ix builds with all 33 accounts vs new IDL", async () => {
   const dummyWallet = {
     publicKey: PROGRAM_ID,
     signTransaction: async (t: any) => t,
@@ -312,10 +312,16 @@ test("assembleExecuteAccounts (peg): executeTrigger ix builds with all 32 accoun
     assert.equal((accounts as any)[camel], null, `${camel} must be null on the peg path`);
   }
   const ix = await buildExecuteTriggerIx(program, accounts);
-  // 32 = 18 base + 3 SB + 11 book; the eleven book keys are the program-id sentinel.
-  assert.equal(ix.keys.length, 32, "executeTrigger ix has all 32 accounts");
-  const tail = ix.keys.slice(21).filter((k) => k.pubkey.equals(program.programId));
+  // 33 = 18 base + 3 SB + 11 book + 1 oco_peer. The slice is BOUNDED at 32 on
+  // purpose: 2A appended oco_peer, and an unbounded slice(21) would sweep it in
+  // and count twelve sentinels against an assertion that means "the ELEVEN book
+  // optionals". Bounding keeps this test about the book tail and lets [32] be
+  // asserted for what it is.
+  assert.equal(ix.keys.length, 33, "executeTrigger ix has all 33 accounts (2A appended oco_peer at [32])");
+  const tail = ix.keys.slice(21, 32).filter((k) => k.pubkey.equals(program.programId));
   assert.equal(tail.length, 11, "the eleven book optionals are the program-id sentinel (None)");
+  assert.ok(ix.keys[32].pubkey.equals(program.programId),
+    "[32] oco_peer is the sentinel on an unpaired trigger");
 });
 
 // ---- Runner ----------------------------------------------------------------
@@ -373,7 +379,7 @@ test("B1.5 gate A: WriterAsk selection puts REAL keys at [21]-[27], sentinels el
   const accounts = assembleExecuteAccounts(
     BUY_VIEW, MINT.toBuffer(), USDC, PROGRAM_ID, PublicKey.default, program.programId, null, book);
   const ix = await buildExecuteTriggerIx(program, accounts);
-  assert.equal(ix.keys.length, 32, "32 accounts on the wire");
+  assert.equal(ix.keys.length, 33, "33 accounts on the wire (2A appended oco_peer at [32])");
 
   const tail = ix.keys.slice(21);                       // [21]..[31]
   const sentinel = (i: number) => tail[i].pubkey.equals(program.programId);
@@ -407,7 +413,8 @@ test("B1.5 gate B: no eligible ask → all ELEVEN stay null (peg fallback regres
       assert.equal((accounts as any)[camel], null, `${label}: ${camel} must be null`);
     }
     const ix = await buildExecuteTriggerIx(program, accounts);
-    const tail = ix.keys.slice(21).filter((k) => k.pubkey.equals(program.programId));
+    // Bounded at 32: [32] is oco_peer, not a book optional. See the note above.
+    const tail = ix.keys.slice(21, 32).filter((k) => k.pubkey.equals(program.programId));
     assert.equal(tail.length, 11, `${label}: all eleven optionals are the sentinel → vault-peg fallback`);
   }
 });

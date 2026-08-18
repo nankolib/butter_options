@@ -235,6 +235,13 @@ export interface TriggerView {
   thresholdUsdc: bigint; // 6-dec
   quantity: bigint;
   maxPremiumPerContract: bigint; // 6-dec (BUY); 0 for sells
+  /** B3: the paired TriggerOrder PDA when this order is half of an OCO couple,
+   *  else null. Carried on the view because execute_trigger's [32] slot needs it
+   *  at assembly time — accountsStrict rejects the build without the account, and
+   *  the program refuses the fire (6087) if a linked order arrives without it.
+   *  OPTIONAL so existing fixtures need no edit — absent is read as "unpaired",
+   *  which is what every pre-B3 order is. */
+  ocoLink?: PublicKey | null;
 }
 
 export interface SpotEntry {
@@ -508,6 +515,8 @@ export function toView(d: { publicKey: PublicKey; account: any }): TriggerView {
     thresholdUsdc: BigInt(a.thresholdUsdc.toString()),
     quantity: BigInt(a.quantity.toString()),
     maxPremiumPerContract: BigInt(a.maxPremium.toString()),
+    // Anchor decodes Option<Pubkey> to the value or null.
+    ocoLink: (a.ocoLink ?? a.oco_link ?? null) as PublicKey | null,
   };
 }
 
@@ -585,6 +594,13 @@ export function assembleExecuteAccounts(
     bookHookProgram: book?.book_hook_program ?? null,
     bookHookState: book?.book_hook_state ?? null,
     bookMakerOption: book?.book_maker_option ?? null,
+    // [32] B3 OCO peer. accountsStrict requires EVERY account the IDL declares, so
+    // omitting this fails the BUILD with "Account `ocoPeer` not provided" — the
+    // keeper could not fire at all. The view carries the paired PDA when the order
+    // is half of an OCO couple; null otherwise. When it IS set, execute_trigger
+    // decrements the sibling in the same transaction, which is the whole point of
+    // pairing on chain rather than in the keeper.
+    ocoPeer: view.ocoLink ?? null,
   };
 }
 

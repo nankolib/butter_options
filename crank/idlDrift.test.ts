@@ -74,7 +74,33 @@ test("every tracked IDL copy is byte-identical to the others", () => {
   }
 });
 
+/**
+ * Test-only instructions that exist ONLY in a featured build
+ * (`--features 'testing test-fast-vol american-enabled test-synth-vol'`, or
+ * cu-profile). Their presence means target/ holds a TEST artifact, not the
+ * feature-free one that ships.
+ */
+const TEST_ONLY_IX = /^(synth_warm_vol_oracle|cu_profile_|create_test_shared_vault|shrink_shared_vault)/;
+
+function isFeaturedBuild(p: string): boolean {
+  const d = JSON.parse(fs.readFileSync(path.join(ROOT, p), "utf8"));
+  return (d.instructions ?? []).some((i: any) => TEST_ONLY_IX.test(i.name));
+}
+
 test("tracked IDLs match the built artifact, when one is present", () => {
+  if (here(BUILT_JSON) && isFeaturedBuild(BUILT_JSON)) {
+    // Running bankrun leaves a FEATURED artifact in target/. It legitimately has
+    // instructions the shipped program does not, so comparing against it would
+    // fire on every test run — and a guard that cries wolf is a guard people
+    // learn to ignore. The cross-copy check above still runs, which is the part
+    // that catches real drift.
+    console.log(
+      "  NOTE: target/idl is a FEATURED build (test-only instructions present) — " +
+        "skipped the built-artifact comparison. Rebuild feature-free (anchor build) " +
+        "for the full check.",
+    );
+    return;
+  }
   if (!here(BUILT_JSON)) {
     // Loud skip, not a silent pass: a fresh clone has no target/, and a green
     // here would otherwise mean "nothing was checked".
@@ -101,6 +127,12 @@ test("tracked IDLs match the built artifact, when one is present", () => {
 test("the generated TS type matches the one it is copied from", () => {
   if (!here(BUILT_TS) || !here(TRACKED_TS)) {
     console.log("  NOTE: TS type comparison skipped (no local build)");
+    return;
+  }
+  if (here(BUILT_JSON) && isFeaturedBuild(BUILT_JSON)) {
+    // Same reason as above: a featured build's TS type carries the test-only
+    // instructions, so this comparison would fire after every bankrun run.
+    console.log("  NOTE: target/types is from a FEATURED build — TS comparison skipped");
     return;
   }
   assert.equal(

@@ -158,17 +158,27 @@
 > - **Audit copy rules against the deployed bundle, not source.** A source grep
 >   missed a rendered JSX label and a fix wired into a component production does
 >   not render. Grep for a marker unique to the **edited component**.
-> - **Live devnet deploy facts, read off chain 2026-08-15 (refreshed at the
->   early-exercise pot-accounting ship)** — programdata
+> - **Live devnet deploy facts, read off chain 2026-08-18 (refreshed at the 2A
+>   tape + OCO ship)** — programdata
 >   `4VJ45tKB5wxsKYWVU3wPYJ4QnykNMBYTXauPd4W4aYKE`, **last deploy slot
->   `484127462`**, artifact sha256 `0b44404c…ab6e9a81` (feature-free, 1,670,920 B),
->   upgrade tx `euVYTP7BgAPF…`. Verified by slice-hash: the programdata's first
->   1,670,920 bytes hash byte-exact to the local artifact and the remaining
->   5,384 are all zero. **This line is REFRESHED in place, never appended to** —
->   the previous value `480011440` is now history, as `460518532` (the Run-6/7
->   May figure) was before it. Quote this, not any slot found further down the
->   file. Every one of those numbers was correct where it was written and wrong
->   the moment it was read as current. Take the chain reading.
+>   `485057525`**, artifact sha256
+>   `4f6ed68774aaa76a88f3a3c19fd58c2ea55da709139682526e473edf86c86b7f`
+>   (feature-free, 1,688,464 B), upgrade tx `2LhbFmc8CZc7NgW6qxgYokuuqPK4bUcG9UD…`,
+>   authority `5YRMuuoY…` unchanged. Verified prefix-wise: the programdata's first
+>   1,688,464 bytes hash byte-exact to the local artifact and the remaining
+>   16,384 are all zero. **This line is REFRESHED in place, never appended to** —
+>   the previous value `484127462` is now history, as `480011440` and `460518532`
+>   were before it. Quote this, not any slot found further down the file. Every one
+>   of those numbers was correct where it was written and wrong the moment it was
+>   read as current. Take the chain reading.
+> - **STANDING RULE — the canonical slot is re-verified against chain at every
+>   pre-flight and replaced at every upgrade close-out.** Earned 2026-08-18: the
+>   2A pre-flight was briefed to use `480011440` as the rollback reference and the
+>   chain reported `484127462`. The docs had gone stale across an intervening
+>   upgrade, and a rollback planned against the stale number would have targeted
+>   the wrong bytes. Read the slot from the chain before you rely on it, and write
+>   the new one back here the moment a deploy lands. Never carry a slot forward on
+>   the strength of a document, including this one.
 > - **The early-exercise pot fix is BURN-VERIFIED on chain, not just in
 >   bankrun.** Devnet sig `QrxjCyjr…3SQR4B`, slot `484431036`, SOL 70C AMER
 >   28-Aug: pot **$210.00 → $194.34** (−$15.66 exactly), contracts 3 → 0, supply
@@ -4274,3 +4284,146 @@ co-restarts accordingly.
   changed, gated on 86eyn5kx8 (2026-08-28).
 - Measure bud-fox's credit burn — it shares the 10M pool that resets on the 24th and
   is the probable cause of the Aug-16 exhaustion.
+
+---
+
+# 2A LIVE — tape source + OCO, devnet slot 485057525 (2026-08-18)
+
+The last exchange piece before FE placement. `execute_trigger` can now evaluate a
+trigger against the option's OWN mark instead of the underlying, and an OCO pair
+settles both legs in one transaction.
+
+## Deployed
+
+    program      CtzJ4MJYX6BFvF4g67i5C24tQuwRn6ddKkaE5L84z9Cq
+    programdata  4VJ45tKB5wxsKYWVU3wPYJ4QnykNMBYTXauPd4W4aYKE   unchanged
+    authority    5YRMuuoY3P7z5GeRAAQND7BxgNdmPSa6CSPCJLca1zZk   unchanged
+    slot         485057525                                       (was 484127462)
+    artifact     1,688,464 B, feature-free (default = [])
+    sha256       4f6ed68774aaa76a88f3a3c19fd58c2ea55da709139682526e473edf86c86b7f
+    upgrade tx   2LhbFmc8CZc7NgW6qxgYokuuqPK4bUcG9UDfyVrceYZNCbMiG3hqZ7yhoV9tF2B2u2GgDPD9x9PMVikrEeBgzoha
+
+Verified PREFIX-WISE: the on-chain dump is padded to the 1,704,848-byte capacity,
+its first 1,688,464 bytes hash byte-exact to the local artifact, and the remaining
+16,384 are all zero. Buffers empty before and after — no orphan to close.
+
+**`661dc7a45f68f6728424ec9e54ff16f54bd62e54cdcc972c329f7b1cd8256a17` was an earlier
+2A candidate. SUPERSEDED, NEVER DEPLOYED.** It exists in commit `f24ed86` and in an
+earlier build-gate report; do not treat it as a rollback point.
+
+## What shipped
+
+- `TapeSource { Underlying, Contract }` on TriggerOrder. Underlying is variant 0 so
+  a zero byte is the safe default. INIT_SPACE 237 → 238, appended in the
+  migration-free window alongside `oco_link` — 0 live TriggerOrders, and that
+  window closes the moment FE placement creates the first one.
+- Contract tape re-checked ON CHAIN via `price_american`, the same helper the vault
+  peg and `get_option_price` use. Never keeper-supplied: `execute_trigger`'s whole
+  security property is that it re-checks the condition itself.
+- `link_oco` — mutual, owner-signed, same-series pairing.
+- B3 atomic OCO decrement, with BOTH sides unlinking on a fire.
+- `cancel_trigger` clears a survivor's link.
+- Errors 6086 ContractTapeRequiresAmerican, 6087 OcoPeerRequired,
+  6088 OcoPeerMismatch, 6089 OcoAlreadyLinked, 6090 OcoSeriesMismatch.
+
+## The CU number, and why the old one was wrong
+
+Measured by simulating `get_option_price` on live American series at ~10 DTE:
+**BTC 24,492 · JTO 38,038 · XRP 40,035 · FARTCOIN 40,786 CU.** The kernel is
+~25-41K, not the "~250-280K for the pricing kernel alone" the source claimed —
+that figure was whole-BUY-path or stale, and is corrected in `execute_trigger.rs`.
+Worst case 441K measured / 680K pessimistic against the 1.4M ceiling, so the
+contract branch shipped rather than being stubbed. Keeper `EXECUTE_CU_LIMIT` moves
+to **700K** in 2B (not in this artifact).
+
+Three measurement errors preceded that number, all worth not repeating:
+
+1. Synthetic strikes (100 USDC on a ~1.08 underlying) make `price_american` bail
+   early with 6012 and measure an exit path, not the kernel.
+2. **Runtime enum shape is PascalCase** (`{"American":{}}`). A lowercase filter
+   reported 0 American vaults out of 4,623 when there are 4,556.
+3. A decoded enum cannot be fed back as an instruction ARG — args are camelCase.
+
+## What the behavioural suite caught before the ceremony
+
+The suite was written because the build gate was NOT met by shape-level tests
+alone, and it earned its place immediately:
+
+1. **B3 was unreachable code.** `place_trigger` hardcoded `oco_link = None` and
+   nothing could set it, so the decrement guarded a state that could not exist.
+   That is what `link_oco` is for.
+2. **Cancelling a leg bricked its survivor** — it kept pointing at a closed PDA,
+   which reads as 6087/6088 forever.
+3. **Then the first run found the same bug relocated inside my own fix:** a fire
+   closes leg A and leg B could no longer be CANCELLED. Both sides now unlink.
+4. **The 6086 test could not do what it claimed.** `create_series` is American-only
+   (6055), so a European series cannot exist and 6086 is unreachable
+   defence-in-depth. The test asserts the reachable truth and says so.
+
+Tape is proven by DISCRIMINATION, not a single green: same threshold, same
+comparator, opposite outcomes from `tape` alone. Mutation-tested — flipping the
+discriminating trigger to Underlying kills the tape test, expecting no decrement
+kills the OCO test.
+
+## Feature independence
+
+Zero `cfg(feature)` gates exist in `execute_trigger.rs`, `place_trigger.rs`,
+`trigger_order.rs`, `cancel_trigger.rs` or `link_oco.rs`. AMERICAN_ENABLED,
+WRITER_ASKS_ENABLED and BOOK_TRIGGERS_ENABLED are `true` in BOTH branches. The only
+real deltas are two extra instructions and `VOL_ORACLE_MIN_PUSH_INTERVAL_SECS`,
+read solely by `push_vol_sample` — the WRITE path. So a featured bankrun binary
+proves the feature-free one on these paths.
+
+## Ceremony notes
+
+- **`solana program extend` was required.** Programdata was 12,160 bytes short.
+  Extended by 28,544 (shortfall + 16,384 slack), a separate admin-signed step
+  ahead of the deploy — 1,676,349 → 1,704,893. The next upgrade has room.
+- **Funding:** 0.5 SOL crank → admin beforehand (ledger 86eynqxrg), because
+  extend-with-slack peaked ~0.03 SOL above the admin balance. Faucet not used. The
+  crank keypair is VPS-only and the admin key WSL-only, so the transfer was signed
+  ON THE BOX with only the destination pubkey crossing.
+- Net cost 0.207 SOL; the 11.75 SOL deploy buffer was fully reclaimed.
+- Ledgers posted BEFORE each send: funding 86eynqxrg, upgrade 86eynqyu3.
+
+## The IDL had drifted to three different vintages
+
+Before the sync: app 50 instructions / 86 errors, crank 51 / 86, mobile 51 / 79,
+built 51 / 91. Not formatting — genuinely different programs. All four now carry
+the deployed IDL byte-for-byte (`7ddae3ff…`).
+
+**The sync deliberately waited until after the upgrade.** Syncing earlier would
+have made the crank build 33-account `execute_trigger` and 7-account
+`cancel_trigger` transactions against a program still expecting 32 and 6.
+
+Box convergence proved by fingerprint, per the drift-slice rule: the on-disk
+`app/src/idl/opta.json` the crank loads hashes identical to the repo HEAD blob.
+The file-copy era stayed over.
+
+## Post-deploy state
+
+8/8 services + crossbar healthy, alarm OK, watcher CLEAR, **0 auth errors** across
+the restart chain with a negative control proving the matcher can match. D1 cache
+**warm-loaded at 3,388 entries** — no cold rebuild. Slot guards **10/10 on-box
+against the deployed IDL**: `execute_trigger` 33 accounts with the pot still at
+[25]/[26] and `oco_peer` at [32]; `settle_vault` [6]/[7]; `exercise_american`
+[14]/[15]; `cancel_trigger` 7 with `oco_peer` last.
+
+Recurring measurement artifact, not a fault: **opta-indexer reports zero RPC reads
+for ~3 minutes after a restart** because it renders shadow state and backfills
+before `entering live tail`. It has now tripped two restart audits. Check its
+startup phase before its health.
+
+## Open
+
+- **2B** — keeper markets/vaults cache (steady state ~2,890 credits/day),
+  `EXECUTE_CU_LIMIT` → 700K, keeper liveness monitor and wallet low-balance alarm.
+  Both monitors are HARD GATES for 2C.
+- **2C** — FE placement, now unblocked. Underlying tape only at launch; the
+  contract toggle stays disabled until the branch is verified live. Contract tape
+  on TradFi is unavailable while the vol oracle is stale (6044 warmup / 6045
+  stale) — in practice, outside market hours. That is oracle freshness, not a
+  calendar rule, and the FE copy should say so.
+- **B3.5** (86eynqev2) — close the zeroed OCO sibling. Deferred: decrement-to-zero
+  completes the double-exit property, closing is rent hygiene. Proven bounded — a
+  zeroed sibling cannot fire and `cancel_trigger` still reclaims its rent.

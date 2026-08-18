@@ -3,8 +3,19 @@
 Local planning doc, deliberately uncommitted.
 
 **Status: STAGE 2 IN PROGRESS.** Design approved with rulings R1-R3 (below).
-Backend (schema, decoders, ingestion, read API, divergence harness) is built and
-green against live devnet. Remaining: nginx exposure, FE overlay, measurement.
+Backend and FE both built and green. Live on the box, exposed through nginx,
+flag flipped in production. Remaining: the before/after measurement.
+
+DEPLOYED
+- indexer `opta-indexer` on the VPS, chain refresh every 30s (R1), schema v8.
+- `/api/chain/{vaults,series,markets,epochs,meta}` public, read-only, gzip, CORS
+  for opta.fyi, GET-only (POST returns 403). D4 allowlist + buy path untouched
+  and md5-verified unchanged.
+- `VITE_CHAIN_READPATH=1` in Vercel Production.
+
+MEASURED ON THE LIVE ENDPOINTS (real Chrome, cache disabled, parallel)
+  the entire JTO board — 638 vaults + 638 series + 34 markets + epochs —
+  arrives in ~1.0-1.5s, against ~14s for the chain path it replaces.
 
 ## RULINGS APPLIED
 

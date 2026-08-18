@@ -27,6 +27,7 @@
   "include": [
     "**/*.ts",
     "../app/src/utils/pythPullPost.ts",
+    "../app/src/utils/triggerBundle.ts",
     "../app/src/idl/opta.ts"
   ],
   "exclude": [

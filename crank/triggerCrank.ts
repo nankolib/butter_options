@@ -435,6 +435,8 @@ export interface TickDeps {
   fetchMarkets: (required?: Iterable<string>) => Promise<{ publicKey: PublicKey; account: any }[]>;
   fetchVaults: (required?: Iterable<string>) => Promise<{ publicKey: PublicKey; account: any }[]>;
   readPrices: (feedHexes: string[]) => Promise<Map<string, SpotEntry>>;
+  /** Diagnostics for the tick heartbeat. Optional: test doubles omit it. */
+  cacheSnapshots?: () => Array<{ label: string; refreshes: number; ageRefreshes: number; missRefreshes: number; hits: number; size: number; ageMs: number }>;
   /** Switchboard WATCH tape (Crossbar simulate). Optional so existing callers
    *  and the Pyth-only tests need no change; absent ⇒ no SB spots. */
   readSbPrices?: (feedHexes: string[]) => Promise<Map<string, SpotEntry>>;
@@ -1071,7 +1073,7 @@ export async function tickOnce(
   report.triggersFound = orders.length;
   if (orders.length === 0) {
     report.durationMs = Date.now() - startMs;
-    ctx.log("info", "trigger tick: no live triggers", { ...report });
+    ctx.log("info", "trigger tick: no live triggers", { ...report, cache: deps.cacheSnapshots?.() });
     return report;
   }
 
@@ -1225,7 +1227,7 @@ export async function tickOnce(
     });
   }
   report.durationMs = Date.now() - startMs;
-  ctx.log("info", "trigger tick complete", { ...report });
+  ctx.log("info", "trigger tick complete", { ...report, cache: deps.cacheSnapshots?.() });
   return report;
 }
 
@@ -1267,6 +1269,10 @@ function realDeps(
     fetchTriggerOrders: () => fetchAllDecoded(program, FETCHABLE.triggerOrder),
     fetchMarkets: (req) => marketCache.get(req),
     fetchVaults: (req) => vaultCache.get(req),
+    // Exposed so the tick heartbeat can REPORT the cache rather than leave its
+    // effect to be inferred from a unit test. 2B shipped the cache with no
+    // on-box evidence that the gPA reduction actually happened; this closes that.
+    cacheSnapshots: () => [marketCache.snapshot(), vaultCache.snapshot()],
     readPrices: (feeds) => readPricesBatched(feeds, ctx.hermesBase),
     readSbPrices: TRIGGER_SB_ENABLED
       ? async (feeds) => {

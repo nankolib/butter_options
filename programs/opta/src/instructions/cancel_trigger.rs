@@ -70,6 +70,30 @@ pub fn handle_cancel_trigger(ctx: Context<CancelTrigger>) -> Result<()> {
         )?;
     }
 
+    // ---- B3: unlink the surviving OCO leg ---------------------------------
+    //
+    // Closing one leg while the other still points at it would BRICK the
+    // survivor: execute_trigger sees `oco_link = Some(closed_pda)`, demands that
+    // account (6087), and any account supplied for a closed PDA fails the mutual
+    // back-link check (6088). The survivor could then never fire — a stop-loss
+    // that silently stops protecting is worse than one that was never placed.
+    //
+    // The peer is OPTIONAL so unpaired cancels are unchanged, but if this trigger
+    // IS linked the peer must be supplied, for exactly the reason above.
+    if let Some(link) = ctx.accounts.trigger_order.oco_link {
+        let peer = ctx
+            .accounts
+            .oco_peer
+            .as_mut()
+            .ok_or(error!(OptaError::OcoPeerRequired))?;
+        require_keys_eq!(peer.key(), link, OptaError::OcoPeerMismatch);
+        require!(
+            peer.oco_link == Some(ctx.accounts.trigger_order.key()),
+            OptaError::OcoPeerMismatch
+        );
+        peer.oco_link = None;
+    }
+
     emit!(TriggerCancelled {
         trigger_order: ctx.accounts.trigger_order.key(),
         owner: ctx.accounts.owner.key(),
@@ -118,6 +142,7 @@ pub struct CancelTrigger<'info> {
     )]
     pub protocol_state: Account<'info, ProtocolState>,
 
+
     /// Owner's USDC account — refund destination (BUY). Mint enforced by the SPL
     /// transfer (from.mint == to.mint); unused on the SELL branch.
     /// CHECK: validated by the SPL transfer.
@@ -125,4 +150,8 @@ pub struct CancelTrigger<'info> {
     pub owner_usdc_account: UncheckedAccount<'info>,
 
     pub token_program: Program<'info, Token>,
+    /// The paired trigger, when this one is half of an OCO couple. APPENDED, so
+    /// every existing account keeps its index and unpaired callers pass None.
+    #[account(mut)]
+    pub oco_peer: Option<Box<Account<'info, TriggerOrder>>>,
 }

@@ -126,7 +126,7 @@ describe("trigger orders — Pass 0 (place + cancel)", function () {
     const { order, escrow } = deriveTrigger(owner.publicKey, s.mint, nonce);
     const ownerUsdc = await usdcAta(e, owner.publicKey);
     const ownerOpt = getAssociatedTokenAddressSync(s.mint, owner.publicKey, false, TOKEN_2022_PROGRAM_ID);
-    await e.opta.methods.placeTrigger(BUY, GE, thresholdUsd, new BN(qty), maxPremium, nonce).accountsStrict({
+    await e.opta.methods.placeTrigger(BUY, GE, thresholdUsd, new BN(qty), maxPremium, nonce, { underlying: {} }).accountsStrict({
       owner: owner.publicKey, market: e.market, sharedVault: vault, vaultMintRecord: s.record,
       optionMint: s.mint, triggerOrder: order, triggerEscrow: escrow, protocolState: e.protocolState,
       usdcMint: e.usdcMint, ownerUsdcAccount: ownerUsdc, ownerOptionAta: ownerOpt,
@@ -142,7 +142,7 @@ describe("trigger orders — Pass 0 (place + cancel)", function () {
   ) {
     const { order, escrow } = deriveTrigger(owner.publicKey, s.mint, nonce);
     const ownerUsdc = await usdcAta(e, owner.publicKey);
-    await e.opta.methods.placeTrigger(SELL, comparator, thresholdUsd, new BN(qty), new BN(0), nonce).accountsStrict({
+    await e.opta.methods.placeTrigger(SELL, comparator, thresholdUsd, new BN(qty), new BN(0), nonce, { underlying: {} }).accountsStrict({
       owner: owner.publicKey, market: e.market, sharedVault: vault, vaultMintRecord: s.record,
       optionMint: s.mint, triggerOrder: order, triggerEscrow: escrow, protocolState: e.protocolState,
       usdcMint: e.usdcMint, ownerUsdcAccount: ownerUsdc, ownerOptionAta: ownerOpt,
@@ -159,6 +159,7 @@ describe("trigger orders — Pass 0 (place + cancel)", function () {
     await e.opta.methods.cancelTrigger().accountsStrict({
       owner: owner.publicKey, triggerOrder: order, triggerEscrow: escrow,
       protocolState: e.protocolState, ownerUsdcAccount: ownerUsdc, tokenProgram: TOKEN_PROGRAM_ID,
+      ocoPeer: null,   // [6] B3 unlink slot; null unless the leg is paired
     }).signers([owner]).rpc();
     return { order, escrow };
   }
@@ -350,6 +351,7 @@ describe("trigger orders — Pass 0 (place + cancel)", function () {
       bookOrder: null, bookMaker: null, bookEscrow: null, bookMakerUsdc: null,
       writerAskPot: null, writerAskPotUsdc: null, writerAskPosition: null,
       bookHookMetas: null, bookHookProgram: null, bookHookState: null, bookMakerOption: null,
+      ocoPeer: null,   // [32] B3 OCO peer; null unless the trigger is paired
     }).preInstructions([CU(400_000)]).rpc();
   }
 
@@ -571,6 +573,7 @@ describe("trigger orders — Pass 0 (place + cancel)", function () {
       bookOrder: null, bookMaker: null, bookEscrow: null, bookMakerUsdc: null,
       writerAskPot: null, writerAskPotUsdc: null, writerAskPosition: null,
       bookHookMetas: null, bookHookProgram: null, bookHookState: null, bookMakerOption: null,
+      ocoPeer: null,   // [32] B3 OCO peer; null unless the trigger is paired
     };
   }
 

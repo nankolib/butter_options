@@ -155,7 +155,7 @@ describe("B2: TakeProfitSell / StopLossSell → book bid side (bid_fill_core)", 
     m: any, owner: Keypair, kind: any, cmp: any, thresholdUsd: BN, qty: number, floor: BN, nonce: BN,
   ) {
     const { order, escrow } = triggerPdas(owner.publicKey, m.mint, nonce);
-    await e.opta.methods.placeTrigger(kind, cmp, thresholdUsd, new BN(qty), floor, nonce).accountsStrict({
+    await e.opta.methods.placeTrigger(kind, cmp, thresholdUsd, new BN(qty), floor, nonce, { underlying: {} }).accountsStrict({
       owner: owner.publicKey, market: e.market, sharedVault: m.vault, vaultMintRecord: m.record,
       optionMint: m.mint, triggerOrder: order, triggerEscrow: escrow, protocolState: e.protocolState,
       usdcMint: e.usdcMint, ownerUsdcAccount: await usdcAta(e, owner.publicKey),
@@ -205,6 +205,7 @@ describe("B2: TakeProfitSell / StopLossSell → book bid side (bid_fill_core)", 
       bookHookProgram: bid ? HOOK_PROGRAM_ID : null,
       bookHookState: bid ? m.hookState : null,
       bookMakerOption: bid ? optAta(m.mint, bid.bidder) : null,             // [31] bid-only
+      ocoPeer: null,   // [32] B3 OCO peer; null unless the trigger is paired
     }).preInstructions(pre);
     if (expectErr) { let msg = ""; try { await b.rpc(); } catch (x: any) { msg = String(x); } return msg; }
     await b.rpc();

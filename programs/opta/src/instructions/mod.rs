@@ -60,6 +60,7 @@ pub mod create_and_deposit;
 pub mod reclaim_unsettled;
 
 // Trigger orders (Phase 4 Pass 0 — placement + cancel; Pass 1 — execute)
+pub mod link_oco;
 pub mod place_trigger;
 pub mod cancel_trigger;
 pub mod execute_trigger;
@@ -165,6 +166,7 @@ pub use create_and_deposit::*;
 pub use reclaim_unsettled::*;
 
 // Trigger orders (Phase 4 Pass 0 — placement + cancel; Pass 1 — execute)
+pub use link_oco::*;
 pub use place_trigger::*;
 pub use cancel_trigger::*;
 pub use execute_trigger::*;

@@ -139,7 +139,7 @@ describe("B1: StopEntryBuy → book (writer_ask_fill_core, escrow-pays)", functi
     const { order, escrow } = triggerPdas(owner.publicKey, m.mint, nonce);
     const ownerUsdc = await usdcAta(e, owner.publicKey);
     const ownerOpt = getAssociatedTokenAddressSync(m.mint, owner.publicKey, false, TOKEN_2022_PROGRAM_ID);
-    await e.opta.methods.placeTrigger(BUY, GE, thresholdUsd, new BN(qty), maxPremium, nonce).accountsStrict({
+    await e.opta.methods.placeTrigger(BUY, GE, thresholdUsd, new BN(qty), maxPremium, nonce, { underlying: {} }).accountsStrict({
       owner: owner.publicKey, market: e.market, sharedVault: m.vault, vaultMintRecord: m.record,
       optionMint: m.mint, triggerOrder: order, triggerEscrow: escrow, protocolState: e.protocolState,
       usdcMint: e.usdcMint, ownerUsdcAccount: ownerUsdc, ownerOptionAta: ownerOpt,
@@ -169,6 +169,7 @@ describe("B1: StopEntryBuy → book (writer_ask_fill_core, escrow-pays)", functi
       bookOrder: askO.order, bookMaker: m.writer.publicKey, bookEscrow: askO.escrow, bookMakerUsdc: makerUsdc,
       writerAskPot: pot, writerAskPotUsdc: potUsdc, writerAskPosition: position,
       bookHookMetas: null, bookHookProgram: null, bookHookState: null, bookMakerOption: null,
+      ocoPeer: null,   // [32] B3 OCO peer; null unless the trigger is paired
     }).preInstructions([CU(400_000)]);
     if (expectErr) { let msg = ""; try { await b.rpc(); } catch (x: any) { msg = String(x); } return msg; }
     await b.rpc();
@@ -345,6 +346,7 @@ describe("B1: StopEntryBuy → book (writer_ask_fill_core, escrow-pays)", functi
       bookOrder: null, bookMaker: null, bookEscrow: null, bookMakerUsdc: null,
       writerAskPot: null, writerAskPotUsdc: null, writerAskPosition: null,
       bookHookMetas: null, bookHookProgram: null, bookHookState: null, bookMakerOption: null,
+      ocoPeer: null,   // [32] B3 OCO peer; null unless the trigger is paired
     }).preInstructions([CU(400_000)]).rpc();
 
     const vaultShare = (await bal(e, m.vaultUsdc)) - vBefore;
@@ -396,6 +398,7 @@ describe("B1: StopEntryBuy → book (writer_ask_fill_core, escrow-pays)", functi
       bookOrder: resale.order, bookMaker: reseller.publicKey, bookEscrow: resale.escrow, bookMakerUsdc: resellerUsdc,
       writerAskPot: null, writerAskPotUsdc: null, writerAskPosition: null,
       bookHookMetas: m.extraMetas, bookHookProgram: HOOK_PROGRAM_ID, bookHookState: m.hookState, bookMakerOption: null,
+      ocoPeer: null,   // [32] B3 OCO peer; null unless the trigger is paired
     }).preInstructions([CU(400_000)]).rpc();
 
     const total = RP.muln(Q);              // $10

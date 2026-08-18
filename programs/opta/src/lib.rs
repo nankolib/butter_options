@@ -448,6 +448,14 @@ pub mod opta {
     /// StopEntryBuy escrows `max_premium × quantity` USDC + pre-creates the
     /// owner's destination option ATA; TakeProfitSell escrows nothing and
     /// sanity-checks the declared source ATA holds ≥ quantity. Spec v1 §placement.
+    /// B3: mutually pair two of the caller's triggers so a fire on one
+    /// decrements the other in the SAME transaction. Without this, `oco_link`
+    /// could never be set and the OCO enforcement in execute_trigger was
+    /// unreachable.
+    pub fn link_oco(ctx: Context<LinkOco>) -> Result<()> {
+        instructions::link_oco::handle_link_oco(ctx)
+    }
+
     pub fn place_trigger(
         ctx: Context<PlaceTrigger>,
         kind: TriggerKind,

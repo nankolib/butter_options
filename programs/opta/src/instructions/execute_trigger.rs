@@ -242,6 +242,15 @@ pub fn handle_execute_trigger(ctx: Context<ExecuteTrigger>) -> Result<()> {
     // Read the OCO link BEFORE dispatch: a full fill closes `trigger_order`, and
     // the sibling still has to be settled after that.
     let oco_link = ctx.accounts.trigger_order.oco_link;
+    // ...and drop this side's link NOW, while the account is guaranteed open.
+    //
+    // Both sides must end a fire unlinked. Clearing only the peer would leave a
+    // surviving partial-fill parent pointing at a sibling that no longer points
+    // back, which execute_trigger reads as a mismatch (6088) and cancel_trigger
+    // as a missing peer (6087) — bricking it. Clearing only this side would brick
+    // the sibling the same way once this account closes. If the fire reverts, so
+    // does this write.
+    ctx.accounts.trigger_order.oco_link = None;
     // Set at every site that actually fires; 0 means nothing fired, so the
     // sibling must not move.
     let mut oco_fired: u64 = 0;
@@ -955,6 +964,10 @@ pub fn handle_execute_trigger(ctx: Context<ExecuteTrigger>) -> Result<()> {
             // saturating: a fire larger than the sibling's remaining size zeroes
             // it rather than wrapping. A zero-quantity trigger cannot fire.
             peer.quantity = peer.quantity.saturating_sub(oco_fired);
+            // The pairing has done its job. Leaving the sibling linked to an
+            // account this transaction may have just closed is what made the
+            // survivor uncancellable (6087) in the first behavioural run.
+            peer.oco_link = None;
         }
     }
 

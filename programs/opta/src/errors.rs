@@ -531,4 +531,18 @@ pub enum OptaError {
     // Append-only — error code 6088.
     #[msg("OCO peer does not match this trigger's link, or the link is not mutual")]
     OcoPeerMismatch,
+
+    // Re-pointing a live pair would orphan the old peer: it would still link
+    // back to a trigger that no longer links to it, which execute_trigger reads
+    // as a mismatch (6088) and refuses — leaving the orphan permanently
+    // unfireable. Unlink by cancelling a leg instead.
+    // Append-only — error code 6089.
+    #[msg("Trigger is already part of an OCO pair")]
+    OcoAlreadyLinked,
+
+    // A TP/SL couple is two exits on ONE position. Linking across series would
+    // let a fire on one contract cancel an exit on an unrelated one.
+    // Append-only — error code 6090.
+    #[msg("OCO legs must be on the same option series")]
+    OcoSeriesMismatch,
 }

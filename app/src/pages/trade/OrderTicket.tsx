@@ -25,7 +25,8 @@ import {
 } from "../../utils/optionPriceQuote";
 import type { UnifiedChainRow } from "../../hooks/useUnifiedChain";
 import {
-  alreadyMetLegs, alreadyMetMessage, isEffectivelyWorthless, spotAnchoredPlaceholder,
+  alreadyMetLegs, alreadyMetMessage, formatSpotForLabel, isEffectivelyWorthless,
+  spotAnchoredPlaceholder,
 } from "../../utils/triggerGuards";
 
 // Quote-on-demand short-TTL cache, keyed by series mint (premium is per-contract,
@@ -650,7 +651,7 @@ export const OrderTicket: FC<{
               $0.5588 underlying happened because nothing on screen anchored
               these fields to the underlying's scale — the label said "JTO" and
               the user supplied a premium. */}
-          <Field label={`Take profit — ${row.asset} at or above${spot != null ? ` · spot $${spot.toFixed(4)}` : ""}`}>
+          <Field label={`Take profit — ${row.asset} at or above${spot != null ? ` · spot ${formatSpotForLabel(spot)}` : ""}`}>
             <NumericField
               value={tpPrice}
               min={0}
@@ -671,7 +672,7 @@ export const OrderTicket: FC<{
             </p>
           )}
 
-          <Field label={`Stop loss — ${row.asset} at or below${spot != null ? ` · spot $${spot.toFixed(4)}` : ""}`}>
+          <Field label={`Stop loss — ${row.asset} at or below${spot != null ? ` · spot ${formatSpotForLabel(spot)}` : ""}`}>
             <NumericField
               value={slPrice}
               min={0}

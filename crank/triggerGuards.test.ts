@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 
 import {
   WORTHLESS_EST_USD, alreadyMetLegs, alreadyMetMessage, isEffectivelyWorthless,
-  spotAnchoredPlaceholder, triggerAlreadyMet,
+  formatSpotForLabel, spotAnchoredPlaceholder, triggerAlreadyMet,
 } from "@app/utils/triggerGuards";
 
 const JTO_SPOT = 0.5588;
@@ -129,4 +129,10 @@ test("without spot the placeholder falls back and promises nothing", () => {
 test("larger underlyings use 2dp, sub-dollar ones 4dp", () => {
   assert.equal(spotAnchoredPlaceholder("tp", 200), "e.g. 220.00");
   assert.match(spotAnchoredPlaceholder("sl", 0.5588), /^e\.g\. 0\.\d{4}$/);
+});
+
+test("spot in the label uses the asset's own scale, not a fixed 4dp", () => {
+  // "$200.0000" on a stock is the same category of noise this change removes.
+  assert.equal(formatSpotForLabel(0.5588), "$0.5588");
+  assert.equal(formatSpotForLabel(200), "$200.00");
 });

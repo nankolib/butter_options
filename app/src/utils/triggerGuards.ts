@@ -103,3 +103,12 @@ export function spotAnchoredPlaceholder(
   // four decimals to be meaningful, larger ones read better with two.
   return `e.g. ${v.toFixed(spot < 10 ? 4 : 2)}`;
 }
+
+/**
+ * Spot for display, at the asset's own scale. A sub-dollar underlying needs four
+ * decimals to say anything (JTO at $0.5588); a stock does not, and "$200.0000"
+ * is exactly the kind of noise this whole change is trying to remove.
+ */
+export function formatSpotForLabel(spot: number): string {
+  return `$${spot.toFixed(spot < 10 ? 4 : 2)}`;
+}

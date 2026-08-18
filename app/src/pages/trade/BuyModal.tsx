@@ -337,7 +337,8 @@ export const BuyModal: FC<BuyModalProps> = ({
             <div className="mt-6">
               <Field label="Contracts to buy">
                 <input
-                  type="number"
+                  type="text"
+            inputMode="decimal"
                   value={quantity}
                   onChange={(e) => setQuantity(e.target.value)}
                   min={1}

@@ -149,7 +149,8 @@ export const WriteContractPanel: FC<Props> = ({
 
       <Field label="Strike (USDC)">
         <TerminalInput
-          type="number"
+          type="text"
+            inputMode="decimal"
           value={values.strike}
           onChange={(v) => onValuesChange({ ...values, strike: v })}
           placeholder="0.00"
@@ -247,7 +248,8 @@ export const WriteContractPanel: FC<Props> = ({
 
       <Field label="Quantity">
         <TerminalInput
-          type="number"
+          type="text"
+            inputMode="decimal"
           value={values.contracts}
           onChange={(v) => onValuesChange({ ...values, contracts: v })}
           placeholder="1"
@@ -304,7 +306,8 @@ export const WriteContractPanel: FC<Props> = ({
         {advOpen && (
           <div className="mt-3 flex flex-col gap-2">
             <TerminalInput
-              type="number"
+              type="text"
+            inputMode="decimal"
               value={values.premiumPerContract}
               onChange={(v) => onValuesChange({ ...values, premiumPerContract: v })}
               placeholder="Auto · Black-Scholes"
@@ -377,15 +380,20 @@ const Chip: FC<{ active: boolean; onClick: () => void; children: React.ReactNode
 
 const TerminalInput: FC<{
   type: string;
+  /** Raises the numeric keypad on mobile while the field stays type="text", so
+   *  the browser cannot blank out mid-type states like "0." — see
+   *  utils/numericInput.ts for why that mattered. */
+  inputMode?: "decimal" | "numeric" | "text";
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
   step?: string;
   min?: string;
   testid?: string;
-}> = ({ type, value, onChange, placeholder, step, min, testid }) => (
+}> = ({ type, inputMode, value, onChange, placeholder, step, min, testid }) => (
   <input
     type={type}
+    inputMode={inputMode}
     value={value}
     onChange={(e) => onChange(e.target.value)}
     placeholder={placeholder}

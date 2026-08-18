@@ -1,4 +1,5 @@
 import type { FC } from "react";
+import { NumericField } from "../../components/NumericField";
 import { useEffect, useMemo, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { usePegFill } from "../../hooks/useOrderFlows";
@@ -156,11 +157,12 @@ export const SimpleTradePanel: FC<{
         <div className="mt-5 mb-2 font-mono-plex text-[9px] uppercase tracking-[0.14em] text-l-muted">Amount (USDC)</div>
         <div className="flex items-center gap-2 rounded-[6px] border border-l-hair bg-l-bg px-4 py-3 transition-colors focus-within:border-l-muted">
           <span className="font-mono-plex text-[20px] leading-none text-l-muted">$</span>
-          <input
-            type="number"
+          <NumericField
             min={1}
+            integer
+            fallback={1}
             value={amount}
-            onChange={(e) => setAmount(Math.max(1, Number(e.target.value) || 1))}
+            onChange={(n) => setAmount(Math.max(1, n || 1))}
             className="w-full bg-transparent font-mono-plex text-[24px] leading-none tabular-nums text-l-text outline-none"
           />
         </div>

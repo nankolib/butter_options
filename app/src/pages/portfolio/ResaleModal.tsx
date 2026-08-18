@@ -138,7 +138,8 @@ export const ResaleModal: FC<ResaleModalProps> = ({
             Contracts to list
           </div>
           <input
-            type="number"
+            type="text"
+            inputMode="decimal"
             value={listQuantity}
             onChange={(e) => setListQuantity(e.target.value)}
             min={1}
@@ -155,7 +156,8 @@ export const ResaleModal: FC<ResaleModalProps> = ({
             Total asking price (USDC)
           </div>
           <input
-            type="number"
+            type="text"
+            inputMode="decimal"
             value={resalePrice}
             onChange={(e) => setResalePrice(e.target.value)}
             step="0.01"

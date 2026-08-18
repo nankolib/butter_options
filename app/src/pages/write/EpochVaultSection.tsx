@@ -287,7 +287,8 @@ export const EpochVaultSection: FC<EpochVaultSectionProps> = ({
               </span>
               <div className="flex items-center gap-1">
                 <input
-                  type="number"
+                  type="text"
+            inputMode="decimal"
                   min="0"
                   max="100"
                   value={split[t]}

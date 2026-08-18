@@ -241,7 +241,8 @@ export const WriterForm: FC<WriterFormProps> = ({
 
       <Field label="Strike (USDC)">
         <input
-          type="number"
+          type="text"
+            inputMode="decimal"
           value={values.strike}
           onChange={(e) => onChange({ ...values, strike: e.target.value })}
           placeholder="0.00"
@@ -256,7 +257,8 @@ export const WriterForm: FC<WriterFormProps> = ({
 
       <Field label="Contracts">
         <input
-          type="number"
+          type="text"
+            inputMode="decimal"
           value={values.contracts}
           onChange={(e) => onChange({ ...values, contracts: e.target.value })}
           placeholder="1"
@@ -435,7 +437,8 @@ const AdvancedSection: FC<{
             Premium per contract (USDC)
           </div>
           <input
-            type="number"
+            type="text"
+            inputMode="decimal"
             value={premiumPerContract}
             onChange={(e) => onChange(e.target.value)}
             placeholder="Auto · uses Black-Scholes"

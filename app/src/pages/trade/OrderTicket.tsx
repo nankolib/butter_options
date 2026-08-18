@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { PublicKey, Transaction, ComputeBudgetProgram } from "@solana/web3.js";
 import { BN } from "@coral-xyz/anchor";
+import { NumericField } from "../../components/NumericField";
 import posthog from "posthog-js";
 import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { useProgram } from "../../hooks/useProgram";
@@ -625,10 +626,12 @@ export const OrderTicket: FC<{
           </div>
 
           <Field label={`Take profit — ${row.asset} at or above`}>
-            <input
-              type="number" inputMode="decimal" min={0} step="any"
-              value={tpPrice || ""} placeholder="leave empty to skip"
-              onChange={(e) => setTpPrice(Number(e.target.value) || 0)}
+            <NumericField
+              value={tpPrice}
+              min={0}
+              fallback={0}
+              placeholder="leave empty to skip"
+              onChange={setTpPrice}
               className="w-full bg-transparent font-mono-plex text-[13px] tabular-nums text-l-text outline-none"
             />
           </Field>
@@ -639,10 +642,12 @@ export const OrderTicket: FC<{
           )}
 
           <Field label={`Stop loss — ${row.asset} at or below`}>
-            <input
-              type="number" inputMode="decimal" min={0} step="any"
-              value={slPrice || ""} placeholder="leave empty to skip"
-              onChange={(e) => setSlPrice(Number(e.target.value) || 0)}
+            <NumericField
+              value={slPrice}
+              min={0}
+              fallback={0}
+              placeholder="leave empty to skip"
+              onChange={setSlPrice}
               className="w-full bg-transparent font-mono-plex text-[13px] tabular-nums text-l-text outline-none"
             />
           </Field>
@@ -653,10 +658,12 @@ export const OrderTicket: FC<{
           )}
 
           <Field label="Minimum proceeds per contract">
-            <input
-              type="number" inputMode="decimal" min={0} step="any"
-              value={sellFloor || ""} placeholder="0 = will not sell into the book"
-              onChange={(e) => setSellFloor(Number(e.target.value) || 0)}
+            <NumericField
+              value={sellFloor}
+              min={0}
+              fallback={0}
+              placeholder="0 = will not sell into the book"
+              onChange={setSellFloor}
               className="w-full bg-transparent font-mono-plex text-[13px] tabular-nums text-l-text outline-none"
             />
           </Field>
@@ -684,7 +691,7 @@ export const OrderTicket: FC<{
 
       {/* Qty + price */}
       <Field label="Quantity">
-        <NumInput value={qty} min={1} step={1} onChange={(n) => setQty(Math.max(1, n || 1))} />
+        <NumInput value={qty} min={1} step={1} integer onChange={(n) => setQty(Math.max(1, n || 1))} />
       </Field>
 
       {(type === "limit" || isWrite) && (
@@ -859,13 +866,17 @@ const Field: FC<{ label: string; children: ReactNode }> = ({ label, children }) 
   </div>
 );
 
-const NumInput: FC<{ value: number; min: number; step: number; onChange: (n: number) => void }> = ({ value, min, step, onChange }) => (
-  <input
-    type="number"
-    min={min}
-    step={step}
+/** Kept as a name so call sites are untouched, but the behaviour now comes from
+ *  the shared NumericField: the old body stored a parsed number, so clearing it
+ *  produced Number("") === 0 and the field snapped back. `step` is accepted and
+ *  ignored — it only ever drove type="number" spinners, which are gone. */
+const NumInput: FC<{ value: number; min: number; step: number; integer?: boolean; onChange: (n: number) => void }> = ({ value, min, integer, onChange }) => (
+  <NumericField
     value={value}
-    onChange={(e) => onChange(Number(e.target.value))}
+    min={min}
+    integer={integer}
+    fallback={min}
+    onChange={onChange}
     className="w-full rounded-[6px] border border-l-hair bg-transparent px-3 py-2 font-mono-plex text-[14px] tabular-nums text-l-text outline-none transition-colors focus:border-l-muted"
   />
 );

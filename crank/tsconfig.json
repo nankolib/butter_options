@@ -28,6 +28,7 @@
     "**/*.ts",
     "../app/src/utils/pythPullPost.ts",
     "../app/src/utils/triggerBundle.ts",
+    "../app/src/utils/numericInput.ts",
     "../app/src/idl/opta.ts"
   ],
   "exclude": [

@@ -21,6 +21,7 @@ import { PublicKey } from "@solana/web3.js";
 import { useWallet } from "@solana/wallet-adapter-react";
 
 import { useProgram } from "./useProgram";
+import { subscribeMutations } from "../utils/mutationBus";
 
 export interface ArmedTrigger {
   pubkey: string;
@@ -97,6 +98,11 @@ export function useTriggers(optionMint?: string | null) {
   }, [program, publicKey]);
 
   useEffect(() => { void refresh(); }, [refresh]);
+
+  // Re-fetch when any mutation confirms. Arming an exit while a trigger list is
+  // already mounted otherwise leaves it showing the pre-placement (empty) set,
+  // and a user who arms protection and sees nothing arms it a second time.
+  useEffect(() => subscribeMutations(() => { void refresh(); }), [refresh]);
 
   const forSeries = optionMint
     ? triggers.filter((t) => t.optionMint === optionMint)

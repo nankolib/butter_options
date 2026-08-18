@@ -28,6 +28,7 @@ import {
   alreadyMetLegs, alreadyMetMessage, formatSpotForLabel, isEffectivelyWorthless,
   spotAnchoredPlaceholder,
 } from "../../utils/triggerGuards";
+import { emitMutation } from "../../utils/mutationBus";
 
 // Quote-on-demand short-TTL cache, keyed by series mint (premium is per-contract,
 // size-independent). Browsing the chain never touches this — only the RFQ button.
@@ -377,6 +378,9 @@ export const OrderTicket: FC<{
             ? "TP/SL pair armed — one fires, the other is cancelled"
             : `${tpPrice > 0 ? "Take-profit" : "Stop-loss"} armed`,
         });
+        // Broadcast so any mounted armed-exits list re-fetches. Without this the
+        // list a user navigates to could still be showing the pre-placement set.
+        emitMutation();
       } else if (side === "write") {
         // Write = mint-on-fill sell side: post a WriterAsk (escrows strike×qty USDC).
         sig = await post.submit(ref, "writerAsk", limitPrice, qty, nonce);

@@ -31,6 +31,7 @@ import { SummaryStrip } from "./terminal/SummaryStrip";
 import { QuestPanel } from "./QuestPanel";
 import { ByAssetSection } from "./terminal/ByAssetSection";
 import { HoldingsLedger } from "./terminal/HoldingsLedger";
+import { ArmedTriggersSection } from "./ArmedTriggersSection";
 import { WrittenLedger } from "./terminal/WrittenLedger";
 import { ActivitySection } from "./terminal/ActivitySection";
 import { UtilitiesSection } from "./terminal/UtilitiesSection";
@@ -175,6 +176,13 @@ export const PortfolioTerminalPage: FC = () => {
                 collapsed={collapsed("holdings")}
                 onToggle={() => toggleSection("holdings")}
               />
+
+              {/* Armed TP/SL exits, directly under the holdings they protect.
+                  This was rendered ONLY by PortfolioPageLegacy, while
+                  PORTFOLIO_TERMINAL_UI has selected this page since the terminal
+                  rewrite — so a confirmed on-chain pair was invisible here, with
+                  no badge and nothing to cancel. */}
+              <ArmedTriggersSection />
 
               <WrittenLedger
                 rows={writerRows}

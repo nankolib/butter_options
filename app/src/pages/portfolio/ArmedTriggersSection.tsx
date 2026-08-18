@@ -73,7 +73,27 @@ export const ArmedTriggersSection: FC = () => {
       <p className="py-4 font-mono-plex text-[11px] text-l-muted">Loading armed exits…</p>
     );
   }
-  if (triggers.length === 0) return null;
+  // Deliberately NOT `return null`. A silent section is indistinguishable from
+  // the bug that shipped here: armed exits existed on chain and the page simply
+  // rendered nothing. Saying "none" is a fact the user can act on; saying
+  // nothing hides a whole class of failure.
+  if (triggers.length === 0) {
+    return (
+      <section className="mt-6">
+        <div className="mb-2 flex items-baseline justify-between">
+          <h3 className="font-mono-plex text-[9px] uppercase tracking-[0.2em] text-l-muted">
+            Armed exits
+          </h3>
+          <span className="font-mono-plex text-[9.5px] text-l-faint">
+            none armed
+          </span>
+        </div>
+        <p className="py-3 font-mono-plex text-[10.5px] text-l-muted">
+          No armed exits. Set a take-profit or stop-loss from the trade ticket.
+        </p>
+      </section>
+    );
+  }
 
   return (
     <section className="mt-6">

@@ -14,7 +14,20 @@ import "./index.css";
 // clicks/inputs (input VALUES are never sent by autocapture); replay masks every
 // input value + any [data-ph-mask] element (wallet addresses / balances).
 const PH_KEY = import.meta.env.VITE_POSTHOG_KEY;
-if (PH_KEY) {
+
+/**
+ * Analytics must not sit in front of first paint. init() opens connections and
+ * starts session recording, and it used to run synchronously BEFORE createRoot,
+ * so every visitor waited on telemetry before seeing anything (its web-vitals
+ * fetch alone was measured at 6.2s on a cold load, competing for sockets with
+ * the data the page actually needs).
+ *
+ * Deferred to the first idle slice after render. Nothing here is load-bearing
+ * for the UI, and PostHog queues events raised before init resolves, so
+ * autocapture and pageview coverage are unchanged — only the ordering moves.
+ */
+function initAnalytics() {
+  if (!PH_KEY) return;
   posthog.init(PH_KEY, {
     api_host: "https://us.i.posthog.com",
     ui_host: "https://us.posthog.com",
@@ -29,6 +42,11 @@ if (PH_KEY) {
   });
 }
 
+const schedule: (cb: () => void) => void =
+  typeof window !== "undefined" && "requestIdleCallback" in window
+    ? (cb) => (window as any).requestIdleCallback(cb, { timeout: 3000 })
+    : (cb) => setTimeout(cb, 0);
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <ErrorBoundary>
@@ -40,3 +58,5 @@ createRoot(document.getElementById("root")!).render(
     </ErrorBoundary>
   </StrictMode>,
 );
+
+schedule(initAnalytics);

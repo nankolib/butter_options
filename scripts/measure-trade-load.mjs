@@ -133,12 +133,50 @@ const page = await ctx.newPage();
 const cold = await measure(page, `COLD — ${URL}`);
 const c = report(cold);
 
-const warm = await measure(page, `WARM — ${URL} (same context, second load)`);
+const warm = await measure(page, `WARM (hard reload) — ${URL}`);
 const w = report(warm);
+
+// THIRD scenario, and the one that matches how the app is actually used.
+// The scan cache is in-memory, so a hard reload throws it away by design; an
+// in-app navigation keeps it. Reporting only the reload number would understate
+// the fix, and reporting only this one would overstate it — so measure both and
+// let the two numbers say different things.
+async function measureSpaNav(label) {
+  await page.goto(URL, { waitUntil: "domcontentloaded", timeout: INTERACTIVE_TIMEOUT });
+  await page.waitForSelector(READY_SELECTORS.join(", "), { timeout: INTERACTIVE_TIMEOUT }).catch(() => {});
+  // Navigate away within the SPA, then back — no document reload.
+  await page.evaluate(() => window.history.pushState({}, "", "/portfolio"));
+  await page.evaluate(() => window.dispatchEvent(new PopStateEvent("popstate")));
+  await page.waitForTimeout(1500);
+  return measureNav(label);
+}
+async function measureNav(label) {
+  const reqs = []; const started = new Map();
+  const onReq = (r) => started.set(r, Date.now());
+  const onDone = async (resp) => {
+    const r = resp.request(); const t0 = started.get(r); if (t0 == null) return;
+    let size = 0;
+    try { size = Number((await resp.headerValue("content-length")) ?? 0); } catch {}
+    if (!size) { try { size = (await resp.body()).length; } catch {} }
+    reqs.push({ url: r.url(), method: bodyMethod(r), status: resp.status(), start: t0, end: Date.now(), ms: Date.now() - t0, size });
+  };
+  page.on("request", onReq); page.on("response", onDone);
+  const t0 = Date.now();
+  await page.evaluate(() => window.history.pushState({}, "", "/trade"));
+  await page.evaluate(() => window.dispatchEvent(new PopStateEvent("popstate")));
+  let interactiveMs = null;
+  try { await page.waitForSelector(READY_SELECTORS.join(", "), { timeout: 60_000 }); interactiveMs = Date.now() - t0; } catch {}
+  await page.waitForTimeout(3000);
+  page.off("request", onReq); page.off("response", onDone);
+  return { label, t0, interactiveMs, reqs, totalMs: Date.now() - t0 };
+}
+const spa = await measureSpaNav(`WARM (in-app navigation) — ${URL}`);
+const sp = report(spa);
 
 console.log(`\n${"=".repeat(66)}\nSUMMARY\n${"=".repeat(66)}`);
 console.log(`  cold interactive : ${c.interactiveMs == null ? "NEVER" : (c.interactiveMs / 1000).toFixed(2) + " s"}   ${c.rpc} RPC, ${(c.bytes / 1e6).toFixed(2)} MB`);
-console.log(`  warm interactive : ${w.interactiveMs == null ? "NEVER" : (w.interactiveMs / 1000).toFixed(2) + " s"}   ${w.rpc} RPC, ${(w.bytes / 1e6).toFixed(2)} MB`);
+console.log(`  warm  (reload)   : ${w.interactiveMs == null ? "NEVER" : (w.interactiveMs / 1000).toFixed(2) + " s"}   ${w.rpc} RPC, ${(w.bytes / 1e6).toFixed(2)} MB`);
+console.log(`  warm  (in-app)   : ${sp.interactiveMs == null ? "NEVER" : (sp.interactiveMs / 1000).toFixed(2) + " s"}   ${sp.rpc} RPC, ${(sp.bytes / 1e6).toFixed(2)} MB`);
 console.log(`  targets          : warm < 2s, cold single-digit seconds`);
 
 await browser.close();

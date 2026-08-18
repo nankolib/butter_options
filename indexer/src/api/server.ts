@@ -53,12 +53,20 @@ const CHAIN_CORS_ORIGINS = new Set([
   "http://localhost:4173",
 ]);
 
-function corsHeadersFor(origin: string | undefined): Record<string, string> {
-  if (!origin || !CHAIN_CORS_ORIGINS.has(origin)) return {};
-  return {
-    "access-control-allow-origin": origin,
-    "vary": "origin",
-  };
+/**
+ * CORS IS NGINX'S JOB, NOT OURS.
+ *
+ * This returned an Access-Control-Allow-Origin header, and so does the nginx
+ * location block in front of it. A response carrying the header TWICE is
+ * rejected outright by every browser — and curl does not care, so the mistake
+ * survives every command-line check and only appears in a real browser.
+ *
+ * The indexer listens on loopback, so nginx is the only route to it; one layer
+ * owns the header, and it is the one that is always in the path. The origin
+ * allowlist above stays as documentation of the intended surface.
+ */
+function corsHeadersFor(_origin: string | undefined): Record<string, string> {
+  return {};
 }
 
 /**
@@ -132,12 +140,10 @@ export function createApiServer(db: DB, cfg: Config): http.Server {
       if (req.method === "OPTIONS") {
         // Preflight for the chain reads. Points endpoints are same-origin and
         // unaffected by the extra headers.
-        res.writeHead(204, {
-          ...corsHeadersFor(req.headers.origin),
-          "access-control-allow-methods": "GET, OPTIONS",
-          "access-control-allow-headers": "content-type",
-          "access-control-max-age": "86400",
-        }).end();
+        // Preflight is answered by nginx (it returns 204 before proxying), so
+        // this only serves direct loopback callers. No CORS headers here: see
+        // corsHeadersFor.
+        res.writeHead(204).end();
         return;
       }
 

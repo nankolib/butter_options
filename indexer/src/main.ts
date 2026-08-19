@@ -202,10 +202,45 @@ async function main(): Promise<void> {
   let lastShadow = Date.now();
   let lastCapital = Date.now();
   let lastMarkets = Date.now();
-  let lastChain = 0;
+
+  // ---- Chain read-path reflection, on its OWN timer -------------------------
+  //
+  // It used to be checked once per main-loop iteration, and that loop ends in a
+  // `tickMs` (60s) sleep — so a 30s cadence could never be honoured and, worse,
+  // a slow poller tick pushed the refresh into the NEXT iteration. Measured:
+  // per-type interval p50 63.6s, p95 129.4s, max 531.8s. The p95 is simply two
+  // iterations. That is what put healthy data past the staleness threshold and
+  // sent the whole read path into fallback on a slow devnet day.
+  //
+  // ARMED HERE, after backfill and the first render, deliberately: a timer armed
+  // earlier would queue during the synchronous SQLite startup that blocks the
+  // event loop for ~3.5 minutes, then fire a burst. The single-flight guard
+  // collapses such a burst to one run regardless.
+  let chainTimer: ReturnType<typeof setInterval> | null = null;
+  let chainInFlight: Promise<void> | null = null;
+
+  const chainTick = (): Promise<void> => {
+    // Never overlap with itself. A scan that outruns its own interval must skip,
+    // not stack — stacking is how a slow RPC turns into a queue of scans that
+    // can never finish.
+    if (chainInFlight) return chainInFlight;
+    chainInFlight = (async () => {
+      try {
+        await refreshChain(db, rpc, cfg.programId);
+      } catch (e) {
+        log.error("chain refresh failed", { err: (e as Error).message });
+      } finally {
+        chainInFlight = null;
+      }
+    })();
+    return chainInFlight;
+  };
+
+  void chainTick(); // one immediately, so the tables are warm before the interval
+  chainTimer = setInterval(() => { void chainTick(); }, cfg.chainRefreshMs);
 
   // ---- Live tail -----------------------------------------------------------
-  log.info("entering live tail", { tickMs: cfg.tickMs });
+  log.info("entering live tail", { tickMs: cfg.tickMs, chainRefreshMs: cfg.chainRefreshMs });
   while (!stopping) {
     try {
       const stats = await poller.tail();
@@ -229,18 +264,6 @@ async function main(): Promise<void> {
       lastMarkets = Date.now();
     }
 
-    // Chain read-path reflection. Runs whether or not the FE is reading from it
-    // (SHADOW first): the divergence harness needs live data to compare, and a
-    // cutover onto a cold table would serve an empty board.
-    if (Date.now() - lastChain >= cfg.chainRefreshMs) {
-      try {
-        await refreshChain(db, rpc, cfg.programId);
-      } catch (e) {
-        log.error("chain refresh failed", { err: (e as Error).message });
-      }
-      lastChain = Date.now();
-    }
-
     if (Date.now() - lastShadow >= cfg.shadowMs) {
       renderOnce();
       sweepNonces(db, Math.floor(Date.now() / 1000));
@@ -250,6 +273,15 @@ async function main(): Promise<void> {
     for (let waited = 0; waited < cfg.tickMs && !stopping; waited += 500) {
       await new Promise((r) => setTimeout(r, 500));
     }
+  }
+
+  // SHUTDOWN ORDER MATTERS. A timer firing after db.close() writes into a closed
+  // database — a corruption path, not a nit. Stop the timer, then WAIT for any
+  // refresh already running, and only then close.
+  if (chainTimer) clearInterval(chainTimer);
+  if (chainInFlight) {
+    log.info("waiting for in-flight chain refresh before close");
+    try { await chainInFlight; } catch { /* already logged */ }
   }
 
   db.close();

@@ -1,3 +1,113 @@
+# INDEXER READ PATH — 2026-08-19 (cold target MET · walkthrough PASS · R1/R3 scheduled)
+
+> Written for a reader with ZERO session memory. Current as of this block;
+> everything below it remains valid history.
+>
+> | Commit | Ships | State |
+> |---|---|---|
+> | `2cd50be` | indexer chain read-path backend (schema v8, decoders, API, divergence gate) | **LIVE** |
+> | `23a947a` | FE read path behind a flag, via a crank-safe registry | **LIVE** |
+> | `8a0865b` | flag flipped in Production | **LIVE** |
+> | `a84e870` `2761184` `293f351` | single-flight, cache-first, timeout sized to payload | **LIVE** |
+> | `34ec8fb` | market-scoped reads (the filter slice) | **LIVE** |
+> | `3b58765` | dock's all-boards read deferred to idle | **LIVE** |
+>
+> Checkpoint `86eyp3my4`. Follow-up `86eyp3myb` (R2 exchangeData).
+>
+> ## Ship-gate table
+>
+> ```
+>                      baseline      read path      filter slice     target
+> cold                 14.18-14.54   8.28 / 10.21   7.86 / 7.13 s    single digit BOTH -> MET
+> warm (hard reload)   11.59-12.83   7.54 / 7.57    8.04 / 7.86 s    <2s -> MISSED
+> warm (in-app nav)     8.18-17.17   4.21 / 4.75    4.22 / 4.08 s
+> bytes, cold            7.9-8.1MB   13.2 MB        13.0 MB
+> ```
+>
+> Filtered board: **vaults 92KB + series 36KB**, against 3.74MB + 1.46MB.
+>
+> ## Why warm-reload misses, precisely
+>
+> **The client cache is IN-MEMORY.** A hard reload discards it and repeats the
+> cold path minus static assets, so no amount of read-path tuning reaches <2s
+> there. It needs a PERSISTENT cache — scheduled as R1 below. In-app navigation,
+> which is what a person actually does, is **4.1s**.
+>
+> The remaining ~13MB is one legitimate read: the trade dock loads ALL boards
+> because a wallet's positions are not confined to the board on screen. It is now
+> deferred to idle (that is what moved cold reliably under 10s) but still
+> transfers ~5MB. R3 below.
+>
+> ## SCHEDULED — R1 + R3 as ONE slice
+>
+> - **R1 persistent client cache** (IndexedDB), keyed by the deploy-slot lineage
+>   `/api/chain/meta` already publishes. Lineage is load-bearing: a program
+>   upgrade can change an account layout, and a cached decode from the previous
+>   layout is not stale, it is garbage that renders as a plausible number.
+> - **R3 by-vault-key dock endpoint**, so the dock fetches only the vaults backing
+>   the positions it holds instead of every board.
+> - Targets: **warm <2s, and reload roughly equal to nav.**
+>
+> ## The rule that keeps paying: verify the instrument before believing it
+>
+> Four times this arc a confident number was the tool's fault, not the code's:
+>
+> - "never interactive, 494 requests, serial waterfall" — a selector waiting on a
+>   `<table>` when the live chain is a grid of divs. The harness sat spinning for
+>   180s and everything it counted was noise.
+> - "expected PublicKey, got object" on every key field — `instanceof` across two
+>   copies of @solana/web3.js. The one account type with no PublicKey fields
+>   passed, which is what gave it away.
+> - A regression guard failing on the very comment that documents the rule it
+>   enforces.
+> - `grep -c` on a single-line bundle, which can only ever return 0 or 1.
+>
+> Also: only STRING LITERALS survive minification. A live-bundle presence check
+> must grep for literals like `/api/chain`, never for identifiers — those are
+> mangled, and their absence proves nothing.
+>
+> ## Correctness evidence (not assertions)
+>
+> - **Divergence CLEAN against the LIVE production database**: 9,360 accounts,
+>   zero divergent, missing or orphaned. The harness is slot-skew-immune by
+>   construction — self-consistency (stored columns vs a re-decode of the stored
+>   bytes) plus chain agreement only for accounts whose bytes are byte-identical.
+>   A naive diff would flag every account someone legitimately traded against,
+>   get muted, and stop being a gate.
+> - **ALL SHAPES MATCH ANCHOR**: 76 accounts, field by field, including enum
+>   VARIANT ORDER — an off-by-one there turns every call into a put.
+> - **Anchor is not a safe oracle for these accounts.** It decodes legacy 88B
+>   OptionsMarket accounts WITHOUT error into `assetClass=106, oracleSource=5`.
+>   433 of 467 devnet OptionsMarket accounts are pre-migration. Exact-length and
+>   value-RANGE guards are what separate the 34 real markets from the rest.
+>
+> ## Six bugs the process caught, and the one that mattered most
+>
+> The pre-commit gate stopped a repeat of the **2026-07-21 crank outage**: the
+> first version imported an `import.meta` module into `safeFetchAll`, which
+> several crank scripts import directly. `import.meta` is an ESM-only syntax
+> marker — its mere presence makes Node treat the file as an ES module. tsc could
+> not see it; the failure is at runtime. The reader now arrives through
+> `utils/indexerRegistry.ts`, and the crank's reader is null, so the crank reads
+> chain directly. That is correct anyway: **a keeper deciding whether to fire must
+> never act on an index.**
+>
+> The others: duplicate CORS header from nginx AND Node; no single-flight (vaults
+> fetched 3x at 3.74MB, so the read path briefly cost MORE than the scans it
+> replaced); the cache consulted AFTER the indexer so it never got a chance; a 4s
+> timeout on a 3.5s payload, guaranteeing the fallback it existed to prevent; and
+> the dock's 5MB read firing during first paint.
+>
+> ## R2 exchangeData — refusal ENDORSED, `raw_b64` REJECTED
+>
+> `utils/exchangeData.ts` parses raw Buffers with its own byte-offset decoders at
+> three sites (series, markets, unified-chain vaults) — the 3 residual gPA calls.
+> Serving `raw_b64` would restore the payload this path exists to remove, so the
+> only route is rewriting those parsers to consume JSON, in code adjacent to
+> fills. Ticket `86eyp3myb`, divergence-harness-gated, red-first before it ships.
+
+---
+
 # FE UX + /trade LOAD — 2026-08-18 (walkthrough fixes SHIPPED · exchange spec COMPLETE, founder-verified)
 
 > Written for a reader with ZERO session memory. Everything below is current as

@@ -1,3 +1,85 @@
+# FE-PERF ARC — CLOSED 2026-08-19 (cold 21.2s → 7.2s · in-app nav → 1.38s)
+
+> Final walkthrough: PASS. Checkpoint `86eyp5a1j`.
+>
+> | stage | cold | warm reload | in-app nav |
+> |---|---|---|---|
+> | 0 baseline | 21.20 s | 12.54 s | — |
+> | 1 client cache + spot fan-out | 14.18–14.54 | 11.59–12.83 | 8.18–17.17 |
+> | 2 indexer read path live | 8.28 / 10.21 | 7.54 / 7.57 | 4.21 / 4.75 |
+> | 3 market-filtered reads | 7.86 / 7.13 | 8.04 / 7.86 | 4.22 / 4.08 |
+> | 4 IndexedDB persistence | 8.14 / 11.24 | 5.20 / 8.52 | 3.74 / 3.70 |
+> | 5 grid on the read path | **7.24 / 7.70** | 4.10 / 4.39 | **1.38 / 1.66** |
+>
+> Targets: **cold single-digit both runs — MET.** **in-app nav <2s — MET.**
+> Hard reload 4.1s — OPEN, cause undiagnosed, ticket `86eyp59ve`.
+>
+> ## THE RULE THIS ARC EARNED
+>
+> **Before ANY FE measurement, the harness asserts `/api/chain/meta` reports every
+> type fresh and EXITS 2 naming the stale ones otherwise.** It is a gate the
+> instrument enforces, not a note a human remembers.
+>
+> The identical grid-migration commit measured **35.4s against a stale indexer and
+> 7.24s against a healthy one**. The FE was falling back to chain scans exactly as
+> designed; the measurement described the fallback, and a sound change was
+> reverted on it. A runbook note already warned against measuring into that window
+> and did not prevent it — I wrote the note and then did not follow it.
+>
+> **Companion rule: verify the code path being MEASURED is the code path being
+> OPTIMIZED.** An entire read-path arc was built against `useTradeData`/`useVaults`
+> while the grid rendered from `useUnifiedChain` → `exchangeData`, which called
+> `safeFetchAll` zero times. Render-path attribution comes BEFORE building.
+>
+> ## Constants must carry their derivation
+>
+> `STALE_AFTER_SEC` was reasoned from the nominal cadence (90s = "three missed
+> 30s refreshes") and was wrong. Measured, 280 intervals per type over 6 hours:
+>
+> ```
+> per-type refresh interval   p50  63.6s   p95 129.4s   max 531.8s
+> the four scans themselves   p50   1.0s   p95   1.6s   max   3.7s
+> ```
+>
+> The scans are ~1s; the interval is the main loop, which the chain refresh shares
+> with the tape poller. 90s sat BELOW the p95, so a healthy indexer on a slow
+> devnet day was flagged stale and the whole read path fell back. Now 200s
+> (p95 + ~55%, floored at 90), deliberately not covering the 531s tail — a gap
+> that long IS a fault. Both client and server constants cite the measurement, and
+> a test asserts they cannot silently diverge.
+>
+> ## Architecture as it now stands
+>
+> - **Indexer** (`opta-indexer`, VPS): schema v8 reflection tables for the four
+>   structural types, full-struct decoders gated on exact length AND value ranges,
+>   read-only public endpoints (gzip, CORS, GET-only, 400 rather than truncation
+>   over the key cap), market and by-key filters.
+> - **FE**: read path behind `VITE_CHAIN_READPATH` reached through a **crank-safe
+>   registry** — never a plain import, because `import.meta` anywhere in
+>   `safeFetchAll`'s graph crashes the crank (2026-07-21). The crank's reader is
+>   null, so it reads chain directly, which is correct: a keeper must never act on
+>   an index.
+> - **The grid** renders from the index; on focus the ticket re-reads the series
+>   **chain-direct** and BLOCKS on failure, timeout or mismatch. It never falls
+>   back to index-row addresses — the reason for reading is that the row might be
+>   wrong.
+> - **Never on the index**: the book, positions, balances, settlement records,
+>   triggers. Enforced twice, by two deliberately duplicated allowlists.
+>
+> ## Open, with tickets
+>
+> - `86eyp59v7` decouple the chain refresh onto its own timer (propose-before-apply;
+>   makes the 200s threshold conservative rather than necessary).
+> - `86eyp59ve` hard-reload 4.1s, diagnose-only. Bytes are already 2.87MB and one
+>   `/api/chain` call, so the remaining cost is NOT chain data — look at JS boot,
+>   wallet init, and the chain-direct book/position reads. If structural, it goes
+>   to mainnet-prep.
+> - `86eyp4hem` R-LEGACY ledger: 261,863.58 devnet USDC across 13 accounts. The 14
+>   legacy 260-byte vaults are now dropped from the grid (both decoders aligned to
+>   exactly-276). Obligation recorded; no funds moved; recovery needs greenlight.
+
+---
+
 # INDEXER READ PATH — 2026-08-19 (cold target MET · walkthrough PASS · R1/R3 scheduled)
 
 > Written for a reader with ZERO session memory. Current as of this block;

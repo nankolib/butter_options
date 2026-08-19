@@ -1,0 +1,26 @@
+[Unit]
+# Indexer liveness monitor — the /trade grid depends on this service.
+# Probes /api/chain/meta, the SAME endpoint the FE checks before trusting the
+# read path, so the monitor cannot be green while the page is degraded.
+Description=Opta indexer liveness monitor (chain read path health)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=opta
+Group=opta
+# Reads the unit's ActiveEnterTimestamp for the startup-grace check.
+SupplementaryGroups=systemd-journal
+EnvironmentFile=-/etc/opta/alarm.env
+ExecStart=/usr/local/bin/indexer-liveness-monitor.sh
+# A failing probe exits 1 by design; systemd must not treat that as a unit fault.
+SuccessExitStatus=0 1
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/opta-rpc-alarm
+
+[Install]
+WantedBy=multi-user.target

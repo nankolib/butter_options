@@ -109,8 +109,6 @@ export type TradeSummary = {
 export type UseTradeData = {
   loading: boolean;
   availableAssets: string[];
-  /** Market pubkey for the selected asset; null while it resolves. */
-  selectedMarket: string | null;
   availableExpiries: number[];
   selectedAsset: string;
   selectedExpiry: number;
@@ -641,7 +639,6 @@ export function useTradeData(): UseTradeData {
   return {
     loading,
     availableAssets,
-    selectedMarket,
     availableExpiries,
     selectedAsset,
     selectedExpiry,

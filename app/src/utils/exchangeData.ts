@@ -280,28 +280,8 @@ interface SharedVaultLite {
 /** Exported as a TEST SEAM for the grid-migration divergence harness, which
  *  compares this byte-offset parse against the indexer's JSON on the same slot.
  *  Behaviour is unchanged; only its visibility is. */
-/** The ONLY accepted SharedVault length. See the length gate below. */
-const SHARED_VAULT_LEN = 276;
-
 export function parseSharedVault(pubkey: PublicKey, d: Buffer): SharedVaultLite | null {
-  // EXACT LENGTH, not >= 260.
-  //
-  // This used to accept anything from 260 bytes up, so 14 pre-Stage-2 vaults
-  // rendered on the grid with their fields read at the CURRENT layout's offsets
-  // — which is to say, read from the wrong places. One of them decodes
-  // collateral_remaining as 4,118,276,548,812,483,240. Rendering that is the
-  // silent-wrong-number failure mode, not a kindness.
-  //
-  // Dropping them is a PRODUCT DECISION, taken deliberately and paired with a
-  // ledger rather than made quietly by a decoder: those 14 hold 261,863.58
-  // devnet USDC across 13 funded accounts, recorded in ClickUp 86eyp4hem with
-  // per-vault balances. Token-account balances are authoritative there; struct
-  // fields are not decodable under any current layout.
-  //
-  // This also aligns with the indexer, which has always required exactly 276, so
-  // both decoders now agree and the grid-migration divergence harness stays
-  // clean.
-  if (d.length !== SHARED_VAULT_LEN) return null;
+  if (d.length < 260) return null;
   return {
     pubkey: pubkey.toBase58(),
     market: new PublicKey(d.subarray(8, 40)).toBase58(),
@@ -351,58 +331,21 @@ export async function fetchMarketAssetMap(connection: Connection, programId: Pub
  * book's best bid/ask and series OI; legacy per-event vaults carry no book
  * (their secondary liquidity is the old resale path, out of Pass-0 scope).
  */
-export async function fetchUnifiedChain(
-  connection: Connection,
-  programId: PublicKey,
-  market?: string,
-): Promise<UnifiedChainRow[]> {
-  // The vault side may come from the index, market-filtered. fetchBook is
-  // DELIBERATELY untouched and always reads chain: a stale book shows a filled
-  // order as live, and the whole point of the boundary is that the book never
-  // moves off chain.
-  const indexer = getIndexerReader();
-  const vaultsFromIndex = indexer
-    ? await indexer("sharedVault", market ? { market } : undefined)
-    : null;
-
-  const [vaultAcctsRaw, series, orders, assetMap] = await Promise.all([
-    vaultsFromIndex ? Promise.resolve(null) : getByDisc(connection, programId, DISC.sharedVault),
-    fetchSeries(connection, programId, market),
+export async function fetchUnifiedChain(connection: Connection, programId: PublicKey): Promise<UnifiedChainRow[]> {
+  const [vaultAccts, series, orders, assetMap] = await Promise.all([
+    getByDisc(connection, programId, DISC.sharedVault),
+    fetchSeries(connection, programId),
     fetchBook(connection, programId),
     fetchMarketAssetMap(connection, programId),
   ]);
-
-  /** One shape for the loop below, whichever source produced it. */
-  const vaultAccts: { pubkey: PublicKey; data: Buffer }[] | null = vaultAcctsRaw;
-  const indexRows = vaultsFromIndex?.rows ?? null;
 
   const seriesByVault = new Map<string, SeriesRecord>();
   for (const s of series) seriesByVault.set(s.vault, s);
   const book = indexBook(orders);
 
-  /** Index rows arrive already decoded; chain rows need the byte parse. Both
-   *  produce the identical SharedVaultLite — asserted on live accounts by
-   *  crank/gridMigration.divergence.ts (4,665 compared, 0 mismatches). */
-  const lite: (SharedVaultLite | null)[] = indexRows
-    ? indexRows.map((r) => {
-        const a = r.account as any;
-        return {
-          pubkey: r.publicKey.toBase58(),
-          market: a.market.toBase58(),
-          optionType: Object.keys(a.optionType)[0] === "call" ? "call" : "put",
-          strike: Number(a.strikePrice.toString()) / MICRO,
-          expiry: Number(a.expiry.toString()),
-          vaultType: Object.keys(a.vaultType)[0] === "epoch" ? "epoch" : "custom",
-          totalOptionsSold: Number(a.totalOptionsSold.toString()),
-          isSettled: a.isSettled,
-          exerciseStyle: Object.keys(a.exerciseStyle)[0] === "american" ? "american" : "european",
-          voided: a.voided,
-        } as SharedVaultLite;
-      })
-    : (vaultAccts ?? []).map((a) => parseSharedVault(a.pubkey, a.data));
-
   const rows: UnifiedChainRow[] = [];
-  for (const v of lite) {
+  for (const a of vaultAccts) {
+    const v = parseSharedVault(a.pubkey, a.data);
     if (!v) continue;
     // Canonical display symbol (hides Switchboard "SB…" seeds + raw "…SPOT" feeds
     // at the data layer, so provenance never reaches ANY surface). null = drop.

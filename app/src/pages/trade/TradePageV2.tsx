@@ -69,10 +69,7 @@ function writeLastAsset(asset: string): void {
 export const TradePageV2: FC = () => {
   const { mode, toggle } = useSurfaceMode("dark");
   const td = useTradeData();
-  // The grid reads ONE board. td.selectedMarket is rendering state — which asset
-  // is selected — and is null until it resolves, which makes the chain wait
-  // instead of pulling every vault and then pulling the board anyway.
-  const chain = useUnifiedChain(td.selectedMarket);
+  const chain = useUnifiedChain();
   const [searchParams] = useSearchParams();
 
   const [persona, setPersona] = useState<Persona>(() =>

@@ -29,7 +29,6 @@ import {
   spotAnchoredPlaceholder,
 } from "../../utils/triggerGuards";
 import { emitMutation } from "../../utils/mutationBus";
-import { resolveAuthoritativeSeries } from "../../utils/authoritativeSeries";
 
 // Quote-on-demand short-TTL cache, keyed by series mint (premium is per-contract,
 // size-independent). Browsing the chain never touches this — only the RFQ button.
@@ -300,27 +299,7 @@ export const OrderTicket: FC<{
       let removed: string[] = [];       // optimistically removed (fully-filled resting order)
       let added: BookOrder | undefined; // optimistically inserted (just-posted resting order)
       let sweepReport: string | null = null; // "Filled X of Y · avg $Z" for market sweeps
-      // AUTHORITATIVE ADDRESS CHECK — before any assembly.
-      //
-      // The board renders from the indexer, and `row.vault` / `row.optionMint`
-      // go straight into accountsStrict. An index row is a cache; a transaction
-      // is not a place for cached addresses. So the series is re-read
-      // chain-direct here and the row is checked against it.
-      //
-      // This is AUTHORITATIVE, not best-effort: a failure, a timeout or a
-      // mismatch BLOCKS. It never falls back to the row's own addresses, because
-      // the reason for reading is that the row might be wrong.
-      const authoritative = await resolveAuthoritativeSeries(
-        program!.provider.connection, program!.programId,
-        { vault: row.vault, optionMint: row.optionMint! },
-      );
-      if (!authoritative.ok) {
-        setStatus({ kind: "err", msg: authoritative.reason });
-        setBusy(false);
-        return;
-      }
-
-      const ref = { asset: row.asset, vault: authoritative.vault, optionMint: authoritative.optionMint };
+      const ref = { asset: row.asset, vault: row.vault, optionMint: row.optionMint! };
       const nonce = Math.floor(Date.now() / 1000);
       const me = publicKey.toBase58();
       const optimisticOrder = (kind: "bid" | "resaleAsk" | "writerAsk", qtyOverride?: number): BookOrder => ({

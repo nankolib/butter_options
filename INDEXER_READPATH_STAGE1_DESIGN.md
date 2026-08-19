@@ -2,7 +2,43 @@
 
 Local planning doc, deliberately uncommitted.
 
-**Status: FILTER SLICE SHIPPED. Stopped at the numbers for the walkthrough.**
+**Status: R1+R3 SHIPPED. Stopped at the numbers. One finding reframes what is left.**
+
+## R1/R3 SHIP-GATE NUMBERS (prod, 2 runs)
+
+```
+                    filter slice     R1+R3            target
+cold                7.86 / 7.13      8.14 / 11.24 s   single digit BOTH -> MISSED (1 of 2)
+warm (hard reload)  8.04 / 7.86      5.20 /  8.52 s   <2s -> MISSED
+warm (in-app nav)   4.22 / 4.08      3.74 /  3.70 s
+bytes, reload       13.0 MB          7.67 MB
+```
+
+Persistence demonstrably works: on a hard reload the page makes **1** /api/chain
+call (`meta`) and serves everything else from IndexedDB. Reload bytes fell
+13.0 -> 7.67MB. And yet the clock barely moved.
+
+## THE FINDING: the read path is not on the critical path
+
+`TradeChainV2` renders `visibleRows`, which comes from `useUnifiedChain`, which
+imports `fetchUnifiedChain` from `utils/exchangeData` and calls `safeFetchAll`
+**zero times**. The rendered grid is fed entirely by exchangeData's raw
+getProgramAccounts scans.
+
+Everything built across this arc — indexer, filtered reads, scoped cache,
+IndexedDB persistence — feeds `useTradeData`/`useVaults`, which drive the asset
+dropdown, expiries and the ticket. **Not the grid.** The measured gains came from
+REDUCED CONTENTION (fewer and smaller competing requests), never from moving the
+thing being timed.
+
+So "time to first contract row" has been gated by exchangeData's chain scans the
+whole time.
+
+**R2 is therefore not a cleanup item — it is the binding constraint.** Warm <2s
+is unreachable while the grid's own data still comes from wholesale gPA scans,
+no matter what else is cached or persisted. The ticket (`86eyp3myb`) should be
+re-scoped from "route three redundant reads through the index" to "move the
+GRID onto the read path".
 
 ## FILTER-SLICE NUMBERS (prod, 2 runs)
 

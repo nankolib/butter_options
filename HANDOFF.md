@@ -48,6 +48,22 @@
 >   the positions it holds instead of every board.
 > - Targets: **warm <2s, and reload roughly equal to nav.**
 >
+> ## DEPLOY RUNBOOK — indexer
+>
+> **After `systemctl restart opta-indexer`, `/api/chain/*` returns 504 for about
+> 3.5 minutes.** The HTTP server binds immediately, but synchronous SQLite
+> startup work blocks the event loop until the log line `entering live tail`.
+> This is expected, not a fault.
+>
+> - Do not measure, verify or cut over during that window — every read falls back
+>   and the numbers are meaningless.
+> - The FE is designed for it: `isServableEnvelope` refuses `ageSec: -1`, which is
+>   exactly what a freshly restarted indexer reports before its first scan.
+> - Wait for `curl -s https://opta.fyi/api/chain/meta` to report `healthy: true`
+>   before trusting anything downstream.
+> - Deploy is: pull as `opta` (never root for git), `npm run build`,
+>   `systemctl restart --no-block`, then poll for health.
+>
 > ## The rule that keeps paying: verify the instrument before believing it
 >
 > Four times this arc a confident number was the tool's fault, not the code's:

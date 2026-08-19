@@ -133,27 +133,42 @@ function rememberLineage(v: string): void {
   try { window.localStorage.setItem(LINEAGE_KEY, v); } catch { /* private mode */ }
 }
 
-let lineageChecked = false;
+let lineagePromise: Promise<string> | null = null;
 
-/** Fetch /meta once per session and reconcile the stored lineage against it. */
-async function verifyLineage(): Promise<void> {
-  if (lineageChecked) return;
-  lineageChecked = true;
-  try {
-    const res = await fetch(`${BASE}/meta`);
-    if (!res.ok) return;
-    const meta = await res.json();
-    const fresh: string = meta?.lineage?.key ?? "";
-    if (!fresh) return;
-    if (fresh !== knownLineage()) {
-      // A new deployment. Everything on disk describes the previous layout.
-      await clearPersisted();
-      rememberLineage(fresh);
+/**
+ * Resolve the lineage once per session, reconciling anything already on disk.
+ *
+ * MEASURED BUG: this used to be fire-and-forget, and on a FIRST visit
+ * localStorage holds no lineage — so every write was skipped and the cache never
+ * populated at all. The persistence only began working on the second visit,
+ * which is exactly the visit that did not need it. Writes now await this.
+ *
+ * Reads still use the SYNCHRONOUS knownLineage(): if it is empty there is by
+ * definition nothing on disk to read, so there is nothing to wait for.
+ */
+function ensureLineage(): Promise<string> {
+  if (lineagePromise) return lineagePromise;
+  lineagePromise = (async () => {
+    try {
+      const res = await fetch(`${BASE}/meta`);
+      if (!res.ok) return knownLineage();
+      const meta = await res.json();
+      const fresh: string = meta?.lineage?.key ?? "";
+      if (!fresh) return knownLineage();
+      if (fresh !== knownLineage()) {
+        // A new deployment, or the first visit. Anything already on disk
+        // describes a different layout, so it goes.
+        await clearPersisted();
+        rememberLineage(fresh);
+      }
+      return fresh;
+    } catch {
+      // Unverified just means we keep using the last known one; the envelope
+      // check still refuses anything that does not match it.
+      return knownLineage();
     }
-  } catch {
-    // Unverified lineage just means we keep using the last known one; the
-    // envelope check still refuses anything that does not match it.
-  }
+  })();
+  return lineagePromise;
 }
 
 const pk = (v: string): PublicKey => new PublicKey(v);
@@ -223,7 +238,9 @@ async function fetchNetwork<T>(
     // Persist the RAW rows, never the decoded ones: structured clone would strip
     // the BN and PublicKey prototypes and hand back plausible-looking rubbish.
     if (isPersistable(name)) {
-      void writePersisted(knownLineage(), name, scope, body.rows, body.slot);
+      // Awaits the lineage: without it the FIRST visit persists nothing, because
+      // localStorage is empty until /meta has been read once.
+      void ensureLineage().then((l) => writePersisted(l, name, scope, body.rows, body.slot));
     }
     return out;
   } catch {
@@ -243,9 +260,9 @@ async function fetchFromIndexerUncoalesced<T>(
   if (!rehydrate) return null;
   const scope = params?.market ?? "";
 
-  // Reconcile the lineage once per session, behind the render rather than in
-  // front of it.
-  void verifyLineage();
+  // Kick lineage resolution once per session, behind the render rather than in
+  // front of it. Writes await it; reads do not need to.
+  void ensureLineage();
 
   // DISK FIRST. This is the reload path: no network in the critical path at all
   // when the record is fresh, which is the only way a hard reload approaches

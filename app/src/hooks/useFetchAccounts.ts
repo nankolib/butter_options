@@ -45,14 +45,29 @@ export type AccountName =
   | "settlementRecord" | "vaultResaleListing" | "restingOrder"
   | "writerAskPosition" | "writerAskPot";
 
+export interface FetchScope {
+  /**
+   * Fetch only this market's board. RENDERING CONTEXT ONLY — it comes from
+   * which board is on screen, never from anything assembling a transaction.
+   * Narrowing a read that feeds tx assembly would hand the builder a partial
+   * view of the world, which is how you sign against a series you cannot see.
+   *
+   * Advisory: the chain fallback cannot filter, so a caller must still tolerate
+   * receiving every board.
+   */
+  market?: string;
+}
+
 export async function safeFetchAll<T>(
   program: Program<any>,
   accountName: AccountName,
+  scope?: FetchScope,
 ): Promise<{ publicKey: PublicKey; account: T }[]> {
   const discriminator = DISCRIMINATORS[accountName];
   if (!discriminator) throw new Error(`Unknown account: ${accountName}`);
 
   const programId = program.programId.toBase58();
+  const market = scope?.market ?? "";
 
   // INDEXER READ PATH. Structural types can be served pre-decoded over HTTP
   // instead of pulling ~5.4MB of raw accounts through getProgramAccounts. It is
@@ -64,19 +79,19 @@ export async function safeFetchAll<T>(
   // what removes the repeat scan waves measured at 3.1s / 6.0s / 7.1s. Book and
   // position types never get here: isCacheableScan is an opt-in allowlist, so
   // they fall straight through to a fresh scan every time.
-  const cached = lookupScan<T>(programId, accountName);
+  const cached = lookupScan<T>(programId, accountName, Date.now(), market);
   if (cached.hit) {
-    if (cached.stale && claimRevalidation(programId, accountName)) {
+    if (cached.stale && claimRevalidation(programId, accountName, market)) {
       // Refresh BEHIND the render, deliberately not awaited — the caller already
       // holds usable data, and blocking on this would defeat the cache entirely.
       void fetchAndDecodeScan<T>(program, accountName, discriminator)
-        .then((rows) => storeScan(programId, accountName, rows))
+        .then((rows) => storeScan(programId, accountName, rows, Date.now(), ""))
         .catch(() => {
           // A failed background refresh leaves the existing entry alone: it gets
           // retried on the next read, or aged out by MAX_STALE_MS. Throwing here
           // would surface as an unhandled rejection with no caller to catch it.
         })
-        .finally(() => releaseRevalidation(programId, accountName));
+        .finally(() => releaseRevalidation(programId, accountName, market));
     }
     return cached.rows;
   }
@@ -92,18 +107,21 @@ export async function safeFetchAll<T>(
   // why this is not a plain import.
   const indexer = getIndexerReader();
   if (indexer) {
-    const viaIndexer = (await indexer(accountName)) as
+    const viaIndexer = (await indexer(accountName, market ? { market } : undefined)) as
       | { rows: { publicKey: PublicKey; account: T }[]; slot: number; ageSec: number }
       | null;
     if (viaIndexer) {
-      // Cache it like any other read so repeat waves inside FRESH_MS are free.
-      storeScan(programId, accountName, viaIndexer.rows);
+      // Cached under the scope ACTUALLY fetched, so a one-board result can never
+      // be served to a caller that asked for every board.
+      storeScan(programId, accountName, viaIndexer.rows, Date.now(), market);
       return viaIndexer.rows;
     }
   }
 
+  // The chain scan cannot filter, so it always yields every board and is cached
+  // under the unfiltered scope regardless of what was asked for.
   const rows = await fetchAndDecodeScan<T>(program, accountName, discriminator);
-  storeScan(programId, accountName, rows);
+  storeScan(programId, accountName, rows, Date.now(), "");
   return rows;
 }
 

@@ -176,7 +176,6 @@ function sortAndPartition(arr: Offering[]): void {
 export function useTradeData(): UseTradeData {
   const { program } = useProgram();
   const { publicKey: connectedWallet } = useWallet();
-  const { vaults, vaultMints } = useVaults();
   const [markets, setMarkets] = useState<{ publicKey: PublicKey; account: any }[]>([]);
   const [listingsRaw, setListingsRaw] = useState<{ publicKey: PublicKey; account: any }[]>([]);
   const [loading, setLoading] = useState(true);
@@ -185,6 +184,20 @@ export function useTradeData(): UseTradeData {
   const [highlightedStrike, setHighlightedStrike] = useState<number | null>(null);
   const [searchParams] = useSearchParams();
   const appliedUrlRef = useRef(false);
+
+  // /trade draws exactly ONE board, so it reads exactly one board. The market
+  // pubkey is derived from RENDERING state — which asset is selected — and is
+  // never used to assemble a transaction.
+  //
+  // null while the asset is still resolving, so useVaults waits instead of
+  // pulling all 4,655 vaults and then fetching the board anyway.
+  const selectedMarket = useMemo<string | null>(() => {
+    if (!selectedAsset || markets.length === 0) return null;
+    const m = markets.find((x) => canonicalAsset(x.account.assetName) === selectedAsset);
+    return m ? m.publicKey.toBase58() : null;
+  }, [markets, selectedAsset]);
+
+  const { vaults, vaultMints } = useVaults(selectedMarket);
 
   const refetch = useCallback(async () => {
     if (!program) return;

@@ -107,7 +107,25 @@ export function getChainSeries(db: DB, params: URLSearchParams, now = Math.floor
 }
 
 export function getChainMarkets(db: DB, _params: URLSearchParams, now = Math.floor(Date.now() / 1000)): ApiResponse {
-  const rows = db.prepare(`SELECT * FROM chain_options_markets ORDER BY asset_name ASC`).all();
+  // Each market carries its LIVE vault count.
+  //
+  // Without this the client is stuck: it wants to fetch only the board on
+  // screen, but the list of boards WORTH SHOWING is "assets with at least one
+  // unexpired vault" — which previously required pulling all 4,655 vaults just
+  // to discover which 34 markets have any. That is the whole cost being
+  // removed, paid to decide what not to pay for.
+  //
+  // Counting here is cheap (an indexed group-by over local SQLite) and adds a
+  // few bytes to a 7KB response, so the client can pick a board and then fetch
+  // exactly that board.
+  const rows = db.prepare(
+    `SELECT m.*,
+            (SELECT COUNT(*) FROM chain_shared_vaults v WHERE v.market = m.pubkey) AS vault_count,
+            (SELECT COUNT(*) FROM chain_shared_vaults v
+              WHERE v.market = m.pubkey AND CAST(v.expiry AS INTEGER) > ?) AS live_vault_count
+       FROM chain_options_markets m
+      ORDER BY m.asset_name ASC`,
+  ).all(now);
   return { status: 200, body: envelope(db, "optionsMarket", rows.map(shapeMarket), now) };
 }
 
@@ -228,6 +246,11 @@ const shapeMarket = (r: any) => ({
   assetClass: r.asset_class,
   bump: r.bump,
   oracleSource: r.oracle_source,
+  // Counts are indexer-only metadata, NOT part of the on-chain account. They are
+  // additive, so a consumer rehydrating an OptionsMarket ignores them and its
+  // shape still matches Anchor exactly (the fidelity check asserts that).
+  vaultCount: r.vault_count ?? undefined,
+  liveVaultCount: r.live_vault_count ?? undefined,
 });
 
 const shapeEpoch = (r: any) => ({

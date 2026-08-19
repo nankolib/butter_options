@@ -119,3 +119,49 @@ test("a failed indexer read falls back rather than throwing", () => {
   const src = read("utils/chainReadPath.ts");
   assert.match(src, /return null/, "every failure path must return null so the caller falls back to chain");
 });
+
+// ---------------------------------------------------------------------------
+// REGRESSION GUARDS for the two bugs that made the read path cost MORE
+// ---------------------------------------------------------------------------
+
+test("REGRESSION: the indexer read is single-flighted, keyed by market", () => {
+  // Measured: without this, a cold /trade fetched /api/chain/vaults THREE times
+  // at 3.74MB each, because several hooks call safeFetchAll concurrently before
+  // any has stored a result. The key must include the market, or two different
+  // boards would share one in-flight promise and one would get the other's rows.
+  const src = read("utils/chainReadPath.ts");
+  assert.match(src, /const inflight = new Map/, "there must be an in-flight map");
+  assert.match(src, /\$\{name\}:\$\{params\?\.market \?\? ""\}/, "keyed by BOTH account type and market");
+});
+
+test("REGRESSION: the cache is consulted BEFORE the indexer", () => {
+  // Measured: with the indexer first, every caller hit the network and the cache
+  // never got a chance — /api/chain/vaults fetched twice per load even WITH
+  // in-flight dedup, because the second wave arrives after the first settles.
+  // Cheapest source must win: cache, then indexer, then chain scan.
+  const src = read("hooks/useFetchAccounts.ts");
+  const cacheAt = src.indexOf("lookupScan<T>(");
+  const indexerAt = src.indexOf("getIndexerReader()");
+  const chainAt = src.lastIndexOf("fetchAndDecodeScan<T>(program, accountName, discriminator)");
+  assert.ok(cacheAt > 0 && indexerAt > 0 && chainAt > 0, "all three sources must be present");
+  assert.ok(cacheAt < indexerAt, "cache must be consulted before the indexer");
+  assert.ok(indexerAt < chainAt, "the indexer must be tried before a full chain scan");
+});
+
+test("REGRESSION: a chain fallback is cached UNFILTERED, never under a market", () => {
+  // The chain scan cannot filter, so it always returns every board. Caching that
+  // under the requested market would be harmless; caching a FILTERED result
+  // under the unfiltered key would truncate every later all-boards read.
+  const src = read("hooks/useFetchAccounts.ts");
+  assert.match(src, /storeScan\(programId, accountName, rows, Date\.now\(\), ""\)/,
+    "the chain-scan result must be stored under the unfiltered scope");
+  assert.match(src, /storeScan\(programId, accountName, viaIndexer\.rows, Date\.now\(\), market\)/,
+    "the indexer result must be stored under the scope actually fetched");
+});
+
+test("the market scope is RENDERING context, and says so", () => {
+  // Boundary rule: narrowing a read that feeds transaction assembly would hand
+  // the builder a partial view of the world.
+  const src = read("hooks/useFetchAccounts.ts");
+  assert.match(src, /RENDERING CONTEXT ONLY/, "the scope must be documented as rendering-only");
+});

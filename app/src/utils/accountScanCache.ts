@@ -92,8 +92,19 @@ interface Entry {
 
 const store = new Map<string, Entry>();
 
-const keyFor = (programId: string, accountName: string) =>
-  `${SCAN_CACHE_VERSION}:${programId}:${accountName}`;
+/**
+ * Entries are scoped by WHAT WAS FETCHED, not by what was asked for.
+ *
+ * The read path can return one market's board (`scope = <marketPubkey>`) or a
+ * chain scan can return every board (`scope = ""`). Keying both the same way
+ * would let a JTO fetch evict the full set, or worse, serve JTO's 638 vaults to
+ * a caller that asked for all 4,655 — a silently truncated board.
+ *
+ * Boards therefore live side by side, and a scoped miss may fall back to the
+ * unfiltered entry because it is a strict superset (see lookupScan).
+ */
+const keyFor = (programId: string, accountName: string, scope: string) =>
+  `${SCAN_CACHE_VERSION}:${programId}:${accountName}:${scope}`;
 
 export type CacheLookup<T> =
   | { hit: false }
@@ -104,10 +115,18 @@ export function lookupScan<T>(
   programId: string,
   accountName: string,
   now: number = Date.now(),
+  scope = "",
 ): CacheLookup<T> {
   if (!isCacheableScan(accountName)) return { hit: false };
-  const key = keyFor(programId, accountName);
-  const entry = store.get(key);
+  let key = keyFor(programId, accountName, scope);
+  let entry = store.get(key);
+  // A scoped request may be satisfied by the UNFILTERED entry, which contains
+  // every board and so is a superset of any single one. The reverse is never
+  // true: a market-scoped entry must never answer an unfiltered request.
+  if (!entry && scope !== "") {
+    key = keyFor(programId, accountName, "");
+    entry = store.get(key);
+  }
   if (!entry) return { hit: false };
 
   const age = now - entry.storedAt;
@@ -124,9 +143,10 @@ export function storeScan<T>(
   accountName: string,
   rows: ScanRow<T>[],
   now: number = Date.now(),
+  scope = "",
 ): void {
   if (!isCacheableScan(accountName)) return;
-  store.set(keyFor(programId, accountName), {
+  store.set(keyFor(programId, accountName, scope), {
     rows: rows as ScanRow<unknown>[],
     storedAt: now,
   });
@@ -138,21 +158,27 @@ export function storeScan<T>(
  * N — otherwise a stale entry read by four hooks would fan back out to exactly
  * the burst this cache exists to remove.
  */
-export function claimRevalidation(programId: string, accountName: string): boolean {
-  const entry = store.get(keyFor(programId, accountName));
+export function claimRevalidation(programId: string, accountName: string, scope = ""): boolean {
+  const entry = store.get(keyFor(programId, accountName, scope));
   if (!entry || entry.revalidating) return false;
   entry.revalidating = true;
   return true;
 }
 
-export function releaseRevalidation(programId: string, accountName: string): void {
-  const entry = store.get(keyFor(programId, accountName));
+export function releaseRevalidation(programId: string, accountName: string, scope = ""): void {
+  const entry = store.get(keyFor(programId, accountName, scope));
   if (entry) entry.revalidating = false;
 }
 
 /** Drop one account type. Called from invalidateAccountScans after a mutation. */
+/**
+ * Drop EVERY scope for this account type. A mutation invalidates the unfiltered
+ * set and each per-market board alike — dropping only the scope the caller
+ * happened to name would leave the others serving pre-mutation rows.
+ */
 export function invalidateScanCache(programId: string, accountName: string): void {
-  store.delete(keyFor(programId, accountName));
+  const prefix = `${SCAN_CACHE_VERSION}:${programId}:${accountName}:`;
+  for (const k of [...store.keys()]) if (k.startsWith(prefix)) store.delete(k);
 }
 
 /** Test seam / hard reset. */

@@ -45,7 +45,31 @@ interface VaultAccount {
  * Fetches SharedVault, WriterPosition, VaultMint, and EpochConfig accounts
  * and provides helpers for common lookups and calculations.
  */
-export function useVaults() {
+/**
+ * @param market Optional market pubkey. When given, the vault and series reads
+ *   are narrowed to that board — 52KB instead of 3.74MB on the measured worst
+ *   case. RENDERING CONTEXT ONLY: it is the board on screen, never anything
+ *   feeding transaction assembly.
+ *
+ *   Portfolio and Markets pass nothing, because a wallet's positions and the
+ *   market list legitimately span every board. Only /trade narrows, because
+ *   /trade only ever draws one.
+ *
+ *   Advisory, not a guarantee: the chain fallback cannot filter, so callers must
+ *   still tolerate receiving every board. Every consumer here already filters by
+ *   asset downstream, so a superset is harmless — a SUBSET would not be.
+ *
+ *   THREE STATES, deliberately:
+ *     undefined -> fetch every board (Portfolio, Markets)
+ *     "<pubkey>" -> fetch that board only (/trade)
+ *     null       -> the caller WILL narrow but does not know the market yet;
+ *                   fetch nothing and wait.
+ *
+ *   Without the third state /trade would pull all 3.74MB on first render and
+ *   then fetch the board again once the asset resolved — paying the full cost
+ *   to avoid paying it.
+ */
+export function useVaults(market?: string | null) {
   const { program } = useProgram();
   const { publicKey } = useWallet();
 
@@ -60,12 +84,19 @@ export function useVaults() {
       setIsLoading(false);
       return;
     }
+    // null = "narrowing, market not resolved yet". Stay loading: the board is
+    // coming, and reporting "loaded, zero vaults" here would render the empty
+    // state over data that is about to arrive.
+    if (market === null) return;
     setIsLoading(true);
     try {
+      const scope = market ? { market } : undefined;
       const [sv, wp, vm, ec] = await Promise.all([
-        safeFetchAll(program, "sharedVault"),
+        safeFetchAll(program, "sharedVault", scope),
+        // writerPosition is NEVER indexed (position-shaped) and epochConfig is a
+        // single row, so neither takes a scope.
         safeFetchAll(program, "writerPosition"),
-        safeFetchAll(program, "vaultMint"),
+        safeFetchAll(program, "vaultMint", scope),
         safeFetchAll(program, "epochConfig"),
       ]);
       // Phase 2 cutoff — hide pre-Phase-2 vaults and cascade to their related records.
@@ -82,7 +113,9 @@ export function useVaults() {
     } finally {
       setIsLoading(false);
     }
-  }, [program]);
+    // `market` IS a dependency: switching boards must refetch the incoming one,
+    // which is the entire point of narrowing the read.
+  }, [program, market]);
 
   useEffect(() => {
     refetch();

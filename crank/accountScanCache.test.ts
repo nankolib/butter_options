@@ -137,3 +137,58 @@ test("entries are namespaced per program id", () => {
   storeScan(PROG, "sharedVault", rows(5));
   assert.equal(lookupScan("SomeOtherProgram1111111111111111111111111111", "sharedVault").hit, false);
 });
+
+// ---------------------------------------------------------------------------
+// SCOPE (filter slice): boards must not evict or impersonate each other
+// ---------------------------------------------------------------------------
+
+test("RED: two boards coexist — one must not evict the other", () => {
+  beforeEach();
+  const A = "MarketAAA", B = "MarketBBB";
+  storeScan(PROG, "sharedVault", rows(5), 1_000_000, A);
+  storeScan(PROG, "sharedVault", rows(9), 1_000_000, B);
+  const a = lookupScan(PROG, "sharedVault", 1_000_001, A);
+  const b = lookupScan(PROG, "sharedVault", 1_000_001, B);
+  assert.equal(a.hit && a.rows.length, 5, "board A must survive board B being fetched");
+  assert.equal(b.hit && b.rows.length, 9);
+});
+
+test("RED: a one-board entry must NEVER answer an all-boards request", () => {
+  // The dangerous direction. Serving JTO's 638 vaults to a caller that asked for
+  // every board is a silently TRUNCATED board — positions and markets pages
+  // would simply lose rows, with nothing to indicate it.
+  beforeEach();
+  storeScan(PROG, "sharedVault", rows(5), 1_000_000, "MarketAAA");
+  assert.equal(lookupScan(PROG, "sharedVault", 1_000_001, "").hit, false,
+    "an unfiltered request must not be served a single board");
+});
+
+test("an all-boards entry MAY answer a one-board request — it is a superset", () => {
+  beforeEach();
+  storeScan(PROG, "sharedVault", rows(12), 1_000_000, "");
+  const r = lookupScan(PROG, "sharedVault", 1_000_001, "MarketAAA");
+  assert.equal(r.hit, true, "the full set contains that board, so it is a valid answer");
+  assert.equal(r.hit && r.rows.length, 12);
+});
+
+test("invalidation clears EVERY scope, not just the one named", () => {
+  // A mutation invalidates the world. Dropping only one scope would leave the
+  // other boards serving pre-mutation rows.
+  beforeEach();
+  storeScan(PROG, "sharedVault", rows(1), 1_000_000, "");
+  storeScan(PROG, "sharedVault", rows(2), 1_000_000, "MarketAAA");
+  storeScan(PROG, "sharedVault", rows(3), 1_000_000, "MarketBBB");
+  invalidateScanCache(PROG, "sharedVault");
+  for (const scope of ["", "MarketAAA", "MarketBBB"]) {
+    assert.equal(lookupScan(PROG, "sharedVault", 1_000_001, scope).hit, false, `scope "${scope}" must be cleared`);
+  }
+});
+
+test("revalidation is claimed per scope, so one board does not block another", () => {
+  beforeEach();
+  storeScan(PROG, "sharedVault", rows(5), 1_000_000, "MarketAAA");
+  storeScan(PROG, "sharedVault", rows(5), 1_000_000, "MarketBBB");
+  assert.equal(claimRevalidation(PROG, "sharedVault", "MarketAAA"), true);
+  assert.equal(claimRevalidation(PROG, "sharedVault", "MarketAAA"), false, "same board: single-flight");
+  assert.equal(claimRevalidation(PROG, "sharedVault", "MarketBBB"), true, "different board: independent");
+});

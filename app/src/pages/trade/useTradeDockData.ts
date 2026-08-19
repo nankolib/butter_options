@@ -80,7 +80,7 @@ export function useTradeDockData(): TradeDockData {
     getUnclaimedPremium,
     isLoading: vaultsLoading,
     refetch: refetchVaults,
-  } = useVaults();
+  } = useVaults(undefined, { deferUntilIdle: true });
   const { orders: bookOrders } = useBook();
 
   // ---- markets / listings / held balances (mirror PortfolioPage) ----

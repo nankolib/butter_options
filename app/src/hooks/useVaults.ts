@@ -69,7 +69,24 @@ interface VaultAccount {
  *   then fetch the board again once the asset resolved — paying the full cost
  *   to avoid paying it.
  */
-export function useVaults(market?: string | null) {
+export function useVaults(
+  market?: string | null,
+  opts?: {
+    /**
+     * Wait for the browser to go idle before the FIRST fetch.
+     *
+     * For consumers that are BELOW THE FOLD. The trade dock legitimately needs
+     * every board (a wallet's positions are not confined to the board on
+     * screen), which is a 5MB read — and it was firing during first paint,
+     * competing for bandwidth with the 92KB the chain actually needs to draw a
+     * row. Same work, off the critical path.
+     *
+     * Not a cancellation: the data still loads, just after the thing the user is
+     * looking at.
+     */
+    deferUntilIdle?: boolean;
+  },
+) {
   const { program } = useProgram();
   const { publicKey } = useWallet();
 
@@ -118,8 +135,23 @@ export function useVaults(market?: string | null) {
   }, [program, market]);
 
   useEffect(() => {
+    if (opts?.deferUntilIdle) {
+      let cancelled = false;
+      const run = () => { if (!cancelled) void refetch(); };
+      const w = window as any;
+      // The timeout is a ceiling, not a hope: on a page that never goes idle the
+      // data must still arrive.
+      const id = typeof w.requestIdleCallback === "function"
+        ? w.requestIdleCallback(run, { timeout: 4000 })
+        : window.setTimeout(run, 1200);
+      return () => {
+        cancelled = true;
+        if (typeof w.cancelIdleCallback === "function") w.cancelIdleCallback(id);
+        else window.clearTimeout(id);
+      };
+    }
     refetch();
-  }, [refetch]);
+  }, [refetch, opts?.deferUntilIdle]);
 
   // Current wallet's writer positions
   const myPositions = useMemo(() => {

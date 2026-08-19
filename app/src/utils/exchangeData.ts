@@ -20,6 +20,7 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { Buffer } from "buffer";
 import { coalescedProgramAccounts, invalidateProgramAccounts } from "./programAccounts";
 import { canonicalAsset } from "./assetDisplay";
+import { getIndexerReader } from "./indexerRegistry";
 
 // ---- Discriminators (first 8 bytes of sha256("account:<Name>")) -------------
 const DISC = {
@@ -191,7 +192,47 @@ export function parseSeriesRecord(pubkey: PublicKey, d: Buffer): SeriesRecord {
   };
 }
 
-export async function fetchSeries(connection: Connection, programId: PublicKey): Promise<SeriesRecord[]> {
+/** Pubkey::default(), the sentinel writer on a canonical series record. */
+const DEFAULT_PUBKEY = "11111111111111111111111111111111";
+
+/**
+ * The index-served form of isSeriesSentinel, from rehydrated fields rather than
+ * raw bytes. Kept beside its byte-offset twin ON PURPOSE: the two must agree, and
+ * the grid-migration harness asserts exactly that against live accounts
+ * (4,581 compared, 0 disagreements).
+ */
+function isSeriesSentinelRow(a: any): boolean {
+  return a.writer?.toBase58?.() === DEFAULT_PUBKEY
+    && a.premiumPerContract?.toString?.() === "0"
+    && a.createdAt?.toString?.() === "0";
+}
+
+export async function fetchSeries(
+  connection: Connection,
+  programId: PublicKey,
+  market?: string,
+): Promise<SeriesRecord[]> {
+  // INDEX FIRST when the FE has registered a reader. The crank never registers
+  // one, so it keeps scanning chain — correct, since a keeper must not act on an
+  // index. Any failure returns null and falls through to the scan below.
+  const indexer = getIndexerReader();
+  if (indexer) {
+    const res = await indexer("vaultMint", market ? { market } : undefined);
+    if (res) {
+      return res.rows
+        .filter((r) => isSeriesSentinelRow(r.account))
+        .map((r) => {
+          const a = r.account as any;
+          return {
+            recordPubkey: r.publicKey.toBase58(),
+            vault: a.vault.toBase58(),
+            optionMint: a.optionMint.toBase58(),
+            quantityMinted: Number(a.quantityMinted.toString()),
+            quantitySold: Number(a.quantitySold.toString()),
+          };
+        });
+    }
+  }
   const accts = await getByDisc(connection, programId, DISC.vaultMint);
   return accts.filter((a) => isSeriesSentinel(a.data)).map((a) => parseSeriesRecord(a.pubkey, a.data));
 }
@@ -259,6 +300,18 @@ export function parseSharedVault(pubkey: PublicKey, d: Buffer): SharedVaultLite 
 /** market pubkey -> asset symbol, from OptionsMarket accounts. */
 /** Exported as a TEST SEAM (see parseSharedVault). */
 export async function fetchMarketAssetMap(connection: Connection, programId: PublicKey): Promise<Map<string, string>> {
+  const indexer = getIndexerReader();
+  if (indexer) {
+    const res = await indexer("optionsMarket");
+    if (res) {
+      const m = new Map<string, string>();
+      for (const r of res.rows) {
+        const asset = (r.account as any).assetName;
+        if (asset) m.set(r.publicKey.toBase58(), asset);
+      }
+      return m;
+    }
+  }
   const accts = await getByDisc(connection, programId, DISC.optionsMarket);
   const m = new Map<string, string>();
   for (const a of accts) {

@@ -2,7 +2,49 @@
 
 Local planning doc, deliberately uncommitted.
 
-**Status: R1+R3 SHIPPED. Stopped at the numbers. One finding reframes what is left.**
+**Status: GRID MIGRATION BUILT, MEASURED, REVERTED. Stopped.**
+
+## GRID MIGRATION — reverted, and the measurement was contaminated
+
+Built and shipped `d7910ec` (market-filtered grid + authoritative focus read +
+exactly-276 alignment), measured cold 35.4s / 30.3s against a 7-8s baseline, and
+reverted it (`c5e576a`). Post-revert recovered to cold 7.11s / 11.39s.
+
+**But the measurement was taken while the indexer was STALE.** `/api/chain/meta`
+reported `healthy=false, oldestAgeSec=163` — past the 90s threshold — so the FE
+was refusing index data and falling back to full chain scans by design. The
+5.38MB getProgramAccounts in that run is the fallback working, not the migration
+failing.
+
+I measured into a degraded dependency, which is precisely what the deploy-runbook
+note in HANDOFF warns against. I wrote that note and then did not follow it.
+
+### Root cause of the staleness — a real design flaw, not a blip
+
+The indexer is healthy and refreshing; its CYCLE is just slower than its own
+freshness bound. Measured on the box: a full refresh cycle took 09:09:29 ->
+09:10:34, about **65 seconds**, because devnet RPC is currently returning
+**4-8 seconds per scan**.
+
+`STALE_AFTER_SEC = 90` with a 30s cadence assumed fast scans. Under degraded RPC
+the cycle approaches the threshold, the data is flagged stale, and the entire
+read path falls back — converting a slow-RPC day into a total fallback rather
+than a graceful one.
+
+**The threshold must be derived from observed cycle time, not assumed.** That is
+the next fix, and it must land BEFORE the grid migration is re-attempted or
+re-measured.
+
+### What is still live vs reverted
+
+  LIVE      indexer + read path + persistence + market-scoped reads
+  LIVE      pilot 88a29ee — fetchSeries + fetchMarketAssetMap via the index
+  REVERTED  exactly-276 alignment (the 14 legacy vaults render again)
+  REVERTED  market-filtered unified chain
+  REVERTED  authoritative focus read
+
+The R-LEGACY ledger (ClickUp 86eyp4hem) STANDS regardless — the obligation is
+recorded even though the drop is not currently applied.
 
 ## R1/R3 SHIP-GATE NUMBERS (prod, 2 runs)
 

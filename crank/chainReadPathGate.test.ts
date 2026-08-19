@@ -171,7 +171,8 @@ test("the market scope is RENDERING context, and says so", () => {
 // ---------------------------------------------------------------------------
 //
 // The staleness threshold was assumed (90s) rather than derived, sat below the
-// measured p95 refresh interval (129.4s over 280 samples), and so flagged a
+// measured p95 refresh interval (129.4s over 280 samples PRE-decouple), and so
+// flagged a
 // healthy indexer as stale whenever devnet slowed — turning a slow day into a
 // TOTAL fallback. These assert the shape that keeps that from being all-or-
 // nothing.
@@ -207,7 +208,7 @@ test("the client threshold is DERIVED and says so", () => {
   // The rule that failed here was an assumed constant. It must now carry its
   // measurement, so the next person changing it knows what to re-measure.
   const src = read("utils/chainReadPath.ts");
-  assert.match(src, /p95 129\.4s/, "the threshold must cite the measurement it came from");
+  assert.match(src, /p95 70\.0s/, "the threshold must cite the measurement it came from");
   assert.equal(CLIENT_MAX_AGE_SEC >= 90, true, "and must respect the agreed floor");
 });
 
@@ -217,5 +218,5 @@ test("client and server thresholds do not silently diverge", () => {
   const client = read("utils/chainReadPath.ts");
   const m = client.match(/const MAX_AGE_SEC = (\d+)/);
   assert.ok(m, "client threshold must be a plain constant, greppable");
-  assert.equal(Number(m[1]), 200, "client MAX_AGE_SEC must match the indexer's STALE_AFTER_SEC");
+  assert.equal(Number(m[1]), 110, "client MAX_AGE_SEC must match the indexer's STALE_AFTER_SEC");
 });

@@ -64,15 +64,17 @@ export function servedByIndexer(name: AccountName): boolean {
  * refusing to be told a stale answer is fresh.
  *
  * Kept in step with the indexer's STALE_AFTER_SEC, which is DERIVED from
- * measured refresh intervals (p95 129.4s over 280 samples) rather than assumed
- * from the nominal cadence. The old 90s sat below that p95, so a healthy indexer
- * on a slow devnet day was flagged stale and the whole read path fell back.
+ * measured refresh intervals rather than assumed from the nominal cadence.
+ * RE-DERIVED after the refresh was decoupled onto its own timer: 387 samples per
+ * type over ~7h give p95 70.0s (69.1s excluding restarts), so max(90, p95 x 1.55)
+ * = 110s. The old 90s sat below the PRE-decouple p95 of 129.4s, which is why a
+ * healthy indexer on a slow day was flagged stale and the read path fell back.
  *
  * PER-TYPE BY CONSTRUCTION: this is applied to each endpoint's own envelope, so
  * a slow `vaults` scan cannot stale-out `series` or `markets` that refreshed
  * fine. Fallback is per account type, never wholesale.
  */
-const MAX_AGE_SEC = 200;
+const MAX_AGE_SEC = 110;
 
 /**
  * One slow endpoint must not hold the page hostage — it falls back instead.

@@ -23,30 +23,30 @@ import type { ChainKind } from "./refresh";
 /**
  * Beyond this the FE stops trusting us and reads chain directly.
  *
- * DERIVED FROM MEASUREMENT, NOT ASSUMED. The previous value (90s) was reasoned
- * from the 30s cadence — "three missed refreshes is a fault" — and was wrong,
- * because the refresh does not actually run every 30s.
+ * DERIVED FROM MEASUREMENT, RE-DERIVED AFTER THE DECOUPLE. Never hand-scaled.
  *
- * Measured on the box, 280 intervals per account type over 6 hours of live
- * devnet:
+ * History, because the number carries its reasoning:
+ *   90s   REASONED from a nominal 30s cadence ("three missed refreshes"). Wrong:
+ *         the refresh was gated by a 60s main-loop sleep, so it never ran at 30s.
+ *         90 sat BELOW the measured p95 and turned a slow devnet day into a total
+ *         read-path fallback.
+ *   200s  derived from the pre-decouple distribution (p95 129.4s over 280 samples).
+ *   110s  re-derived after the refresh moved onto its own timer.
  *
- *   per-type refresh interval   p50  63.6s   p95 129.4s   max 531.8s
- *   the four scans themselves   p50   1.0s   p95   1.6s   max   3.7s
+ * Post-decouple measurement, 387 intervals per account type over ~7h of live
+ * devnet, and separately 206 intervals of restart-free steady state:
  *
- * The scans are fast; the INTERVAL is the main loop. The chain refresh shares a
- * loop with the tape poller and capital tick, so a nominal 30s cadence lands at
- * ~64s median and 129s at p95. A 90s threshold therefore sat BELOW the p95 and
- * was guaranteed to flag healthy data as stale whenever devnet slowed —
- * converting a slow day into a total read-path fallback.
+ *   with restarts   p50 60.1s   p95 70.0s   max 328.9s
+ *   steady state    p50 60.1s   p95 69.1s   max 278.1s
  *
- * Set to p95 + ~55% margin, floored at 90s. This deliberately does NOT cover the
- * 531s tail: a gap that long IS a fault and should fall back.
+ * Both windows agree, so the derivation does not depend on how service restarts
+ * are treated. Rule applied unchanged: max(90, p95 x 1.55) = 110s.
  *
- * If the loop is ever decoupled so the cadence is really 30s, re-derive this
- * from fresh numbers rather than scaling it by hand — the point is that the
- * threshold carries its measurement.
+ * It deliberately does NOT cover the ~278s tail. A gap that long IS a fault and
+ * SHOULD fall back — a threshold stretched to tolerate an outage stops being a
+ * staleness bound and becomes a rubber stamp.
  */
-export const STALE_AFTER_SEC = 200;
+export const STALE_AFTER_SEC = 110;
 
 interface MetaRow {
   kind: string;

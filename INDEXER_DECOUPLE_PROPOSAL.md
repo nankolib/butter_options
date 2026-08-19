@@ -2,7 +2,53 @@
 
 Local planning doc, deliberately uncommitted.
 
-**Status: PROPOSAL ONLY. Nothing built. Stopping here for the ruling.**
+**Status: BUILT AND DEPLOYED (Option B). Threshold re-derivation pending a 6h window.**
+
+## RESULT — the tail collapsed, at zero RPC delta
+
+```
+                 before (280 samples)   after (12 samples, early)
+p50                    63.6 s                  60.1 s
+p95                   129.4 s                  61.2 s
+max                   531.8 s                  61.2 s
+```
+
+The distribution is now 59.0-61.2s — a dedicated timer doing exactly what a
+dedicated timer should. **The p95 that broke the staleness threshold is gone**,
+and the 531s tail with it, without spending a single extra RPC call.
+
+## SHUTDOWN HAZARD — PROVEN, not asserted
+
+Stopped the service with a refresh cycle genuinely in flight:
+
+```
+10:30:54.875  chain refresh sharedVault      <- cycle in flight
+10:30:55.682  chain refresh vaultMint
+10:30:55.688  shutdown requested             <- SIGTERM lands MID-CYCLE
+10:30:55.743  chain refresh optionsMarket    <- in-flight cycle CONTINUES
+10:30:55.915  chain refresh epochConfig      <- completes
+10:30:56.215  stopped cleanly                <- only then
+```
+
+No `database is closed`, no error. A first attempt did NOT prove this — it caught
+the process during startup rather than the live tail, because the wait loop
+matched a log line from the previous run. Fixed by anchoring the wait to the
+current run's own boot timestamp.
+
+## WARMUP — not lengthened
+
+Healthy 20s after restart, against the ~3.5min the runbook warns about. The
+immediate `chainTick()` at arm time helps; a warm database also contributes, so
+this is not claimed as a pure win. It is not WORSE, which is what was required.
+
+## STILL PENDING (elapsed time, not effort)
+  - poller/capital counters over a matched 3h window vs the 3h baseline
+    (baseline: 131 chain refreshes, 1,940 txsIndexed, 0 fetchFailures,
+     15 capital ticks, 270 atasPolled, 0 failures)
+  - 6h / 280-sample observation, then re-derive STALE_AFTER_SEC by the same
+    p95 + margin rule, floor 90s. NO hand-scaling. On the early numbers the
+    threshold looks likely to land near 90-120s, which would make it
+    conservative rather than necessary — the stated goal.
 
 ---
 

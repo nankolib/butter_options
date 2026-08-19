@@ -78,6 +78,16 @@
 >   enforces.
 > - `grep -c` on a single-line bundle, which can only ever return 0 or 1.
 >
+> **Corollary, learned the expensive way: verify that the code path being
+> MEASURED is the code path being OPTIMIZED — render-path attribution comes
+> BEFORE building, not after.** An entire read-path arc (indexer, filtered reads,
+> scoped cache, IndexedDB persistence) was built and shipped against
+> `useTradeData`/`useVaults`, which drive the asset dropdown, expiries and
+> ticket. The GRID renders from `useUnifiedChain` -> `exchangeData`, which calls
+> `safeFetchAll` zero times. Every measured gain came from reduced contention,
+> never from moving the thing being timed. One grep for what feeds the component
+> under measurement would have caught it on day one.
+>
 > Also: only STRING LITERALS survive minification. A live-bundle presence check
 > must grep for literals like `/api/chain`, never for identifiers — those are
 > mangled, and their absence proves nothing.

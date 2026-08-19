@@ -236,7 +236,10 @@ interface SharedVaultLite {
   voided: boolean;
 }
 
-function parseSharedVault(pubkey: PublicKey, d: Buffer): SharedVaultLite | null {
+/** Exported as a TEST SEAM for the grid-migration divergence harness, which
+ *  compares this byte-offset parse against the indexer's JSON on the same slot.
+ *  Behaviour is unchanged; only its visibility is. */
+export function parseSharedVault(pubkey: PublicKey, d: Buffer): SharedVaultLite | null {
   if (d.length < 260) return null;
   return {
     pubkey: pubkey.toBase58(),
@@ -254,7 +257,8 @@ function parseSharedVault(pubkey: PublicKey, d: Buffer): SharedVaultLite | null 
 }
 
 /** market pubkey -> asset symbol, from OptionsMarket accounts. */
-async function fetchMarketAssetMap(connection: Connection, programId: PublicKey): Promise<Map<string, string>> {
+/** Exported as a TEST SEAM (see parseSharedVault). */
+export async function fetchMarketAssetMap(connection: Connection, programId: PublicKey): Promise<Map<string, string>> {
   const accts = await getByDisc(connection, programId, DISC.optionsMarket);
   const m = new Map<string, string>();
   for (const a of accts) {

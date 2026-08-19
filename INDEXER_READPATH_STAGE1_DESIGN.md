@@ -2,7 +2,33 @@
 
 Local planning doc, deliberately uncommitted.
 
-**Status: GRID MIGRATION BUILT, MEASURED, REVERTED. Stopped.**
+**Status: GRID MIGRATION LIVE. Stopped at the numbers for the final walkthrough.**
+
+## FINAL SHIP-GATE NUMBERS (prod, 2 runs, indexer health gated by the harness)
+
+```
+                    before grid      after grid       target
+cold                 8.14 / 11.24    7.24 / 7.70 s    single digit BOTH -> MET
+warm (hard reload)   8.04 /  7.86    4.10 / 4.39 s    <2s -> MISSED
+warm (in-app nav)    4.22 /  4.08    1.38 / 1.66 s    <2s -> MET
+bytes, cold          13.0 MB         8.1 MB
+bytes, reload        13.0 MB         2.87 MB
+bytes, in-app        ~5.5 MB         0.36 MB
+```
+
+**In-app navigation is 1.38s / 1.66s — under the 2s target.** Cold is
+single-digit in both runs. Hard reload at 4.1-4.4s is the one miss.
+
+## The 35s "regression" was the stale indexer, nothing else
+
+The identical commit (d7910ec) measured 35.4s when the indexer was stale and
+7.24s when it was healthy. The FE was falling back to full chain scans exactly as
+designed; the measurement described the fallback. The revert was the right
+PROCESS call on a contaminated instrument, and the code was sound — which is why
+re-applying it unchanged worked.
+
+The harness now refuses to measure unless /api/chain/meta reports every type
+fresh, so this cannot recur silently.
 
 ## GRID MIGRATION — reverted, and the measurement was contaminated
 

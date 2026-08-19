@@ -37,6 +37,9 @@ import { PublicKey } from "@solana/web3.js";
 import type { AccountName } from "../hooks/useFetchAccounts";
 import { REHYDRATE, isServableEnvelope } from "./chainRehydrate";
 import { registerIndexerReader } from "./indexerRegistry";
+import {
+  clearPersisted, isPersistable, readPersisted, writePersisted,
+} from "./persistentScanCache";
 
 /** Off unless explicitly enabled. Ships dark and is flipped deliberately. */
 export const CHAIN_READPATH_ENABLED = import.meta.env.VITE_CHAIN_READPATH === "1";
@@ -105,6 +108,54 @@ async function getJson<T>(path: string): Promise<ChainEnvelope<T> | null> {
   }
 }
 
+const LINEAGE_KEY = "opta:chain:lineage";
+
+/**
+ * Last-known deploy-slot lineage, read SYNCHRONOUSLY from localStorage.
+ *
+ * The lineage is the layout guarantee for anything on disk, and it comes from
+ * /api/chain/meta — but awaiting that before touching IndexedDB would put a
+ * network round-trip in front of the instant render this whole slice exists to
+ * produce. So the last-known value is used optimistically and VERIFIED in the
+ * background; a mismatch wipes the store.
+ *
+ * Optimism is safe here precisely because the persisted rows are re-validated
+ * against it: the worst case is one render from the previous deploy's data,
+ * immediately followed by a bust and a refetch. Being wrong for one paint beats
+ * being slow on every load — and being wrong FOREVER is what the verification
+ * prevents.
+ */
+function knownLineage(): string {
+  try { return window.localStorage.getItem(LINEAGE_KEY) ?? ""; } catch { return ""; }
+}
+
+function rememberLineage(v: string): void {
+  try { window.localStorage.setItem(LINEAGE_KEY, v); } catch { /* private mode */ }
+}
+
+let lineageChecked = false;
+
+/** Fetch /meta once per session and reconcile the stored lineage against it. */
+async function verifyLineage(): Promise<void> {
+  if (lineageChecked) return;
+  lineageChecked = true;
+  try {
+    const res = await fetch(`${BASE}/meta`);
+    if (!res.ok) return;
+    const meta = await res.json();
+    const fresh: string = meta?.lineage?.key ?? "";
+    if (!fresh) return;
+    if (fresh !== knownLineage()) {
+      // A new deployment. Everything on disk describes the previous layout.
+      await clearPersisted();
+      rememberLineage(fresh);
+    }
+  } catch {
+    // Unverified lineage just means we keep using the last known one; the
+    // envelope check still refuses anything that does not match it.
+  }
+}
+
 const pk = (v: string): PublicKey => new PublicKey(v);
 
 // ---------------------------------------------------------------------------
@@ -153,6 +204,36 @@ export async function fetchFromIndexer<T>(
   return p;
 }
 
+/** Raw indexer rows -> the shape safeFetchAll returns. Shared by the network and
+ *  the disk paths so both go through ONE decoder. */
+function hydrateRows<T>(rows: any[], rehydrate: (r: any) => unknown): IndexerResult<T>["rows"] {
+  return rows.map((r) => ({ publicKey: pk(r.publicKey), account: rehydrate(r) as T }));
+}
+
+async function fetchNetwork<T>(
+  name: AccountName,
+  scope: string,
+  rehydrate: (r: any) => unknown,
+): Promise<IndexerResult<T> | null> {
+  const q = scope ? `?market=${encodeURIComponent(scope)}` : "";
+  const body = await getJson<any>(`${BASE}/${ENDPOINT[name]}${q}`);
+  if (!body) return null;
+  try {
+    const out = { rows: hydrateRows<T>(body.rows, rehydrate), slot: body.slot, ageSec: body.ageSec };
+    // Persist the RAW rows, never the decoded ones: structured clone would strip
+    // the BN and PublicKey prototypes and hand back plausible-looking rubbish.
+    if (isPersistable(name)) {
+      void writePersisted(knownLineage(), name, scope, body.rows, body.slot);
+    }
+    return out;
+  } catch {
+    // A rehydration failure means the served shape is not what this build
+    // expects — most likely a layout change on one side. Fall back rather than
+    // hand a half-built object to a pricing model.
+    return null;
+  }
+}
+
 async function fetchFromIndexerUncoalesced<T>(
   name: AccountName,
   params?: { market?: string },
@@ -160,26 +241,31 @@ async function fetchFromIndexerUncoalesced<T>(
   if (!servedByIndexer(name)) return null;
   const rehydrate = REHYDRATE[name];
   if (!rehydrate) return null;
+  const scope = params?.market ?? "";
 
-  const q = params?.market ? `?market=${encodeURIComponent(params.market)}` : "";
-  const body = await getJson<any>(`${BASE}/${ENDPOINT[name]}${q}`);
-  if (!body) return null;
+  // Reconcile the lineage once per session, behind the render rather than in
+  // front of it.
+  void verifyLineage();
 
-  try {
-    return {
-      rows: body.rows.map((r) => ({
-        publicKey: pk(r.publicKey),
-        account: rehydrate(r) as T,
-      })),
-      slot: body.slot,
-      ageSec: body.ageSec,
-    };
-  } catch {
-    // A rehydration failure means the served shape is not what this build
-    // expects — most likely a layout change on one side. Fall back rather than
-    // hand a half-built object to a pricing model.
-    return null;
+  // DISK FIRST. This is the reload path: no network in the critical path at all
+  // when the record is fresh, which is the only way a hard reload approaches
+  // in-app navigation.
+  const persisted = await readPersisted(knownLineage(), name, scope);
+  if (persisted.usable) {
+    try {
+      const rows = hydrateRows<T>(persisted.envelope.rows as any[], rehydrate);
+      if (persisted.stale) {
+        // Serve now, refresh behind it. Not awaited on purpose.
+        void fetchNetwork<T>(name, scope, rehydrate);
+      }
+      return { rows, slot: persisted.envelope.slot, ageSec: 0 };
+    } catch {
+      // Stored rows no longer rehydrate under this build. Fall through to the
+      // network rather than serving a half-built object.
+    }
   }
+
+  return fetchNetwork<T>(name, scope, rehydrate);
 }
 
 /**

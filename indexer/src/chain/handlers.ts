@@ -66,7 +66,36 @@ const num = (v: string | null, dflt: number, max: number): number => {
 // Collections
 // ---------------------------------------------------------------------------
 
+/**
+ * Hard ceiling on ?keys=. A URL is not a request body: past a few hundred keys
+ * the query string starts running into proxy limits, and an unbounded IN(...)
+ * is a trivially abusable read amplifier on a public endpoint.
+ *
+ * Over the cap the endpoint does NOT silently truncate — a truncated board is
+ * indistinguishable from a small one. It returns 400 so the caller falls back to
+ * a path that can answer completely.
+ */
+export const MAX_VAULT_KEYS = 200;
+
 export function getChainVaults(db: DB, params: URLSearchParams, now = Math.floor(Date.now() / 1000)): ApiResponse {
+  // `keys` serves the positions dock: it holds a handful of vaults and needed
+  // ALL 4,655 to describe them, because "which vaults back my positions" is
+  // answerable only by the wallet. Fetching exactly those is the whole point.
+  const keysRaw = params.get("keys");
+  if (keysRaw != null) {
+    const keys = keysRaw.split(",").map((k) => k.trim()).filter(Boolean);
+    if (keys.length === 0) {
+      return { status: 200, body: envelope(db, "sharedVault", [], now) };
+    }
+    if (keys.length > MAX_VAULT_KEYS) {
+      return { status: 400, body: { error: "too_many_keys", max: MAX_VAULT_KEYS } };
+    }
+    const rows = db.prepare(
+      `SELECT * FROM chain_shared_vaults WHERE pubkey IN (${keys.map(() => "?").join(",")})`,
+    ).all(...keys);
+    return { status: 200, body: envelope(db, "sharedVault", rows.map(shapeVault), now) };
+  }
+
   // `market` narrows to one board, which is what the trade page actually needs;
   // the unfiltered form stays available because the markets page spans all of
   // them. Both are served from the same rows.

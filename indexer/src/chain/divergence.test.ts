@@ -182,3 +182,49 @@ test("legacy-sized accounts are rejected and COUNTED, never stored", async () =>
   assert.equal(meta.rejected, 1, "NEVER SILENT: the rejection must be counted");
   assert.match(meta.rejected_json, /"260"/, "and attributed to its size");
 });
+
+// ---------------------------------------------------------------------------
+// R3 — by-vault-key lookup
+// ---------------------------------------------------------------------------
+
+test("?keys= returns exactly the requested vaults", async () => {
+  const { getChainVaults } = await import("./handlers");
+  const vaults = [
+    { pubkey: key(1), buf: vaultBytes(1, 1_000n) },
+    { pubkey: key(2), buf: vaultBytes(2, 2_000n) },
+    { pubkey: key(3), buf: vaultBytes(3, 3_000n) },
+  ];
+  const { db } = await seeded(vaults);
+  const res = getChainVaults(db, new URLSearchParams({ keys: `${key(1)},${key(3)}` }));
+  assert.equal(res.status, 200);
+  const rows = (res.body as any).rows as any[];
+  assert.equal(rows.length, 2, "only the requested vaults");
+  assert.deepEqual(rows.map((r) => r.publicKey).sort(), [key(1), key(3)].sort());
+});
+
+test("RED: over the key cap it REFUSES rather than truncating", async () => {
+  // A truncated board is indistinguishable from a small one. The dock would
+  // silently describe fewer positions than the user holds, with nothing on
+  // screen to indicate it — so this must be an error, not a shorter list.
+  const { getChainVaults, MAX_VAULT_KEYS } = await import("./handlers");
+  const { db } = await seeded([{ pubkey: key(1), buf: vaultBytes(1, 1_000n) }]);
+  const tooMany = Array.from({ length: MAX_VAULT_KEYS + 1 }, (_, i) => key(i)).join(",");
+  const res = getChainVaults(db, new URLSearchParams({ keys: tooMany }));
+  assert.equal(res.status, 400, "must refuse, so the caller can fall back to a complete answer");
+  assert.equal((res.body as any).error, "too_many_keys");
+});
+
+test("an empty keys list asks for nothing and gets nothing", async () => {
+  const { getChainVaults } = await import("./handlers");
+  const { db } = await seeded([{ pubkey: key(1), buf: vaultBytes(1, 1_000n) }]);
+  const res = getChainVaults(db, new URLSearchParams({ keys: "" }));
+  // "" is absent, not empty — an absent filter must not become an all-boards read.
+  assert.equal(res.status, 200);
+});
+
+test("unknown keys are simply absent, not an error", async () => {
+  const { getChainVaults } = await import("./handlers");
+  const { db } = await seeded([{ pubkey: key(1), buf: vaultBytes(1, 1_000n) }]);
+  const res = getChainVaults(db, new URLSearchParams({ keys: `${key(1)},${key(99)}` }));
+  assert.equal((res.body as any).rows.length, 1);
+});

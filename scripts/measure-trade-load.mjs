@@ -126,6 +126,47 @@ function report(m) {
   return { interactiveMs, requests: reqs.length, bytes, rpc: rpc.length };
 }
 
+// =============================================================================
+// PRE-FLIGHT GATE — the instrument refuses to measure a degraded dependency
+// =============================================================================
+//
+// On 2026-08-19 the grid migration was measured at cold 35.4s against a 7-8s
+// baseline and REVERTED on that number. The indexer had been stale
+// (healthy=false, oldestAgeSec=163), so the FE was refusing index data and
+// falling back to full chain scans BY DESIGN. The measurement described the
+// fallback, not the change, and a sound change was reverted on it.
+//
+// A runbook note already warned against exactly this, and a note did not stop
+// it. So the check lives in the harness: it refuses to produce numbers rather
+// than producing numbers that mean something other than they appear to.
+async function preflight() {
+  const url = "https://opta.fyi/api/chain/meta";
+  let meta;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`meta ${res.status}`);
+    meta = await res.json();
+  } catch (e) {
+    console.error(`PRE-FLIGHT FAILED: cannot read ${url} (${e.message}).`);
+    console.error("Refusing to measure — a page falling back to chain scans does not");
+    console.error("tell you anything about the read path.");
+    process.exit(2);
+  }
+  const kinds = Object.entries(meta.kinds ?? {});
+  const stale = kinds.filter(([, v]) => v.stale);
+  const line = kinds.map(([k, v]) => `${k}=${v.ageSec}s${v.stale ? " STALE" : ""}`).join("  ");
+  console.log(`pre-flight: healthy=${meta.healthy}  staleAfter=${meta.staleAfterSec}s  ${line}`);
+  if (!meta.healthy || stale.length > 0) {
+    console.error("");
+    console.error("PRE-FLIGHT FAILED: the indexer is not healthy, so the FE will fall back to");
+    console.error("chain scans and any number produced here describes the FALLBACK.");
+    console.error(`  stale types: ${stale.map(([k]) => k).join(", ") || "(none, but healthy=false)"}`);
+    console.error("Wait for healthy=true and re-run. Do not interpret partial numbers.");
+    process.exit(2);
+  }
+}
+await preflight();
+
 const browser = await chromium.launch({ channel: "chrome", headless: true });
 const ctx = await browser.newContext();
 const page = await ctx.newPage();

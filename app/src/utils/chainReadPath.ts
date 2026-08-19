@@ -62,8 +62,17 @@ export function servedByIndexer(name: AccountName): boolean {
  * A response older than this is not trusted, no matter what it says. The server
  * publishes its own `stale` flag against the same threshold; this is the client
  * refusing to be told a stale answer is fresh.
+ *
+ * Kept in step with the indexer's STALE_AFTER_SEC, which is DERIVED from
+ * measured refresh intervals (p95 129.4s over 280 samples) rather than assumed
+ * from the nominal cadence. The old 90s sat below that p95, so a healthy indexer
+ * on a slow devnet day was flagged stale and the whole read path fell back.
+ *
+ * PER-TYPE BY CONSTRUCTION: this is applied to each endpoint's own envelope, so
+ * a slow `vaults` scan cannot stale-out `series` or `markets` that refreshed
+ * fine. Fallback is per account type, never wholesale.
  */
-const MAX_AGE_SEC = 90;
+const MAX_AGE_SEC = 200;
 
 /**
  * One slow endpoint must not hold the page hostage — it falls back instead.

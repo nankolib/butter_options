@@ -165,3 +165,57 @@ test("the market scope is RENDERING context, and says so", () => {
   const src = read("hooks/useFetchAccounts.ts");
   assert.match(src, /RENDERING CONTEXT ONLY/, "the scope must be documented as rendering-only");
 });
+
+// ---------------------------------------------------------------------------
+// GRACEFUL DEGRADATION — per-type, not wholesale
+// ---------------------------------------------------------------------------
+//
+// The staleness threshold was assumed (90s) rather than derived, sat below the
+// measured p95 refresh interval (129.4s over 280 samples), and so flagged a
+// healthy indexer as stale whenever devnet slowed — turning a slow day into a
+// TOTAL fallback. These assert the shape that keeps that from being all-or-
+// nothing.
+
+test("(a) one slow type falls back ALONE — the others still serve from the index", () => {
+  // A slow `vaults` scan must not stale-out `series` and `markets` that
+  // refreshed fine. The envelope check is applied per response, so each type
+  // stands on its own freshness.
+  const slow = { rows: [{}], stale: false, ageSec: CLIENT_MAX_AGE_SEC + 1, slot: 1 };
+  const fine = { rows: [{}], stale: false, ageSec: 12, slot: 1 };
+  assert.equal(isServableEnvelope(slow), false, "the slow type falls back");
+  assert.equal(isServableEnvelope(fine), true, "and the healthy ones do NOT");
+});
+
+test("(b) a genuinely dead indexer produces a FULL fallback", () => {
+  // Every shape a dead or broken endpoint can produce must be unusable, so the
+  // page degrades to chain scans across the board rather than half-rendering.
+  for (const dead of [null, undefined, {}, { rows: null }, { rows: [], ageSec: -1 },
+                      { rows: [{}], stale: true, ageSec: 5 }]) {
+    assert.equal(isServableEnvelope(dead as never), false, `${JSON.stringify(dead)} must not serve`);
+  }
+});
+
+test("(c) the 3.5-min warmup window refuses, per the runbook", () => {
+  // A freshly restarted indexer answers for MINUTES before its first scan lands,
+  // reporting ageSec -1. Serving that renders an empty board confidently, which
+  // reads as "you own nothing" rather than "still starting".
+  assert.equal(isServableEnvelope({ rows: [], stale: false, ageSec: -1, slot: 0 }), false);
+  assert.equal(isServableEnvelope({ rows: [], stale: true, ageSec: 0, slot: 0 }), false);
+});
+
+test("the client threshold is DERIVED and says so", () => {
+  // The rule that failed here was an assumed constant. It must now carry its
+  // measurement, so the next person changing it knows what to re-measure.
+  const src = read("utils/chainReadPath.ts");
+  assert.match(src, /p95 129\.4s/, "the threshold must cite the measurement it came from");
+  assert.equal(CLIENT_MAX_AGE_SEC >= 90, true, "and must respect the agreed floor");
+});
+
+test("client and server thresholds do not silently diverge", () => {
+  // Two numbers that must agree, in two repos. If one moves alone, the client
+  // either refuses fresh data or trusts data the server called stale.
+  const client = read("utils/chainReadPath.ts");
+  const m = client.match(/const MAX_AGE_SEC = (\d+)/);
+  assert.ok(m, "client threshold must be a plain constant, greppable");
+  assert.equal(Number(m[1]), 200, "client MAX_AGE_SEC must match the indexer's STALE_AFTER_SEC");
+});

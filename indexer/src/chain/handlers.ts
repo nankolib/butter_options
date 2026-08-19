@@ -20,10 +20,33 @@ import type { DB } from "../db";
 import type { ApiResponse } from "../api/handlers";
 import type { ChainKind } from "./refresh";
 
-/** Beyond this the FE should stop trusting us and read chain directly. Chosen
- *  against the 30s SharedVault cadence: three missed refreshes is a fault, not
- *  jitter. */
-export const STALE_AFTER_SEC = 90;
+/**
+ * Beyond this the FE stops trusting us and reads chain directly.
+ *
+ * DERIVED FROM MEASUREMENT, NOT ASSUMED. The previous value (90s) was reasoned
+ * from the 30s cadence — "three missed refreshes is a fault" — and was wrong,
+ * because the refresh does not actually run every 30s.
+ *
+ * Measured on the box, 280 intervals per account type over 6 hours of live
+ * devnet:
+ *
+ *   per-type refresh interval   p50  63.6s   p95 129.4s   max 531.8s
+ *   the four scans themselves   p50   1.0s   p95   1.6s   max   3.7s
+ *
+ * The scans are fast; the INTERVAL is the main loop. The chain refresh shares a
+ * loop with the tape poller and capital tick, so a nominal 30s cadence lands at
+ * ~64s median and 129s at p95. A 90s threshold therefore sat BELOW the p95 and
+ * was guaranteed to flag healthy data as stale whenever devnet slowed —
+ * converting a slow day into a total read-path fallback.
+ *
+ * Set to p95 + ~55% margin, floored at 90s. This deliberately does NOT cover the
+ * 531s tail: a gap that long IS a fault and should fall back.
+ *
+ * If the loop is ever decoupled so the cadence is really 30s, re-derive this
+ * from fresh numbers rather than scaling it by hand — the point is that the
+ * threshold carries its measurement.
+ */
+export const STALE_AFTER_SEC = 200;
 
 interface MetaRow {
   kind: string;

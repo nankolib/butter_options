@@ -2,7 +2,47 @@
 
 Local planning doc, deliberately uncommitted.
 
-**Status: STAGE 2 SHIPPED AND LIVE. Stopped at the numbers for the walkthrough.**
+**Status: FILTER SLICE SHIPPED. Stopped at the numbers for the walkthrough.**
+
+## FILTER-SLICE NUMBERS (prod, 2 runs)
+
+```
+                    before slice     after slice        target
+cold                 8.28 / 10.21    7.86 / 7.13 s      single digit BOTH -> MET
+warm (hard reload)   7.54 / 7.57     8.04 / 7.86 s      <2s -> MISSED
+warm (in-app nav)    4.21 / 4.75     4.22 / 4.08 s
+bytes, cold          13.2 MB         13.0 MB
+```
+
+The board itself now arrives filtered: **vaults 92KB, series 36KB** (was 3.74MB
+and 1.46MB) — the ~70x the slice was for.
+
+### Why warm-reload cannot reach <2s as built
+
+The client cache is IN-MEMORY, so a hard reload throws it away and repeats the
+whole cold path minus static assets. Reaching <2s on reload needs a PERSISTENT
+client cache (IndexedDB), keyed by the deploy-slot lineage that /meta already
+publishes. That is a real slice, not a tweak.
+
+In-app navigation — the common case, and what the founder actually does — is
+**4.1-4.2s**.
+
+### The remaining 13MB is one legitimate read
+
+`useTradeDockData` reads ALL boards because a wallet's positions are not confined
+to the board on screen. It is now deferred to idle (off the critical path, which
+is what moved cold under 10s) but still transfers ~5MB. Fixing it properly needs
+a by-vault-key endpoint so the dock fetches only the vaults backing the positions
+it holds.
+
+### NOT DONE: exchangeData adapter (item 3)
+
+Assessed rather than attempted. `exchangeData.ts` parses raw Buffers with its own
+byte-offset decoders at three fetch sites (series, markets, unified-chain
+vaults). Routing it through the index needs either raw_b64 served — which
+restores the payload this whole path removed — or rewriting those parsers to
+consume JSON, in code adjacent to fills. It accounts for 3 residual gPA calls.
+Flagged for a ruling rather than done quietly.
 
 ## SHIP-GATE NUMBERS (prod, real Chrome, 2 runs each)
 

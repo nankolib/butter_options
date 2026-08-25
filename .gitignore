@@ -91,3 +91,6 @@ tests/**/*.js
 
 # Local endpoint log from crank/_local_sb_endpoint.ts (dev only).
 crank/_sb_endpoint.log
+
+# vC3 test runner transpile output (node --test consumes it; never committed)
+mobile/test/out/

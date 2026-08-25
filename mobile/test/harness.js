@@ -78,10 +78,25 @@ function createHarness() {
   };
 }
 
+/**
+ * Stub react-native. useMarketState imports AppState from it, and requiring the
+ * real package pulls in Flow-typed source that Node cannot parse.
+ */
+function installReactNative() {
+  const path = require.resolve("react-native");
+  require.cache[path] = {
+    id: path, filename: path, loaded: true,
+    exports: {
+      AppState: { addEventListener: () => ({ remove() {} }), currentState: "active" },
+      Platform: { OS: "android", select: (o) => o.android }
+    }
+  };
+}
+
 /** Install the fake react into require.cache so the module under test picks it up. */
 function installReact(react) {
   const path = require.resolve("react");
   require.cache[path] = { id: path, filename: path, loaded: true, exports: react };
 }
 
-module.exports = { createHarness, installReact };
+module.exports = { createHarness, installReact, installReactNative };

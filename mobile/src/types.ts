@@ -47,6 +47,8 @@ export type MarketSnapshot = {
   listings: OptaListing[];
   spotByAsset: Record<string, number>;
   spotStatusByAsset: Record<string, "live" | "stale">;
+  /** FIX C: false until the deferred spot stage has run for this snapshot. */
+  spotResolved: boolean;
   offerings: Offering[];
   assets: string[];
   expiriesByAsset: Record<string, number[]>;

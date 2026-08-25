@@ -3,7 +3,10 @@ import { Animated, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useTheme } from "../hooks/useTheme";
 import type { AppTheme } from "../theme";
 
-export type PriceState = "live" | "stale";
+// FIX C: "pending" = the deferred spot stage has not run yet. It must NOT
+// render the STALE badge — we have not tried to fetch the price, so claiming
+// staleness would be a lie, and the badge appearing/vanishing is a layout jump.
+export type PriceState = "live" | "stale" | "pending";
 
 export type TickerQuote = {
   symbol: string;

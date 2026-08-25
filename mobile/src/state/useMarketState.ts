@@ -3,6 +3,7 @@ import { AppState } from "react-native";
 import type { Connection, PublicKey } from "@solana/web3.js";
 import {
   loadMarketSnapshot,
+  loadSpotPrices,
   loadWalletPortfolio,
   refetchPositionMetadata
 } from "../solana/marketData";
@@ -32,22 +33,30 @@ export function useMarketState(connection: Connection, owner: PublicKey | null) 
   const [priceChanges, setPriceChanges] = useState<Record<string, number>>({});
   const [clock, setClock] = useState(Date.now());
   const requestId = useRef(0);
-  const backgroundRefreshInFlight = useRef(false);
+  // FIX B: one flag for ANY load in flight. The old flag was set only by
+  // background calls, so a 60s auto-refresh could pre-empt the mount load —
+  // and since the mount load takes 120-180s on a real device, every attempt was
+  // superseded before it could commit. Measured 2026-08-25: scan burst 19:04:32,
+  // spot stage 19:07:20, refresh every 60s. Nothing ever rendered.
+  const loadInFlight = useRef(false);
 
   const fetchAll = useCallback(async (background = false) => {
-    if (background && backgroundRefreshInFlight.current) return;
+    // FIX B: a refresh never pre-empts a load that is already running.
+    if (background && loadInFlight.current) return;
     if (background) {
-      backgroundRefreshInFlight.current = true;
       setRefreshing(true);
     } else if (!snapshotRef.current) {
       setPhase("loading");
     }
+    loadInFlight.current = true;
     const currentRequest = ++requestId.current;
     setError(null);
 
     try {
       const nextSnapshot = await loadMarketSnapshot(connection);
-      if (currentRequest !== requestId.current) return;
+      // FIX A: only discard a superseded result when something is already on
+      // screen. With nothing rendered, any data beats skeletons forever.
+      if (currentRequest !== requestId.current && snapshotRef.current) return;
 
       const previous = snapshotRef.current;
       const nextChanges: Record<string, number> = {};
@@ -65,6 +74,18 @@ export function useMarketState(connection: Connection, owner: PublicKey | null) 
       setClock(Date.now());
       const hasData = nextSnapshot.markets.length > 0 || nextSnapshot.offerings.length > 0;
       setPhase(hasData ? "loaded" : "empty");
+
+      // FIX C: offerings are on screen now. Prices arrive after, and a spot
+      // failure leaves them as placeholders rather than unrendering the board.
+      void loadSpotPrices(connection, nextSnapshot.markets).then(
+        ({ spotByAsset, spotStatusByAsset }) => {
+          if (snapshotRef.current !== nextSnapshot) return;
+          const merged = { ...nextSnapshot, spotByAsset, spotStatusByAsset, spotResolved: true };
+          snapshotRef.current = merged;
+          setSnapshot(merged);
+          setClock(Date.now());
+        }
+      );
 
       if (!owner) {
         setPositions([]);
@@ -88,7 +109,8 @@ export function useMarketState(connection: Connection, owner: PublicKey | null) 
         setPortfolioPhase("error");
       }
     } catch (nextError) {
-      if (currentRequest !== requestId.current) return;
+      // FIX A: same rule for failures — a superseded error still beats skeletons.
+      if (currentRequest !== requestId.current && snapshotRef.current) return;
       setError(errorText(nextError));
       setPhase("error");
       if (owner && !snapshotRef.current) {
@@ -96,7 +118,7 @@ export function useMarketState(connection: Connection, owner: PublicKey | null) 
         setPortfolioPhase("error");
       }
     } finally {
-      if (background) backgroundRefreshInFlight.current = false;
+      loadInFlight.current = false;
       if (currentRequest === requestId.current) setRefreshing(false);
     }
   }, [connection, owner]);
@@ -131,7 +153,11 @@ export function useMarketState(connection: Connection, owner: PublicKey | null) 
   const refresh = useCallback(() => fetchAll(true), [fetchAll]);
 
   const pricePhaseFor = useCallback((asset: string): PricePhase => {
-    if (!snapshot || !asset || snapshot.spotByAsset[asset] == null) return "stale";
+    if (!snapshot || !asset) return "stale";
+    // FIX C: distinguish "not fetched yet" from "fetched and stale" so the UI
+    // can show a placeholder instead of falsely claiming the price is stale.
+    if (!snapshot.spotResolved) return "pending";
+    if (snapshot.spotByAsset[asset] == null) return "stale";
     if (snapshot.spotStatusByAsset[asset] === "stale") return "stale";
     return clock - snapshot.fetchedAt > PRICE_STALE_AFTER_MS ? "stale" : "live";
   }, [clock, snapshot]);

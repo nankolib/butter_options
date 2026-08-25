@@ -213,31 +213,13 @@ export async function loadMarketSnapshot(connection: Connection): Promise<Market
     activeListings.push(listing);
   }
 
-  const feeds = new Map<string, { source: number; feedHex: string; feedId: number[] }>();
-  for (const market of markets) {
-    const asset = market.account.assetName as string;
-    if (!feeds.has(asset)) {
-      const feedId = market.account.pythFeedId as number[];
-      feeds.set(asset, {
-        source: market.account.oracleSource as number,
-        feedHex: hexFromBytes(feedId),
-        feedId
-      });
-    }
-  }
+  // FIX C: the spot stage USED to run here, inline, before offerings were built.
+  // Measured on-device 2026-08-25: scan responses landed at 19:04:35 but the spot
+  // reads did not start until 19:07:20 — a 165s tail in front of the first paint,
+  // for data no offering row depends on. It is now deferred: offerings commit
+  // immediately after decode, prices arrive afterwards via loadSpotPrices().
   const spotByAsset: Record<string, number> = {};
   const spotStatusByAsset: Record<string, "live" | "stale"> = {};
-  await Promise.all(Array.from(feeds.entries()).map(async ([asset, feed]) => {
-    const quote = feed.source === 1
-      ? await fetchOnchainSpot(program, feed.feedId).catch(() => null)
-      : await fetchSpot(feed.feedHex).catch(() => null);
-    if (quote == null) {
-      spotStatusByAsset[asset] = "stale";
-    } else {
-      spotByAsset[asset] = quote.value;
-      spotStatusByAsset[asset] = quote.state;
-    }
-  }));
 
   const offerings: Offering[] = [];
   const now = Math.floor(Date.now() / 1000);
@@ -310,6 +292,7 @@ export async function loadMarketSnapshot(connection: Connection): Promise<Market
     listings: activeListings,
     spotByAsset,
     spotStatusByAsset,
+    spotResolved: false,
     offerings,
     assets,
     expiriesByAsset,
@@ -640,4 +623,52 @@ function readU64Number(data: ArrayLike<number>, offset: number): number {
 
 function errorText(error: unknown): string {
   return error instanceof Error && error.message ? error.message : String(error);
+}
+
+/**
+ * FIX C — deferred spot stage.
+ *
+ * Split out of loadMarketSnapshot so offerings render as soon as they are
+ * decoded. No offering field depends on spot: the offerings loop reads only
+ * vault / vaultMint data. Prices are a decoration on top.
+ *
+ * Never throws. A dead Hermes or an unreachable VolOracle yields empty maps,
+ * which renders prices as placeholders and leaves offerings untouched — the
+ * spot stage must not be able to unrender the board.
+ */
+export async function loadSpotPrices(
+  connection: Connection,
+  markets: AccountRecord[]
+): Promise<{ spotByAsset: Record<string, number>; spotStatusByAsset: Record<string, "live" | "stale"> }> {
+  const spotByAsset: Record<string, number> = {};
+  const spotStatusByAsset: Record<string, "live" | "stale"> = {};
+  try {
+    const program = createOptaProgram(connection);
+    const feeds = new Map<string, { source: number; feedHex: string; feedId: number[] }>();
+    for (const market of markets) {
+      const asset = market.account.assetName as string;
+      if (!feeds.has(asset)) {
+        const feedId = market.account.pythFeedId as number[];
+        feeds.set(asset, {
+          source: market.account.oracleSource as number,
+          feedHex: hexFromBytes(feedId),
+          feedId
+        });
+      }
+    }
+    await Promise.all(Array.from(feeds.entries()).map(async ([asset, feed]) => {
+      const quote = feed.source === 1
+        ? await fetchOnchainSpot(program, feed.feedId).catch(() => null)
+        : await fetchSpot(feed.feedHex).catch(() => null);
+      if (quote == null) {
+        spotStatusByAsset[asset] = "stale";
+      } else {
+        spotByAsset[asset] = quote.value;
+        spotStatusByAsset[asset] = quote.state;
+      }
+    }));
+  } catch {
+    // Deliberately swallowed — see the contract above.
+  }
+  return { spotByAsset, spotStatusByAsset };
 }

@@ -10,7 +10,7 @@ export type ConnectionPhase =
   | "rejected";
 
 export type DataPhase = "loading" | "loaded" | "empty" | "error";
-export type PricePhase = "live" | "stale";
+export type PricePhase = "live" | "stale" | "pending";
 
 export type ToastTone = "success" | "info" | "error";
 

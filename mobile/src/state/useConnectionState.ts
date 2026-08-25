@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { PublicKey } from "@solana/web3.js";
 import type { ConnectionPhase } from "./models";
 import { sanitizeUserVisibleText } from "./displaySafety";
@@ -36,6 +36,16 @@ export function useConnectionState(wallet: WalletConnection) {
   );
   const [error, setError] = useState<string | null>(null);
 
+  // A rehydrated session deserializes `address` as a base58 string, so
+  // normalizeAccount mints a FRESH PublicKey on every render. Consumers use the
+  // result as a hook dependency (App.tsx -> useMarketState), where a new identity
+  // each render re-runs the load effect, and that effect's cleanup bumps
+  // requestId — silently invalidating the in-flight snapshot before it can call
+  // setPhase. The screen then sits on skeletons forever with no error.
+  // Memoize on the wallet's own account object, which the wallet lib holds stable
+  // via a nanostores computed.
+  const account = useMemo(() => normalizeAccount(wallet.account), [wallet.account]);
+
   useEffect(() => {
     if (wallet.account) {
       setPhase("connected");
@@ -71,7 +81,7 @@ export function useConnectionState(wallet: WalletConnection) {
   return {
     phase,
     error,
-    account: normalizeAccount(wallet.account),
+    account,
     connect,
     disconnect
   };

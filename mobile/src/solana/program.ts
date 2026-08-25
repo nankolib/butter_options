@@ -90,6 +90,7 @@ export async function safeFetchAll<T = any>(
   }
 
   const decoded: { publicKey: any; account: T }[] = [];
+  let skipped = 0;
   for (const raw of rawAccounts) {
     if (!raw.account.owner.equals(program.programId)) {
       throw new OptaAccountReadError(`${accountName} scan returned an account owned by another program.`);
@@ -108,8 +109,15 @@ export async function safeFetchAll<T = any>(
       // the current IDL. They are not current records and must never be
       // coerced into live market state, but one legacy row must not disguise
       // every valid row as a transport failure either.
-      console.warn(`Skipping unreadable ${accountName} account ${raw.pubkey.toBase58()}.`);
+      //
+      // Rev C: counted, not logged per account. This fired 880 times per load
+      // on a real device (433 optionsMarket x2 + 14 sharedVault), and every one
+      // was a bridge crossing.
+      skipped += 1;
     }
+  }
+  if (skipped > 0) {
+    console.warn(`Skipped ${skipped} unreadable ${accountName} account(s) with pre-IDL layouts.`);
   }
   return decoded;
 }

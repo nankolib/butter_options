@@ -34,6 +34,7 @@ import {
 } from "./solana/transactions";
 import { EXPECTED_CLUSTER, OPTA_CHAIN, RPC_ENDPOINT } from "./constants";
 import { collateralRequired, estimatePremium } from "./pricing";
+import { pickInventorySide } from "./state/sideRider";
 import type { Offering, WalletPosition, WalletWriterPosition, WriteDraft } from "./types";
 import { ThemeProvider, useOptaFonts, useTheme } from "./hooks";
 import {
@@ -95,11 +96,24 @@ const INITIAL_WRITE: WriteFormState = {
   customExpiry: ""
 };
 
+// MobileWalletProvider defaults `commitmentOrConfig` to a fresh object literal on
+// every render and memoizes its Connection on it, so an omitted prop means a NEW
+// Connection each time the provider subtree re-renders (theme hydration does this
+// at launch, mid-first-scan). That new identity re-runs useMarketState's load
+// effect, whose cleanup invalidates the in-flight snapshot. Pass a module-level
+// constant so the Connection identity is stable for the life of the process.
+const WALLET_COMMITMENT = { commitment: "confirmed" } as const;
+
 export default function App() {
   return (
     <SafeAreaProvider>
       <ThemeProvider>
-        <MobileWalletProvider chain={OPTA_CHAIN} endpoint={RPC_ENDPOINT} identity={identity}>
+        <MobileWalletProvider
+          chain={OPTA_CHAIN}
+          endpoint={RPC_ENDPOINT}
+          identity={identity}
+          commitmentOrConfig={WALLET_COMMITMENT}
+        >
           <OptaSeekerApp />
         </MobileWalletProvider>
       </ThemeProvider>
@@ -122,7 +136,7 @@ function OptaSeekerApp() {
   const owner = connection.account?.address ?? null;
   const ownerRef = useRef<PublicKey | null>(owner);
   ownerRef.current = owner;
-  const market = useMarketState(wallet.connection, owner);
+  const market = useMarketState(wallet.connection, owner, trade.asset || null);
   const epoch = useEpochTenors(wallet.connection);
   const topInset = Math.max(theme.space.m, insets.top);
   const bottomInset = Math.max(theme.layout.gestureInset, insets.bottom);
@@ -213,6 +227,19 @@ function OptaSeekerApp() {
       setTrade((current) => ({ ...current, expiry: tradeExpiries[0], offeringId: null }));
     }
   }, [trade.expiry, tradeExpiries]);
+
+  // Side auto-correct — mirrors the asset/expiry effects above. See
+  // state/sideRider.ts for why `side` needs it and why this terminates.
+  useEffect(() => {
+    const nextSide = pickInventorySide(
+      market.snapshot?.offerings ?? [],
+      trade.asset,
+      trade.expiry,
+      trade.side
+    );
+    if (!nextSide) return;
+    setTrade((current) => ({ ...current, side: nextSide, offeringId: null }));
+  }, [market.snapshot, trade.asset, trade.expiry, trade.side]);
 
   const visibleOfferings = useMemo(() => (
     market.snapshot?.offerings.filter((offering) =>
@@ -545,6 +572,7 @@ function OptaSeekerApp() {
             maxQuantity={maxTradeQuantity}
             onQuantityChange={(quantity) => setTrade((current) => ({ ...current, quantity }))}
             dataPhase={market.phase}
+            dataError={market.error}
             connectionPhase={connection.phase}
             onConnect={() => { void connectWallet(); }}
             onRetry={() => { void market.refresh(); }}
@@ -598,6 +626,7 @@ function OptaSeekerApp() {
             expiry={selectedWriteExpiry}
             ready={writeReady}
             dataPhase={market.phase}
+            dataError={market.error}
             connectionPhase={connection.phase}
             onConnect={() => { void connectWallet(); }}
             onRetryData={() => { void market.refresh(); }}
@@ -612,6 +641,7 @@ function OptaSeekerApp() {
             holdings={holdingRows}
             written={writtenRows}
             dataPhase={market.portfolioPhase}
+            dataError={market.positionError}
             connectionPhase={connection.phase}
             onConnect={() => { void connectWallet(); }}
             onRetry={() => { void market.refresh(); }}

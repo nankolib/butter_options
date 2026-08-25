@@ -7,6 +7,7 @@ import {
   TOKEN_2022_PROGRAM_ID
 } from "@solana/spl-token";
 import { createOptaProgram, fetchDecodedAccount, normalizeAccountBytes, safeFetchAll } from "./program";
+import { indexerLineageOk, loadIndexerRecords } from "./indexerReadPath";
 import { ensureDevnetConnection } from "./cluster";
 import {
   deriveMarket,
@@ -158,13 +159,57 @@ async function fetchSpot(feedIdHex: string): Promise<SpotQuote | null> {
   return { value, state };
 }
 
-export async function loadMarketSnapshot(connection: Connection): Promise<MarketSnapshot> {
+export type SnapshotOptions = {
+  /**
+   * Board to load. Rev C fetches vaults/series for ONE market at a time — the
+   * unfiltered form is 5.93 MB of JSON, worse than the base64 it replaces.
+   * null means "first paint": markets only, so the asset chips can render
+   * before any board is chosen. The board loads on selection.
+   */
+  marketKey?: string | null;
+};
+
+export async function loadMarketSnapshot(
+  connection: Connection,
+  options?: SnapshotOptions
+): Promise<MarketSnapshot> {
   await ensureDevnetConnection(connection);
   const program = createOptaProgram(connection);
-  const [rawMarkets, vaults, vaultMints, listings] = await Promise.all([
-    safeFetchAll(program, "optionsMarket"),
-    safeFetchAll(program, "sharedVault"),
-    safeFetchAll(program, "vaultMint"),
+  const marketKey = options?.marketKey ?? null;
+
+  // One lineage/health probe per load. Any failure here (unhealthy, wrong
+  // deploy, unreachable) demotes the whole load to the chain scan, which is
+  // exactly today's behaviour — the floor, never worse.
+  const indexerOk = await indexerLineageOk().catch(() => false);
+
+  async function viaIndexer(
+    kind: "sharedVault" | "vaultMint" | "optionsMarket" | "epochConfig",
+    mk: string | null,
+    fallback: () => Promise<AccountRecord[]>
+  ): Promise<AccountRecord[]> {
+    if (indexerOk) {
+      const rows = await loadIndexerRecords(kind, mk).catch(() => null);
+      if (rows) return rows;
+    }
+    return fallback();
+  }
+
+  // Board-scoped kinds are skipped entirely on first paint. Without a board
+  // there is nothing to show in the grid anyway, and fetching every vault to
+  // discover that is the whole disease.
+  const boardScoped = (
+    fallback: () => Promise<AccountRecord[]>,
+    kind: "sharedVault" | "vaultMint"
+  ): Promise<AccountRecord[]> =>
+    indexerOk && !marketKey
+      ? Promise.resolve([] as AccountRecord[])
+      : viaIndexer(kind, marketKey, fallback);
+
+  const [rawMarkets, vaults, vaultMints, listings]: AccountRecord[][] = await Promise.all([
+    viaIndexer("optionsMarket", null, () => safeFetchAll(program, "optionsMarket")),
+    boardScoped(() => safeFetchAll(program, "sharedVault"), "sharedVault"),
+    boardScoped(() => safeFetchAll(program, "vaultMint"), "vaultMint"),
+    // No indexer endpoint, and trivially small (1 account / 492 B). Stays chain-direct.
     safeFetchAll(program, "vaultResaleListing")
   ]);
 
@@ -213,31 +258,13 @@ export async function loadMarketSnapshot(connection: Connection): Promise<Market
     activeListings.push(listing);
   }
 
-  const feeds = new Map<string, { source: number; feedHex: string; feedId: number[] }>();
-  for (const market of markets) {
-    const asset = market.account.assetName as string;
-    if (!feeds.has(asset)) {
-      const feedId = market.account.pythFeedId as number[];
-      feeds.set(asset, {
-        source: market.account.oracleSource as number,
-        feedHex: hexFromBytes(feedId),
-        feedId
-      });
-    }
-  }
+  // FIX C: the spot stage USED to run here, inline, before offerings were built.
+  // Measured on-device 2026-08-25: scan responses landed at 19:04:35 but the spot
+  // reads did not start until 19:07:20 — a 165s tail in front of the first paint,
+  // for data no offering row depends on. It is now deferred: offerings commit
+  // immediately after decode, prices arrive afterwards via loadSpotPrices().
   const spotByAsset: Record<string, number> = {};
   const spotStatusByAsset: Record<string, "live" | "stale"> = {};
-  await Promise.all(Array.from(feeds.entries()).map(async ([asset, feed]) => {
-    const quote = feed.source === 1
-      ? await fetchOnchainSpot(program, feed.feedId).catch(() => null)
-      : await fetchSpot(feed.feedHex).catch(() => null);
-    if (quote == null) {
-      spotStatusByAsset[asset] = "stale";
-    } else {
-      spotByAsset[asset] = quote.value;
-      spotStatusByAsset[asset] = quote.state;
-    }
-  }));
 
   const offerings: Offering[] = [];
   const now = Math.floor(Date.now() / 1000);
@@ -310,6 +337,7 @@ export async function loadMarketSnapshot(connection: Connection): Promise<Market
     listings: activeListings,
     spotByAsset,
     spotStatusByAsset,
+    spotResolved: false,
     offerings,
     assets,
     expiriesByAsset,
@@ -640,4 +668,52 @@ function readU64Number(data: ArrayLike<number>, offset: number): number {
 
 function errorText(error: unknown): string {
   return error instanceof Error && error.message ? error.message : String(error);
+}
+
+/**
+ * FIX C — deferred spot stage.
+ *
+ * Split out of loadMarketSnapshot so offerings render as soon as they are
+ * decoded. No offering field depends on spot: the offerings loop reads only
+ * vault / vaultMint data. Prices are a decoration on top.
+ *
+ * Never throws. A dead Hermes or an unreachable VolOracle yields empty maps,
+ * which renders prices as placeholders and leaves offerings untouched — the
+ * spot stage must not be able to unrender the board.
+ */
+export async function loadSpotPrices(
+  connection: Connection,
+  markets: AccountRecord[]
+): Promise<{ spotByAsset: Record<string, number>; spotStatusByAsset: Record<string, "live" | "stale"> }> {
+  const spotByAsset: Record<string, number> = {};
+  const spotStatusByAsset: Record<string, "live" | "stale"> = {};
+  try {
+    const program = createOptaProgram(connection);
+    const feeds = new Map<string, { source: number; feedHex: string; feedId: number[] }>();
+    for (const market of markets) {
+      const asset = market.account.assetName as string;
+      if (!feeds.has(asset)) {
+        const feedId = market.account.pythFeedId as number[];
+        feeds.set(asset, {
+          source: market.account.oracleSource as number,
+          feedHex: hexFromBytes(feedId),
+          feedId
+        });
+      }
+    }
+    await Promise.all(Array.from(feeds.entries()).map(async ([asset, feed]) => {
+      const quote = feed.source === 1
+        ? await fetchOnchainSpot(program, feed.feedId).catch(() => null)
+        : await fetchSpot(feed.feedHex).catch(() => null);
+      if (quote == null) {
+        spotStatusByAsset[asset] = "stale";
+      } else {
+        spotByAsset[asset] = quote.value;
+        spotStatusByAsset[asset] = quote.state;
+      }
+    }));
+  } catch {
+    // Deliberately swallowed — see the contract above.
+  }
+  return { spotByAsset, spotStatusByAsset };
 }

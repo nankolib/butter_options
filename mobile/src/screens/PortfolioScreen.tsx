@@ -5,6 +5,7 @@ import { useTheme } from "../hooks/useTheme";
 import type { AppTheme } from "../theme";
 import type { ConnectionPhase, DataPhase } from "../state/models";
 import { LoadingRows, ScreenStatePanel, SectionLabel } from "./shared";
+import { errorPanelMessage } from "../state/errorMessage";
 
 type PortfolioRowBase = {
   id: string;
@@ -24,6 +25,7 @@ export type PortfolioScreenProps = {
   holdings: readonly PortfolioRow[];
   written?: readonly PortfolioRow[];
   dataPhase: DataPhase;
+  dataError?: string | null;
   connectionPhase: ConnectionPhase;
   onConnect: () => void;
   onRetry: () => void;
@@ -62,6 +64,7 @@ export function PortfolioScreen({
   holdings,
   written,
   dataPhase,
+  dataError,
   connectionPhase,
   onConnect,
   onRetry,
@@ -97,7 +100,7 @@ export function PortfolioScreen({
         <ScreenStatePanel
           tone="error"
           title="Couldn't load positions."
-          message="No wallet action was taken."
+          message={errorPanelMessage(dataError, "No wallet action was taken.")}
           actionLabel="Retry"
           onAction={onRetry}
           busy={refreshing}
@@ -127,7 +130,7 @@ export function PortfolioScreen({
           <ScreenStatePanel
             tone="error"
             title="Refresh failed."
-            message="Showing the last position snapshot."
+            message={errorPanelMessage(dataError, "Showing the last position snapshot.")}
             actionLabel="Retry"
             onAction={onRetry}
             busy={refreshing}

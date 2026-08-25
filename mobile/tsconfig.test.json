@@ -1,0 +1,37 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "noEmitOnError": false,
+    "outDir": "test/out",
+    "rootDir": "src",
+    "lib": [
+      "ES2020"
+    ],
+    "types": []
+  },
+  "include": [
+    "src/state/useConnectionState.ts",
+    "src/state/sideRider.ts",
+    "src/state/errorMessage.ts",
+    "src/state/displaySafety.ts",
+    "src/state/models.ts",
+    "src/state/useMarketState.ts",
+    "src/solana/marketData.ts",
+    "src/types.ts",
+    "src/format.ts",
+    "src/runtime/assetDisplay.ts",
+    "src/solana/program.ts",
+    "src/solana/cluster.ts",
+    "src/solana/pdas.ts",
+    "src/constants.ts",
+    "src/solana/indexerReadPath.ts",
+    "src/solana/transactions.ts"
+  ]
+}

@@ -3,6 +3,7 @@ import { AppState } from "react-native";
 import type { Connection, PublicKey } from "@solana/web3.js";
 import {
   loadMarketSnapshot,
+  loadSpotPrices,
   loadWalletPortfolio,
   refetchPositionMetadata
 } from "../solana/marketData";
@@ -11,7 +12,10 @@ import type { DataPhase, PricePhase } from "./models";
 import { sanitizeUserVisibleText } from "./displaySafety";
 
 const PRICE_STALE_AFTER_MS = 90_000;
-const AUTO_REFRESH_MS = 60_000;
+// Rev C: 60s was senseless against a 120-180s load and is still wrong at
+// board-scoped sizes. 300s with a ~68 KB board payload is ~125x less sustained
+// traffic than 60s against a 1.65 MB full scan.
+const AUTO_REFRESH_MS = 300_000;
 const CLOCK_TICK_MS = 15_000;
 
 function errorText(error: unknown): string {
@@ -19,7 +23,17 @@ function errorText(error: unknown): string {
   return sanitizeUserVisibleText(String(error || "Unknown data error"));
 }
 
-export function useMarketState(connection: Connection, owner: PublicKey | null) {
+/**
+ * `selectedAsset` drives Rev C's board-scoped load. It is the asset NAME, not a
+ * pubkey: the market key is resolved from the snapshot we already hold, which
+ * breaks the circular dependency between "which board is selected" (App state,
+ * derived from the chips) and "which markets exist" (this hook's snapshot).
+ */
+export function useMarketState(
+  connection: Connection,
+  owner: PublicKey | null,
+  selectedAsset: string | null = null
+) {
   const [snapshot, setSnapshot] = useState<MarketSnapshot | null>(null);
   const snapshotRef = useRef<MarketSnapshot | null>(null);
   const [positions, setPositions] = useState<WalletPosition[]>([]);
@@ -32,22 +46,41 @@ export function useMarketState(connection: Connection, owner: PublicKey | null) 
   const [priceChanges, setPriceChanges] = useState<Record<string, number>>({});
   const [clock, setClock] = useState(Date.now());
   const requestId = useRef(0);
-  const backgroundRefreshInFlight = useRef(false);
+  // FIX B: one flag for ANY load in flight. The old flag was set only by
+  // background calls, so a 60s auto-refresh could pre-empt the mount load —
+  // and since the mount load takes 120-180s on a real device, every attempt was
+  // superseded before it could commit. Measured 2026-08-25: scan burst 19:04:32,
+  // spot stage 19:07:20, refresh every 60s. Nothing ever rendered.
+  const loadInFlight = useRef(false);
 
   const fetchAll = useCallback(async (background = false) => {
-    if (background && backgroundRefreshInFlight.current) return;
+    // FIX B: a refresh never pre-empts a load that is already running.
+    if (background && loadInFlight.current) return;
     if (background) {
-      backgroundRefreshInFlight.current = true;
       setRefreshing(true);
     } else if (!snapshotRef.current) {
       setPhase("loading");
     }
+    loadInFlight.current = true;
     const currentRequest = ++requestId.current;
     setError(null);
 
     try {
-      const nextSnapshot = await loadMarketSnapshot(connection);
-      if (currentRequest !== requestId.current) return;
+      // Resolve the board from what we already have. Null on first paint, which
+      // loads markets only so the chips can render.
+      let marketKey: string | null = null;
+      if (selectedAsset) {
+        for (const record of snapshotRef.current?.markets ?? []) {
+          if (record.account.assetName === selectedAsset) {
+            marketKey = record.publicKey.toBase58();
+            break;
+          }
+        }
+      }
+      const nextSnapshot = await loadMarketSnapshot(connection, { marketKey });
+      // FIX A: only discard a superseded result when something is already on
+      // screen. With nothing rendered, any data beats skeletons forever.
+      if (currentRequest !== requestId.current && snapshotRef.current) return;
 
       const previous = snapshotRef.current;
       const nextChanges: Record<string, number> = {};
@@ -65,6 +98,18 @@ export function useMarketState(connection: Connection, owner: PublicKey | null) 
       setClock(Date.now());
       const hasData = nextSnapshot.markets.length > 0 || nextSnapshot.offerings.length > 0;
       setPhase(hasData ? "loaded" : "empty");
+
+      // FIX C: offerings are on screen now. Prices arrive after, and a spot
+      // failure leaves them as placeholders rather than unrendering the board.
+      void loadSpotPrices(connection, nextSnapshot.markets).then(
+        ({ spotByAsset, spotStatusByAsset }) => {
+          if (snapshotRef.current !== nextSnapshot) return;
+          const merged = { ...nextSnapshot, spotByAsset, spotStatusByAsset, spotResolved: true };
+          snapshotRef.current = merged;
+          setSnapshot(merged);
+          setClock(Date.now());
+        }
+      );
 
       if (!owner) {
         setPositions([]);
@@ -88,7 +133,8 @@ export function useMarketState(connection: Connection, owner: PublicKey | null) 
         setPortfolioPhase("error");
       }
     } catch (nextError) {
-      if (currentRequest !== requestId.current) return;
+      // FIX A: same rule for failures — a superseded error still beats skeletons.
+      if (currentRequest !== requestId.current && snapshotRef.current) return;
       setError(errorText(nextError));
       setPhase("error");
       if (owner && !snapshotRef.current) {
@@ -96,10 +142,10 @@ export function useMarketState(connection: Connection, owner: PublicKey | null) 
         setPortfolioPhase("error");
       }
     } finally {
-      if (background) backgroundRefreshInFlight.current = false;
+      loadInFlight.current = false;
       if (currentRequest === requestId.current) setRefreshing(false);
     }
-  }, [connection, owner]);
+  }, [connection, owner, selectedAsset]);
 
   useEffect(() => {
     if (!owner) {
@@ -113,13 +159,20 @@ export function useMarketState(connection: Connection, owner: PublicKey | null) 
     return () => {
       requestId.current += 1;
     };
-  }, [connection, fetchAll, owner]);
+  }, [connection, fetchAll, owner, selectedAsset]);
 
   useEffect(() => {
     const timer = setInterval(() => setClock(Date.now()), CLOCK_TICK_MS);
     const refreshTimer = setInterval(() => { void fetchAll(true); }, AUTO_REFRESH_MS);
+    // Rev C: pause the cadence while backgrounded. Refreshing a screen nobody is
+    // looking at was pure cost.
     const subscription = AppState.addEventListener("change", (nextState) => {
-      if (nextState === "active") void fetchAll(true);
+      if (nextState === "active") {
+        void fetchAll(true);
+      } else {
+        clearInterval(timer);
+        clearInterval(refreshTimer);
+      }
     });
     return () => {
       clearInterval(timer);
@@ -131,7 +184,11 @@ export function useMarketState(connection: Connection, owner: PublicKey | null) 
   const refresh = useCallback(() => fetchAll(true), [fetchAll]);
 
   const pricePhaseFor = useCallback((asset: string): PricePhase => {
-    if (!snapshot || !asset || snapshot.spotByAsset[asset] == null) return "stale";
+    if (!snapshot || !asset) return "stale";
+    // FIX C: distinguish "not fetched yet" from "fetched and stale" so the UI
+    // can show a placeholder instead of falsely claiming the price is stale.
+    if (!snapshot.spotResolved) return "pending";
+    if (snapshot.spotByAsset[asset] == null) return "stale";
     if (snapshot.spotStatusByAsset[asset] === "stale") return "stale";
     return clock - snapshot.fetchedAt > PRICE_STALE_AFTER_MS ? "stale" : "live";
   }, [clock, snapshot]);

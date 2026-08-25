@@ -8,6 +8,7 @@ import { useTheme } from "../hooks/useTheme";
 import type { AppTheme } from "../theme";
 import type { ConnectionPhase, DataPhase } from "../state/models";
 import { LoadingRows, ScreenFooter, ScreenStatePanel } from "./shared";
+import { errorPanelMessage } from "../state/errorMessage";
 
 export type TradeAssetItem = { value: string; label: string };
 export type TradeExpiryItem = { value: string; label: string };
@@ -28,6 +29,7 @@ export type TradeScreenProps = {
   maxQuantity: number;
   onQuantityChange: (quantity: number) => void;
   dataPhase: DataPhase;
+  dataError?: string | null;
   connectionPhase: ConnectionPhase;
   onConnect: () => void;
   onRetry: () => void;
@@ -53,6 +55,7 @@ export function TradeScreen({
   maxQuantity,
   onQuantityChange,
   dataPhase,
+  dataError,
   connectionPhase,
   onConnect,
   onRetry,
@@ -118,7 +121,7 @@ export function TradeScreen({
           <ScreenStatePanel
             tone="error"
             title="Couldn't load offers."
-            message="Your positions are unaffected."
+            message={errorPanelMessage(dataError, "Your positions are unaffected.")}
             actionLabel="Retry"
             onAction={onRetry}
             busy={refreshing}

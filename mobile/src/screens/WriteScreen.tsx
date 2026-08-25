@@ -8,6 +8,7 @@ import { useTheme } from "../hooks/useTheme";
 import type { AppTheme } from "../theme";
 import type { ConnectionPhase, DataPhase, EpochTenor } from "../state/models";
 import { LoadingRows, ScreenFooter, ScreenStatePanel } from "./shared";
+import { errorPanelMessage } from "../state/errorMessage";
 
 export type WriteAssetItem = { value: string; label: string };
 export type WriteTenorItem = { value: EpochTenor; label: string; expiry: number };
@@ -42,6 +43,7 @@ export type WriteScreenProps = {
   expiry: number | null;
   ready: boolean;
   dataPhase: DataPhase;
+  dataError?: string | null;
   connectionPhase: ConnectionPhase;
   onConnect: () => void;
   onRetryData: () => void;
@@ -100,6 +102,7 @@ export function WriteScreen({
   expiry,
   ready,
   dataPhase,
+  dataError,
   connectionPhase,
   onConnect,
   onRetryData,
@@ -143,7 +146,7 @@ export function WriteScreen({
         <ScreenStatePanel
           tone="error"
           title="Couldn't load markets."
-          message="Your positions are unaffected."
+          message={errorPanelMessage(dataError, "Your positions are unaffected.")}
           actionLabel="Retry"
           onAction={onRetryData}
           busy={refreshing}

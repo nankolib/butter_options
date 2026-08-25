@@ -284,6 +284,70 @@ export async function buildAtomicWriteTx(params: {
   return pending;
 }
 
+
+/**
+ * Rev C — pre-sign chain-direct re-read. MANDATORY.
+ *
+ * Display rows may come from the indexer (cache-control: max-age=10, and its own
+ * refresh cadence on top). A signature must never be built from them. This
+ * re-reads the two accounts the transaction actually depends on, straight from
+ * chain, and BLOCKS with a surfaced error on any material divergence — it never
+ * silently proceeds and never silently substitutes.
+ *
+ * The thrown message reaches the user through the §2b-bis error panel.
+ */
+/** Local mirror of marketData's private helper — BN | number | string -> number. */
+function bnToNumber(value: any): number {
+  if (value == null) return 0;
+  if (typeof value === "number") return value;
+  if (value?.toNumber) { try { return value.toNumber(); } catch { return Number(value.toString()); } }
+  const n = Number(String(value));
+  return Number.isFinite(n) ? n : 0;
+}
+
+export class StaleOfferingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "StaleOfferingError";
+  }
+}
+
+export async function reReadOfferingForSigning(
+  program: Program,
+  offering: Offering,
+  quantity: number
+): Promise<{ vault: any; vaultMint: any }> {
+  const [vault, vaultMint] = await Promise.all([
+    fetchDecodedAccount<any>(program, "sharedVault", offering.vault.publicKey),
+    fetchDecodedAccount<any>(program, "vaultMint", offering.vaultMint.publicKey)
+  ]);
+  if (!vault) throw new StaleOfferingError("This vault no longer exists on-chain. Refresh and try again.");
+  if (!vaultMint) throw new StaleOfferingError("This offer no longer exists on-chain. Refresh and try again.");
+
+  if (vault.account.isSettled) throw new StaleOfferingError("This vault has settled. Refresh to see current offers.");
+  if (vault.account.voided) throw new StaleOfferingError("This vault has been voided. Refresh to see current offers.");
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (bnToNumber(vault.account.expiry) <= nowSec) {
+    throw new StaleOfferingError("This option has expired. Refresh to see current offers.");
+  }
+
+  const freshPremium = bnToNumber(vaultMint.account.premiumPerContract);
+  const shownPremium = bnToNumber(offering.vaultMint.account.premiumPerContract);
+  if (freshPremium !== shownPremium) {
+    throw new StaleOfferingError("The price changed while you were reviewing. Refresh and try again.");
+  }
+
+  const unsold = bnToNumber(vaultMint.account.quantityMinted) - bnToNumber(vaultMint.account.quantitySold);
+  if (unsold < quantity) {
+    throw new StaleOfferingError(`Only ${Math.max(0, unsold)} contract(s) remain. Refresh and try again.`);
+  }
+
+  if (!(vaultMint.account.optionMint as PublicKey).equals(offering.vaultMint.account.optionMint as PublicKey)) {
+    throw new StaleOfferingError("This offer changed on-chain. Refresh and try again.");
+  }
+  return { vault, vaultMint };
+}
+
 export async function buildPrimaryPurchaseTx(params: {
   program: Program;
   connection: Connection;
@@ -297,8 +361,11 @@ export async function buildPrimaryPurchaseTx(params: {
   const treasury = treasuryPda(program.programId);
   const protocolState = protocol.account;
 
-  const vault = offering.vault;
-  const vaultMint = offering.vaultMint;
+  // Rev C: chain-direct re-read BEFORE anything is built or signed. Throws on
+  // divergence rather than proceeding with index-derived inputs.
+  const fresh = await reReadOfferingForSigning(program, offering, quantity);
+  const vault = fresh.vault;
+  const vaultMint = fresh.vaultMint;
   const optionMint = vaultMint.account.optionMint as PublicKey;
   const writer = vaultMint.account.writer as PublicKey;
   const createdAt = vaultMint.account.createdAt as BN;

@@ -7,6 +7,7 @@ import {
   TOKEN_2022_PROGRAM_ID
 } from "@solana/spl-token";
 import { createOptaProgram, fetchDecodedAccount, normalizeAccountBytes, safeFetchAll } from "./program";
+import { indexerLineageOk, loadIndexerRecords } from "./indexerReadPath";
 import { ensureDevnetConnection } from "./cluster";
 import {
   deriveMarket,
@@ -158,13 +159,57 @@ async function fetchSpot(feedIdHex: string): Promise<SpotQuote | null> {
   return { value, state };
 }
 
-export async function loadMarketSnapshot(connection: Connection): Promise<MarketSnapshot> {
+export type SnapshotOptions = {
+  /**
+   * Board to load. Rev C fetches vaults/series for ONE market at a time — the
+   * unfiltered form is 5.93 MB of JSON, worse than the base64 it replaces.
+   * null means "first paint": markets only, so the asset chips can render
+   * before any board is chosen. The board loads on selection.
+   */
+  marketKey?: string | null;
+};
+
+export async function loadMarketSnapshot(
+  connection: Connection,
+  options?: SnapshotOptions
+): Promise<MarketSnapshot> {
   await ensureDevnetConnection(connection);
   const program = createOptaProgram(connection);
-  const [rawMarkets, vaults, vaultMints, listings] = await Promise.all([
-    safeFetchAll(program, "optionsMarket"),
-    safeFetchAll(program, "sharedVault"),
-    safeFetchAll(program, "vaultMint"),
+  const marketKey = options?.marketKey ?? null;
+
+  // One lineage/health probe per load. Any failure here (unhealthy, wrong
+  // deploy, unreachable) demotes the whole load to the chain scan, which is
+  // exactly today's behaviour — the floor, never worse.
+  const indexerOk = await indexerLineageOk().catch(() => false);
+
+  async function viaIndexer(
+    kind: "sharedVault" | "vaultMint" | "optionsMarket" | "epochConfig",
+    mk: string | null,
+    fallback: () => Promise<AccountRecord[]>
+  ): Promise<AccountRecord[]> {
+    if (indexerOk) {
+      const rows = await loadIndexerRecords(kind, mk).catch(() => null);
+      if (rows) return rows;
+    }
+    return fallback();
+  }
+
+  // Board-scoped kinds are skipped entirely on first paint. Without a board
+  // there is nothing to show in the grid anyway, and fetching every vault to
+  // discover that is the whole disease.
+  const boardScoped = (
+    fallback: () => Promise<AccountRecord[]>,
+    kind: "sharedVault" | "vaultMint"
+  ): Promise<AccountRecord[]> =>
+    indexerOk && !marketKey
+      ? Promise.resolve([] as AccountRecord[])
+      : viaIndexer(kind, marketKey, fallback);
+
+  const [rawMarkets, vaults, vaultMints, listings]: AccountRecord[][] = await Promise.all([
+    viaIndexer("optionsMarket", null, () => safeFetchAll(program, "optionsMarket")),
+    boardScoped(() => safeFetchAll(program, "sharedVault"), "sharedVault"),
+    boardScoped(() => safeFetchAll(program, "vaultMint"), "vaultMint"),
+    // No indexer endpoint, and trivially small (1 account / 492 B). Stays chain-direct.
     safeFetchAll(program, "vaultResaleListing")
   ]);
 

@@ -136,7 +136,7 @@ function OptaSeekerApp() {
   const owner = connection.account?.address ?? null;
   const ownerRef = useRef<PublicKey | null>(owner);
   ownerRef.current = owner;
-  const market = useMarketState(wallet.connection, owner);
+  const market = useMarketState(wallet.connection, owner, trade.asset || null);
   const epoch = useEpochTenors(wallet.connection);
   const topInset = Math.max(theme.space.m, insets.top);
   const bottomInset = Math.max(theme.layout.gestureInset, insets.bottom);

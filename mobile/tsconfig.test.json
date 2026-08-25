@@ -30,6 +30,8 @@
     "src/solana/program.ts",
     "src/solana/cluster.ts",
     "src/solana/pdas.ts",
-    "src/constants.ts"
+    "src/constants.ts",
+    "src/solana/indexerReadPath.ts",
+    "src/solana/transactions.ts"
   ]
 }

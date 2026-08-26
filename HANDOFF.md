@@ -1,3 +1,136 @@
+# SEEKER vC3 ARC — CLOSED 2026-08-26 (skeletons-forever → ~6s time-to-offerings, IN REVIEW)
+
+> **SUPERSEDES the 2026-07-13 Seeker block's "status IN REVIEW" marker for v1.0.0.**
+> That listing has been **LIVE**; the marker was stale and never closed out. Portal shows
+> v1.0.0 **uploaded 13 Jul 2026, status Live** — it does **not** surface an approval date, so
+> none is recorded. Do not re-derive one.
+>
+> **CURRENT STATE:** vC3 `a676ad6a3f93b31c1ec534f773f55b0a11e46ba64b7b35c39f6f4970d39c8ab4`,
+> versionCode **3** / 1.0.1, **IN REVIEW** — release `ecfa4531-356d-49da-bbec-047520007129`,
+> submission `#330456271554`, submitted 26 Aug 2026, 82.64 MB, SDK 24→36.
+> Release NFT `GBjqo7oN…vEYkXiZk`, app collection `ARWvanaU…Hirka4w2`, mint tx
+> `ucXy1Xr6…j16KSK6s`, publisher `AjMu…Vb1y`, cert `087ff9cb` (same keystore as v1.0.0).
+> Merged `d8e9346` on master + main.
+>
+> ## THE ARC
+>
+> Field APK rendered nothing: skeletons forever, no error, no chips. Five-layer recon
+> (wire / decoder / pipeline / render / device-state) eliminated the first three with evidence —
+> the proxy delivered full 200s, the baked decoder parsed cleanly, and the actual `a556f0c`
+> pipeline reproduced 3 offerings on a desktop harness.
+>
+> | Rev | sha | Change |
+> |---|---|---|
+> | A | `3460d02` | `owner` memoized at source; module-level `commitmentOrConfig`; side rider; real error text in all four panels |
+> | B | `2bd9a52` | first result always commits; refresh yields to in-flight load; spot stage deferred |
+> | C | `cfee5bc` | indexer read path, board-scoped, chain fallback, pre-sign chain-direct re-read |
+>
+> **Device pass 2026-08-26:** time-to-offerings **~6s** (vs 120–180s), no hangs under
+> scroll/toggle abuse, offers survive force-kill relaunches, portfolio renders. Three buys
+> verified on-chain from `2A3TTZbGQYoHgJuZzYNtWscokDrKNNb6JFAFmKhQfBVF` — all three canary
+> series `quantity_sold` 0→1, buyer holds 1 token per Token-2022 ATA, `netPremiumCollected`
+> = gross − 50 bps. Tests **21/21**, red-first per revision.
+>
+> ## THE RULE THIS ARC EARNED
+>
+> **A fix that removes a real defect is not thereby the fix for the reported symptom.**
+>
+> Rev A removed genuine identity churn — `owner` re-minted every render on rehydrated
+> sessions, `Connection` re-created whenever the provider re-rendered (the wallet lib defaults
+> `commitmentOrConfig` to a fresh object literal). All real, all confirmed gone by the capture:
+> mount produced 2 concurrent loads, every later cycle produced 1. **The screen still never
+> rendered.**
+>
+> The actual cause was arithmetic: **load duration (120–180s) exceeded the refresh interval
+> (60s)**, so every load was superseded and silently discarded before `setPhase` ran. Same
+> mechanism Rev A targeted — `if (currentRequest !== requestId.current) return;` — different
+> trigger. Finding a true defect on the path to the symptom is the most convincing way to stop
+> looking.
+>
+> **Corollary: absence of a signature is not absence of the phenomenon.** 68s of unfiltered
+> logcat showed **zero** `Skipped NNN frames`, zero GC storms, zero ANR, zero OOM — which killed
+> the thread-saturation hypothesis. But the pipeline genuinely took ~2.5 min; it just yielded at
+> every `await`, so it was slow without ever being *blocked*.
+>
+> ## BUILD DISCIPLINE — THREE VOID APKs IN ONE WEEK
+>
+> | sha | Defect |
+> |---|---|
+> | `7a8291cd` | `EXPO_PUBLIC_RPC_URL` unset → baked `api.devnet.solana.com`, bypassing the proxy. **Passed the existing 4/4 gate.** |
+> | `6ee91e9f` | superseded by Rev B |
+> | `0bf7eeb2` | superseded by Rev C |
+>
+> Two false greens worth remembering: `tail` swallowed `gradlew.bat is not recognized` and
+> returned exit 0; and `createBundleReleaseJsAndAssets` reported **UP-TO-DATE** because Gradle
+> does not track `EXPO_PUBLIC_*` as task inputs, shipping a **stale bundle** under
+> `BUILD SUCCESSFUL`. Only hashing the artifact caught either. **Delete the bundle task's
+> outputs before a release build**, and treat `EXPO_PUBLIC_RPC_URL` / `EXPO_PUBLIC_INDEXER_BASE`
+> as required build vars (`mobile/.env`, gitignored, so it does not travel). Ticket `86eyr0uf4`.
+>
+> Separately: `npm run build:apk` runs **`assembleReview`** — `initWith release` but
+> `signingConfig signingConfigs.debug`. The Seeker ran that debug-signed artifact from 13 Jul
+> until this week (`installerPackageName=null`, cert `beb54db1…` = `CN=Android Debug`), so every
+> field observation before vC3 came from a review build, and `adb install -r` of a real release
+> APK failed `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. Ticket `86eyr0uf6`.
+>
+> ## MOBILE NOW DEPENDS ON THE INDEXER
+>
+> Four types move to `/api/chain/*`, **board-scoped**: `sharedVault`→`vaults?market=`,
+> `vaultMint`→`series?market=`, `optionsMarket`→`markets`, `epochConfig`→`epochs`.
+> Chain-direct stays for `vaultResaleListing`, `protocolState`, `volOracle` (no endpoints).
+>
+> **The `market=` filter is the requirement, not an optimisation.** Unfiltered `vaults`+`series`
+> = **5.93 MB raw** — *worse* than the 5.26 MB of base64 it replaces. Board-scoped is
+> **~68 KB gz / 326 rows**. The unfiltered form is refused in code and a test asserts **zero HTTP
+> calls are issued**.
+>
+> Safety: one lineage+health probe per load; stale envelope, `ageSec > 110`, `healthy:false`,
+> lineage mismatch, non-200, timeout or malformed body all fall back to the chain scan — never
+> worse than before. **Signatures never come from index rows**: `reReadOfferingForSigning`
+> re-reads both accounts chain-direct and blocks with a surfaced error on settled / voided /
+> expired / price-moved / sold-out / mint divergence.
+>
+> The endpoint is **baked into the APK** and cannot change without a release users choose to
+> install. The indexer is one process on one host with no redundancy — ticket `86eyr0uf8`.
+> Note the FE-PERF arc's rule applies double now: **a stale indexer silently demotes every field
+> APK to chain scans**, which is the 120–180s path this arc existed to escape.
+>
+> ## FLOOR — THURSDAY, NO ACTION NEEDED
+>
+> The 3 canary puts (WIF $0.217, FARTCOIN $0.194, JUP $0.227, 5 minted / **1 sold** each) expire
+> **2026-08-28T08:00:00Z**. All three are **ITM**; the founder's 3 positions are not worthless.
+>
+> `auto_finalize_holders` is permissionless: it burns holder tokens and **transfers USDC to ITM
+> holders automatically**, then `auto_finalize_writers` releases writer collateral. The crank
+> runs both continuously (1,562 `holder finalize pass` + 1,562 `writer finalize pass` logged in
+> one evening). **Positions vanishing from Portfolio post-expiry is expected and correct** —
+> tokens are burned on finalize, and settled vaults are filtered out of `activeVaults` anyway.
+> These are American, so early exercise is available but unnecessary.
+>
+> **MINT STAYS HELD.** The both-sides floor refresh proposal is **armed and triggers on store
+> approval**, not before.
+>
+> ## OPEN
+>
+> - `86eyr0ufa` — **cold boot** (icon-tap → first UI). Founder-reported, distinct from data load.
+>   **Measure with `am start -W` before proposing anything.** One non-cold sample showed ~1.9s
+>   activity-start → JS entry. R8 is off (`enableMinifyInReleaseBuilds` defaults false).
+> - `86eyr0ha7` — **Arc D**: close settled/voided SharedVault+VaultMint. 75.1% of accounts,
+>   5.258 MB → 1.307 MB measured. Needs new Rust + deploy. Shrinks the indexer's own payloads
+>   and every fallback scan.
+> - `86eyr0uf9` — **default asset lands on an empty board.** Auto-select takes `marketAssets[0]`
+>   (alphabetical, inventory-blind); predates vC3 but Rev C makes it visible because the empty
+>   board is now the only board loaded. `liveVaultCount` is in the markets payload but is a weak
+>   hint — >0 for 22/35 assets including BTC, while only WIF/FARTCOIN/JUP had inventory.
+> - `86eyr0uf4` build gate · `86eyr0uf6` review-signing trap · `86eyr0uf8` indexer redundancy.
+> - **untiedbear replied** — follow up.
+>
+> Checkpoints: `86eyr0uf7` (close-out), `86eyr0uj5` (arc). Proposal docs kept local, uncommitted:
+> `SEEKER_VC3_PROPOSAL.md`, `SEEKER_VC3_REVC_PROPOSAL.md`.
+> `KEY_ROTATION_RUNSHEET.md` lives **outside** the repo (`D:\claude everything\`) — it maps
+> credential consumers and must never be committed.
+
+
 # FE-PERF ARC — CLOSED 2026-08-19 (cold 21.2s → 7.2s · in-app nav → 1.38s)
 
 > Final walkthrough: PASS. Checkpoint `86eyp5a1j`.

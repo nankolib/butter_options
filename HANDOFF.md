@@ -1,3 +1,120 @@
+# WRITER INCIDENT + THE LEASH — CLOSED 2026-08-27 (reconciled, leashed, live)
+
+> **Writer is LIVE under the leash.** Steady-state SOL burn **0.075 SOL/h** measured after the
+> board rebuilt — under the 0.3 threshold, ~1.8 SOL/day, **below** the 3.13 SOL/day that started
+> this. Balance 10.85 SOL ≈ 144 h runway, so the rule-2 top-up was **not needed**. Alarm pages at
+> 1.0 SOL and deliverability is now founder-confirmed end to end.
+>
+> ## WHAT HAPPENED
+>
+> The writer committed **$937,611** of USDC and burned **3.13 SOL** in ~24h, ran out of SOL, and
+> could no longer pay for its own **cancels**. 291 `writer-strand` errors (`quote-fail:unknown`
+> → *"Transaction results in an account (0) underfunded"*), resting count **109 → 184** because
+> posts had landed while cancels could not. Every service still reported healthy.
+>
+> **Nothing was stolen.** A 400-transaction counterparty audit showed every USDC recipient was a
+> token account owned by `5uBcRhU6…` — the `protocol_state` PDA — and every tx touched only
+> ComputeBudget + the Opta program. Zero transfers to non-program-owned accounts.
+>
+> **The "$934,661 unexplained" was never missing.** Cancelling the 184 orders returned
+> **+$1,835,586**, exactly the `cpc × qty` figure. It was ask collateral sitting in vault USDC
+> accounts the whole time. The reconciliation gap existed because I searched `WriterAskPot` /
+> `WriterAskPosition`, and ask collateral does not live there.
+>
+> ## THE RULE THIS ARC EARNED
+>
+> **A cap that counts cells is not a spend limit.**
+>
+> `MAX_CELLS=470` was never binding — the incident peaked at 184 orders. Collateral is **1× strike
+> per contract**, so BTC costs ~**$79,360 per contract** against WIF at ~$0.21. Ten BTC cells and
+> ten WIF cells are identical to a cell counter and differ by four orders of magnitude in dollars.
+> BTC alone was **$1.587M of the $1.835M** committed; BTC+ETH+XAU were **96%**.
+>
+> **Corollary — the failure mode was not "ran out of money", it was "ran out of money to get
+> OUT".** Cancels cost fees too. Any bot that can post must always be able to afford to unwind.
+>
+> ## THE LEASH (`7c36440`, live)
+>
+> `writer/src/leash.ts`, pure and unit-tested:
+> - **`measureCommitted`** — sums committed collateral from **live on-chain orders at every tick**.
+>   Never a counter: a counter drifts the moment a tx lands out-of-band or a cancel fails, and a
+>   drifted counter reads as authority. Unresolvable orders still count toward the global cap.
+> - **`collateralGate`** — 150k global / 30k per-asset, evaluated **including the would-be post**.
+>   A ceiling checked only against prior state is always one post too late.
+> - **`solGate`** — `minSolPost` 0.5, `reserveSol` 0.25. Gates **new posts only**; cancels are
+>   never gated, so unwind stays possible at any balance.
+> - **`BUILD_EXCLUDED_ASSETS` = BTC/ETH/XAU** — frozen in code. Env may ADD exclusions, never
+>   remove these. Re-enabling is ticket `86eyrpr06`.
+>
+> Defaults are the shipped policy, not placeholders — a missing env var must never mean
+> "unlimited". Tests 11/11 (each encodes a real incident number); writer suite 107/107.
+>
+> **Two live ticks proved it binds:** tick 1 measured **$0** (correct, post-unwind), tick 2
+> measured **$99,190/150,000** with per-asset XRP 28,005 / GOOGL 16,080 / TSLA 16,300 / META
+> 15,650 / CRCL 12,155 / JTO 10,000 / WIF 1,000 — all under 30k — and **1,425
+> `leash-collateral-skip`** refusals. BTC/ETH/XAU post-ok: **0**.
+>
+> ## MEASUREMENT TRAPS THIS ARC (all mine, all caught late)
+>
+> 1. **Peak-sampling.** I measured 0.72 SOL/h during NYSE hours with the full equity ladder live
+>    and projected **17 SOL/day**. Equities gate on `marketOpen` and pull at the close; the
+>    pre-incident 3.13 SOL/day covered a *full* day. The figures were never comparable.
+> 2. **One-time cost read as steady state.** That same sample included the board rebuilding from
+>    zero after the unwind — 107 posts creating fresh rent-bearing accounts. Steady state after
+>    the board existed is **0.075 SOL/h**.
+> 3. **A credit masking a drain.** The 2h window showed balance *rising* 1.849 SOL. An
+>    `opta-airdrop` **+2.0 SOL** landed at 16:56:24 inside it. Gross burn = 2.000 − 1.849 = 0.151.
+>    **Always decompose a balance delta before calling it a burn rate.**
+> 4. **Wrong cause, right symptom.** I reported "the pager does not page" on a `ntfy delivery
+>    FAILED`. Delivery was fine — HTTP 200 in 0.23s, the message stored server-side. The timeout
+>    was transient. The finding that survived: **HTTP 200 is acceptance, not delivery.**
+>
+> ## PAGER — PROVEN END TO END
+>
+> All five alarms share one topic (`OPTA_ALARM_NTFY_URL`): rpc-alarm, rpc-exhaustion-watcher,
+> keeper-wallet, writer-wallet, keeper-liveness. New `writer-wallet-alarm.sh` covers SOL **and**
+> liquid-USDC floors with four negative controls (floors-below → OK; USDC floor raised → LOW_USDC;
+> both → LOW_BOTH; unreachable RPC → **UNREADABLE, not LOW** — it must never page for a balance
+> nobody measured). Founder confirmed receipt on the handset: delivery test + both probes + the
+> real LOW_SOL alarm. **One topic also means one point of failure for every alarm** — ticket
+> `86eyrpr09` adds a weekly heartbeat, because a channel proven once rots silently.
+>
+> ## FLOOR REFRESH (armed by store approval, fired 2026-08-27)
+>
+> Both sides now live: WIF/FARTCOIN/JUP × call+put, 5 contracts each, expiry **2026-09-04T08:00Z**.
+> All 30 candidates passed the dust gate — no reselection needed, unlike the canary where JUP
+> K=$0.186 failed at $0.000555. USDC delta **exact to the micro** (6,275,000), premium > 0 and
+> minted=5/sold=0 on all six, free collateral $0.000000, RestingOrder(writer) unchanged.
+> **Funnel 3 → 9 offerings** (call=3, put=6; the 3 extra puts are Aug-28 canary remnants at qty=4).
+>
+> ## FUNDING PROVENANCE
+>
+> The 2×5 SOL that appeared mid-session came from the **devnet faucet**
+> (`dev2JBjyB5CshoGsiJCwzdmJYiEUwAXMdqDR7txoFBJ` — System-owned, 6.09M SOL, 3,000+ sigs in three
+> days, vanity `dev…` prefix). **Not** `opta-airdrop`: its run that hour *failed* at 12:32:31,
+> four minutes after the credits landed, already reading `writerSol: 10.0009`. Not any Opta
+> wallet. The pre-authorised 2.0 SOL crank→writer transfer was therefore **skipped** — the
+> shortfall it existed to clear no longer existed.
+>
+> ## OPEN
+>
+> - `86eyrpr04` — **pre-mainnet gate**: unrecoverable payer-rent. Fees are ~**2%** of the burn;
+>   the rest is rent for protocol-owned accounts the writer funds but does not own (~0.008 SOL/tx
+>   against a 0.000005 base fee). 17 SOL/day was a bad extrapolation, but even 1.8 SOL/day is real
+>   money on mainnet. Reprice is **pull-and-repost**, not in-place — `pull-noop-gone` matching
+>   `pull-ok` exactly (46/46) needs a look.
+> - `86eyrpr06` — majors re-enable. A 30k per-asset cap admits **zero** BTC contracts, so that
+>   option is an exclusion wearing a cap's clothes; notional-normalised sizing is the real answer.
+> - `86eyrpr09` — weekly alarm heartbeat.
+> - **leash v2** (tomorrow): `OPTA_WRITER_SOL_BUDGET_PER_DAY`, rolling 24h, measured from chain
+>   like collateral, posting pauses when exhausted, cancels never gated. Red-first.
+> - Tomorrow post-08:00Z: expiry auto-finalize verification — 3 canary puts settle intrinsic to
+>   `2A3TTZbG…`, writer collateral releases, board cleans to **3×2 Sep-04**.
+>
+> Ledgers: `86eyrmyhu` (stop + reconciliation) · `86eyrnwxf` (unwind + provenance) ·
+> `86eyrpncy` (floor refresh).
+
+
 # SEEKER vC3 ARC — CLOSED 2026-08-26 (skeletons-forever → ~6s time-to-offerings, IN REVIEW)
 
 > **SUPERSEDES the 2026-07-13 Seeker block's "status IN REVIEW" marker for v1.0.0.**

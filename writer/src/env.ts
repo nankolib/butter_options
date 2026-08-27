@@ -43,6 +43,11 @@ export interface WriterConfig {
   tickMs: number;            // OPTA_WRITER_TICK_MS (default 5m)
   lowBalanceWarnSol: number; // OPTA_WRITER_LOW_BALANCE_WARN_SOL (default 1.0)
   minFreeUsdc: number;       // OPTA_WRITER_MIN_FREE_USDC (default 0) — warn below
+  // --- THE LEASH (incident 2026-08-27). See leash.ts. ---
+  maxCollateralUsdc: number;         // OPTA_WRITER_MAX_COLLATERAL_USDC — global ceiling (0 = off)
+  maxCollateralPerAssetUsdc: number; // OPTA_WRITER_MAX_COLLATERAL_PER_ASSET (0 = off)
+  minSolPost: number;                // OPTA_WRITER_MIN_SOL_POST — refuse NEW posts below
+  reserveSol: number;                // OPTA_WRITER_RESERVE_SOL — posting may never spend into this
 
   // --- C1 two-sided quoting (bids). Dark by default. ---
   // A bid is a DEPENDENT quote: it exists only alongside a resting ask on the
@@ -170,6 +175,12 @@ export function loadConfig(): WriterConfig {
     tickMs: Math.max(1000, num(process.env.OPTA_WRITER_TICK_MS, 5 * 60 * 1000)),
     lowBalanceWarnSol: num(process.env.OPTA_WRITER_LOW_BALANCE_WARN_SOL, 1.0),
     minFreeUsdc: num(process.env.OPTA_WRITER_MIN_FREE_USDC, 0),
+    // THE LEASH — defaults are the SHIPPED policy, not placeholders. A missing
+    // env var must not mean 'unlimited'; that is how the incident happened.
+    maxCollateralUsdc: num(process.env.OPTA_WRITER_MAX_COLLATERAL_USDC, 150_000),
+    maxCollateralPerAssetUsdc: num(process.env.OPTA_WRITER_MAX_COLLATERAL_PER_ASSET, 30_000),
+    minSolPost: num(process.env.OPTA_WRITER_MIN_SOL_POST, 0.5),
+    reserveSol: num(process.env.OPTA_WRITER_RESERVE_SOL, 0.25),
     // Bids: dark by default. The master switch defaults FALSE so a deploy that
     // ships this code changes nothing until it is set deliberately.
     bidEnabled: bool(process.env.OPTA_WRITER_BID_ENABLED, false),

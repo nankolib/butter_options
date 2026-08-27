@@ -9,7 +9,7 @@ import type { MyOrder } from "./discovery";
 
 const uniq = () => PublicKey.unique();
 function mkOrder(vault: PublicKey): MyOrder {
-  return { pubkey: uniq(), optionMint: uniq(), vault, priceMicro: 0n, quantityRemaining: 1n, nonce: 0n, createdAtMs: 0 };
+  return { pubkey: uniq(), optionMint: uniq(), vault, priceMicro: 0n, quantityRemaining: 1n, nonce: 0n, createdAtMs: 0, collateralPerContract: 0n };
 }
 
 test("pulls ONLY the stale market's resting asks", () => {

@@ -44,6 +44,10 @@ export interface MyOrder {
   quantityRemaining: bigint;
   nonce: bigint;
   createdAtMs: number; // best-effort from on-chain created_at (secs -> ms)
+  /** Collateral this ask locks PER CONTRACT, micro-USDC. The leash measures
+   *  committed collateral from these on-chain values at tick start — it never
+   *  trusts an internal counter. See leash.ts. */
+  collateralPerContract: bigint;
 }
 
 /** A resting Bid owned by the bot. Same shape as MyOrder — kept as a distinct
@@ -158,6 +162,7 @@ export async function enumerateMyOrders(
       quantityRemaining: BigInt(String(r.quantityRemaining ?? r.quantity_remaining ?? 0)),
       nonce: BigInt(String(r.nonce ?? 0)),
       createdAtMs: createdAtSec > 0 ? createdAtSec * 1000 : 0,
+      collateralPerContract: BigInt(String(r.collateralPerContract ?? r.collateral_per_contract ?? 0)),
     });
   }
   return out;

@@ -9,6 +9,11 @@ import { denyReason, scopeReason } from "./engine";
 
 const SBXAU = { assetName: "SBXAU", assetClass: 1 };
 const BTC = { assetName: "BTC", assetClass: 0 };
+// BTC/ETH/XAU are BUILD-EXCLUDED from 2026-08-27 (see leash.ts), so they can no
+// longer stand in for "a normal asset". SOL/JUP carry that role now; the BTC
+// fixture is kept because the build-exclusion itself is worth pinning.
+const SOL = { assetName: "SOL", assetClass: 0 };
+const JUP = { assetName: "JUP", assetClass: 0 };
 const NVDA = { assetName: "NVDA", assetClass: 2 }; // equity
 const SPY = { assetName: "SPY", assetClass: 4 };   // etf
 
@@ -25,7 +30,9 @@ test("denylist WINS over the allow-list (even if someone re-adds SBXAU to it)", 
 });
 
 test("normal SB crypto passes on full board", () => {
-  assert.equal(scopeReason(BTC, null, EXCL, NO_CLASSES), null);
+  assert.equal(scopeReason(SOL, null, EXCL, NO_CLASSES), null);
+  // ...and a build-excluded major does NOT, even on a full board.
+  assert.equal(scopeReason(BTC, null, EXCL, NO_CLASSES), "build-excluded");
 });
 
 test("equity/ETF classes are excluded by class denylist on full board", () => {
@@ -38,8 +45,8 @@ test("equities pass once the class denylist is lifted (post-funding cap raise)",
 });
 
 test("allow-list still narrows scope when no denylist hit", () => {
-  assert.equal(scopeReason(BTC, ["ETH"], EXCL, NO_CLASSES), "not-in-allowlist");
-  assert.equal(scopeReason(BTC, ["BTC"], EXCL, NO_CLASSES), null);
+  assert.equal(scopeReason(SOL, ["JUP"], EXCL, NO_CLASSES), "not-in-allowlist");
+  assert.equal(scopeReason(SOL, ["SOL"], EXCL, NO_CLASSES), null);
 });
 
 test("denyReason is case-insensitive on ticker", () => {

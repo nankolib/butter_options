@@ -18,6 +18,10 @@ import type { Chain } from "./chain";
 import { getBalanceSol, getFreeUsdc, sendTx, accountExists } from "./chain";
 import { log, Heartbeat } from "./log";
 import {
+  measureCommitted, collateralGate, applyPost, solGate, isBuildExcluded,
+  type Committed,
+} from "./leash";
+import {
   enumerateMarkets, readOracle, enumerateMyOrders, enumerateMyBids, enumerateMyLongs,
   type MarketInfo, type MyOrder, type MyBid,
 } from "./discovery";
@@ -115,6 +119,8 @@ export function denyReason(
   assetsExclude: string[],
   excludeClasses: number[],
 ): string | null {
+  // THE LEASH: build-level freeze. Env may ADD exclusions, never remove these.
+  if (isBuildExcluded(m.assetName)) return "build-excluded";
   if (assetsExclude.includes(m.assetName.toUpperCase())) return "ticker-denylist";
   if (excludeClasses.includes(m.assetClass)) return `class-denylist:${m.assetClass}`;
   return null;
@@ -224,6 +230,14 @@ export class WriterEngine {
     }
     const freeUsdc = await getFreeUsdc(this.chain);
     if (sol < this.cfg.lowBalanceWarnSol) log.warn("low-sol", { sol, warnAt: this.cfg.lowBalanceWarnSol });
+
+    // THE LEASH — SOL solvency. Refuses NEW posts; never blocks cancels, because
+    // unwinding must stay possible at any balance. The 2026-08-27 incident was
+    // not "ran out of money", it was "ran out of money to get OUT".
+    const solVerdict = solGate(sol, { minSolPost: this.cfg.minSolPost, reserveSol: this.cfg.reserveSol });
+    if (!solVerdict.allow) {
+      log.warn("leash-sol-halt", { reason: solVerdict.reason, sol: solVerdict.sol, floor: solVerdict.floor });
+    }
     if (this.cfg.minFreeUsdc > 0 && freeUsdc < this.cfg.minFreeUsdc) log.warn("low-usdc", { freeUsdc, warnAt: this.cfg.minFreeUsdc });
 
     // --- discovery ---
@@ -237,6 +251,23 @@ export class WriterEngine {
     }
     // Resolve order -> vault -> market so a stale market's asks can be pulled below.
     await this.resolveVaultMarkets(myOrders);
+
+    // THE LEASH — MEASURED, not remembered. Summed from live on-chain orders at
+    // the start of every tick; an internal counter drifts the moment a tx lands
+    // out-of-band or a cancel fails, and a drifted counter reads as authority.
+    const marketAsset = new Map<string, string>(
+      markets.map((m) => [m.publicKey.toBase58(), m.assetName]),
+    );
+    const committed: Committed = measureCommitted(myOrders, (o) => {
+      const mk = this.vaultMarket.get((o as MyOrder).vault.toBase58());
+      return mk ? (marketAsset.get(mk) ?? null) : null;
+    });
+    log.info("leash-committed", {
+      totalUsdc: Number(committed.totalMicro) / 1e6,
+      capUsdc: this.cfg.maxCollateralUsdc,
+      perAsset: Object.fromEntries([...committed.perAssetMicro].map(([k, v]) => [k, Number(v) / 1e6])),
+      capPerAssetUsdc: this.cfg.maxCollateralPerAssetUsdc,
+    });
 
     let liveGlobal = myOrders.length;
     let postedThisRun = 0;
@@ -390,8 +421,25 @@ export class WriterEngine {
         const collateral = cell.strikeDollars * cell.qty;
         if (collateral > quoteBudget) { log.warn("usdc-budget-skip", { asset: cell.assetName, need: collateral, free: quoteBudget }); noAnchor(); continue; }
 
+        // THE LEASH — SOL solvency, then the collateral ceilings. Both gate NEW
+        // obligations only.
+        if (!solVerdict.allow) { noAnchor(); continue; }
+        const addMicro = BigInt(Math.round(collateral * 1e6));
+        const gate = collateralGate(committed, market.assetName, addMicro, {
+          maxCollateralUsdc: this.cfg.maxCollateralUsdc,
+          maxCollateralPerAssetUsdc: this.cfg.maxCollateralPerAssetUsdc,
+        });
+        if (!gate.allow) {
+          log.warn("leash-collateral-skip", {
+            reason: gate.reason, asset: market.assetName,
+            committed: gate.committed, cap: gate.cap, need: collateral,
+          });
+          noAnchor(); continue;
+        }
+
         const ok = await this.post(cell, market, seriesMint, askMicro, nowSec);
         if (ok) {
+          applyPost(committed, market.assetName, addMicro);
           postedThisRun++; liveGlobal++; assetLive++; quoteBudget -= collateral;
           perAssetLive.set(market.assetName, assetLive);
         }

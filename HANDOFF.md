@@ -6,7 +6,9 @@
 > none is recorded. Do not re-derive one.
 >
 > **CURRENT STATE:** vC3 `a676ad6a3f93b31c1ec534f773f55b0a11e46ba64b7b35c39f6f4970d39c8ab4`,
-> versionCode **3** / 1.0.1, **IN REVIEW** — release `ecfa4531-356d-49da-bbec-047520007129`,
+> versionCode **3** / 1.0.1, **LIVE — approved 2026-08-27** (submitted 26 Aug, **~1 day** review
+> turnaround; that is the measured number for future mobile releases). Release
+> `ecfa4531-356d-49da-bbec-047520007129`,
 > submission `#330456271554`, submitted 26 Aug 2026, 82.64 MB, SDK 24→36.
 > Release NFT `GBjqo7oN…vEYkXiZk`, app collection `ARWvanaU…Hirka4w2`, mint tx
 > `ucXy1Xr6…j16KSK6s`, publisher `AjMu…Vb1y`, cert `087ff9cb` (same keystore as v1.0.0).

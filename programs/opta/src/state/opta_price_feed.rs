@@ -122,19 +122,29 @@ pub struct OptaPriceFeed {
 }
 
 impl OptaPriceFeed {
-    /// Absolute deviation of `new_price` from `self.prev_price_6dec`, in bps.
-    /// Returns None when there is no usable baseline: no previous price, or a
-    /// baseline old enough that comparing against it is meaningless.
+    /// Absolute deviation of `new_price` from the CURRENTLY STORED price, in bps.
+    ///
+    /// The baseline is `self.price_6dec` — the last accepted push — NOT
+    /// `self.prev_price_6dec`. This is called BEFORE the roll-forward, so at
+    /// that moment `prev_price_6dec` still holds the price from TWO pushes ago;
+    /// using it would compare against the wrong sample and, worse, would be 0 on
+    /// the second-ever push and skip the breaker entirely. Caught by
+    /// tests/bankrun/fp-oracle-push-guards.test.ts, which is the whole reason
+    /// the suite exists.
+    ///
+    /// `prev_*` are the historical record for forensics and for the shadow log;
+    /// they are not the breaker's baseline.
+    ///
+    /// Returns None when there is no usable baseline: no price yet (first push),
+    /// or a baseline old enough that comparing against it is meaningless.
     pub fn deviation_bps(&self, new_price: u64, now_ts: i64) -> Option<u64> {
-        if self.prev_price_6dec == 0 {
+        if self.price_6dec == 0 {
             return None;
         }
-        if now_ts.saturating_sub(self.prev_publish_time)
-            > OPTA_FEED_DEVIATION_BASELINE_MAX_AGE_SECS
-        {
+        if now_ts.saturating_sub(self.publish_time) > OPTA_FEED_DEVIATION_BASELINE_MAX_AGE_SECS {
             return None;
         }
-        let prev = self.prev_price_6dec as u128;
+        let prev = self.price_6dec as u128;
         let new = new_price as u128;
         let diff = if new > prev { new - prev } else { prev - new };
         // prev > 0 is guaranteed above, so the division is safe.

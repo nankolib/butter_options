@@ -96,9 +96,9 @@ pub fn handle_push_opta_price(
                 "would_have_tripped: feed={} dev_bps={} prev={} new={} dt={} live_limit={} observe={}",
                 feed_key,
                 dev_bps,
-                feed.prev_price_6dec,
+                feed.price_6dec,
                 price_6dec,
-                publish_time.saturating_sub(feed.prev_publish_time),
+                publish_time.saturating_sub(feed.publish_time),
                 OPTA_FEED_MAX_DEVIATION_BPS,
                 OPTA_FEED_OBSERVE_DEVIATION_BPS,
             );

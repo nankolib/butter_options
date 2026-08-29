@@ -246,6 +246,64 @@ describe("FP-ORACLE — push_opta_price guards", () => {
     assert.isTrue(r.ok, `first push must land at any value: ${r.err}`);
   });
 
+  // ---- ordering contract (pre/post-roll) ----------------------------------
+  // These pin the invariant the breaker bug violated: every guard reads CURRENT
+  // state, never prev_*. They are cheap and they are the regression net for a
+  // whole bug CLASS, not one bug.
+
+  it("roll semantics: after three pushes prev_ is the SECOND, current is the third", async () => {
+    const { e, bytes, feed, authority } = await setupFeed("roll");
+    const t0 = await getClockUnix(e.h.context);
+    assert.isTrue((await tryPush(e, bytes, feed, authority, px(100), px(0.01), t0)).ok);
+    await setClockUnix(e.h.context, t0 + MIN_INTERVAL + 2);
+    const t1 = await getClockUnix(e.h.context);
+    assert.isTrue((await tryPush(e, bytes, feed, authority, px(101), px(0.01), t1)).ok);
+    await setClockUnix(e.h.context, t1 + MIN_INTERVAL + 2);
+    const t2 = await getClockUnix(e.h.context);
+    assert.isTrue((await tryPush(e, bytes, feed, authority, px(102), px(0.01), t2)).ok);
+
+    const a: any = await (e.opta.account as any).optaPriceFeed.fetch(feed);
+    assert.equal(Number(a.price6Dec), 102_000_000, "current must be the third push");
+    assert.equal(Number(a.prevPrice6Dec), 101_000_000, "prev_ must be the SECOND push");
+    assert.equal(Number(a.publishTime), t2, "current publish_time must be the third");
+    assert.equal(Number(a.prevPublishTime), t1, "prev_ publish_time must be the second");
+  });
+
+  it("rate limit reads CURRENT publish_time, not prev_ (the pre-roll contract)", async () => {
+    // If guard 5 read prev_publish_time it would compare against a timestamp one
+    // push older, so a push arriving just after an accepted one would pass. This
+    // is that exact scenario: three pushes, the third arriving 1s after the
+    // second. It must be refused.
+    const { e, bytes, feed, authority } = await setupFeed("rollrate");
+    const t0 = await getClockUnix(e.h.context);
+    assert.isTrue((await tryPush(e, bytes, feed, authority, px(100), px(0.01), t0)).ok);
+    await setClockUnix(e.h.context, t0 + MIN_INTERVAL + 2);
+    const t1 = await getClockUnix(e.h.context);
+    assert.isTrue((await tryPush(e, bytes, feed, authority, px(100.2), px(0.01), t1)).ok);
+
+    // 1s after the second push — inside the window vs CURRENT, outside vs prev_.
+    const r = await tryPush(e, bytes, feed, authority, px(100.3), px(0.01), t1 + 1);
+    assert.isFalse(r.ok, "reading prev_ here would wrongly admit this push");
+    assertErr(r.err, "OptaFeedPushTooSoon", "rate limit vs current");
+  });
+
+  it("breaker reads CURRENT price, not prev_ (the bug this suite caught)", async () => {
+    // Three pushes walking 100 -> 101 -> 111. The last is +9.9% off CURRENT
+    // (must trip) but only +11% off prev_=100 either way; the decisive part is
+    // that a breaker reading prev_ on the SECOND push sees 0 and skips entirely.
+    // Covered here end-to-end: the second push must be measured against 100.
+    const { e, bytes, feed, authority } = await setupFeed("rolldev");
+    const t0 = await getClockUnix(e.h.context);
+    assert.isTrue((await tryPush(e, bytes, feed, authority, px(100), px(0.01), t0)).ok);
+    await setClockUnix(e.h.context, t0 + MIN_INTERVAL + 2);
+    const t1 = await getClockUnix(e.h.context);
+    // +9% on the SECOND push. prev_ is still 0 here, so a prev_-reading breaker
+    // returns None and lets it through. A current-reading breaker trips.
+    const r = await tryPush(e, bytes, feed, authority, px(109), px(0.01), t1);
+    assert.isFalse(r.ok, "the second-ever push must be measured against the first");
+    assertErr(r.err, "OptaFeedDeviationTooLarge", "breaker on second push");
+  });
+
   // ---- freeze (revocation tier 1) ----------------------------------------
 
   it("a frozen feed refuses pushes from the REAL authority (6092)", async () => {

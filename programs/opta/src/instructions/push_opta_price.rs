@@ -24,6 +24,49 @@
 // [OBSERVE, MAX) is accepted and emits `would_have_tripped`, so the soak can
 // answer "would a tighter breaker have wedged us on a real move?" from data
 // rather than from a guess. The final threshold is set at end of soak.
+//
+// -----------------------------------------------------------------------------
+// ORDERING CONTRACT -- READ THIS BEFORE MOVING ANY LINE IN THIS HANDLER
+// -----------------------------------------------------------------------------
+// This account holds the same quantity twice: `price_6dec`/`publish_time` (the
+// last accepted push) and `prev_price_6dec`/`prev_publish_time` (the one before
+// that). A single roll-forward near the end of the handler shifts current into
+// prev. Every guard therefore has a correct side of that roll, and picking the
+// wrong side is not a compile error -- it silently reads a value one push stale.
+//
+// That is not hypothetical. The deviation breaker shipped reading `prev_*` and
+// was DEAD: it runs pre-roll, where prev_ still holds the push from two back,
+// which is 0 on the second-ever push -- so the breaker returned None and waved
+// through the exact move it exists to stop. Caught by
+// tests/bankrun/fp-oracle-push-guards.test.ts, not by review.
+//
+// THE CONTRACT, in one line:
+//   Every guard runs PRE-ROLL and reads CURRENT state (`price_6dec`,
+//   `publish_time`, `frozen`) or an instruction argument. NOTHING in this
+//   handler reads `prev_*`. `prev_*` is write-only here -- it exists for
+//   forensics and for off-chain readers, never for a decision.
+//
+// Full audit of every read, in execution order:
+//
+//   # | guard             | reads                          | roll side | why that side
+//  ---|-------------------|--------------------------------|-----------|---------------------------
+//   1 | frozen            | feed.frozen                    | pre       | unaffected by the roll
+//   2 | authority         | feed.authority (Accounts)      | pre-body  | never rolled
+//   3 | price > 0         | ARGUMENT price_6dec            | n/a       | no state read
+//   4 | clock skew        | ARGUMENT publish_time, clock   | n/a       | no state read
+//   5 | rate limit        | feed.publish_time              | pre       | must be the LAST ACCEPTED
+//     |                   |                                |           | push; prev_ would permit a
+//     |                   |                                |           | burst every other tx
+//   6 | deviation breaker | feed.price_6dec,               | pre       | baseline IS the last
+//     |                   | feed.publish_time              |           | accepted price; prev_ is
+//     |                   | (via deviation_bps)            |           | one push stale and 0 on
+//     |                   |                                |           | the second push
+//   6b| shadow log        | feed.price_6dec,               | pre       | must report the SAME
+//     |                   | feed.publish_time              |           | baseline the breaker used,
+//     |                   |                                |           | or the soak data is a lie
+//
+// If you add a guard, add a row. If a guard ever legitimately needs `prev_*`,
+// that is a design change -- say so out loud rather than reaching past the roll.
 // =============================================================================
 
 use anchor_lang::prelude::*;
@@ -68,9 +111,10 @@ pub fn handle_push_opta_price(
         OptaError::OptaFeedSkewTooLarge
     );
 
-    // 5. Rate limit. Measured against the stored publish_time (the last ACCEPTED
-    //    push), not against the clock, so a burst cannot be laundered through a
-    //    slow validator.
+    // 5. Rate limit. READS feed.publish_time — CURRENT, pre-roll (contract row 5).
+    //    Measured against the last ACCEPTED push, not against the clock, so a
+    //    burst cannot be laundered through a slow validator. Reading prev_ here
+    //    would let a pusher land two txs back-to-back every other block.
     if feed.publish_time != 0 {
         require!(
             publish_time.saturating_sub(feed.publish_time) >= OPTA_FEED_MIN_PUSH_INTERVAL_SECS,
@@ -78,10 +122,17 @@ pub fn handle_push_opta_price(
         );
     }
 
-    // 6. Deviation circuit-breaker. `deviation_bps` returns None when there is
-    //    no usable baseline (first push, or a baseline old enough that comparing
-    //    against it is meaningless) — in which case this push is a re-seed and
-    //    the breaker correctly does not fire.
+    // 6. Deviation circuit-breaker. READS feed.price_6dec + feed.publish_time —
+    //    CURRENT, pre-roll (contract row 6). `deviation_bps` returns None when
+    //    there is no usable baseline: the GENESIS push (price_6dec == 0) or a
+    //    baseline older than OPTA_FEED_DEVIATION_BASELINE_MAX_AGE_SECS.
+    //
+    //    BOTH of those are UNGUARDED MOMENTS and the runbook must treat them as
+    //    such: at genesis and after any long gap the very next push sets the
+    //    baseline for everything after it, at whatever value it carries. The
+    //    breaker cannot protect the number it is measuring from. Ceremony
+    //    verification of that first price against the live market is the only
+    //    control — see FP_ORACLE_MODULE_SPEC_V2, genesis-push handling.
     if let Some(dev_bps) = feed.deviation_bps(price_6dec, now) {
         require!(
             dev_bps <= OPTA_FEED_MAX_DEVIATION_BPS,
@@ -105,8 +156,10 @@ pub fn handle_push_opta_price(
         }
     }
 
-    // Roll the baseline forward BEFORE overwriting current, so prev_* always
-    // describes the immediately preceding ACCEPTED push.
+    // ---- THE ROLL. Everything above is pre-roll; everything below is post-roll.
+    // No guard may be moved below this line without re-deriving which side of the
+    // roll its reads land on (see the ORDERING CONTRACT in the header).
+    // prev_* is WRITE-ONLY in this handler — forensics, never a decision.
     feed.prev_price_6dec = feed.price_6dec;
     feed.prev_publish_time = feed.publish_time;
 

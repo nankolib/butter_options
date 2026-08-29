@@ -84,6 +84,11 @@ pub mod migrate_shared_vault_residual_shares;
 pub mod initialize_vol_oracle;
 pub mod push_vol_sample;
 pub mod reset_vol_oracle;
+// ---- FP-ORACLE module (additive files only until the plug ceremony) --------
+pub mod init_opta_price_feed;
+pub mod push_opta_price;
+pub mod set_feed_authority;
+pub mod set_oracle_source;
 
 // Phase 2 Stage C Pass 3 -- AMER pricing view
 pub mod get_option_price;
@@ -185,6 +190,11 @@ pub use migrate_shared_vault_residual_shares::*;
 pub use initialize_vol_oracle::*;
 pub use push_vol_sample::*;
 pub use reset_vol_oracle::*;
+// ---- FP-ORACLE module ------------------------------------------------------
+pub use init_opta_price_feed::*;
+pub use push_opta_price::*;
+pub use set_feed_authority::*;
+pub use set_oracle_source::*;
 
 // Phase 2 Stage C Pass 3 -- AMER pricing view
 pub use get_option_price::*;

@@ -633,6 +633,94 @@ pub mod opta {
         instructions::reset_vol_oracle::handle_reset_vol_oracle(ctx, feed_id, seed_vol)
     }
 
+    // =========================================================================
+    // FP-ORACLE module — first-party price feed (spec FP_ORACLE_MODULE_SPEC_V2)
+    // =========================================================================
+    // Additive entrypoints only. The six oracle_source match arms are NOT armed
+    // here — that lands as a single `arm-6-sites` commit at the plug ceremony.
+    // Until then ORACLE_SOURCE_OPTA is unreachable from every read path, so
+    // these instructions can create and drive a feed that nothing consumes.
+
+    /// Create an OptaPriceFeed PDA and install its initial oracle authority.
+    /// Admin-only. Stores NO price: the feed is unreadable (OptaFeedInvalidPrice)
+    /// until the authority pushes to it, so creating a feed can never make a
+    /// market quotable by accident. Refuses admin-as-authority.
+    pub fn init_opta_price_feed(
+        ctx: Context<InitOptaPriceFeed>,
+        feed_id: [u8; 32],
+        authority: Pubkey,
+    ) -> Result<()> {
+        instructions::init_opta_price_feed::handle_init_opta_price_feed(ctx, feed_id, authority)
+    }
+
+    /// Write a price to an OptaPriceFeed. Signed by feed.authority — NOT admin,
+    /// and admin has no override. Guards, in order: frozen, authority, price>0,
+    /// clock skew (both directions), rate limit, deviation circuit-breaker.
+    /// The breaker ships at 500 bps and shadow-logs `would_have_tripped` in
+    /// [OBSERVE, MAX) so the final threshold comes from soak data (R4).
+    pub fn push_opta_price(
+        ctx: Context<PushOptaPrice>,
+        feed_id: [u8; 32],
+        price_6dec: u64,
+        conf_6dec: u64,
+        publish_time: i64,
+    ) -> Result<()> {
+        instructions::push_opta_price::handle_push_opta_price(
+            ctx,
+            feed_id,
+            price_6dec,
+            conf_6dec,
+            publish_time,
+        )
+    }
+
+    /// Rotate an OptaPriceFeed's authority (revocation tier 2). Admin-only. The
+    /// old key is inert as of this tx — no redeploy, no migration. Refuses
+    /// admin-as-authority.
+    pub fn set_feed_authority(
+        ctx: Context<SetFeedAuthority>,
+        feed_id: [u8; 32],
+        new_authority: Pubkey,
+    ) -> Result<()> {
+        instructions::set_feed_authority::handle_set_feed_authority(ctx, feed_id, new_authority)
+    }
+
+    /// Freeze/unfreeze an OptaPriceFeed (revocation tier 1 — the break-glass).
+    /// Admin-only, one transaction, no key movement. A frozen feed blocks every
+    /// read at every arm regardless of freshness, and accepts no pushes even
+    /// from the real authority.
+    pub fn set_feed_frozen(
+        ctx: Context<SetFeedFrozen>,
+        feed_id: [u8; 32],
+        frozen: bool,
+    ) -> Result<()> {
+        instructions::set_feed_authority::handle_set_feed_frozen(ctx, feed_id, frozen)
+    }
+
+    /// Flip a market's oracle lane. Admin-only. Writes BOTH
+    /// OptionsMarket.oracle_source AND VolOracle.oracle_source, or neither —
+    /// the two bytes are independent at rest and a market that settles from one
+    /// source while its vol oracle is warmed from another keeps quoting, which
+    /// is what makes the desync dangerous (6096).
+    ///
+    /// R1: refuses if any SharedVault passed in remaining_accounts holds live
+    /// collateral (6100). That is a FAT-FINGER guard, not a trustless
+    /// invariant — completeness of the vault list is enforced off-chain by the
+    /// ceremony. See instructions/set_oracle_source.rs for the full limit.
+    pub fn set_oracle_source<'info>(
+        ctx: Context<'_, '_, '_, 'info, SetOracleSource<'info>>,
+        asset_name: String,
+        feed_id: [u8; 32],
+        new_source: u8,
+    ) -> Result<()> {
+        instructions::set_oracle_source::handle_set_oracle_source(
+            ctx,
+            asset_name,
+            feed_id,
+            new_source,
+        )
+    }
+
     /// AMER-only BS-2002 pricing view. Read-only; CPI-callable.
     /// Returns OptionPriceQuote (premium + vol/spot snapshot + ts) for the
     /// supplied hypothetical option against a live VolOracle. European

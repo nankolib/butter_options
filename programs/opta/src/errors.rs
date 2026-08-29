@@ -545,4 +545,78 @@ pub enum OptaError {
     // Append-only — error code 6090.
     #[msg("OCO legs must be on the same option series")]
     OcoSeriesMismatch,
+
+    // =========================================================================
+    // FP-ORACLE module (first-party price feed) — codes 6091-6100
+    // =========================================================================
+    // Reserved as a contiguous block. The spec reserved 6091-6096; the build
+    // needed four more (push-side rate limit, deviation breaker, push skew, and
+    // the open-collateral flip guard) which the spec's prose implied but had not
+    // been given codes. Block widened to 6091-6100 — recorded here because the
+    // next feature must start at 6101, not 6097.
+
+    // Read-side freshness gate. now - publish_time exceeded the call site's
+    // max_age. Also raised for a FUTURE-dated feed: a read gate that trusts the
+    // writer's clock is not a gate.
+    // Append-only — error code 6091.
+    #[msg("Opta price feed is stale for this read")]
+    OptaFeedStale,
+
+    // Admin kill-switch (revocation tier 1). Blocks EVERY read at EVERY arm,
+    // regardless of freshness, in one admin transaction with no key movement.
+    // Append-only — error code 6092.
+    #[msg("Opta price feed is frozen by the protocol admin")]
+    OptaFeedFrozen,
+
+    // Zero price. A feed that has never been pushed, or one pushed with a
+    // garbage value, must not price an option.
+    // Append-only — error code 6093.
+    #[msg("Opta price feed price is zero or invalid")]
+    OptaFeedInvalidPrice,
+
+    // Confidence band wider than OPTA_FEED_MAX_CONF_BPS of price — the sources
+    // disagreed, and a price nobody agrees on must not settle an option.
+    // Append-only — error code 6094.
+    #[msg("Opta price feed confidence band is too wide to price against")]
+    OptaFeedConfTooWide,
+
+    // Push signer is not feed.authority. The single most important check in the
+    // module: it is what makes the oracle key's blast radius one instruction.
+    // Append-only — error code 6095.
+    #[msg("Signer is not the authority for this Opta price feed")]
+    OptaFeedUnauthorized,
+
+    // oracle_source disagrees between OptionsMarket and its VolOracle. The two
+    // bytes are independent in storage but must never diverge: a market settling
+    // from one source while its vol oracle is warmed from another mixes
+    // provenance across the pricing inputs AND KEEPS QUOTING, which is what
+    // makes it dangerous. set_oracle_source writes both or neither.
+    // Append-only — error code 6096.
+    #[msg("Market and vol-oracle oracle_source disagree — they must be set together")]
+    OracleSourceMismatch,
+
+    // Push-side rate limit (OPTA_FEED_MIN_PUSH_INTERVAL_SECS).
+    // Append-only — error code 6097.
+    #[msg("Opta price feed push too soon since the last accepted push")]
+    OptaFeedPushTooSoon,
+
+    // Deviation circuit-breaker. Converts "compromised key writes $1 BTC" from
+    // an instant drain into a slow, loud, visible walk.
+    // Append-only — error code 6098.
+    #[msg("Opta price feed push deviates too far from the previous price")]
+    OptaFeedDeviationTooLarge,
+
+    // Pushed publish_time is too far from the on-chain clock in either
+    // direction. Blocks future-dating (a feed that looks fresh after the pusher
+    // dies) and backfill (a stale price replayed as current).
+    // Append-only — error code 6099.
+    #[msg("Opta price feed push timestamp skew exceeds the allowed window")]
+    OptaFeedSkewTooLarge,
+
+    // R1 flip guard: refuse to change oracle_source while the market has an
+    // unsettled vault holding collateral. Changing the settlement basis under a
+    // live contract is a material change to an instrument someone already holds.
+    // Append-only — error code 6100.
+    #[msg("Market has open collateral — settle or reclaim before changing oracle_source")]
+    MarketHasOpenCollateral,
 }

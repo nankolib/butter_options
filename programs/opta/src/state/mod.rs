@@ -8,6 +8,8 @@
 
 pub mod epoch_config;
 pub mod market;
+// FP-ORACLE module (additive; see state/opta_price_feed.rs MODULE BOUNDARY note)
+pub mod opta_price_feed;
 pub mod protocol;
 pub mod resting_order;
 pub mod settlement_record;
@@ -22,6 +24,7 @@ pub mod writer_position;
 
 pub use epoch_config::*;
 pub use market::*;
+pub use opta_price_feed::*;
 pub use protocol::*;
 pub use resting_order::*;
 pub use settlement_record::*;

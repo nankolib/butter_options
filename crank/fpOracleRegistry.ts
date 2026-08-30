@@ -9,8 +9,8 @@
 //            that price against (soak gate S10).
 //
 // S10 exists because a verification that reuses the push sources proves the
-// arithmetic works and nothing else. If the crank medians Binance/Coinbase/OKX
-// and we verify against Binance/Coinbase/OKX, a venue outage or a bad tick is
+// arithmetic works and nothing else. If the crank medians crypto.com/Coinbase/OKX
+// and we verify against crypto.com/Coinbase/OKX, a venue outage or a bad tick is
 // invisible to the check — the two numbers move together by construction. The
 // ruling is that the sets are disjoint FROM DAY ONE, not bolted on before the
 // soak report, so `assertDisjoint()` runs at module load and throws. There is no
@@ -27,7 +27,7 @@
 // ============================================================================
 
 export type SourceId =
-  | "binance" | "coinbase" | "okx"       // PUSH set
+  | "cryptocom" | "coinbase" | "okx"     // PUSH set
   | "gate" | "kucoin" | "bitget";        // VERIFY set
 
 export interface SourceSpec {
@@ -50,10 +50,14 @@ export interface FpFeedEntry {
 // Kept as builders rather than literals so a new asset cannot silently acquire a
 // hand-typed URL that differs in a query param nobody notices.
 
-const binance = (sym: string): SourceSpec => ({
-  id: "binance",
-  url: `https://api.binance.com/api/v3/ticker/price?symbol=${sym}`,
-  path: "price",
+// Binance was the original third push venue and was REMOVED 2026-08-30: it
+// returns HTTP 451 "Service unavailable from a restricted location" to this
+// VPS's IP on every feed, while answering normally from the dev workstation.
+// See P1 in the spec — this is the exact failure that policy exists to catch.
+const cryptocom = (inst: string): SourceSpec => ({
+  id: "cryptocom",
+  url: `https://api.crypto.com/exchange/v1/public/get-tickers?instrument_name=${inst}`,
+  path: "result.data[0].a",
 });
 const coinbase = (product: string): SourceSpec => ({
   id: "coinbase",
@@ -81,12 +85,13 @@ const bitget = (sym: string): SourceSpec => ({
   path: "data[0].lastPr",
 });
 
-const PUSH_SET: readonly SourceId[] = ["binance", "coinbase", "okx"];
+const PUSH_SET: readonly SourceId[] = ["cryptocom", "coinbase", "okx"];
 const VERIFY_SET: readonly SourceId[] = ["gate", "kucoin", "bitget"];
 
-// ---- PROVENANCE: every URL + path below was probed live, 2026-08-30 ---------
-// Not guessed. All 30 endpoints hit read-only; observed cross-set deltas were
-// 0.1-1.4 bps against the 50 bps S3 gate, and push-side spreads 0.0-1.9 bps.
+// ---- PROVENANCE: every URL + path below was probed live ---------------------
+// Not guessed. Probed from the DEV WORKSTATION 2026-08-30, then RE-PROBED FROM
+// THE VPS the same day — which is the probe that counts, and which changed the
+// registry twice.
 //
 // The first draft of this file used mexc + bybit as verify sources and had to be
 // replaced: NEITHER lists PAXG spot (mexc -1121 "invalid symbol", bybit 10001
@@ -94,11 +99,21 @@ const VERIFY_SET: readonly SourceId[] = ["gate", "kucoin", "bitget"];
 // source and silently broken S10 for the one non-crypto asset in the soak scope.
 // gate/kucoin/bitget all cover all five feeds including PAXG.
 //
-// OKX CAVEAT: okx.com does not resolve from the Windows dev workstation (DNS
-// fails outright, curl HTTP 000, time_namelookup 0.000000). It resolves and
-// returns 200 from the VPS, where the crank actually runs, and the
-// `data[0].last` path was confirmed against a real response body there. Do not
-// "fix" the OKX entry after a local probe failure — probe from the box first.
+// TWO VENUES HAVE ALREADY BEEN WRONG, IN OPPOSITE DIRECTIONS. Neither would have
+// been caught by reading documentation:
+//
+//   OKX      dead from the dev workstation (DNS fails outright, curl HTTP 000,
+//            time_namelookup 0.000000), fine from the VPS. A local failure is NOT
+//            evidence about the source. Do not "fix" this entry after a local
+//            probe failure — probe from the box first.
+//   BINANCE  fine from the dev workstation, HTTP 451 on every feed from the VPS
+//            ("Service unavailable from a restricted location"), observed twice.
+//            A permanent geo-block on the box that actually runs the lane.
+//            REMOVED 2026-08-30, replaced by crypto.com, which was verified 5/5
+//            from the VPS BEFORE the swap.
+//
+// The probe that counts is the one run from production. Both directions of that
+// mistake are in the record because both happened here.
 
 // ---- the registry ----------------------------------------------------------
 // feedHashHex values are the EXISTING ids already used by the SB markets, so an
@@ -110,28 +125,28 @@ export const FP_FEEDS: FpFeedEntry[] = [
     symbol: "BTC/USD",
     feedHashHex: "baf182b54386b4a1c0354b7d64fb33d679301087a8b509d6a397d7b4f5162ee2",
     assetClass: "crypto",
-    push: [binance("BTCUSDT"), coinbase("BTC-USD"), okx("BTC-USDT")],
+    push: [cryptocom("BTC_USD"), coinbase("BTC-USD"), okx("BTC-USDT")],
     verify: [gate("BTC_USDT"), kucoin("BTC-USDT"), bitget("BTCUSDT")],
   },
   {
     symbol: "ETH/USD",
     feedHashHex: "1d8f55a03da760d0f322bc1d066427e95573f651d506e0e31a5499659349caa3",
     assetClass: "crypto",
-    push: [binance("ETHUSDT"), coinbase("ETH-USD"), okx("ETH-USDT")],
+    push: [cryptocom("ETH_USD"), coinbase("ETH-USD"), okx("ETH-USDT")],
     verify: [gate("ETH_USDT"), kucoin("ETH-USDT"), bitget("ETHUSDT")],
   },
   {
     symbol: "SOL/USD",
     feedHashHex: "e01fe3bb1d659e5957296b2637658defd1f8b42fc87dd9f16e8fff16fcaeb463",
     assetClass: "crypto",
-    push: [binance("SOLUSDT"), coinbase("SOL-USD"), okx("SOL-USDT")],
+    push: [cryptocom("SOL_USD"), coinbase("SOL-USD"), okx("SOL-USDT")],
     verify: [gate("SOL_USDT"), kucoin("SOL-USDT"), bitget("SOLUSDT")],
   },
   {
     symbol: "XRP/USD",
     feedHashHex: "a1c4ce28a9a4abd471fb2eb11236c299a3b02cad72f3f93437aa01578405f736",
     assetClass: "crypto",
-    push: [binance("XRPUSDT"), coinbase("XRP-USD"), okx("XRP-USDT")],
+    push: [cryptocom("XRP_USD"), coinbase("XRP-USD"), okx("XRP-USDT")],
     verify: [gate("XRP_USDT"), kucoin("XRP-USDT"), bitget("XRPUSDT")],
   },
   {
@@ -139,7 +154,7 @@ export const FP_FEEDS: FpFeedEntry[] = [
     symbol: "XAU/USD",
     feedHashHex: "6c3c5cc720d1ffd8108aca22bf7834d659612b7e1a4e5f623b76846d1167355e",
     assetClass: "commodity",
-    push: [binance("PAXGUSDT"), coinbase("PAXG-USD"), okx("PAXG-USDT")],
+    push: [cryptocom("PAXG_USD"), coinbase("PAXG-USD"), okx("PAXG-USDT")],
     verify: [gate("PAXG_USDT"), kucoin("PAXG-USDT"), bitget("PAXGUSDT")],
   },
 ];

@@ -55,7 +55,7 @@ function stubFetch(byUrlFragment: Array<[string, number | null]>): () => void {
         if (val === null) return { ok: false, status: 503, json: async () => ({}) } as any;
         // Shape the body to whatever path THIS venue's spec expects, so the test
         // exercises the real resolvePath wiring rather than a convenient stub.
-        if (frag.includes("binance") || frag.includes("mexc")) return { ok: true, json: async () => ({ price: String(val) }) } as any;
+        if (frag.includes("crypto.com")) return { ok: true, json: async () => ({ result: { data: [{ a: String(val) }] } }) } as any;
         if (frag.includes("coinbase")) return { ok: true, json: async () => ({ price: String(val) }) } as any;
         if (frag.includes("okx")) return { ok: true, json: async () => ({ data: [{ last: String(val) }] }) } as any;
         if (frag.includes("gateio")) return { ok: true, json: async () => [{ last: String(val) }] } as any;
@@ -137,7 +137,7 @@ async function main() {
   {
     const jsonl = freshJsonl();
     const un = stubFetch([
-      ["binance", 100], ["coinbase", 100.02], ["okx", 99.98],   // push median 100
+      ["crypto.com", 100], ["coinbase", 100.02], ["okx", 99.98],   // push median 100
       ["gateio", 100.01], ["kucoin", 100.0], ["bitget", 100.02], // verify median 100.01
     ]);
     const rep = emptyReport();
@@ -150,7 +150,7 @@ async function main() {
     assert.ok(Math.abs(s[0].pushed_price! - 100) < 1e-9, "pushed the push-side median");
     assert.ok(Math.abs(s[0].reference_median! - 100.01) < 1e-9, "reference from the verify set");
     assert.equal(s[0].within_gate, true, `delta ${s[0].bps_delta} must be inside ${VERIFY_GATE_BPS}bps`);
-    assert.deepEqual(s[0].push_sources.sort(), ["binance", "coinbase", "okx"]);
+    assert.deepEqual(s[0].push_sources.sort(), ["coinbase", "cryptocom", "okx"]);
     assert.deepEqual(s[0].verify_sources.sort(), ["bitget", "gate", "kucoin"]);
     assert.equal(s[0].reseed, false);
     console.log("  ok  happy path: pushes the median, verifies against the disjoint set");
@@ -160,7 +160,7 @@ async function main() {
   {
     const jsonl = freshJsonl();
     const un = stubFetch([
-      ["binance", 100], ["coinbase", 100.02], ["okx", null],   // only 2 push responders
+      ["crypto.com", 100], ["coinbase", 100.02], ["okx", null],   // only 2 push responders
       ["gateio", 100], ["kucoin", 100], ["bitget", 100],
     ]);
     const rep = emptyReport();
@@ -179,7 +179,7 @@ async function main() {
   {
     const jsonl = freshJsonl();
     const un = stubFetch([
-      ["binance", 100], ["coinbase", 100], ["okx", 110],  // ~1000bps spread
+      ["crypto.com", 100], ["coinbase", 100], ["okx", 110],  // ~1000bps spread
       ["gateio", 100], ["kucoin", 100], ["bitget", 100],
     ]);
     const rep = emptyReport();
@@ -196,7 +196,7 @@ async function main() {
   {
     const jsonl = freshJsonl();
     const un = stubFetch([
-      ["binance", 100], ["coinbase", 100], ["okx", 100],       // push 100
+      ["crypto.com", 100], ["coinbase", 100], ["okx", 100],       // push 100
       ["gateio", 105], ["kucoin", 105], ["bitget", 105],        // reference 105 -> ~476bps
     ]);
     const rep = emptyReport();
@@ -216,7 +216,7 @@ async function main() {
   {
     const jsonl = freshJsonl();
     const un = stubFetch([
-      ["binance", 100], ["coinbase", 100], ["okx", 100],
+      ["crypto.com", 100], ["coinbase", 100], ["okx", 100],
       ["gateio", 100], ["kucoin", 100], ["bitget", 100],
     ]);
     const rep = emptyReport();
@@ -235,7 +235,7 @@ async function main() {
   {
     const jsonl = freshJsonl();
     const un = stubFetch([
-      ["binance", 100], ["coinbase", 100], ["okx", 100],
+      ["crypto.com", 100], ["coinbase", 100], ["okx", 100],
       ["gateio", 100], ["kucoin", 100], ["bitget", 100],
     ]);
     const rep = emptyReport();

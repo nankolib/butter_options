@@ -48,7 +48,20 @@ import { runFpOracleCrank, type FpCrankContext, type FpLogLevel } from "./fpOrac
 
 /** The live production program. This lane must never address it. */
 const CANONICAL_PROGRAM_ID = "CtzJ4MJYX6BFvF4g67i5C24tQuwRn6ddKkaE5L84z9Cq";
-const IDL_JSON_PATH = path.resolve(__dirname, "../app/src/idl/opta.json");
+// LANE-LOCAL IDL, deliberately NOT ../app/src/idl/opta.json.
+//
+// The app's IDL copy is the CANONICAL surface and does not carry this module's
+// instructions — correctly so. Regenerating it to include push_opta_price would
+// put module instructions into the canonical IDL and trip the IDL-drift gate,
+// which requires every tracked copy to match. So the lane ships its own copy,
+// built from `anchor build` output (target/idl/opta.json), living under its own
+// tree. One more thing not shared with another service (spec 6.3).
+//
+// The `address` field in that file is whatever the build declared; it is
+// overridden below with OPTA_FP_PROGRAM_ID regardless, so a canonical-address
+// IDL is fine to ship here.
+const IDL_JSON_PATH =
+  process.env.OPTA_FP_IDL?.trim() || path.resolve(__dirname, "../idl/opta.json");
 const DEFAULT_JSONL = "/opt/opta-fp-oracle/fp-oracle-samples.jsonl";
 
 function log(level: FpLogLevel, msg: string, fields?: Record<string, unknown>): void {

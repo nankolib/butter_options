@@ -88,6 +88,7 @@ pub mod reset_vol_oracle;
 pub mod init_opta_price_feed;
 pub mod push_opta_price;
 pub mod set_feed_authority;
+pub mod close_opta_price_feed;
 pub mod set_oracle_source;
 
 // Phase 2 Stage C Pass 3 -- AMER pricing view
@@ -194,6 +195,7 @@ pub use reset_vol_oracle::*;
 pub use init_opta_price_feed::*;
 pub use push_opta_price::*;
 pub use set_feed_authority::*;
+pub use close_opta_price_feed::*;
 pub use set_oracle_source::*;
 
 // Phase 2 Stage C Pass 3 -- AMER pricing view

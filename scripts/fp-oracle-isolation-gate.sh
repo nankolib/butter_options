@@ -32,7 +32,7 @@ set -uo pipefail
 BASE="${1:-origin/master}"
 SCOPE="programs/opta/src"
 
-MODULE_FILES='^programs/opta/src/(state/opta_price_feed\.rs|utils/opta_price_read\.rs|instructions/(init_opta_price_feed|push_opta_price|set_feed_authority|set_oracle_source)\.rs)$'
+MODULE_FILES='^programs/opta/src/(state/opta_price_feed\.rs|utils/opta_price_read\.rs|instructions/(init_opta_price_feed|push_opta_price|set_feed_authority|set_oracle_source|close_opta_price_feed)\.rs)$'
 REGISTRATION_FILES='^programs/opta/src/(lib\.rs|errors\.rs|state/mod\.rs|instructions/mod\.rs|utils/mod\.rs)$'
 
 fail=0

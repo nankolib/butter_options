@@ -619,4 +619,12 @@ pub enum OptaError {
     // Append-only — error code 6100.
     #[msg("Market has open collateral — settle or reclaim before changing oracle_source")]
     MarketHasOpenCollateral,
+
+    // ---- FP-ORACLE close (6101) --------------------------------------------
+    // Closing a LIVE feed would remove pricing capability silently: the account
+    // vanishes and every read arm fails on a missing account instead of the
+    // explicit OptaFeedFrozen operators are trained to recognise. Freeze first,
+    // then close -- reversible step before irreversible one.
+    #[msg("OptaPriceFeed must be frozen before it can be closed")]
+    OptaFeedNotFrozen,
 }

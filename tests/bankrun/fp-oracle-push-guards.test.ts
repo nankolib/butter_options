@@ -24,7 +24,7 @@
 import { assert } from "chai";
 import { SystemProgram } from "@solana/web3.js";
 import {
-  setupEnv, getClockUnix, setClockUnix, fundWallet,
+  setupEnv, getClockUnix, setClockUnix, fundWallet, exists,
   BN, PublicKey, Keypair, OPTA_PROGRAM_ID, Env,
 } from "./helpers";
 import { synthFeedIdHex } from "../_pyth_fixtures";
@@ -381,6 +381,85 @@ describe("FP-ORACLE — push_opta_price guards", () => {
       }).signers([authority]).rpc();
     } catch (ex: any) { err = String(ex); }
     assert.notEqual(err, "", "the oracle authority must not be able to freeze");
+  });
+
+  // ---- close (wedge-path recovery) ----------------------------------------
+  // Without close, a genesis error above the breaker's 50% cap is permanently
+  // uncorrectable — the band tops out at CAP so no push can ever reach the right
+  // price. These pin the two guards that make close safe.
+
+  it("REFUSES to close a live (unfrozen) feed (6101)", async () => {
+    const { e, bytes, feed, authority } = await setupFeed("closelive");
+    const t0 = await getClockUnix(e.h.context);
+    assert.isTrue((await tryPush(e, bytes, feed, authority, px(100), px(0.01), t0)).ok);
+    let err = "";
+    try {
+      await e.opta.methods.closeOptaPriceFeed(bytes).accountsStrict({
+        admin: e.admin.publicKey, protocolState: e.protocolState, optaPriceFeed: feed,
+      }).rpc();
+    } catch (ex: any) { err = String(ex); }
+    assertErr(err, "OptaFeedNotFrozen", "close live feed");
+    assert.isTrue(await exists(e, feed), "the feed must still be there");
+  });
+
+  it("closes a FROZEN feed and returns the rent", async () => {
+    const { e, bytes, feed, authority } = await setupFeed("closeok");
+    const t0 = await getClockUnix(e.h.context);
+    assert.isTrue((await tryPush(e, bytes, feed, authority, px(100), px(0.01), t0)).ok);
+    await e.opta.methods.setFeedFrozen(bytes, true).accountsStrict({
+      admin: e.admin.publicKey, protocolState: e.protocolState, optaPriceFeed: feed,
+    }).rpc();
+    await e.opta.methods.closeOptaPriceFeed(bytes).accountsStrict({
+      admin: e.admin.publicKey, protocolState: e.protocolState, optaPriceFeed: feed,
+    }).rpc();
+    assert.isFalse(await exists(e, feed), "the feed account must be gone");
+  });
+
+  it("close is ADMIN-only — the oracle authority cannot delete its own feed", async () => {
+    const { e, bytes, feed, authority } = await setupFeed("closeauth");
+    await e.opta.methods.setFeedFrozen(bytes, true).accountsStrict({
+      admin: e.admin.publicKey, protocolState: e.protocolState, optaPriceFeed: feed,
+    }).rpc();
+    let err = "";
+    try {
+      await e.opta.methods.closeOptaPriceFeed(bytes).accountsStrict({
+        admin: authority.publicKey, protocolState: e.protocolState, optaPriceFeed: feed,
+      }).signers([authority]).rpc();
+    } catch (ex: any) { err = String(ex); }
+    assert.notEqual(err, "", "the oracle key must not be able to close the feed");
+    assert.isTrue(await exists(e, feed), "feed must survive the attempt");
+  });
+
+  it("re-genesis works after close — the wedge path actually completes", async () => {
+    // The whole point: a wedged feed can be recovered end-to-end.
+    const { e, bytes, feed, authority } = await setupFeed("regen");
+    const t0 = await getClockUnix(e.h.context);
+    // A deliberately wrong genesis, then discover it is wrong.
+    assert.isTrue((await tryPush(e, bytes, feed, authority, px(1), px(0.001), t0)).ok);
+    await setClockUnix(e.h.context, t0 + MIN_INTERVAL + 2);
+    const t1 = await getClockUnix(e.h.context);
+    // Correcting push is refused — this is the wedge.
+    const wedged = await tryPush(e, bytes, feed, authority, px(100), px(0.01), t1);
+    assert.isFalse(wedged.ok, "a 100x correction must be refused — that IS the wedge");
+    assertErr(wedged.err, "OptaFeedDeviationTooLarge", "wedge");
+
+    // Recovery: freeze -> close -> re-init -> correct genesis.
+    const adm = { admin: e.admin.publicKey, protocolState: e.protocolState, optaPriceFeed: feed };
+    await e.opta.methods.setFeedFrozen(bytes, true).accountsStrict(adm).rpc();
+    await e.opta.methods.closeOptaPriceFeed(bytes).accountsStrict(adm).rpc();
+    assert.isFalse(await exists(e, feed), "closed");
+
+    await e.opta.methods.initOptaPriceFeed(bytes, authority.publicKey).accountsStrict({
+      admin: e.admin.publicKey, protocolState: e.protocolState, optaPriceFeed: feed,
+      systemProgram: SystemProgram.programId,
+    }).rpc();
+    const fresh: any = await (e.opta.account as any).optaPriceFeed.fetch(feed);
+    assert.equal(Number(fresh.price6Dec), 0, "re-inited feed is blank again");
+    assert.isFalse(fresh.frozen, "re-inited feed is not frozen");
+
+    const t2 = await getClockUnix(e.h.context);
+    const good = await tryPush(e, bytes, feed, authority, px(100), px(0.01), t2);
+    assert.isTrue(good.ok, `corrected genesis must land: ${good.err}`);
   });
 
   // ---- rotation (revocation tier 2) --------------------------------------

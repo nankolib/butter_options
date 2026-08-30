@@ -727,6 +727,17 @@ pub mod opta {
         instructions::set_feed_authority::handle_set_feed_frozen(ctx, feed_id, frozen)
     }
 
+    /// Close an OptaPriceFeed and return its rent to the admin. REFUSES unless
+    /// the feed is already frozen (6101), so a live feed can never be deleted in
+    /// one step. Required by the wedge path — a genesis error above the
+    /// breaker's 50% cap is otherwise uncorrectable — and by unplug (spec 9.2).
+    pub fn close_opta_price_feed(
+        ctx: Context<CloseOptaPriceFeed>,
+        feed_id: [u8; 32],
+    ) -> Result<()> {
+        instructions::close_opta_price_feed::handle_close_opta_price_feed(ctx, feed_id)
+    }
+
     /// Flip a market's oracle lane. Admin-only. Writes BOTH
     /// OptionsMarket.oracle_source AND VolOracle.oracle_source, or neither —
     /// the two bytes are independent at rest and a market that settles from one

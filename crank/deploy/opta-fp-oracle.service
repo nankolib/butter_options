@@ -1,0 +1,66 @@
+# =============================================================================
+# opta-fp-oracle.service — the first-party oracle push lane
+# =============================================================================
+#
+# *** NOT INSTALLED BY THIS COMMIT. *** Two-gate: this file is the PROPOSAL.
+# Install is a separate step, only on explicit GO:
+#
+#   cp crank/deploy/opta-fp-oracle.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now opta-fp-oracle
+#
+# WHY ITS OWN UNIT (spec 6.3 — this is a boundary INVARIANT, not tidiness).
+# This process holds a key that can write settlement prices. It shares NOTHING
+# at runtime with any other Opta service: own unit, own env file, own log path,
+# own keypair path, zero shared environment variables.
+#
+# Note there is exactly ONE EnvironmentFile line, and it is not
+# /opt/opta-crank/.env. Do not add a second one. opta-trigger.service reads
+# opta-crank's env and therefore shares opta-crank's signing key — that is the
+# precedent this lane deliberately does not follow.
+#
+# The isolation is also what makes the unplug cheap: `systemctl disable --now
+# opta-fp-oracle` plus deleting /opt/opta-fp-oracle removes the entire lane,
+# with no shared state to unpick.
+# =============================================================================
+
+[Unit]
+Description=Opta first-party oracle — push lane (SCRATCH program, soak)
+Documentation=https://github.com/nankolib/opta
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=opta
+Group=opta
+WorkingDirectory=/opt/opta-fp-oracle/crank
+
+# EXACTLY ONE env file. See the header — adding a second is a boundary breach.
+EnvironmentFile=/opt/opta-fp-oracle/.env
+
+ExecStart=/usr/bin/node --require ts-node/register --require tsconfig-paths/register /opt/opta-fp-oracle/crank/fpOracleMain.ts
+
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=120
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=opta-fp-oracle
+
+# Sandbox. ReadWritePaths is the lane's own tree ONLY: the JSONL soak artifact
+# must not live anywhere another unit can write to or rotate.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/opta-fp-oracle
+
+# Sized against the SB crank (MemoryMax=400M) but this lane does far less: no
+# gPA sweeps, no IDL-wide account scans — five feeds, six HTTP GETs each, one
+# small tx. 200M leaves headroom without hiding a leak.
+MemoryMax=200M
+
+[Install]
+WantedBy=multi-user.target

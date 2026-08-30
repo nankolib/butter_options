@@ -53,6 +53,36 @@ compile_error!(
      Pass `--features testing` only to run the American test suite."
 );
 
+// =============================================================================
+// FP-ORACLE SCRATCH BUILD IDENTITY -- isolation gate TIER 3
+// =============================================================================
+// Anchor 0.32 emits a declared-id check in the program entrypoint
+// (anchor-syn-0.32.1/src/codegen/program/entry.rs:52): a program deployed to an
+// address other than its declare_id! fails EVERY instruction with
+// DeclaredProgramIdMismatch (4100). Deploying the FP-ORACLE module to its
+// throwaway devnet program therefore requires the declared id to change, and
+// there is no build-time override for it -- declare_id! takes a literal.
+//
+// So this block exists, feature-gated, and it is the ONLY canonical-path edit
+// the module makes outside its own files. Same shape as AMERICAN_ENABLED and
+// WRITER_ASKS_ENABLED (LOW-5): the feature-free branch is what production
+// builds, and it is unchanged.
+//
+// THE INVARIANT, MECHANICALLY PROVEN, NOT ASSERTED:
+//   A feature-free build of this tree must be BYTE-IDENTICAL to a feature-free
+//   build of the same tree with this block replaced by the plain canonical
+//   declare_id!. scripts/fp-oracle-identity-proof.sh performs exactly that
+//   comparison and the isolation gate runs it. If the hashes ever diverge, this
+//   block has stopped being free and the gate fails.
+//
+// NEVER deploy a `--features fp-scratch` build to the canonical program. The
+// feature exists to point a THROWAWAY devnet program at itself during soak.
+// AT PLUG TIME this entire block is deleted and replaced by the plain canonical
+// declare_id!, and gate tier 3 is deleted with it.
+// =============================================================================
+#[cfg(feature = "fp-scratch")]
+declare_id!("E9XHfJr4ExaLYafGzcKk6Lnem5KsrcM3LJdXgvwLqJpS");
+#[cfg(not(feature = "fp-scratch"))]
 declare_id!("CtzJ4MJYX6BFvF4g67i5C24tQuwRn6ddKkaE5L84z9Cq");
 
 #[program]

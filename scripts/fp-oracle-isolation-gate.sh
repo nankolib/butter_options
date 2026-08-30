@@ -75,6 +75,62 @@ else
 fi
 echo
 
+# ---- TIER 3: build identity ------------------------------------------------
+# The ONE canonical-path edit the module is allowed outside its own files: the
+# cfg-gated declare_id! block that repoints a --features fp-scratch build at the
+# throwaway devnet program. Anchor 0.32 checks the declared id at dispatch
+# (anchor-syn entry.rs:52 -> DeclaredProgramIdMismatch 4100), so a scratch deploy
+# is impossible without it.
+#
+# Tier 2 would already let this through as an additive lib.rs diff — git sees
+# pure insertion because the original declare_id line survives verbatim inside
+# the block. That is too weak. Tier 3 NAMES the block and proves it is free.
+#
+# Skip the (slow, Linux-only) build proof with FP_GATE_SKIP_IDENTITY=1 for a
+# quick structural check; CI and any pre-push run must NOT skip it.
+echo "TIER 3 — build identity (cfg-gated declare_id):"
+T3_MARKER="FP-ORACLE SCRATCH BUILD IDENTITY"
+if grep -q "${T3_MARKER}" programs/opta/src/lib.rs 2>/dev/null; then
+  # The scratch id may appear ONLY inside that block, and ONLY under cfg.
+  scratch_hits=$(grep -c 'declare_id!("E9XHfJr4ExaLYafGzcKk6Lnem5KsrcM3LJdXgvwLqJpS")' programs/opta/src/lib.rs)
+  cfg_hits=$(grep -c '#\[cfg(feature = "fp-scratch")\]' programs/opta/src/lib.rs)
+  canon_hits=$(grep -c 'declare_id!("CtzJ4MJYX6BFvF4g67i5C24tQuwRn6ddKkaE5L84z9Cq")' programs/opta/src/lib.rs)
+  if [ "${scratch_hits}" -eq 1 ] && [ "${cfg_hits}" -eq 1 ] && [ "${canon_hits}" -eq 1 ]; then
+    printf '    ok   block shape: 1 scratch id, 1 cfg guard, 1 canonical id
+'
+  else
+    printf '    FAIL block shape: scratch=%s cfg=%s canonical=%s (expected 1/1/1)
+'       "${scratch_hits}" "${cfg_hits}" "${canon_hits}"
+    fail=1
+  fi
+  # The scratch id must appear NOWHERE else under programs/opta/src.
+  stray=$(grep -rl "E9XHfJr4ExaLYafGzcKk6Lnem5KsrcM3LJdXgvwLqJpS" programs/opta/src 2>/dev/null | grep -v '^programs/opta/src/lib.rs$' || true)
+  if [ -n "${stray}" ]; then
+    echo "${stray}" | sed 's/^/    FAIL scratch id leaked into /'
+    fail=1
+  else
+    printf '    ok   scratch id confined to lib.rs
+'
+  fi
+  if [ "${FP_GATE_SKIP_IDENTITY:-0}" = "1" ]; then
+    printf '    SKIP identity proof (FP_GATE_SKIP_IDENTITY=1) — do not skip before a push
+'
+  elif bash scripts/fp-oracle-identity-proof.sh >/tmp/_fp_identity.log 2>&1; then
+    printf '    ok   identity proof: feature-free build is byte-identical to ungated
+'
+    grep -E '^  (gated|canonical)' /tmp/_fp_identity.log | sed 's/^/      /'
+  else
+    printf '    FAIL identity proof — the cfg gate now changes the production binary
+'
+    tail -6 /tmp/_fp_identity.log | sed 's/^/      /'
+    fail=1
+  fi
+else
+  printf '    (block absent — plug ceremony has removed it, or it is not yet added)
+'
+fi
+echo
+
 if [ "${fail}" -ne 0 ]; then
   echo "CANONICAL PATH TOUCHED — STOP."
   echo "If this is the deliberate arm-6-sites commit, the plug ceremony has begun:"

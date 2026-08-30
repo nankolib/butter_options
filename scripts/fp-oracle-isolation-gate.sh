@@ -115,15 +115,32 @@ if grep -q "${T3_MARKER}" programs/opta/src/lib.rs 2>/dev/null; then
   if [ "${FP_GATE_SKIP_IDENTITY:-0}" = "1" ]; then
     printf '    SKIP identity proof (FP_GATE_SKIP_IDENTITY=1) — do not skip before a push
 '
-  elif bash scripts/fp-oracle-identity-proof.sh >/tmp/_fp_identity.log 2>&1; then
-    printf '    ok   identity proof: feature-free build is byte-identical to ungated
-'
-    grep -E '^  (gated|canonical)' /tmp/_fp_identity.log | sed 's/^/      /'
   else
-    printf '    FAIL identity proof — the cfg gate now changes the production binary
+    bash scripts/fp-oracle-identity-proof.sh >/tmp/_fp_identity.log 2>&1
+    proof_rc=$?
+    case "${proof_rc}" in
+      0)
+        printf '    ok   identity proof: feature-free build is byte-identical to ungated
 '
-    tail -6 /tmp/_fp_identity.log | sed 's/^/      /'
-    fail=1
+        grep -E '^  (gated|canonical)' /tmp/_fp_identity.log | sed 's/^/      /'
+        ;;
+      2)
+        # Toolchain missing / build could not run. NOT a divergence — say so, and
+        # do NOT pass either. An unrun proof must never read as green.
+        printf '    INCONCLUSIVE identity proof — could not run (toolchain?). NOT a pass.
+'
+        tail -3 /tmp/_fp_identity.log | sed 's/^/      /'
+        printf '      re-run this gate from WSL before pushing.
+'
+        fail=1
+        ;;
+      *)
+        printf '    FAIL identity proof — the cfg gate now changes the production binary
+'
+        tail -6 /tmp/_fp_identity.log | sed 's/^/      /'
+        fail=1
+        ;;
+    esac
   fi
 else
   printf '    (block absent — plug ceremony has removed it, or it is not yet added)

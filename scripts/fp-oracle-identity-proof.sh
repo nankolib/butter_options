@@ -35,7 +35,8 @@
 # This is a strictly STRONGER statement than the pre-edit diff would have been.
 #
 # Usage:  bash scripts/fp-oracle-identity-proof.sh
-# Exit 0 = identical (tier 3 is free). Exit 1 = divergence (STOP).
+# Exit 0 = identical (tier 3 is free). Exit 1 = DIVERGENCE (STOP).
+# Exit 2 = could not run (no toolchain / build failed) — INCONCLUSIVE, not a pass.
 # Requires: WSL/Linux with the anchor toolchain. Takes ~2 builds.
 # =============================================================================
 
@@ -60,6 +61,19 @@ if ! grep -q "$MARKER" "$LIB"; then
   exit 0
 fi
 
+# Exit 2 (not 1) when the TOOLCHAIN is the problem rather than the code. A proof
+# that cannot run is not a proof that failed, and reporting "the cfg gate now
+# changes the production binary" because `anchor` is not on PATH is a false STOP
+# — which trains people to ignore the gate. Observed 2026-08-30: run from Git
+# Bash on Windows, both builds failed and the gate cried divergence while the
+# same proof passed cleanly under WSL.
+if ! command -v anchor >/dev/null 2>&1; then
+  echo "TOOLCHAIN UNAVAILABLE — \`anchor\` is not on PATH."
+  echo "This proof needs the Anchor toolchain (run it from WSL, not Git Bash)."
+  echo "NOT a divergence: the comparison never ran."
+  exit 2
+fi
+
 build_hash() {
   anchor build >/dev/null 2>&1 || { echo "BUILD FAILED"; return 1; }
   sha256sum "$SO" | awk '{print $1}'
@@ -69,7 +83,7 @@ echo "FP-ORACLE identity proof (tier 3)"
 echo
 
 echo "[1/2] feature-free build of the tree AS IS (cfg-gated declare_id) ..."
-GATED="$(build_hash)" || exit 1
+GATED="$(build_hash)" || exit 2
 echo "      $GATED"
 
 # Build the line-count-matched canonical-only variant.
@@ -90,7 +104,7 @@ print(f"      variant: block ({n} lines) -> {n-1} comment lines + bare canonical
 PY
 
 echo "[2/2] feature-free build of the canonical-only variant (same line count) ..."
-PLAIN="$(build_hash)" || exit 1
+PLAIN="$(build_hash)" || exit 2
 echo "      $PLAIN"
 echo
 

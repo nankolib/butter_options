@@ -52,11 +52,6 @@ pub const OPTA_FEED_MIN_PUSH_INTERVAL_SECS: i64 = 5;
 /// stale price be replayed as current).
 pub const OPTA_FEED_PUSH_MAX_SKEW_SECS: i64 = 30;
 
-/// Deviation circuit-breaker, in basis points, against `prev_price_6dec`.
-/// R4: SHIPS AT 500. The final value is set from soak data, not from this
-/// constant -- see OPTA_FEED_OBSERVE_DEVIATION_BPS.
-pub const OPTA_FEED_MAX_DEVIATION_BPS: u64 = 500;
-
 /// R4 shadow-logging threshold. A push whose deviation lands in
 /// [OBSERVE, MAX) is accepted but emits a `would_have_tripped` log carrying the
 /// deviation, so the soak can answer "would a tighter breaker have wedged us on
@@ -65,12 +60,38 @@ pub const OPTA_FEED_MAX_DEVIATION_BPS: u64 = 500;
 /// hour; this is how we avoid picking one blind.
 pub const OPTA_FEED_OBSERVE_DEVIATION_BPS: u64 = 150;
 
-/// Age beyond which the breaker stops comparing against `prev_price_6dec`.
-/// After a long gap the previous price is not a meaningful baseline -- a real
-/// market can move any distance in an hour -- so the deviation check is skipped
-/// and the push is treated as a re-seed. Mirrors the reasoning behind
-/// VOL_ORACLE_MAX_SAMPLE_GAP_SECS in state/vol_oracle.rs.
-pub const OPTA_FEED_DEVIATION_BASELINE_MAX_AGE_SECS: i64 = 900;
+/// GAP-SCALED BREAKER (ruling, 2026-08-30). Superseded the old "skip the check
+/// after 900s" bypass, which fully DISARMED the breaker after any outage over
+/// 15 minutes -- unattended, on every restart, at whatever value the next push
+/// carried. The band now WIDENS with the gap instead of vanishing:
+///
+///     allowed_bps = min(BASE + PER_HOUR * gap_hours, CAP)
+///
+/// The reasoning the bypass got right is preserved: a real market can move a
+/// long way in an hour, so a stale baseline must not refuse an honest push. The
+/// part it got wrong is that "can move a long way" is not "can move any
+/// distance" -- past the CAP, a move is not a market, it is a fault or an
+/// attack, and it should still be refused however long the crank was down.
+///
+/// POST-GENESIS THE BREAKER NEVER FULLY DISARMS. The only unguarded push in a
+/// feed's life is its genesis (price_6dec == 0), which the init ceremony covers
+/// (spec 4.2b).
+///
+/// gap_hours uses integer division, so it truncates DOWNWARD -- a 90-minute gap
+/// scores 1 hour, not 1.5. Truncation tightens the band, which is the fail-safe
+/// direction; do not "fix" it into rounding.
+///
+/// All three are soak-tunable. The soak sets them from `would_have_tripped`
+/// data and observed reseed magnitudes, not from this comment.
+pub const OPTA_FEED_DEVIATION_BASE_BPS: u64 = 500;
+pub const OPTA_FEED_DEVIATION_BPS_PER_HOUR: u64 = 250;
+pub const OPTA_FEED_DEVIATION_CAP_BPS: u64 = 5_000;
+
+/// Gap beyond which a push is CLASSIFIED as a reseed. This no longer gates the
+/// breaker -- it is a reporting threshold only. Crossing it emits a distinct
+/// on-chain log so the soak can pull reseeds out of the tape and hold them to
+/// the same 50 bps verify gate as any other sample (a miss is an S3 breach).
+pub const OPTA_FEED_RESEED_GAP_SECS: i64 = 900;
 
 /// Confidence ceiling as a fraction of price, in basis points. Mirrors the
 /// Pyth arm's MAX_CONF_BPS philosophy: a wide band means the sources disagreed,
@@ -135,13 +156,12 @@ impl OptaPriceFeed {
     /// `prev_*` are the historical record for forensics and for the shadow log;
     /// they are not the breaker's baseline.
     ///
-    /// Returns None when there is no usable baseline: no price yet (first push),
-    /// or a baseline old enough that comparing against it is meaningless.
-    pub fn deviation_bps(&self, new_price: u64, now_ts: i64) -> Option<u64> {
+    /// Returns None ONLY at genesis (`price_6dec == 0`) -- there is genuinely
+    /// nothing to deviate from. There is no longer an age-based escape: a stale
+    /// baseline widens the allowed band (see `allowed_deviation_bps`) rather
+    /// than switching the breaker off.
+    pub fn deviation_bps(&self, new_price: u64) -> Option<u64> {
         if self.price_6dec == 0 {
-            return None;
-        }
-        if now_ts.saturating_sub(self.publish_time) > OPTA_FEED_DEVIATION_BASELINE_MAX_AGE_SECS {
             return None;
         }
         let prev = self.price_6dec as u128;
@@ -149,6 +169,28 @@ impl OptaPriceFeed {
         let diff = if new > prev { new - prev } else { prev - new };
         // prev > 0 is guaranteed above, so the division is safe.
         u64::try_from(diff.saturating_mul(10_000) / prev).ok()
+    }
+
+    /// The breaker band in force right now, widened by how stale the baseline is.
+    ///
+    ///     min(BASE + PER_HOUR * floor(gap_secs / 3600), CAP)
+    ///
+    /// Saturating throughout: a feed whose baseline is years old lands on CAP,
+    /// never wraps. A negative gap (baseline in the future, which the skew guard
+    /// already refuses on the way in) clamps to zero and yields BASE.
+    pub fn allowed_deviation_bps(&self, now_ts: i64) -> u64 {
+        let gap_secs = now_ts.saturating_sub(self.publish_time).max(0) as u64;
+        let gap_hours = gap_secs / 3_600;
+        OPTA_FEED_DEVIATION_BASE_BPS
+            .saturating_add(OPTA_FEED_DEVIATION_BPS_PER_HOUR.saturating_mul(gap_hours))
+            .min(OPTA_FEED_DEVIATION_CAP_BPS)
+    }
+
+    /// Is this push far enough past the baseline to be reported as a reseed?
+    /// Classification only -- it does not affect whether the push is accepted.
+    pub fn is_reseed(&self, now_ts: i64) -> bool {
+        self.price_6dec != 0
+            && now_ts.saturating_sub(self.publish_time) > OPTA_FEED_RESEED_GAP_SECS
     }
 
     /// The shared read-side gate. EVERY read helper in utils/price_oracle.rs

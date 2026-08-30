@@ -20,10 +20,16 @@
 //   6. deviation     -- the circuit-breaker, LAST because it is the only guard
 //                       that needs the previous accepted state to mean anything.
 //
-// R4: the breaker ships at 500 bps but also SHADOW-LOGS. A push landing in
-// [OBSERVE, MAX) is accepted and emits `would_have_tripped`, so the soak can
+// R4: the breaker ships at BASE 500 bps but also SHADOW-LOGS. A push landing in
+// [OBSERVE, allowed) is accepted and emits `would_have_tripped`, so the soak can
 // answer "would a tighter breaker have wedged us on a real move?" from data
-// rather than from a guess. The final threshold is set at end of soak.
+// rather than from a guess. Final thresholds are set at end of soak.
+//
+// GAP-SCALED BAND (ruling 2026-08-30). The breaker's limit is not a constant: it
+// is min(BASE + 250*gap_hours, CAP 5000), widening as the baseline goes stale.
+// The earlier design SKIPPED the check entirely past 900s, which disarmed the
+// breaker on every crank outage over 15 minutes. It no longer does. Post-genesis
+// there is no gap, and no other input, that turns this guard off.
 //
 // -----------------------------------------------------------------------------
 // ORDERING CONTRACT -- READ THIS BEFORE MOVING ANY LINE IN THIS HANDLER
@@ -57,10 +63,13 @@
 //   5 | rate limit        | feed.publish_time              | pre       | must be the LAST ACCEPTED
 //     |                   |                                |           | push; prev_ would permit a
 //     |                   |                                |           | burst every other tx
-//   6 | deviation breaker | feed.price_6dec,               | pre       | baseline IS the last
-//     |                   | feed.publish_time              |           | accepted price; prev_ is
-//     |                   | (via deviation_bps)            |           | one push stale and 0 on
+//   6 | deviation breaker | feed.price_6dec                | pre       | baseline IS the last
+//     |                   | (via deviation_bps)            |           | accepted price; prev_ is
+//     |                   |                                |           | one push stale and 0 on
 //     |                   |                                |           | the second push
+//   6a| allowed band      | feed.publish_time              | pre       | gap measured from the LAST
+//     |                   | (via allowed_deviation_bps)    |           | ACCEPTED push; prev_ would
+//     |                   |                                |           | over-widen the band
 //   6b| shadow log        | feed.price_6dec,               | pre       | must report the SAME
 //     |                   | feed.publish_time              |           | baseline the breaker used,
 //     |                   |                                |           | or the soak data is a lie
@@ -73,8 +82,8 @@ use anchor_lang::prelude::*;
 
 use crate::errors::OptaError;
 use crate::state::{
-    OptaPriceFeed, OPTA_FEED_MAX_DEVIATION_BPS, OPTA_FEED_MIN_PUSH_INTERVAL_SECS,
-    OPTA_FEED_OBSERVE_DEVIATION_BPS, OPTA_FEED_PUSH_MAX_SKEW_SECS, OPTA_PRICE_FEED_SEED,
+    OptaPriceFeed, OPTA_FEED_MIN_PUSH_INTERVAL_SECS, OPTA_FEED_OBSERVE_DEVIATION_BPS,
+    OPTA_FEED_PUSH_MAX_SKEW_SECS, OPTA_PRICE_FEED_SEED,
 };
 
 pub fn handle_push_opta_price(
@@ -123,34 +132,57 @@ pub fn handle_push_opta_price(
     }
 
     // 6. Deviation circuit-breaker. READS feed.price_6dec + feed.publish_time —
-    //    CURRENT, pre-roll (contract row 6). `deviation_bps` returns None when
-    //    there is no usable baseline: the GENESIS push (price_6dec == 0) or a
-    //    baseline older than OPTA_FEED_DEVIATION_BASELINE_MAX_AGE_SECS.
+    //    CURRENT, pre-roll (contract row 6). `deviation_bps` returns None ONLY at
+    //    GENESIS (price_6dec == 0), where there is genuinely nothing to compare
+    //    against. A stale baseline no longer skips the check — it widens the
+    //    allowed band via `allowed_deviation_bps`, which is capped.
     //
-    //    BOTH of those are UNGUARDED MOMENTS and the runbook must treat them as
-    //    such: at genesis and after any long gap the very next push sets the
-    //    baseline for everything after it, at whatever value it carries. The
-    //    breaker cannot protect the number it is measuring from. Ceremony
-    //    verification of that first price against the live market is the only
-    //    control — see FP_ORACLE_MODULE_SPEC_V2, genesis-push handling.
-    if let Some(dev_bps) = feed.deviation_bps(price_6dec, now) {
+    //    GENESIS IS THEREFORE THE ONLY UNGUARDED PUSH IN A FEED'S LIFE, and it is
+    //    unguarded by necessity, not by choice: the breaker cannot protect the
+    //    number it measures from. Ceremony verification of that first price
+    //    against an independent reference is the only control — see
+    //    FP_ORACLE_MODULE_SPEC_V2 section 4.2b.
+    if let Some(dev_bps) = feed.deviation_bps(price_6dec) {
+        // The band WIDENS with the gap; it never vanishes. Post-genesis there is
+        // no input that disarms this check.
+        let allowed_bps = feed.allowed_deviation_bps(now);
+        let reseed = feed.is_reseed(now);
+        let gap_secs = now.saturating_sub(feed.publish_time).max(0);
+
         require!(
-            dev_bps <= OPTA_FEED_MAX_DEVIATION_BPS,
+            dev_bps <= allowed_bps,
             OptaError::OptaFeedDeviationTooLarge
         );
-        // R4 shadow log — accepted, but recorded for threshold-setting at end of
+
+        // Reseed CLASSIFICATION, not a bypass. Emitted distinctly so the soak can
+        // pull reseeds out of the tape and hold them to the same 50 bps verify
+        // gate as any other sample -- a reseed outside it is an S3 breach, which
+        // is only checkable if reseeds are identifiable in the first place.
+        if reseed {
+            msg!(
+                "reseed: feed={} dev_bps={} allowed_bps={} gap_s={} prev={} new={}",
+                feed_key,
+                dev_bps,
+                allowed_bps,
+                gap_secs,
+                feed.price_6dec,
+                price_6dec,
+            );
+        }
+
+        // R4 shadow log -- accepted, but recorded for threshold-setting at end of
         // soak. Emitted as a msg! rather than an event because nothing on-chain
         // consumes it; the soak harness reads it from the transaction logs
         // alongside the reference market move for the same interval.
         if dev_bps >= OPTA_FEED_OBSERVE_DEVIATION_BPS {
             msg!(
-                "would_have_tripped: feed={} dev_bps={} prev={} new={} dt={} live_limit={} observe={}",
+                "would_have_tripped: feed={} dev_bps={} prev={} new={} dt={} allowed_bps={} observe={}",
                 feed_key,
                 dev_bps,
                 feed.price_6dec,
                 price_6dec,
                 publish_time.saturating_sub(feed.publish_time),
-                OPTA_FEED_MAX_DEVIATION_BPS,
+                allowed_bps,
                 OPTA_FEED_OBSERVE_DEVIATION_BPS,
             );
         }

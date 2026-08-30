@@ -31,8 +31,10 @@ import { synthFeedIdHex } from "../_pyth_fixtures";
 
 const SKEW = 30;          // OPTA_FEED_PUSH_MAX_SKEW_SECS
 const MIN_INTERVAL = 5;   // OPTA_FEED_MIN_PUSH_INTERVAL_SECS
-const MAX_DEV_BPS = 500;  // OPTA_FEED_MAX_DEVIATION_BPS
-const BASELINE_MAX_AGE = 900; // OPTA_FEED_DEVIATION_BASELINE_MAX_AGE_SECS
+const DEV_BASE_BPS = 500;      // OPTA_FEED_DEVIATION_BASE_BPS
+const DEV_BPS_PER_HOUR = 250;  // OPTA_FEED_DEVIATION_BPS_PER_HOUR
+const DEV_CAP_BPS = 5000;      // OPTA_FEED_DEVIATION_CAP_BPS
+const RESEED_GAP = 900;        // OPTA_FEED_RESEED_GAP_SECS (reporting only)
 
 const px = (n: number) => new BN(Math.round(n * 1_000_000)); // USDC 6-dec
 
@@ -227,16 +229,49 @@ describe("FP-ORACLE — push_opta_price guards", () => {
       "prev_* must roll to the previous ACCEPTED push");
   });
 
-  it("skips the breaker after a long gap — a stale baseline is not a baseline", async () => {
-    const { e, bytes, feed, authority } = await setupFeed("gap");
+  it("gap-scaled band: a legit move after a 4h gap is ACCEPTED", async () => {
+    // 4h gap -> allowed = 500 + 250*4 = 1500 bps. A +12% move (1200 bps) is a
+    // plausible 4-hour crypto move and must not be refused just because the
+    // crank was down.
+    const { e, bytes, feed, authority } = await setupFeed("gapok");
     const t0 = await getClockUnix(e.h.context);
     assert.isTrue((await tryPush(e, bytes, feed, authority, px(100), px(0.01), t0)).ok);
-    await setClockUnix(e.h.context, t0 + BASELINE_MAX_AGE + 60);
+    await setClockUnix(e.h.context, t0 + 4 * 3600 + 30);
     const t1 = await getClockUnix(e.h.context);
-    // +50% after a 16-minute gap. A real market can move any distance in that
-    // time, so this is a re-seed, not an attack, and must land.
-    const r = await tryPush(e, bytes, feed, authority, px(150), px(0.01), t1);
-    assert.isTrue(r.ok, `post-gap reseed must land: ${r.err}`);
+    const r = await tryPush(e, bytes, feed, authority, px(112), px(0.01), t1);
+    assert.isTrue(r.ok, `1200bps inside a 1500bps band must land: ${r.err}`);
+  });
+
+  it("gap-scaled band: an ABSURD move after the same 4h gap is REFUSED (6098)", async () => {
+    // Same 4h gap, same 1500 bps band, but +40% (4000 bps). Under the OLD
+    // bypass this landed unchecked — that is the hole this ruling closed.
+    const { e, bytes, feed, authority } = await setupFeed("gapbad");
+    const t0 = await getClockUnix(e.h.context);
+    assert.isTrue((await tryPush(e, bytes, feed, authority, px(100), px(0.01), t0)).ok);
+    await setClockUnix(e.h.context, t0 + 4 * 3600 + 30);
+    const t1 = await getClockUnix(e.h.context);
+    const r = await tryPush(e, bytes, feed, authority, px(140), px(0.01), t1);
+    assert.isFalse(r.ok, "a 40% post-gap move must not land");
+    assertErr(r.err, "OptaFeedDeviationTooLarge", "absurd post-gap");
+  });
+
+  it("gap-scaled band is CAPPED — the breaker never fully disarms", async () => {
+    // 30h gap would scale to 500 + 250*30 = 8000 bps, but CAP is 5000. A +60%
+    // move (6000 bps) must still be refused however long the crank was down.
+    // This is the property the ruling asked for, tested directly.
+    const { e, bytes, feed, authority } = await setupFeed("gapcap");
+    const t0 = await getClockUnix(e.h.context);
+    assert.isTrue((await tryPush(e, bytes, feed, authority, px(100), px(0.01), t0)).ok);
+    await setClockUnix(e.h.context, t0 + 30 * 3600);
+    const t1 = await getClockUnix(e.h.context);
+    const r = await tryPush(e, bytes, feed, authority, px(160), px(0.01), t1);
+    assert.isFalse(r.ok, "the cap must hold no matter how stale the baseline is");
+    assertErr(r.err, "OptaFeedDeviationTooLarge", "capped post-gap");
+
+    // ...and a move INSIDE the cap after the same gap still lands, so the cap is
+    // a ceiling on the band, not a second refusal.
+    const ok = await tryPush(e, bytes, feed, authority, px(140), px(0.01), t1);
+    assert.isTrue(ok.ok, `4000bps inside the 5000bps cap must land: ${ok.err}`);
   });
 
   it("does not trip on the FIRST push — there is no baseline to deviate from", async () => {
